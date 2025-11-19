@@ -58,6 +58,7 @@ export declare function getCombinedXpStats(stats: XpAbilityStats[]): {
 export declare function setSpeciesXpPerLevel(species: string, xpPerLevel: number): void;
 /**
  * Get XP required per level for a species
+ * Automatically calculated based on hours to mature
  */
 export declare function getSpeciesXpPerLevel(species: string): number | null;
 /**

@@ -216,10 +216,45 @@ export function setSpeciesXpPerLevel(species: string, xpPerLevel: number): void 
 }
 
 /**
+ * Pet species hours to mature (from Magic Garden Wiki)
+ * Active pets get 3600 XP/hour
+ * Total XP = 3600 × hoursToMature
+ * XP per level = Total XP / 30
+ */
+const SPECIES_HOURS_TO_MATURE: Record<string, number> = {
+  'Worm': 12,
+  'Snail': 12,
+  'Bee': 12,
+  'Chicken': 24,
+  'Bunny': 24,
+  'Dragonfly': 24,
+  'Pig': 72,
+  'Cow': 72,
+  'Squirrel': 100,
+  'Turtle': 100,
+  'Goat': 100,
+  'Butterfly': 144,
+  'Peacock': 144,
+  'Capybara': 144,
+};
+
+/**
  * Get XP required per level for a species
+ * Automatically calculated based on hours to mature
  */
 export function getSpeciesXpPerLevel(species: string): number | null {
-  return configData.speciesXpPerLevel[species] ?? null;
+  const hoursToMature = SPECIES_HOURS_TO_MATURE[species];
+  if (!hoursToMature) {
+    return configData.speciesXpPerLevel[species] ?? null;
+  }
+
+  // Active pets get 3600 XP/hour
+  // Total XP = 3600 × hoursToMature
+  // XP per level = Total XP / 30
+  const totalXp = 3600 * hoursToMature;
+  const xpPerLevel = totalXp / 30;
+
+  return xpPerLevel;
 }
 
 /**

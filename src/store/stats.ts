@@ -1,7 +1,7 @@
 // src/store/stats.ts
 import { storage } from '../utils/storage';
 import { startWeatherHub, onWeatherSnapshot, getWeatherSnapshot, type WeatherSnapshot } from './weatherHub';
-import type { WeatherPreset } from '../features/weatherSwap';
+import type { WeatherPreset } from '../features/weatherUtils';
 
 export type ShopCategoryKey = 'seeds' | 'eggs' | 'tools' | 'decor';
 

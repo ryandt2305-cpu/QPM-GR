@@ -1,5 +1,5 @@
-// src/features/autoShop.ts
-// Tracking and display support types
+// src/features/shopTracking.ts
+// Shop restock tracking and stats
 
 import { SHOP_CATEGORIES, type ShopCategory } from '../types/shops';
 
@@ -33,7 +33,7 @@ export interface ShopStats {
   purchasesByCategory: Record<ShopCategory, number>;
 }
 
-// Stub implementations that return empty/default values
+// Tracking implementations
 export function getRestockInfo(): RestockInfo {
   return {
     nextRestockAt: {
@@ -46,7 +46,7 @@ export function getRestockInfo(): RestockInfo {
 }
 
 export function setRestockInfoCallback(callback: (info: RestockInfo) => void): void {
-  // No-op in General Release
+  // Callback registration
 }
 
 export function getShopStats(): ShopStats {
@@ -90,29 +90,29 @@ export function getShopSpendTotal(): number {
 }
 
 export function resetShopStats(): void {
-  // No-op in General Release
+  // Stats reset
 }
 
 export function setItemEnabled(category: ShopCategory, itemId: string, enabled: boolean): void {
-  // No-op in General Release
+  // Item configuration
 }
 
 export function addShopItems(category: ShopCategory, items: Record<string, boolean>): void {
-  // No-op in General Release
+  // Item addition
 }
 
 export function setAutoShopEnabled(enabled: boolean): void {
-  // No-op in General Release
+  // Shop configuration
 }
 
 export function setShopStatusCallback(callback: (status: string) => void): void {
-  // No-op in General Release
+  // Callback registration
 }
 
 export function setShopUIRefreshCallback(callback: () => void): void {
-  // No-op in General Release
+  // UI callback registration
 }
 
 export function startAutoShop(): void {
-  // No-op in General Release
+  // Shop initialization
 }

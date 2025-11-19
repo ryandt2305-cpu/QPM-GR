@@ -206,7 +206,7 @@ export function createAbilityRow(
   const baseProbPerSecond = baseProb / 60; // Convert per-minute to per-second
   const actualChancePerSecond = (baseProbPerSecond * petStrengthValue) / 100;
   const actualChancePerMinute = actualChancePerSecond * 60;
-  const chanceText = `${actualChancePerSecond.toFixed(3)}%/sec`;
+  const chanceText = `${actualChancePerMinute.toFixed(2)}%/min`;
 
   chanceCell.innerHTML = wastePercent > 0
     ? `${chanceText} <span style="color: var(--qpm-warning); font-size: 10px;">(-${wastePercent.toFixed(0)}%)</span>`
@@ -219,8 +219,8 @@ export function createAbilityRow(
     white-space: nowrap;
   `;
   chanceCell.title = wastePercent > 0
-    ? `Per Second: ${baseProbPerSecond.toFixed(3)}% × ${petStrengthValue}/100 = ${actualChancePerSecond.toFixed(3)}%\nPer Minute: ${actualChancePerMinute.toFixed(2)}%\n${wastePercent.toFixed(1)}% waste from colored plants`
-    : `Per Second: ${baseProbPerSecond.toFixed(3)}% × ${petStrengthValue}/100 = ${actualChancePerSecond.toFixed(3)}%\nPer Minute: ${actualChancePerMinute.toFixed(2)}% (game checks every second)`;
+    ? `Base: ${(baseProbPerSecond * 60).toFixed(2)}%/min × ${petStrengthValue}/100 = ${actualChancePerMinute.toFixed(2)}%/min\n${wastePercent.toFixed(1)}% waste from colored plants`
+    : `Base: ${(baseProbPerSecond * 60).toFixed(2)}%/min × ${petStrengthValue}/100 = ${actualChancePerMinute.toFixed(2)}%/min (game checks every second)`;
 
   // Procs Per Hour (effective)
   const procsCell = row.insertCell();

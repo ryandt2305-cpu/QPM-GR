@@ -1,4 +1,4 @@
-import { WeatherPreset } from '../features/weatherSwap';
+import { WeatherPreset } from '../features/weatherUtils';
 export type ShopCategoryKey = 'seeds' | 'eggs' | 'tools' | 'decor';
 interface FeedEntry {
     count: number;

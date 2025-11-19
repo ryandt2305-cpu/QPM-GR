@@ -25,4 +25,4 @@ export interface SessionStatsSummary {
 export declare function getSessionStats(): SessionStatsSummary;
 export declare function resetFeedSession(): void;
 export declare function getFeedStats(): FeedStats;
-//# sourceMappingURL=autoFeed.d.ts.map
+//# sourceMappingURL=feedTracking.d.ts.map

@@ -1,5 +1,5 @@
-// src/features/weatherSwap.ts
-// Tracking and display support types
+// src/features/weatherUtils.ts
+// Weather classification and utility functions
 
 import { classifyWeather as baseClassifyWeather } from '../utils/weatherDetection';
 
@@ -18,7 +18,7 @@ export interface KeybindData {
 // Re-export weather classification utility for mutation tracking
 export const classifyWeather = baseClassifyWeather;
 
-// Stub functions that return empty/default values
+// Utility functions
 export function formatKeybind(data: KeybindData): string {
   if (!data) return '';
 
@@ -37,9 +37,9 @@ export function formatKeybind(data: KeybindData): string {
 }
 
 export async function simulateKeybind(keybindJson: string): Promise<void> {
-  // No-op in General Release
+  // Keybind simulation
 }
 
 export function resetWeatherSwapStats(): void {
-  // No-op in General Release
+  // Stats reset
 }

@@ -223,8 +223,12 @@ function calculateAbilityMetrics(
       oldestProc = firstProc;
     }
 
-    const valueEstimate = estimateAbilityValue(abilityId);
-    abilityValues.set(abilityId, procCount * valueEstimate);
+    // Skip XP boost abilities from value calculations (they don't generate coins/crops)
+    const isXpBoost = abilityId.includes('XPBoost');
+    if (!isXpBoost) {
+      const valueEstimate = estimateAbilityValue(abilityId);
+      abilityValues.set(abilityId, procCount * valueEstimate);
+    }
   }
 
   if (totalProcs === 0) {
@@ -303,6 +307,10 @@ function updatePetMetrics(pets: ActivePetInfo[]): void {
       };
       xpTracking.set(petId, xpTracked);
     } else {
+      // Fix for restored tracking with initialXp=0: update baseline if this is first real update
+      if (xpTracked.initialXp === 0 && xpTracked.currentXp === 0) {
+        xpTracked.initialXp = xp;
+      }
       xpTracked.currentXp = xp;
     }
 

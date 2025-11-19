@@ -8,6 +8,7 @@ import { getAbilityHistorySnapshot, onAbilityHistoryUpdate } from '../store/abil
 import { getPetXpSnapshots } from '../store/petXpTracker';
 import { getMutationSummary } from '../store/mutationSummary';
 import { getStatsSnapshot } from '../store/stats';
+import { getPetEfficiencySnapshot } from './petEfficiency';
 
 const STORAGE_KEY = 'qpm.comprehensiveAnalytics.v1';
 const SAVE_DEBOUNCE_MS = 3000;
@@ -340,11 +341,11 @@ export function recordMutation(type: 'gold' | 'rainbow', species: string, estima
 function calculatePredictions(): void {
   const pets = getActivePetsDebug();
   const xpSnapshots = getPetXpSnapshots();
+  const efficiencySnapshot = getPetEfficiencySnapshot();
 
   snapshot.predictions.petLevelUp.clear();
 
   // Predict pet level-ups based on recent XP gain
-  // This is simplified - real implementation would track XP over time
   for (const pet of pets) {
     if (!pet.species || !pet.level || !pet.xp) continue;
 
@@ -359,8 +360,10 @@ function calculatePredictions(): void {
     const xpNeeded = nextLevelData.xp - pet.xp;
     if (xpNeeded <= 0) continue;
 
-    // Estimate XP rate (this would be tracked over time in reality)
-    const estimatedXpPerHour = 1000; // Placeholder
+    // Get actual XP rate from pet efficiency tracking
+    const petId = pet.petId || pet.slotId || `slot-${pet.slotIndex}`;
+    const efficiencyMetrics = efficiencySnapshot.pets.get(petId);
+    const estimatedXpPerHour = efficiencyMetrics?.xpGainRate || 0;
 
     if (estimatedXpPerHour > 0) {
       const estimatedHours = xpNeeded / estimatedXpPerHour;

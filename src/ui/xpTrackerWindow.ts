@@ -763,12 +763,13 @@ function updateLiveCountdowns(state: XpTrackerWindowState): void {
     const lastProc = parseInt(cell.dataset.lastProc ?? '0', 10);
     const effectiveRate = parseFloat(cell.dataset.effectiveRate ?? '0');
 
-    if (!lastProc || !effectiveRate || effectiveRate <= 0) {
+    // Skip only if there's no rate data at all
+    if (!effectiveRate || effectiveRate <= 0) {
       return;
     }
 
     const minutesBetween = 60 / effectiveRate;
-    const etaResult = calculateLiveETA(lastProc, minutesBetween, effectiveRate);
+    const etaResult = calculateLiveETA(lastProc || null, minutesBetween, effectiveRate);
 
     cell.textContent = etaResult.text;
     cell.style.color = etaResult.isOverdue

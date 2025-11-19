@@ -4,7 +4,7 @@ import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind 
 import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/procRateAnalytics';
 import { getPetEfficiencySnapshot, subscribeToPetEfficiency } from '../features/petEfficiency';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
-import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal } from '../features/comprehensiveAnalytics';
+import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
 import { onHarvestSummary, onHarvestToast, getHarvestSummary } from '../features/harvestReminder';
@@ -8198,6 +8198,107 @@ function createMutationValueSection(): HTMLElement {
   return root;
 }
 
+function showGoalCreationModal(onComplete: () => void): void {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+  const form = document.createElement('div');
+  form.style.cssText = 'background:#1a1a2a;padding:20px;border-radius:8px;max-width:400px;width:90%;';
+
+  form.innerHTML = `
+    <div style="font-weight:bold;font-size:14px;margin-bottom:16px;color:#FFD700;">Create New Goal</div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Goal Type:</label>
+      <select id="goal-type" style="width:100%;padding:6px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:4px;font-size:11px;">
+        <option value="earn_coins">Earn Coins</option>
+        <option value="get_procs">Get Ability Procs</option>
+        <option value="garden_value">Reach Garden Value</option>
+      </select>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Target Amount:</label>
+      <input type="number" id="goal-target" placeholder="e.g., 1000000" style="width:100%;padding:6px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:4px;font-size:11px;">
+    </div>
+
+    <div id="goal-specific" style="margin-bottom:12px;display:none;">
+      <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;" id="goal-specific-label">Ability Name:</label>
+      <input type="text" id="goal-specific-value" placeholder="e.g., Midas Touch" style="width:100%;padding:6px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:4px;font-size:11px;">
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button id="create-goal-btn" style="flex:1;padding:8px;background:#4CAF50;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;">Create</button>
+      <button id="cancel-goal-btn" style="flex:1;padding:8px;background:#333;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Cancel</button>
+    </div>
+  `;
+
+  form.querySelector('#goal-type')!.addEventListener('change', (e) => {
+    const type = (e.target as HTMLSelectElement).value;
+    const specificDiv = form.querySelector('#goal-specific') as HTMLElement;
+    const specificLabel = form.querySelector('#goal-specific-label') as HTMLElement;
+    const specificInput = form.querySelector('#goal-specific-value') as HTMLInputElement;
+
+    if (type === 'get_procs') {
+      specificDiv.style.display = 'block';
+      specificLabel.textContent = 'Ability Name:';
+      specificInput.placeholder = 'e.g., Midas Touch';
+    } else {
+      specificDiv.style.display = 'none';
+    }
+  });
+
+  form.querySelector('#create-goal-btn')!.addEventListener('click', () => {
+    const type = (form.querySelector('#goal-type') as HTMLSelectElement).value;
+    const target = parseInt((form.querySelector('#goal-target') as HTMLInputElement).value);
+    const specificValue = (form.querySelector('#goal-specific-value') as HTMLInputElement).value;
+
+    if (!target || target <= 0) {
+      alert('Please enter a valid target amount');
+      return;
+    }
+
+    let description = '';
+    const goalData: any = {
+      type,
+      target,
+      current: 0,
+    };
+
+    if (type === 'earn_coins') {
+      description = `Earn ${formatNumber(target)} coins`;
+    } else if (type === 'get_procs') {
+      if (!specificValue) {
+        alert('Please enter ability name');
+        return;
+      }
+      goalData.abilityId = specificValue;
+      description = `Get ${target} ${specificValue} procs`;
+    } else if (type === 'garden_value') {
+      description = `Reach ${formatNumber(target)} garden value`;
+    }
+
+    goalData.description = description;
+    addGoal(goalData);
+
+    document.body.removeChild(modal);
+    onComplete();
+  });
+
+  form.querySelector('#cancel-goal-btn')!.addEventListener('click', () => {
+    document.body.removeChild(modal);
+  });
+
+  modal.appendChild(form);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      document.body.removeChild(modal);
+    }
+  });
+
+  document.body.appendChild(modal);
+}
+
 function createGoalsRecordsSection(): HTMLElement {
   const { root, body } = createCard('🎯 Goals & Personal Records', {
     subtitle: 'Custom goals and achievement tracking',
@@ -8268,7 +8369,18 @@ function createGoalsRecordsSection(): HTMLElement {
 
     // Goals Section (show active goals)
     const goalsSection = document.createElement('div');
-    goalsSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎯 Active Goals</div>';
+    const goalsHeader = document.createElement('div');
+    goalsHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px 0;';
+    goalsHeader.innerHTML = '<div style="font-weight:bold;font-size:11px;color:#FFD700;">🎯 Active Goals</div>';
+
+    // Create New Goal button
+    const createGoalBtn = document.createElement('button');
+    createGoalBtn.textContent = '+ New Goal';
+    createGoalBtn.className = 'qpm-button qpm-button--small';
+    createGoalBtn.style.cssText = 'font-size:10px;padding:4px 8px;';
+    createGoalBtn.onclick = () => showGoalCreationModal(render);
+    goalsHeader.appendChild(createGoalBtn);
+    goalsSection.appendChild(goalsHeader);
 
     const activeGoals = snapshot.goals.filter(g => !g.completedAt);
 
@@ -8276,12 +8388,23 @@ function createGoalsRecordsSection(): HTMLElement {
       const goalsContainer = document.createElement('div');
       goalsContainer.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
 
-      activeGoals.slice(0, 5).forEach(goal => {
+      activeGoals.forEach(goal => {
         const progress = Math.min(100, (goal.current / goal.target) * 100);
         const goalDiv = document.createElement('div');
-        goalDiv.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:4px;';
-        goalDiv.innerHTML = `
-          <div style="font-size:10px;margin-bottom:4px;display:flex;justify-content:space-between;">
+        goalDiv.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:4px;position:relative;';
+
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '×';
+        deleteBtn.style.cssText = 'position:absolute;top:4px;right:4px;background:rgba(255,82,82,0.2);color:#FF5252;border:none;border-radius:3px;width:20px;height:20px;cursor:pointer;font-size:14px;line-height:1;';
+        deleteBtn.onclick = () => {
+          removeGoal(goal.id);
+        };
+        goalDiv.appendChild(deleteBtn);
+
+        const goalContent = document.createElement('div');
+        goalContent.innerHTML = `
+          <div style="font-size:10px;margin-bottom:4px;display:flex;justify-content:space-between;padding-right:24px;">
             <strong>${goal.description}</strong>
             <span style="color:#888;">${goal.current}/${goal.target}</span>
           </div>
@@ -8289,6 +8412,7 @@ function createGoalsRecordsSection(): HTMLElement {
             <div style="width:${progress}%;height:100%;background:linear-gradient(90deg,#4CAF50,#8BC34A);transition:width 0.3s;"></div>
           </div>
         `;
+        goalDiv.appendChild(goalContent);
         goalsContainer.appendChild(goalDiv);
       });
 
@@ -8296,7 +8420,7 @@ function createGoalsRecordsSection(): HTMLElement {
     } else {
       const emptyGoals = document.createElement('div');
       emptyGoals.style.cssText = 'padding:12px;text-align:center;color:#888;font-size:10px;font-style:italic;';
-      emptyGoals.textContent = 'No active goals. Goals feature coming soon!';
+      emptyGoals.textContent = 'No active goals. Click "New Goal" to create one!';
       goalsSection.appendChild(emptyGoals);
     }
 

@@ -306,11 +306,12 @@ function updatePetMetrics(pets: ActivePetInfo[]): void {
       xpTracked.currentXp = xp;
     }
 
-    // Calculate XP gain rate
+    // Calculate XP gain rate (require at least 5 minutes of data)
     const xpGained = Math.max(0, xpTracked.currentXp - xpTracked.initialXp);
     const xpDuration = Math.max(1, now - xpTracked.firstSeenAt);
     const xpHours = xpDuration / HOUR_MS;
-    const xpGainRate = xpHours > 0 ? xpGained / xpHours : 0;
+    const MIN_TRACKING_TIME = 5 * 60 * 1000; // 5 minutes minimum
+    const xpGainRate = (xpDuration >= MIN_TRACKING_TIME && xpHours > 0) ? xpGained / xpHours : 0;
 
     // Calculate ability metrics
     const abilityMetrics = calculateAbilityMetrics(

@@ -70,6 +70,16 @@ export interface StatsSnapshot {
     lastDestroyedAt: number | null;
     lastWateredAt: number | null;
   };
+  pets: {
+    totalHatched: number;
+    hatchedByRarity: {
+      normal: number;
+      gold: number;
+      rainbow: number;
+    };
+    lastHatchedAt: number | null;
+    lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
+  };
   meta: {
     initializedAt: number;
     updatedAt: number;
@@ -149,6 +159,16 @@ function createDefaultState(now: number): StatsState {
       lastHarvestedAt: null,
       lastDestroyedAt: null,
       lastWateredAt: null,
+    },
+    pets: {
+      totalHatched: 0,
+      hatchedByRarity: {
+        normal: 0,
+        gold: 0,
+        rainbow: 0,
+      },
+      lastHatchedAt: null,
+      lastHatchedRarity: null,
     },
     meta: {
       initializedAt: now,
@@ -285,6 +305,18 @@ function hydrateState(): StatsState {
     base.garden.lastWateredAt = stored.garden.lastWateredAt ?? null;
   }
 
+  // Pets
+  if (stored.pets) {
+    base.pets.totalHatched = Number(stored.pets.totalHatched ?? 0);
+    if (stored.pets.hatchedByRarity) {
+      base.pets.hatchedByRarity.normal = Number(stored.pets.hatchedByRarity.normal ?? 0);
+      base.pets.hatchedByRarity.gold = Number(stored.pets.hatchedByRarity.gold ?? 0);
+      base.pets.hatchedByRarity.rainbow = Number(stored.pets.hatchedByRarity.rainbow ?? 0);
+    }
+    base.pets.lastHatchedAt = stored.pets.lastHatchedAt ?? null;
+    base.pets.lastHatchedRarity = stored.pets.lastHatchedRarity ?? null;
+  }
+
   // Meta
   if (stored.meta) {
     base.meta.initializedAt = stored.meta.initializedAt ?? base.meta.initializedAt;
@@ -345,6 +377,12 @@ function emitSnapshot(): void {
       lastHarvestedAt: state.garden.lastHarvestedAt,
       lastDestroyedAt: state.garden.lastDestroyedAt,
       lastWateredAt: state.garden.lastWateredAt,
+    },
+    pets: {
+      totalHatched: state.pets.totalHatched,
+      hatchedByRarity: { ...state.pets.hatchedByRarity },
+      lastHatchedAt: state.pets.lastHatchedAt,
+      lastHatchedRarity: state.pets.lastHatchedRarity,
     },
     meta: { ...state.meta },
   };
@@ -495,6 +533,12 @@ export function getStatsSnapshot(): StatsSnapshot {
       lastDestroyedAt: state.garden.lastDestroyedAt,
       lastWateredAt: state.garden.lastWateredAt,
     },
+    pets: {
+      totalHatched: state.pets.totalHatched,
+      hatchedByRarity: { ...state.pets.hatchedByRarity },
+      lastHatchedAt: state.pets.lastHatchedAt,
+      lastHatchedRarity: state.pets.lastHatchedRarity,
+    },
     meta: { ...state.meta },
   };
 }
@@ -642,6 +686,15 @@ export function recordWateringCan(timestamp = Date.now()): void {
   ensureInitialized();
   state.garden.totalWateringCans += 1;
   state.garden.lastWateredAt = timestamp;
+  commitState();
+}
+
+export function recordPetHatch(rarity: 'normal' | 'gold' | 'rainbow', timestamp = Date.now()): void {
+  ensureInitialized();
+  state.pets.totalHatched += 1;
+  state.pets.hatchedByRarity[rarity] += 1;
+  state.pets.lastHatchedAt = timestamp;
+  state.pets.lastHatchedRarity = rarity;
   commitState();
 }
 

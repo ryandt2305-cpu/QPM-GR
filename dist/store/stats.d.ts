@@ -63,6 +63,16 @@ export interface StatsSnapshot {
         lastDestroyedAt: number | null;
         lastWateredAt: number | null;
     };
+    pets: {
+        totalHatched: number;
+        hatchedByRarity: {
+            normal: number;
+            gold: number;
+            rainbow: number;
+        };
+        lastHatchedAt: number | null;
+        lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
+    };
     meta: {
         initializedAt: number;
         updatedAt: number;
@@ -81,6 +91,7 @@ export declare function recordGardenPlant(count?: number, timestamp?: number): v
 export declare function recordGardenHarvest(count?: number, timestamp?: number): void;
 export declare function recordGardenDestroy(count?: number, timestamp?: number): void;
 export declare function recordWateringCan(timestamp?: number): void;
+export declare function recordPetHatch(rarity: 'normal' | 'gold' | 'rainbow', timestamp?: number): void;
 export declare function resetStats(): void;
 export {};
 //# sourceMappingURL=stats.d.ts.map

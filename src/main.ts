@@ -14,6 +14,7 @@ import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore } from './store/inventory';
 import { startAbilityTriggerStore } from './store/abilityLogs';
 import { startGardenTracker } from './store/gardenTracker';
+import { startPetHatchingTracker } from './store/petHatchingTracker';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { initializeProcRateAnalytics } from './features/procRateAnalytics';
@@ -672,6 +673,7 @@ async function initialize(): Promise<void> {
   await startAbilityTriggerStore();
   await startPetInfoStore();
   await startGardenTracker();
+  await startPetHatchingTracker();
 
   // Initialize features
   startCropTypeLocking();

@@ -1,6 +1,10 @@
 // src/ui/originalPanel.ts - Complete UI matching the working original
 // General Release v5.0.0 - Tracking and analytics
 import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind } from '../features/weatherUtils';
+import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/procRateAnalytics';
+import { getPetEfficiencySnapshot, subscribeToPetEfficiency } from '../features/petEfficiency';
+import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
+import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal } from '../features/comprehensiveAnalytics';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
 import { onHarvestSummary, onHarvestToast, getHarvestSummary } from '../features/harvestReminder';
@@ -4878,6 +4882,169 @@ function createTurtleTimerSection(): HTMLElement {
   return root;
 }
 
+function createHowToUseSection(): HTMLElement {
+  const { root, body } = createCard('📖 How to Use QPM', {
+    subtitle: 'Quick guide for each feature',
+    collapsible: true,
+    startCollapsed: false,
+  });
+  root.dataset.qpmSection = 'how-to-use';
+
+  const features = [
+    {
+      icon: '🐢',
+      name: 'Turtle Timer',
+      desc: 'Shows when your pets will proc abilities. Open via button to see detailed ETAs and configure focus modes.'
+    },
+    {
+      icon: '📈',
+      name: 'Ability Tracker',
+      desc: 'Tracks your pet ability procs in real-time. Click "Trackers" button to view proc history and rates.'
+    },
+    {
+      icon: '✨',
+      name: 'XP Tracker',
+      desc: 'Monitors pet XP gains and estimates level-up times. Click "XP Tracker" button to view detailed progress.'
+    },
+    {
+      icon: '🧬',
+      name: 'Mutation Reminder',
+      desc: 'Detects weather events and notifies you which plants can mutate. Enable/disable in the Mutation tab.'
+    },
+    {
+      icon: '🔒',
+      name: 'Crop Locking',
+      desc: 'Lock crops to prevent accidental selling. Toggle sync mode in Inventory Settings to auto-sync with favorites.'
+    },
+    {
+      icon: '📊',
+      name: 'Proc Analytics',
+      desc: 'View proc rate variance, hot/cold streaks, and expected vs actual rates. (See Analytics tabs below)'
+    },
+    {
+      icon: '🏆',
+      name: 'Pet Efficiency',
+      desc: 'Ranks pets by XP rate, ability value/hour, and efficiency scores. (See Analytics tabs below)'
+    },
+    {
+      icon: '💎',
+      name: 'Mutation Value',
+      desc: 'Tracks gold/rainbow generation rates and session value. (See Analytics tabs below)'
+    },
+    {
+      icon: '🎯',
+      name: 'Goals & Records',
+      desc: 'Set custom goals and track personal records like fastest level-up. (See Analytics tabs below)'
+    },
+    {
+      icon: '⏰',
+      name: 'Predictions',
+      desc: 'View ETAs for pet level-ups, next procs, and goal completion. (See Analytics tabs below)'
+    },
+  ];
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;';
+
+  features.forEach(feature => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;border-left:3px solid var(--qpm-primary,#4CAF50);';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:4px;color:var(--qpm-text,#fff);';
+    title.textContent = `${feature.icon} ${feature.name}`;
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:11px;line-height:1.4;color:var(--qpm-text-muted,#999);';
+    desc.textContent = feature.desc;
+
+    card.appendChild(title);
+    card.appendChild(desc);
+    grid.appendChild(card);
+  });
+
+  body.appendChild(grid);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'margin-top:12px;padding:10px;background:#2a1a2a;border-radius:6px;font-size:11px;line-height:1.5;color:#aaa;border:1px dashed #9C27B0;';
+  note.innerHTML = '💡 <strong>Tip:</strong> QPM is a <em>passive information tool</em> - it shows you data to help make decisions, but never automates actions. All game interactions must be done manually!';
+  body.appendChild(note);
+
+  return root;
+}
+
+function createAnalyticsIntroSection(): HTMLElement {
+  const { root, body } = createCard('📊 Analytics Dashboard', {
+    subtitle: 'Performance insights and tracking',
+  });
+  root.dataset.qpmSection = 'analytics-intro';
+
+  const intro = document.createElement('div');
+  intro.style.cssText = 'padding:12px;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:8px;margin-bottom:12px;';
+
+  const introText = document.createElement('div');
+  introText.style.cssText = 'font-size:12px;line-height:1.6;color:#ccc;margin-bottom:10px;';
+  introText.innerHTML = `
+    <strong style="color:#4CAF50;font-size:14px;">Welcome to QPM Analytics!</strong><br>
+    Your comprehensive performance tracking system for Magic Garden.<br><br>
+    Use the tabs below to access detailed analytics:
+  `;
+
+  const tabList = document.createElement('div');
+  tabList.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:8px;';
+
+  const tabs = [
+    { icon: '📊', name: 'Proc Analytics', desc: 'Variance & streaks' },
+    { icon: '🏆', name: 'Pet Efficiency', desc: 'Rankings & scores' },
+    { icon: '💎', name: 'Mutation Value', desc: 'Generation rates' },
+    { icon: '🎯', name: 'Goals & Records', desc: 'Progress tracking' },
+    { icon: '⏰', name: 'Predictions', desc: 'ETAs & forecasts' },
+  ];
+
+  tabs.forEach(tab => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:8px;background:rgba(76,175,80,0.1);border-radius:4px;border:1px solid rgba(76,175,80,0.3);';
+    item.innerHTML = `
+      <div style="font-weight:600;font-size:12px;color:#4CAF50;">${tab.icon} ${tab.name}</div>
+      <div style="font-size:10px;color:#999;margin-top:2px;">${tab.desc}</div>
+    `;
+    tabList.appendChild(item);
+  });
+
+  intro.appendChild(introText);
+  intro.appendChild(tabList);
+  body.appendChild(intro);
+
+  const statsPreview = document.createElement('div');
+  statsPreview.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;';
+
+  const stats = [
+    { label: 'Session Time', value: '0m', color: '#4CAF50' },
+    { label: 'Total Procs', value: '0', color: '#2196F3' },
+    { label: 'Session Value', value: '0g', color: '#FFB74D' },
+    { label: 'Active Pets', value: '0', color: '#9C27B0' },
+  ];
+
+  stats.forEach(stat => {
+    const statCard = document.createElement('div');
+    statCard.style.cssText = `background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;text-align:center;border-top:2px solid ${stat.color};`;
+    statCard.innerHTML = `
+      <div style="font-size:20px;font-weight:700;color:${stat.color};">${stat.value}</div>
+      <div style="font-size:10px;color:#999;margin-top:4px;">${stat.label}</div>
+    `;
+    statsPreview.appendChild(statCard);
+  });
+
+  body.appendChild(statsPreview);
+
+  const navHint = document.createElement('div');
+  navHint.style.cssText = 'margin-top:12px;padding:8px;background:#1a1a2a;border-radius:4px;text-align:center;font-size:11px;color:#888;';
+  navHint.innerHTML = '👉 Click the analytics tabs in the navigation menu to view detailed insights';
+  body.appendChild(navHint);
+
+  return root;
+}
+
 function createTrackersSection(): HTMLElement[] {
   if (uiState.mutationTrackerUnsubscribe) {
     uiState.mutationTrackerUnsubscribe();
@@ -6385,8 +6552,11 @@ function createTrackersSection(): HTMLElement[] {
   // END OLD TRACKER SECTIONS
   // ============================================================================
 
-  // Trackers now accessible via tab buttons
-  return [];
+  // Dashboard: How to Use + Analytics Cards
+  const howToUseSection = createHowToUseSection();
+  const analyticsIntroSection = createAnalyticsIntroSection();
+
+  return [howToUseSection, analyticsIntroSection];
 }
 
 /**

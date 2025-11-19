@@ -2589,6 +2589,11 @@ export function createOriginalUI(): HTMLElement {
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   // Feed tab not included in this version
   registerTab('mutation', 'Mutation Reminder', '🧬', [mutationSection]);
+  registerTab('proc-analytics', 'Proc Analytics', '📊', [createProcAnalyticsSection()]);
+  registerTab('pet-efficiency', 'Pet Efficiency', '🏆', [createPetEfficiencySection()]);
+  registerTab('mutation-value', 'Mutation Value', '💎', [createMutationValueSection()]);
+  registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
+  registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
@@ -7877,6 +7882,136 @@ function createInventoryLockerSection(initialSyncMode: boolean): HTMLElement {
   helper.textContent = 'Tip: open inventory to lock species. Sync mode avoids unfavoriting crops you already starred.';
   helper.style.cssText = 'font-size:10px;color:#A5D6A7;line-height:1.4;margin-top:8px;';
   body.appendChild(helper);
+
+  return root;
+}
+
+function createProcAnalyticsSection(): HTMLElement {
+  const { root, body } = createCard('📊 Proc Rate Analytics', {
+    subtitle: 'Variance analysis and streak detection',
+    collapsible: true,
+  });
+  root.dataset.qpmSection = 'proc-analytics';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML = `
+    <strong>📈 Track proc performance:</strong><br>
+    • Expected vs actual proc rates (% variance)<br>
+    • Hot streaks (>150% expected) and cold streaks (<50%)<br>
+    • Average time between procs<br>
+    • Historical rates per hour/day
+  `;
+  body.appendChild(info);
+
+  const comingSoon = document.createElement('div');
+  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+  comingSoon.textContent = 'Analytics UI coming soon! Data is being collected in the background.';
+  body.appendChild(comingSoon);
+
+  return root;
+}
+
+function createPetEfficiencySection(): HTMLElement {
+  const { root, body } = createCard('🏆 Pet Efficiency Rankings', {
+    subtitle: 'Performance scores and rankings',
+    collapsible: true,
+  });
+  root.dataset.qpmSection = 'pet-efficiency';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML = `
+    <strong>🏅 Pet performance rankings:</strong><br>
+    • XP gain rate (XP per hour)<br>
+    • Ability value generated (gold/hour)<br>
+    • Overall efficiency scores (0-100)<br>
+    • Daily and weekly bests
+  `;
+  body.appendChild(info);
+
+  const comingSoon = document.createElement('div');
+  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+  comingSoon.textContent = 'Rankings UI coming soon! Pet efficiency is being tracked.';
+  body.appendChild(comingSoon);
+
+  return root;
+}
+
+function createMutationValueSection(): HTMLElement {
+  const { root, body } = createCard('💎 Mutation Value Tracking', {
+    subtitle: 'Gold/Rainbow generation rates',
+    collapsible: true,
+  });
+  root.dataset.qpmSection = 'mutation-value';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML = `
+    <strong>💰 Value generation tracking:</strong><br>
+    • Gold/Rainbow proc rates per hour<br>
+    • Session total value<br>
+    • Best hour/session records<br>
+    • Weekly trend analysis
+  `;
+  body.appendChild(info);
+
+  const comingSoon = document.createElement('div');
+  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+  comingSoon.textContent = 'Value tracking UI coming soon! Generation rates being monitored.';
+  body.appendChild(comingSoon);
+
+  return root;
+}
+
+function createGoalsRecordsSection(): HTMLElement {
+  const { root, body } = createCard('🎯 Goals & Personal Records', {
+    subtitle: 'Custom goals and achievement tracking',
+    collapsible: true,
+  });
+  root.dataset.qpmSection = 'goals-records';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML = `
+    <strong>🏆 Track your achievements:</strong><br>
+    • Custom goal system with progress bars<br>
+    • Personal records (fastest level-up, most procs, etc.)<br>
+    • Highest value mutations<br>
+    • Best XP gain rates
+  `;
+  body.appendChild(info);
+
+  const comingSoon = document.createElement('div');
+  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+  comingSoon.textContent = 'Goals UI coming soon! Records are being tracked automatically.';
+  body.appendChild(comingSoon);
+
+  return root;
+}
+
+function createPredictionsSection(): HTMLElement {
+  const { root, body } = createCard('⏰ Predictions & ETAs', {
+    subtitle: 'Forecasts and time estimates',
+    collapsible: true,
+  });
+  root.dataset.qpmSection = 'predictions';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML = `
+    <strong>🔮 Prediction system:</strong><br>
+    • Pet level-up ETAs<br>
+    • Next ability proc estimates<br>
+    • Goal completion timelines<br>
+    • Trend-based forecasts
+  `;
+  body.appendChild(info);
+
+  const comingSoon = document.createElement('div');
+  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+  comingSoon.textContent = 'Predictions UI coming soon! Data collection in progress.';
+  body.appendChild(comingSoon);
 
   return root;
 }

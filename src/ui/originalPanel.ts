@@ -7686,7 +7686,7 @@ function createGuideSection(): HTMLElement {
   `;
 
   const img = document.createElement('img');
-  img.src = '/MGGuide.jpeg'; // Path relative to where the game is hosted
+  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
     max-width: 100%;
@@ -7698,7 +7698,7 @@ function createGuideSection(): HTMLElement {
   img.onerror = () => {
     imageContainer.innerHTML = `
       <div style="padding: 40px; color: var(--qpm-text-muted, #999); font-style: italic;">
-        📖 Guide image not found. Please ensure MGGuide.jpeg is in the repository root.
+        📖 Guide image not found. Please ensure MGGuide.jpeg is uploaded to the main branch of the repository.
       </div>
     `;
   };

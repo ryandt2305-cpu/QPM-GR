@@ -20,7 +20,7 @@ import { storage } from '../utils/storage';
 import { getCropLockConfig, setCropLockSyncMode } from '../features/cropTypeLocking';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
-import { subscribeToStats, resetStats, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
+import { subscribeToStats, resetStats, getStatsSnapshot, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
 import { findWeatherCanvas, WEATHER_CANVAS_SELECTORS } from '../utils/weatherDetection';
 import { onActivePetInfos, startPetInfoStore, getActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { estimatePetXpTarget } from '../store/petXpTracker';
@@ -2597,6 +2597,7 @@ export function createOriginalUI(): HTMLElement {
   registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
   registerTab('settings', 'Settings', '⚙️', [createSettingsSection()]);
+  registerTab('stats-overview', 'Stats Overview', '📊', [createStatsOverviewSection()]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
   // Override tab click handlers to open windows instead
@@ -8609,6 +8610,135 @@ function createPredictionsSection(): HTMLElement {
         }
       });
     });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
+
+  return root;
+}
+
+function createStatsOverviewSection(): HTMLElement {
+  const { root, body } = createCard('📊 Statistics Overview', {
+    subtitle: 'Comprehensive stats across all sessions',
+  });
+  root.dataset.qpmSection = 'stats-overview';
+
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toString();
+  };
+
+  const createStatRow = (label: string, value: string, icon: string = '•') => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #2a2a2a;font-size:11px;';
+    row.innerHTML = `
+      <span style="color:#888;">${icon} ${label}</span>
+      <span style="color:#FFD700;font-weight:bold;">${value}</span>
+    `;
+    return row;
+  };
+
+  const createCategoryHeader = (title: string, icon: string) => {
+    const header = document.createElement('div');
+    header.style.cssText = 'font-weight:bold;font-size:13px;color:#FFD700;margin:16px 0 8px 0;padding-bottom:4px;border-bottom:2px solid #FFD700;';
+    header.textContent = `${icon} ${title}`;
+    return header;
+  };
+
+  const updateStats = () => {
+    body.innerHTML = '';
+
+    const stats = getStatsSnapshot();
+
+    // Garden Stats
+    body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
+    body.appendChild(createStatRow('Total Planted', formatNumber(stats.garden.totalPlanted), '🌱'));
+    body.appendChild(createStatRow('Total Harvested', formatNumber(stats.garden.totalHarvested), '🌾'));
+    body.appendChild(createStatRow('Total Destroyed', formatNumber(stats.garden.totalDestroyed), '💥'));
+    body.appendChild(createStatRow('Watering Cans Used', formatNumber(stats.garden.totalWateringCans), '💧'));
+
+    // Pet Stats
+    body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
+    body.appendChild(createStatRow('Total Hatched', formatNumber(stats.pets.totalHatched), '🥚'));
+    body.appendChild(createStatRow('Normal Pets', formatNumber(stats.pets.hatchedByRarity.normal), '⚪'));
+    body.appendChild(createStatRow('Gold Pets', formatNumber(stats.pets.hatchedByRarity.gold), '🟡'));
+    body.appendChild(createStatRow('Rainbow Pets', formatNumber(stats.pets.hatchedByRarity.rainbow), '🌈'));
+
+    // Ability Stats
+    body.appendChild(createCategoryHeader('Ability Performance', '⚡'));
+    body.appendChild(createStatRow('Total Ability Procs', formatNumber(stats.abilities.totalProcs), '⚡'));
+    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(stats.abilities.totalEstimatedValue)} coins`, '💰'));
+
+    // Top 5 abilities by proc count
+    const topByProcs = Object.entries(stats.abilities.procsByAbility)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .slice(0, 5);
+
+    if (topByProcs.length > 0) {
+      const topProcsHeader = document.createElement('div');
+      topProcsHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
+      topProcsHeader.textContent = 'Top Abilities by Count:';
+      body.appendChild(topProcsHeader);
+
+      topByProcs.forEach(([abilityId, count]) => {
+        body.appendChild(createStatRow(abilityId, formatNumber(count as number), '▸'));
+      });
+    }
+
+    // Top 5 abilities by value
+    const topByValue = Object.entries(stats.abilities.valueByAbility)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .slice(0, 5);
+
+    if (topByValue.length > 0) {
+      const topValueHeader = document.createElement('div');
+      topValueHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
+      topValueHeader.textContent = 'Top Abilities by Value:';
+      body.appendChild(topValueHeader);
+
+      topByValue.forEach(([abilityId, value]) => {
+        body.appendChild(createStatRow(abilityId, `${formatNumber(value as number)} coins`, '▸'));
+      });
+    }
+
+    // Feed Stats
+    body.appendChild(createCategoryHeader('Feeding Activity', '🍖'));
+    body.appendChild(createStatRow('Total Feeds', formatNumber(stats.feed.totalFeeds), '🍖'));
+
+    // Shop Stats
+    body.appendChild(createCategoryHeader('Shop Activity', '🏪'));
+    body.appendChild(createStatRow('Total Purchases', formatNumber(stats.shop.totalPurchases), '🛒'));
+    body.appendChild(createStatRow('Coins Spent', formatNumber(stats.shop.totalSpentCoins), '💰'));
+    body.appendChild(createStatRow('Credits Spent', formatNumber(stats.shop.totalSpentCredits), '💎'));
+    body.appendChild(createStatRow('Seeds Bought', formatNumber(stats.shop.purchasesByCategory.seeds), '🌱'));
+    body.appendChild(createStatRow('Eggs Bought', formatNumber(stats.shop.purchasesByCategory.eggs), '🥚'));
+    body.appendChild(createStatRow('Tools Bought', formatNumber(stats.shop.purchasesByCategory.tools), '🔧'));
+    body.appendChild(createStatRow('Decor Bought', formatNumber(stats.shop.purchasesByCategory.decor), '🎨'));
+
+    // Weather Stats
+    body.appendChild(createCategoryHeader('Weather Activity', '🌤️'));
+    body.appendChild(createStatRow('Total Swaps', formatNumber(stats.weather.totalSwaps), '🔄'));
+    body.appendChild(createStatRow('Weather Swaps', formatNumber(stats.weather.swapsByState.weather), '🌈'));
+    body.appendChild(createStatRow('No-Weather Swaps', formatNumber(stats.weather.swapsByState.noweather), '⚫'));
+    body.appendChild(createStatRow('Cooldown Blocks', formatNumber(stats.weather.cooldownBlocks), '🚫'));
+  };
+
+  // Initial update
+  updateStats();
+
+  // Subscribe to stats changes for live updates
+  const unsubscribe = subscribeToStats(() => {
+    updateStats();
+  });
+
+  // Cleanup on element removal
+  const observer = new MutationObserver(() => {
+    if (!document.contains(root)) {
+      unsubscribe();
+      observer.disconnect();
+    }
   });
   if (root.parentElement) {
     observer.observe(root.parentElement, { childList: true, subtree: true });

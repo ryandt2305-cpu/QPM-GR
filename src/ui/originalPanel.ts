@@ -6701,21 +6701,39 @@ function renderTrackersWindow(root: HTMLElement): void {
     footer,
     abilityCheckboxGrid,
     updateInterval: null as number | null,
+    lastPetCount: 0,
   };
 
-  // Subscribe to pet updates
+  // Subscribe to pet updates - only rebuild when structure changes
   onActivePetInfos((infos) => {
     modalLatestInfos = infos;
     modalLatestAnalysis = analyzeActivePetAbilities(infos);
-    updateTrackerWindow(trackerState);
+
+    // Only rebuild table if pet count changed (structure change)
+    if (infos.length !== trackerState.lastPetCount) {
+      trackerState.lastPetCount = infos.length;
+      updateTrackerWindow(trackerState);
+    }
   });
 
   // Initial render
   updateTrackerWindow(trackerState);
+  trackerState.lastPetCount = modalLatestInfos.length;
 
-  // Auto-update every second for live countdowns (like XP tracker)
+  // Live countdown updates every second
   trackerState.updateInterval = window.setInterval(() => {
-    updateTrackerWindowCountdowns(trackerState);
+    const countdownCells = root.querySelectorAll<HTMLElement>('.eta-countdown');
+    countdownCells.forEach((cell) => {
+      const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
+      const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
+
+      if (effectiveRate === 0) return;
+
+      const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
+      const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
+      cell.textContent = etaResult.text;
+      cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
+    });
   }, 1000);
 
   // Cleanup on window close
@@ -7009,34 +7027,6 @@ function updateTrackerWindow(state: {
 
     state.footer.innerHTML = footerParts.join(' • ');
   }
-}
-
-/**
- * Update only the countdown cells (called every second)
- */
-function updateTrackerWindowCountdowns(state: {
-  root: HTMLElement;
-  summaryText: HTMLElement;
-  tbody: HTMLTableSectionElement;
-  footer: HTMLElement;
-  abilityCheckboxGrid: HTMLElement;
-}): void {
-  // Query from root like XP tracker does - more reliable
-  const countdownCells = state.root.querySelectorAll<HTMLElement>('.eta-countdown');
-  countdownCells.forEach((cell) => {
-    const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
-    const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
-
-    // Skip only if there's no rate data at all
-    if (effectiveRate === 0) {
-      return;
-    }
-
-    const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
-    const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
-    cell.textContent = etaResult.text;
-    cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
-  });
 }
 
 /**

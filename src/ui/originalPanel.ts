@@ -2586,6 +2586,7 @@ export function createOriginalUI(): HTMLElement {
   // Feed tab not included in this version
   registerTab('mutation', 'Mutation Reminder', '🧬', [mutationSection]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
+  registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
   // Override tab click handlers to open windows instead
   const trackersButton = tabButtons.get('trackers');
@@ -6050,8 +6051,11 @@ function createTrackersSection(): HTMLElement[] {
           row.appendChild(procsCell);
 
           const etaCell = document.createElement('td');
+          etaCell.className = 'eta-countdown-dashboard';
+          etaCell.dataset.lastProc = String(entry.lastProcAt ?? 0);
+          etaCell.dataset.effectiveRate = String(entry.procsPerHour);
           const etaText = entry.expectedMinutesBetween != null ? formatMinutesPretty(entry.expectedMinutesBetween) : '—';
-          etaCell.textContent = etaText;
+          etaCell.textContent = `${etaText} Est.`;
           etaCell.title = entry.lastProcAt != null ? `Last proc ${formatSince(entry.lastProcAt)}` : 'No proc observed yet';
           row.appendChild(etaCell);
 
@@ -6103,7 +6107,10 @@ function createTrackersSection(): HTMLElement[] {
         totalRow.appendChild(totalProcsCell);
 
         const totalEtaCell = document.createElement('td');
-        totalEtaCell.textContent = group.combinedEtaMinutes != null ? formatMinutesPretty(group.combinedEtaMinutes) : '—';
+        totalEtaCell.className = 'eta-countdown-dashboard';
+        totalEtaCell.dataset.lastProc = String(group.lastProcAt ?? 0);
+        totalEtaCell.dataset.effectiveRate = String(group.totalProcsPerHour);
+        totalEtaCell.textContent = group.combinedEtaMinutes != null ? `${formatMinutesPretty(group.combinedEtaMinutes)} Est.` : '—';
         totalEtaCell.title = group.lastProcAt != null ? `Latest proc ${formatSince(group.lastProcAt)}` : 'No proc observed yet';
         totalRow.appendChild(totalEtaCell);
 
@@ -6361,17 +6368,44 @@ function createTrackersSection(): HTMLElement[] {
     log('⚠️ Failed to start ability trigger store', error);
   });
 
+  // Update ETA countdowns every second in Trackers tab
+  window.setInterval(() => {
+    updateDashboardETACountdowns();
+  }, 1000);
+
+  /*
   uiState.trackerAbilityTicker = window.setInterval(() => {
     renderAbilitySection(latestAnalysis);
   }, 15000);
-
-  return [windowButton, mutationCard.root, abilityCard.root, xpCard.root];
   */
+
   // END OLD TRACKER SECTIONS
   // ============================================================================
 
   // Trackers now accessible via tab buttons
   return [];
+}
+
+/**
+ * Update ETA countdown cells in dashboard
+ */
+function updateDashboardETACountdowns(): void {
+  const countdownCells = document.querySelectorAll('.eta-countdown-dashboard');
+  countdownCells.forEach((cell) => {
+    if (!(cell instanceof HTMLElement)) return;
+
+    const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
+    const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
+
+    if (lastProc === 0 || effectiveRate === 0) {
+      return;
+    }
+
+    const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
+    const etaResult = calculateLiveETA(lastProc, expectedMinutesBetween, effectiveRate);
+    cell.textContent = etaResult.text;
+    cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger, #ff4444)' : '';
+  });
 }
 
 // Track the latest pet analysis for the modal window
@@ -7634,6 +7668,45 @@ function createInventoryLockerSection(initialSyncMode: boolean): HTMLElement {
   helper.textContent = 'Tip: open inventory to lock species. Sync mode avoids unfavoriting crops you already starred.';
   helper.style.cssText = 'font-size:10px;color:#A5D6A7;line-height:1.4;margin-top:8px;';
   body.appendChild(helper);
+
+  return root;
+}
+
+function createGuideSection(): HTMLElement {
+  const { root, body } = createCard('📖 Magic Garden Guide', {
+    subtitle: 'Reference guide for game mechanics',
+  });
+  root.dataset.qpmSection = 'guide';
+
+  const imageContainer = document.createElement('div');
+  imageContainer.style.cssText = `
+    width: 100%;
+    text-align: center;
+    padding: 12px;
+    background: var(--qpm-surface-1, #1a1a1a);
+    border-radius: 8px;
+  `;
+
+  const img = document.createElement('img');
+  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/MGGuide.jpeg';
+  img.alt = 'Magic Garden Guide';
+  img.style.cssText = `
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  `;
+
+  img.onerror = () => {
+    imageContainer.innerHTML = `
+      <div style="padding: 40px; color: var(--qpm-text-muted, #999); font-style: italic;">
+        📖 Guide image not found. Please ensure MGGuide.jpeg is uploaded to the main branch of the repository.
+      </div>
+    `;
+  };
+
+  imageContainer.appendChild(img);
+  body.appendChild(imageContainer);
 
   return root;
 }

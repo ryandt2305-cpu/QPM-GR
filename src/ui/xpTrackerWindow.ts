@@ -23,7 +23,6 @@ export interface XpTrackerWindowState {
   petLevelTbody: HTMLTableSectionElement; // All active pets level progress
   tbody: HTMLTableSectionElement; // XP generation abilities
   combinedTbody: HTMLTableSectionElement;
-  configTbody: HTMLTableSectionElement;
   updateInterval: number | null;
   latestPets: ActivePetInfo[];
   latestStats: XpAbilityStats[];
@@ -173,28 +172,6 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
   // Combined Totals Section (info now shown in XP Generation Summary)
   const combinedTbody = document.createElement('tbody') as HTMLTableSectionElement;
 
-  // XP Configuration Section
-  const configSection = createCollapsibleSection(
-    '⚙️ XP Per Level Configuration',
-    'xp-config-section',
-    false // Collapsed by default
-  );
-  const configTable = createConfigTable();
-  const configTbody = configTable.querySelector('tbody') as HTMLTableSectionElement;
-  configSection.content.appendChild(configTable);
-
-  const configHelp = document.createElement('div');
-  configHelp.style.cssText = `
-    padding: 8px 12px;
-    color: var(--qpm-text-muted, #aaa);
-    font-size: 11px;
-    font-style: italic;
-  `;
-  configHelp.textContent = 'Tip: Input the XP required to gain +1 Strength. MAX STR is calculated automatically based on each pet\'s Target Scale.';
-  configSection.content.appendChild(configHelp);
-
-  root.appendChild(configSection.root);
-
   document.body.appendChild(root);
 
   // Make draggable
@@ -206,7 +183,6 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     petLevelTbody,
     tbody,
     combinedTbody,
-    configTbody,
     updateInterval: null,
     latestPets: [],
     latestStats: [],
@@ -363,34 +339,6 @@ function createXpTable(): HTMLTableElement {
 }
 
 /**
- * Create XP configuration table
- */
-function createConfigTable(): HTMLTableElement {
-  const table = document.createElement('table');
-  table.style.cssText = `
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  `;
-
-  const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr style="background: var(--qpm-surface-2, #222); border-bottom: 2px solid var(--qpm-border, #555);">
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">Species</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">XP Per Level</th>
-      <th style="padding: 10px 12px; text-align: center; color: var(--qpm-text, #fff); font-weight: 600;">Actions</th>
-    </tr>
-  `;
-
-  const tbody = document.createElement('tbody');
-
-  table.appendChild(thead);
-  table.appendChild(tbody);
-
-  return table;
-}
-
-/**
  * Update XP tracker display
  */
 function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
@@ -502,14 +450,7 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
   }
 
   // Check if species list changed
-  const speciesChanged =
-    currentSpecies.size !== state.lastKnownSpecies.size ||
-    Array.from(currentSpecies).some(s => !state.lastKnownSpecies.has(s));
-
-  if (speciesChanged) {
-    state.lastKnownSpecies = currentSpecies;
-    updateConfigTable(state);
-  }
+  state.lastKnownSpecies = currentSpecies;
 }
 
 /**
@@ -810,216 +751,6 @@ function updateLevelProgressDisplays(state: XpTrackerWindowState): void {
   for (const pet of state.latestPets) {
     createPetLevelRow(state.petLevelTbody, pet, state.totalTeamXpPerHour);
   }
-}
-
-/**
- * Update config table
- */
-function updateConfigTable(state: XpTrackerWindowState): void {
-  state.configTbody.innerHTML = '';
-
-  const config = getAllSpeciesXpConfig();
-  const uniqueSpecies = new Set<string>();
-
-  // Add species from active pets
-  for (const pet of state.latestPets) {
-    if (pet.species) {
-      uniqueSpecies.add(pet.species);
-    }
-  }
-
-  // Add species from existing config
-  for (const species of Object.keys(config)) {
-    uniqueSpecies.add(species);
-  }
-
-  // Create rows for each species
-  for (const species of Array.from(uniqueSpecies).sort()) {
-    const row = state.configTbody.insertRow();
-    row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
-
-    // Species name
-    const speciesCell = row.insertCell();
-    speciesCell.textContent = species;
-    speciesCell.style.cssText = `
-      padding: 10px 12px;
-      color: var(--qpm-text, #fff);
-      font-weight: 500;
-    `;
-
-    // XP input
-    const xpCell = row.insertCell();
-    xpCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-    `;
-
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0';
-    input.step = '1000';
-    input.value = String(config[species] ?? '');
-    input.placeholder = 'e.g., 50000';
-    input.style.cssText = `
-      width: 120px;
-      padding: 6px 8px;
-      border: 1px solid var(--qpm-border, #555);
-      background: var(--qpm-background-tertiary, #333);
-      color: var(--qpm-text, #fff);
-      border-radius: 4px;
-      font-size: 12px;
-      font-family: monospace;
-    `;
-
-    // Function to save the value
-    const saveValue = () => {
-      const value = parseInt(input.value, 10);
-      if (!isNaN(value) && value > 0) {
-        setSpeciesXpPerLevel(species, value);
-        // Only update the level progress displays, not the entire table
-        updateLevelProgressDisplays(state);
-        // Visual feedback
-        input.style.borderColor = 'var(--qpm-accent, #4CAF50)';
-        setTimeout(() => {
-          input.style.borderColor = 'var(--qpm-border, #555)';
-        }, 500);
-      }
-    };
-
-    // Prevent game from capturing number key presses
-    input.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      // Save on Enter key
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        saveValue();
-        input.blur();
-      }
-    });
-    input.addEventListener('keyup', (e) => {
-      e.stopPropagation();
-    });
-    input.addEventListener('keypress', (e) => {
-      e.stopPropagation();
-    });
-
-    // Use blur to save when clicking away
-    input.onblur = () => {
-      saveValue();
-    };
-
-    xpCell.appendChild(input);
-
-    // Actions
-    const actionsCell = row.insertCell();
-    actionsCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: center;
-    `;
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = '💾';
-    saveBtn.title = 'Click to save (or press Enter)';
-    saveBtn.style.cssText = `
-      padding: 4px 8px;
-      background: var(--qpm-accent, #4CAF50);
-      border: 1px solid var(--qpm-accent, #4CAF50);
-      border-radius: 4px;
-      color: white;
-      cursor: pointer;
-      font-size: 14px;
-    `;
-
-    saveBtn.onclick = () => {
-      saveValue();
-    };
-
-    actionsCell.appendChild(saveBtn);
-  }
-
-  // Add new species row
-  const addRow = state.configTbody.insertRow();
-  addRow.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444); background: var(--qpm-surface-1, #1a1a1a);';
-
-  const addSpeciesCell = addRow.insertCell();
-  addSpeciesCell.colSpan = 3;
-  addSpeciesCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: center;
-  `;
-
-  const addSpeciesInput = document.createElement('input');
-  addSpeciesInput.type = 'text';
-  addSpeciesInput.placeholder = 'Species name (e.g., Goat)';
-  addSpeciesInput.style.cssText = `
-    width: 200px;
-    padding: 6px 8px;
-    border: 1px solid var(--qpm-border, #555);
-    background: var(--qpm-background-tertiary, #333);
-    color: var(--qpm-text, #fff);
-    border-radius: 4px;
-    font-size: 12px;
-    margin-right: 8px;
-  `;
-
-  // Prevent game from capturing key presses
-  addSpeciesInput.addEventListener('keydown', (e) => e.stopPropagation());
-  addSpeciesInput.addEventListener('keyup', (e) => e.stopPropagation());
-  addSpeciesInput.addEventListener('keypress', (e) => e.stopPropagation());
-
-  const addXpInput = document.createElement('input');
-  addXpInput.type = 'number';
-  addXpInput.min = '0';
-  addXpInput.step = '1000';
-  addXpInput.placeholder = 'XP per level';
-  addXpInput.style.cssText = `
-    width: 120px;
-    padding: 6px 8px;
-    border: 1px solid var(--qpm-border, #555);
-    background: var(--qpm-background-tertiary, #333);
-    color: var(--qpm-text, #fff);
-    border-radius: 4px;
-    font-size: 12px;
-    margin-right: 8px;
-  `;
-
-  // Prevent game from capturing number key presses
-  addXpInput.addEventListener('keydown', (e) => e.stopPropagation());
-  addXpInput.addEventListener('keyup', (e) => e.stopPropagation());
-  addXpInput.addEventListener('keypress', (e) => e.stopPropagation());
-
-  const addBtn = document.createElement('button');
-  addBtn.textContent = '➕ Add Species';
-  addBtn.style.cssText = `
-    padding: 6px 12px;
-    background: var(--qpm-accent, #4CAF50);
-    border: none;
-    color: white;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-  `;
-
-  addBtn.onclick = () => {
-    const species = addSpeciesInput.value.trim();
-    const xp = parseInt(addXpInput.value, 10);
-
-    if (species && !isNaN(xp) && xp > 0) {
-      setSpeciesXpPerLevel(species, xp);
-      addSpeciesInput.value = '';
-      addXpInput.value = '';
-      // Add to known species
-      state.lastKnownSpecies.add(species);
-      // Only rebuild the config table to show the new species
-      updateConfigTable(state);
-      // Update level progress displays in case this species has active pets
-      updateLevelProgressDisplays(state);
-    }
-  };
-
-  addSpeciesCell.appendChild(addSpeciesInput);
-  addSpeciesCell.appendChild(addXpInput);
-  addSpeciesCell.appendChild(addBtn);
 }
 
 /**

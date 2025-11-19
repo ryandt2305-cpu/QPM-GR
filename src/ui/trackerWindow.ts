@@ -133,11 +133,11 @@ export function calculateLiveETA(
   const seconds = Math.floor((msRemaining % 60000) / 1000);
 
   if (hours > 0) {
-    return { text: `${hours}h ${minutes}m ${seconds}s`, isOverdue: false };
+    return { text: `${hours}h ${minutes}m ${seconds}s Est.`, isOverdue: false };
   } else if (minutes > 0) {
-    return { text: `${minutes}m ${seconds}s`, isOverdue: false };
+    return { text: `${minutes}m ${seconds}s Est.`, isOverdue: false };
   } else {
-    return { text: `${seconds}s`, isOverdue: false };
+    return { text: `${seconds}s Est.`, isOverdue: false };
   }
 }
 

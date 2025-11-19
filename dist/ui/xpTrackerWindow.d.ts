@@ -6,7 +6,6 @@ export interface XpTrackerWindowState {
     petLevelTbody: HTMLTableSectionElement;
     tbody: HTMLTableSectionElement;
     combinedTbody: HTMLTableSectionElement;
-    configTbody: HTMLTableSectionElement;
     updateInterval: number | null;
     latestPets: ActivePetInfo[];
     latestStats: XpAbilityStats[];

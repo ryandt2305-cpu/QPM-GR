@@ -53,6 +53,16 @@ export interface StatsSnapshot {
         totalFailures: number;
         failuresByCategory: Record<ShopCategoryKey, number>;
     };
+    garden: {
+        totalPlanted: number;
+        totalHarvested: number;
+        totalDestroyed: number;
+        totalWateringCans: number;
+        lastPlantedAt: number | null;
+        lastHarvestedAt: number | null;
+        lastDestroyedAt: number | null;
+        lastWateredAt: number | null;
+    };
     meta: {
         initializedAt: number;
         updatedAt: number;
@@ -67,6 +77,10 @@ export declare function recordWeatherSwap(stateType: 'weather' | 'noweather', pr
 export declare function recordWeatherCooldownBlock(): void;
 export declare function recordShopPurchase(category: ShopCategoryKey, itemName: string, count: number, coins: number, credits: number, timestamp?: number): void;
 export declare function recordShopFailure(category: ShopCategoryKey, itemName: string, reason: string, timestamp?: number): void;
+export declare function recordGardenPlant(count?: number, timestamp?: number): void;
+export declare function recordGardenHarvest(count?: number, timestamp?: number): void;
+export declare function recordGardenDestroy(count?: number, timestamp?: number): void;
+export declare function recordWateringCan(timestamp?: number): void;
 export declare function resetStats(): void;
 export {};
 //# sourceMappingURL=stats.d.ts.map

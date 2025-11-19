@@ -60,6 +60,16 @@ export interface StatsSnapshot {
     totalFailures: number;
     failuresByCategory: Record<ShopCategoryKey, number>;
   };
+  garden: {
+    totalPlanted: number;
+    totalHarvested: number;
+    totalDestroyed: number;
+    totalWateringCans: number;
+    lastPlantedAt: number | null;
+    lastHarvestedAt: number | null;
+    lastDestroyedAt: number | null;
+    lastWateredAt: number | null;
+  };
   meta: {
     initializedAt: number;
     updatedAt: number;
@@ -129,6 +139,16 @@ function createDefaultState(now: number): StatsState {
         tools: 0,
         decor: 0,
       },
+    },
+    garden: {
+      totalPlanted: 0,
+      totalHarvested: 0,
+      totalDestroyed: 0,
+      totalWateringCans: 0,
+      lastPlantedAt: null,
+      lastHarvestedAt: null,
+      lastDestroyedAt: null,
+      lastWateredAt: null,
     },
     meta: {
       initializedAt: now,
@@ -253,6 +273,18 @@ function hydrateState(): StatsState {
     }
   }
 
+  // Garden
+  if (stored.garden) {
+    base.garden.totalPlanted = Number(stored.garden.totalPlanted ?? 0);
+    base.garden.totalHarvested = Number(stored.garden.totalHarvested ?? 0);
+    base.garden.totalDestroyed = Number(stored.garden.totalDestroyed ?? 0);
+    base.garden.totalWateringCans = Number(stored.garden.totalWateringCans ?? 0);
+    base.garden.lastPlantedAt = stored.garden.lastPlantedAt ?? null;
+    base.garden.lastHarvestedAt = stored.garden.lastHarvestedAt ?? null;
+    base.garden.lastDestroyedAt = stored.garden.lastDestroyedAt ?? null;
+    base.garden.lastWateredAt = stored.garden.lastWateredAt ?? null;
+  }
+
   // Meta
   if (stored.meta) {
     base.meta.initializedAt = stored.meta.initializedAt ?? base.meta.initializedAt;
@@ -303,6 +335,16 @@ function emitSnapshot(): void {
       lastPurchase: state.shop.lastPurchase ? { ...state.shop.lastPurchase } : null,
       totalFailures: state.shop.totalFailures,
       failuresByCategory: { ...state.shop.failuresByCategory },
+    },
+    garden: {
+      totalPlanted: state.garden.totalPlanted,
+      totalHarvested: state.garden.totalHarvested,
+      totalDestroyed: state.garden.totalDestroyed,
+      totalWateringCans: state.garden.totalWateringCans,
+      lastPlantedAt: state.garden.lastPlantedAt,
+      lastHarvestedAt: state.garden.lastHarvestedAt,
+      lastDestroyedAt: state.garden.lastDestroyedAt,
+      lastWateredAt: state.garden.lastWateredAt,
     },
     meta: { ...state.meta },
   };
@@ -443,6 +485,16 @@ export function getStatsSnapshot(): StatsSnapshot {
       totalFailures: state.shop.totalFailures,
       failuresByCategory: { ...state.shop.failuresByCategory },
     },
+    garden: {
+      totalPlanted: state.garden.totalPlanted,
+      totalHarvested: state.garden.totalHarvested,
+      totalDestroyed: state.garden.totalDestroyed,
+      totalWateringCans: state.garden.totalWateringCans,
+      lastPlantedAt: state.garden.lastPlantedAt,
+      lastHarvestedAt: state.garden.lastHarvestedAt,
+      lastDestroyedAt: state.garden.lastDestroyedAt,
+      lastWateredAt: state.garden.lastWateredAt,
+    },
     meta: { ...state.meta },
   };
 }
@@ -562,6 +614,34 @@ export function recordShopFailure(
     state.shop.history.splice(0, state.shop.history.length - MAX_HISTORY);
   }
 
+  commitState();
+}
+
+export function recordGardenPlant(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalPlanted += count;
+  state.garden.lastPlantedAt = timestamp;
+  commitState();
+}
+
+export function recordGardenHarvest(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalHarvested += count;
+  state.garden.lastHarvestedAt = timestamp;
+  commitState();
+}
+
+export function recordGardenDestroy(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalDestroyed += count;
+  state.garden.lastDestroyedAt = timestamp;
+  commitState();
+}
+
+export function recordWateringCan(timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalWateringCans += 1;
+  state.garden.lastWateredAt = timestamp;
   commitState();
 }
 

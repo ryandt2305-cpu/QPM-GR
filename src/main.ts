@@ -13,6 +13,7 @@ import { initializeXpTracker } from './store/xpTracker';
 import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore } from './store/inventory';
 import { startAbilityTriggerStore } from './store/abilityLogs';
+import { startGardenTracker } from './store/gardenTracker';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { initializeProcRateAnalytics } from './features/procRateAnalytics';
@@ -670,6 +671,7 @@ async function initialize(): Promise<void> {
   log('📡 Starting data collection stores...');
   await startAbilityTriggerStore();
   await startPetInfoStore();
+  await startGardenTracker();
 
   // Initialize features
   startCropTypeLocking();

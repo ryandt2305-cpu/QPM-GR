@@ -1,0 +1,578 @@
+// src/store/stats.ts
+import { storage } from '../utils/storage';
+import { startWeatherHub, onWeatherSnapshot, getWeatherSnapshot, type WeatherSnapshot } from './weatherHub';
+import type { WeatherPreset } from '../features/weatherSwap';
+
+export type ShopCategoryKey = 'seeds' | 'eggs' | 'tools' | 'decor';
+
+interface FeedEntry {
+  count: number;
+  lastFeedAt: number | null;
+}
+
+interface ShopItemEntry {
+  count: number;
+  coins: number;
+  credits: number;
+  lastPurchasedAt: number;
+}
+
+export interface StatsSnapshot {
+  feed: {
+    totalFeeds: number;
+    perPet: Record<string, FeedEntry>;
+    lastFeedAt: number | null;
+    sessionStart: number;
+  };
+  weather: {
+    totalSwaps: number;
+    swapsByState: Record<'weather' | 'noweather', number>;
+    presetUsage: Record<'weather' | 'noweather', Record<WeatherPreset, number>>;
+    cooldownBlocks: number;
+    timeByKind: Record<string, number>;
+    activeKind: string;
+    lastSwapAt: number | null;
+  };
+  shop: {
+    totalPurchases: number;
+    totalSpentCoins: number;
+    totalSpentCredits: number;
+    purchasesByCategory: Record<ShopCategoryKey, number>;
+    items: Record<string, ShopItemEntry>;
+    history: Array<{
+      itemName: string;
+      category: ShopCategoryKey;
+      count: number;
+      coins: number;
+      credits: number;
+      timestamp: number;
+      success: boolean;
+      failureReason?: string;
+    }>;
+    lastPurchase: {
+      itemName: string;
+      category: ShopCategoryKey;
+      count: number;
+      coins: number;
+      credits: number;
+      timestamp: number;
+    } | null;
+    totalFailures: number;
+    failuresByCategory: Record<ShopCategoryKey, number>;
+  };
+  meta: {
+    initializedAt: number;
+    updatedAt: number;
+    version: number;
+  };
+}
+
+interface StatsState extends StatsSnapshot {
+  weather: StatsSnapshot['weather'] & {
+    lastSnapshotAt: number;
+  };
+}
+
+const STORAGE_KEY = 'quinoa:stats:v1';
+const SAVE_DEBOUNCE_MS = 1200;
+const WEATHER_TICK_INTERVAL = 5000;
+const MAX_SHOP_ITEMS = 40;
+const MAX_HISTORY = 1000; // Store up to 1000 history entries
+
+let state: StatsState;
+let initialized = false;
+let saveTimer: number | null = null;
+let weatherUnsubscribe: (() => void) | null = null;
+let weatherTickTimer: number | null = null;
+let lastWeatherTickAt = Date.now();
+
+const listeners = new Set<(snapshot: StatsSnapshot) => void>();
+
+function createDefaultState(now: number): StatsState {
+  return {
+    feed: {
+      totalFeeds: 0,
+      perPet: {},
+      lastFeedAt: null,
+      sessionStart: now,
+    },
+    weather: {
+      totalSwaps: 0,
+      swapsByState: { weather: 0, noweather: 0 },
+      presetUsage: {
+        weather: { primary: 0, alternate: 0 },
+        noweather: { primary: 0, alternate: 0 },
+      },
+      cooldownBlocks: 0,
+      timeByKind: {},
+      activeKind: 'unknown',
+      lastSwapAt: null,
+      lastSnapshotAt: now,
+    },
+    shop: {
+      totalPurchases: 0,
+      totalSpentCoins: 0,
+      totalSpentCredits: 0,
+      purchasesByCategory: {
+        seeds: 0,
+        eggs: 0,
+        tools: 0,
+        decor: 0,
+      },
+      items: {},
+      history: [],
+      lastPurchase: null,
+      totalFailures: 0,
+      failuresByCategory: {
+        seeds: 0,
+        eggs: 0,
+        tools: 0,
+        decor: 0,
+      },
+    },
+    meta: {
+      initializedAt: now,
+      updatedAt: now,
+      version: 1,
+    },
+  };
+}
+
+function hydrateState(): StatsState {
+  const now = Date.now();
+  const stored = storage.get<Partial<StatsState> | null>(STORAGE_KEY, null);
+  if (!stored || typeof stored !== 'object') {
+    return createDefaultState(now);
+  }
+
+  const base = createDefaultState(stored.meta?.initializedAt ?? now);
+
+  // Feed
+  if (stored.feed) {
+    base.feed.totalFeeds = Number(stored.feed.totalFeeds ?? base.feed.totalFeeds);
+    base.feed.lastFeedAt = stored.feed.lastFeedAt ?? null;
+    base.feed.sessionStart = stored.feed.sessionStart ?? base.feed.sessionStart;
+    if (stored.feed.perPet && typeof stored.feed.perPet === 'object') {
+      for (const [key, value] of Object.entries(stored.feed.perPet)) {
+        const entry = value as FeedEntry;
+        if (!entry) continue;
+        base.feed.perPet[key] = {
+          count: Number(entry.count ?? 0),
+          lastFeedAt: entry.lastFeedAt ?? null,
+        };
+      }
+    }
+  }
+
+  // Weather
+  if (stored.weather) {
+    base.weather.totalSwaps = Number(stored.weather.totalSwaps ?? 0);
+    base.weather.cooldownBlocks = Number(stored.weather.cooldownBlocks ?? 0);
+    base.weather.activeKind = stored.weather.activeKind ?? base.weather.activeKind;
+    base.weather.lastSwapAt = stored.weather.lastSwapAt ?? null;
+    base.weather.lastSnapshotAt = stored.weather.lastSnapshotAt ?? now;
+
+    if (stored.weather.swapsByState) {
+      base.weather.swapsByState.weather = Number(stored.weather.swapsByState.weather ?? 0);
+      base.weather.swapsByState.noweather = Number(stored.weather.swapsByState.noweather ?? 0);
+    }
+
+    if (stored.weather.presetUsage) {
+      for (const stateKey of ['weather', 'noweather'] as const) {
+        const presetRow = stored.weather.presetUsage[stateKey];
+        if (!presetRow) continue;
+        base.weather.presetUsage[stateKey].primary = Number(presetRow.primary ?? 0);
+        base.weather.presetUsage[stateKey].alternate = Number(presetRow.alternate ?? 0);
+      }
+    }
+
+    if (stored.weather.timeByKind && typeof stored.weather.timeByKind === 'object') {
+      for (const [kind, value] of Object.entries(stored.weather.timeByKind)) {
+        base.weather.timeByKind[kind] = Number(value ?? 0);
+      }
+    }
+  }
+
+  // Shop
+  if (stored.shop) {
+    base.shop.totalPurchases = Number(stored.shop.totalPurchases ?? 0);
+    base.shop.totalSpentCoins = Number(stored.shop.totalSpentCoins ?? 0);
+    base.shop.totalSpentCredits = Number(stored.shop.totalSpentCredits ?? 0);
+    if (stored.shop.purchasesByCategory) {
+      for (const key of ['seeds', 'eggs', 'tools', 'decor'] as ShopCategoryKey[]) {
+        const value = stored.shop.purchasesByCategory[key];
+        base.shop.purchasesByCategory[key] = Number(value ?? 0);
+      }
+    }
+    if (stored.shop.items && typeof stored.shop.items === 'object') {
+      for (const [item, entry] of Object.entries(stored.shop.items)) {
+        const snapshot = entry as ShopItemEntry;
+        if (!snapshot) continue;
+        base.shop.items[item] = {
+          count: Number(snapshot.count ?? 0),
+          coins: Number(snapshot.coins ?? 0),
+          credits: Number(snapshot.credits ?? 0),
+          lastPurchasedAt: snapshot.lastPurchasedAt ?? now,
+        };
+      }
+    }
+    if (Array.isArray(stored.shop.history)) {
+      base.shop.history = stored.shop.history
+        .map((row: any) => ({
+          itemName: row.itemName,
+          category: (row.category ?? 'seeds') as ShopCategoryKey,
+          count: Number(row.count ?? 0),
+          coins: Number(row.coins ?? 0),
+          credits: Number(row.credits ?? 0),
+          timestamp: row.timestamp ?? now,
+          success: row.success ?? true, // backward compatibility: assume old entries were successful
+          failureReason: row.failureReason,
+        }))
+        .slice(-MAX_HISTORY);
+    }
+    if (typeof stored.shop.totalFailures === 'number') {
+      base.shop.totalFailures = stored.shop.totalFailures;
+    }
+    if (stored.shop.failuresByCategory && typeof stored.shop.failuresByCategory === 'object') {
+      base.shop.failuresByCategory = {
+        seeds: Number(stored.shop.failuresByCategory.seeds ?? 0),
+        eggs: Number(stored.shop.failuresByCategory.eggs ?? 0),
+        tools: Number(stored.shop.failuresByCategory.tools ?? 0),
+        decor: Number(stored.shop.failuresByCategory.decor ?? 0),
+      };
+    }
+    if (stored.shop.lastPurchase) {
+      base.shop.lastPurchase = {
+        itemName: stored.shop.lastPurchase.itemName,
+        category: (stored.shop.lastPurchase.category ?? 'seeds') as ShopCategoryKey,
+        count: Number(stored.shop.lastPurchase.count ?? 0),
+        coins: Number(stored.shop.lastPurchase.coins ?? 0),
+        credits: Number(stored.shop.lastPurchase.credits ?? 0),
+        timestamp: stored.shop.lastPurchase.timestamp ?? now,
+      };
+    }
+  }
+
+  // Meta
+  if (stored.meta) {
+    base.meta.initializedAt = stored.meta.initializedAt ?? base.meta.initializedAt;
+    base.meta.updatedAt = stored.meta.updatedAt ?? base.meta.updatedAt;
+    base.meta.version = stored.meta.version ?? base.meta.version;
+  }
+
+  return base;
+}
+
+function ensureInitialized(): void {
+  if (!initialized) {
+    initializeStatsStore();
+  }
+}
+
+function emitSnapshot(): void {
+  const snapshot: StatsSnapshot = {
+    feed: {
+      totalFeeds: state.feed.totalFeeds,
+      perPet: Object.fromEntries(
+        Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
+      ),
+      lastFeedAt: state.feed.lastFeedAt,
+      sessionStart: state.feed.sessionStart,
+    },
+    weather: {
+      totalSwaps: state.weather.totalSwaps,
+      swapsByState: { ...state.weather.swapsByState },
+      presetUsage: {
+        weather: { ...state.weather.presetUsage.weather },
+        noweather: { ...state.weather.presetUsage.noweather },
+      },
+      cooldownBlocks: state.weather.cooldownBlocks,
+      timeByKind: { ...state.weather.timeByKind },
+      activeKind: state.weather.activeKind,
+      lastSwapAt: state.weather.lastSwapAt,
+    },
+    shop: {
+      totalPurchases: state.shop.totalPurchases,
+      totalSpentCoins: state.shop.totalSpentCoins,
+      totalSpentCredits: state.shop.totalSpentCredits,
+      purchasesByCategory: { ...state.shop.purchasesByCategory },
+      items: Object.fromEntries(
+        Object.entries(state.shop.items).map(([key, value]) => [key, { ...value }])
+      ),
+      history: state.shop.history.map((row) => ({ ...row })),
+      lastPurchase: state.shop.lastPurchase ? { ...state.shop.lastPurchase } : null,
+      totalFailures: state.shop.totalFailures,
+      failuresByCategory: { ...state.shop.failuresByCategory },
+    },
+    meta: { ...state.meta },
+  };
+
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.error('[stats] subscriber error', error);
+    }
+  }
+}
+
+function scheduleSave(): void {
+  if (saveTimer != null) {
+    window.clearTimeout(saveTimer);
+  }
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    try {
+      storage.set(STORAGE_KEY, state);
+    } catch (error) {
+      console.error('[stats] save error', error);
+    }
+  }, SAVE_DEBOUNCE_MS) as unknown as number;
+}
+
+function commitState(): void {
+  state.meta.updatedAt = Date.now();
+  scheduleSave();
+  emitSnapshot();
+}
+
+function pruneShopItems(): void {
+  const entries = Object.entries(state.shop.items);
+  if (entries.length <= MAX_SHOP_ITEMS) return;
+  entries.sort((a, b) => (a[1].lastPurchasedAt ?? 0) - (b[1].lastPurchasedAt ?? 0));
+  const excess = entries.length - MAX_SHOP_ITEMS;
+  for (let i = 0; i < excess; i++) {
+    delete state.shop.items[entries[i]![0]];
+  }
+}
+
+function recordWeatherDuration(targetTimestamp: number): boolean {
+  const now = targetTimestamp;
+  const delta = Math.max(0, now - lastWeatherTickAt);
+  if (delta < 1000) {
+    lastWeatherTickAt = now;
+    state.weather.lastSnapshotAt = now;
+    return false;
+  }
+  const kindKey = state.weather.activeKind || 'unknown';
+  state.weather.timeByKind[kindKey] = (state.weather.timeByKind[kindKey] ?? 0) + delta;
+  lastWeatherTickAt = now;
+  state.weather.lastSnapshotAt = now;
+  return true;
+}
+
+function attachWeatherTracking(): void {
+  startWeatherHub();
+  const current = getWeatherSnapshot();
+  state.weather.activeKind = current.kind ?? 'unknown';
+  state.weather.lastSnapshotAt = current.timestamp;
+  lastWeatherTickAt = Date.now();
+
+  weatherUnsubscribe = onWeatherSnapshot((snapshot: WeatherSnapshot) => {
+    const changed = recordWeatherDuration(snapshot.timestamp);
+    state.weather.activeKind = snapshot.kind ?? 'unknown';
+    if (changed) {
+      commitState();
+    } else {
+      commitState();
+    }
+  }, true);
+
+  weatherTickTimer = window.setInterval(() => {
+    const changed = recordWeatherDuration(Date.now());
+    if (changed) {
+      commitState();
+    }
+  }, WEATHER_TICK_INTERVAL) as unknown as number;
+}
+
+export function initializeStatsStore(): void {
+  if (initialized) return;
+  state = hydrateState();
+  initialized = true;
+  attachWeatherTracking();
+  emitSnapshot();
+}
+
+export function subscribeToStats(listener: (snapshot: StatsSnapshot) => void): () => void {
+  ensureInitialized();
+  listeners.add(listener);
+  try {
+    listener(getStatsSnapshot());
+  } catch (error) {
+    console.error('[stats] immediate subscriber error', error);
+  }
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getStatsSnapshot(): StatsSnapshot {
+  ensureInitialized();
+  return {
+    feed: {
+      totalFeeds: state.feed.totalFeeds,
+      perPet: Object.fromEntries(
+        Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
+      ),
+      lastFeedAt: state.feed.lastFeedAt,
+      sessionStart: state.feed.sessionStart,
+    },
+    weather: {
+      totalSwaps: state.weather.totalSwaps,
+      swapsByState: { ...state.weather.swapsByState },
+      presetUsage: {
+        weather: { ...state.weather.presetUsage.weather },
+        noweather: { ...state.weather.presetUsage.noweather },
+      },
+      cooldownBlocks: state.weather.cooldownBlocks,
+      timeByKind: { ...state.weather.timeByKind },
+      activeKind: state.weather.activeKind,
+      lastSwapAt: state.weather.lastSwapAt,
+    },
+    shop: {
+      totalPurchases: state.shop.totalPurchases,
+      totalSpentCoins: state.shop.totalSpentCoins,
+      totalSpentCredits: state.shop.totalSpentCredits,
+      purchasesByCategory: { ...state.shop.purchasesByCategory },
+      items: Object.fromEntries(
+        Object.entries(state.shop.items).map(([key, value]) => [key, { ...value }])
+      ),
+      history: state.shop.history.map((row) => ({ ...row })),
+      lastPurchase: state.shop.lastPurchase ? { ...state.shop.lastPurchase } : null,
+      totalFailures: state.shop.totalFailures,
+      failuresByCategory: { ...state.shop.failuresByCategory },
+    },
+    meta: { ...state.meta },
+  };
+}
+
+export function recordFeedEvent(petName: string, timestamp = Date.now()): void {
+  ensureInitialized();
+  const key = (petName || '').trim() || 'Unknown Pet';
+  if (!state.feed.perPet[key]) {
+    state.feed.perPet[key] = { count: 0, lastFeedAt: null };
+  }
+  state.feed.perPet[key].count += 1;
+  state.feed.perPet[key].lastFeedAt = timestamp;
+  state.feed.totalFeeds += 1;
+  state.feed.lastFeedAt = timestamp;
+  commitState();
+}
+
+export function recordWeatherSwap(stateType: 'weather' | 'noweather', preset: WeatherPreset, triggeredAt: number): void {
+  ensureInitialized();
+  state.weather.totalSwaps += 1;
+  state.weather.swapsByState[stateType] += 1;
+  state.weather.presetUsage[stateType][preset] += 1;
+  state.weather.lastSwapAt = triggeredAt;
+  commitState();
+}
+
+export function recordWeatherCooldownBlock(): void {
+  ensureInitialized();
+  state.weather.cooldownBlocks += 1;
+  commitState();
+}
+
+export function recordShopPurchase(
+  category: ShopCategoryKey,
+  itemName: string,
+  count: number,
+  coins: number,
+  credits: number,
+  timestamp = Date.now(),
+): void {
+  ensureInitialized();
+  const safeCount = Math.max(0, Math.round(count));
+  const safeCoins = Math.max(0, Math.round(coins));
+  const safeCredits = Math.max(0, Math.round(credits));
+  const label = itemName || 'Unknown Item';
+
+  state.shop.totalPurchases += safeCount;
+  state.shop.totalSpentCoins += safeCoins;
+  state.shop.totalSpentCredits += safeCredits;
+  state.shop.purchasesByCategory[category] = (state.shop.purchasesByCategory[category] ?? 0) + safeCount;
+
+  if (!state.shop.items[label]) {
+    state.shop.items[label] = {
+      count: 0,
+      coins: 0,
+      credits: 0,
+      lastPurchasedAt: timestamp,
+    };
+  }
+
+  const entry = state.shop.items[label]!;
+  entry.count += safeCount;
+  entry.coins += safeCoins;
+  entry.credits += safeCredits;
+  entry.lastPurchasedAt = timestamp;
+
+  pruneShopItems();
+
+  state.shop.lastPurchase = {
+    itemName: label,
+    category,
+    count: safeCount,
+    coins: safeCoins,
+    credits: safeCredits,
+    timestamp,
+  };
+
+  state.shop.history.push({
+    itemName: label,
+    category,
+    count: safeCount,
+    coins: safeCoins,
+    credits: safeCredits,
+    timestamp,
+    success: true,
+  });
+  if (state.shop.history.length > MAX_HISTORY) {
+    state.shop.history.splice(0, state.shop.history.length - MAX_HISTORY);
+  }
+
+  commitState();
+}
+
+export function recordShopFailure(
+  category: ShopCategoryKey,
+  itemName: string,
+  reason: string,
+  timestamp = Date.now(),
+): void {
+  ensureInitialized();
+  const label = itemName || 'Unknown Item';
+
+  state.shop.totalFailures += 1;
+  state.shop.failuresByCategory[category] = (state.shop.failuresByCategory[category] ?? 0) + 1;
+
+  state.shop.history.push({
+    itemName: label,
+    category,
+    count: 0,
+    coins: 0,
+    credits: 0,
+    timestamp,
+    success: false,
+    failureReason: reason,
+  });
+  if (state.shop.history.length > MAX_HISTORY) {
+    state.shop.history.splice(0, state.shop.history.length - MAX_HISTORY);
+  }
+
+  commitState();
+}
+
+export function resetStats(): void {
+  ensureInitialized();
+  const now = Date.now();
+  state = createDefaultState(now);
+  const current = getWeatherSnapshot();
+  state.weather.activeKind = current.kind ?? 'unknown';
+  state.weather.lastSnapshotAt = current.timestamp;
+  lastWeatherTickAt = now;
+  emitSnapshot();
+  scheduleSave();
+}

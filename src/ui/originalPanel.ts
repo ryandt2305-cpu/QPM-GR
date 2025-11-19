@@ -6723,33 +6723,56 @@ function renderTrackersWindow(root: HTMLElement): void {
   // Live countdown updates every second
   trackerState.updateInterval = window.setInterval(() => {
     const countdownCells = root.querySelectorAll<HTMLElement>('.eta-countdown');
+    const now = Date.now();
 
-    // DEBUG: Log every execution to verify interval is running
-    console.log('[QPM Tracker] Interval tick - found cells:', countdownCells.length);
-
-    let updated = 0;
     countdownCells.forEach((cell) => {
       const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
       const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
 
-      console.log('[QPM Tracker] Cell data:', { lastProc, effectiveRate });
-
       if (effectiveRate === 0) {
-        console.log('[QPM Tracker] Skipping cell - no effective rate');
         return;
       }
 
       const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
-      const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
 
-      console.log('[QPM Tracker] ETA result:', etaResult);
+      // For cells without proc history, create a live countdown from first render
+      if (lastProc === 0 && expectedMinutesBetween) {
+        // Store the timestamp when we first saw this cell
+        if (!cell.dataset.countdownStart) {
+          cell.dataset.countdownStart = String(now);
+        }
 
-      cell.textContent = etaResult.text;
-      cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
-      updated++;
+        const countdownStart = parseInt(cell.dataset.countdownStart, 10);
+        const expectedNextProc = countdownStart + expectedMinutesBetween * 60 * 1000;
+        const msRemaining = expectedNextProc - now;
+
+        if (msRemaining > 0) {
+          const totalSeconds = Math.floor(msRemaining / 1000);
+          const hours = Math.floor(totalSeconds / 3600);
+          const mins = Math.floor((totalSeconds % 3600) / 60);
+          const secs = totalSeconds % 60;
+
+          if (hours > 0) {
+            cell.textContent = `${hours}h ${mins}m ${secs}s Est.`;
+          } else if (mins > 0) {
+            cell.textContent = `${mins}m ${secs}s Est.`;
+          } else {
+            cell.textContent = `${secs}s Est.`;
+          }
+          cell.style.color = 'var(--qpm-positive)';
+        } else {
+          // Countdown expired, reset for next cycle
+          cell.dataset.countdownStart = String(now);
+          cell.textContent = 'Ready';
+          cell.style.color = 'var(--qpm-danger)';
+        }
+      } else {
+        // For cells with proc history, use the original calculateLiveETA
+        const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
+        cell.textContent = etaResult.text;
+        cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
+      }
     });
-
-    console.log('[QPM Tracker] Updated cells:', updated);
   }, 1000);
 
   // Cleanup on window close

@@ -4,7 +4,7 @@
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
 import { getActivePetsDebug } from '../store/pets';
-import { getAbilityHistorySnapshot } from '../store/abilityLogs';
+import { getAbilityHistorySnapshot, onAbilityHistoryUpdate } from '../store/abilityLogs';
 import { getPetXpSnapshots } from '../store/petXpTracker';
 import { getMutationSummary } from '../store/mutationSummary';
 import { getStatsSnapshot } from '../store/stats';
@@ -570,10 +570,44 @@ export function initializeComprehensiveAnalytics(): void {
   // Recalculate on init
   recalculateAll();
 
+  // Subscribe to ability logs to auto-update goal progress
+  onAbilityHistoryUpdate(() => {
+    updateGoalProgressFromAbilityLogs();
+  });
+
   // Recalculate periodically (every 60 seconds)
   setInterval(() => {
     recalculateAll();
   }, 60000);
+}
+
+function updateGoalProgressFromAbilityLogs(): void {
+  const historySnapshot = getAbilityHistorySnapshot();
+
+  for (const goal of snapshot.goals) {
+    if (goal.completedAt) continue; // Skip completed goals
+
+    if (goal.type === 'get_procs' && goal.abilityId) {
+      // Count procs for this ability
+      let procCount = 0;
+      for (const history of historySnapshot.values()) {
+        if (history.abilityId === goal.abilityId ||
+            history.abilityId.toLowerCase().includes(goal.abilityId.toLowerCase()) ||
+            goal.abilityId.toLowerCase().includes(history.abilityId.toLowerCase())) {
+          procCount += history.events.length;
+        }
+      }
+
+      if (procCount !== goal.current) {
+        goal.current = procCount;
+        if (procCount >= goal.target && !goal.completedAt) {
+          goal.completedAt = Date.now();
+        }
+      }
+    }
+  }
+
+  notifyListeners();
 }
 
 export function getComprehensiveSnapshot(): ComprehensiveSnapshot {

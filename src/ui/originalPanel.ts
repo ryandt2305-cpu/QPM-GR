@@ -21,7 +21,7 @@ import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
 import { subscribeToStats, resetStats, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
 import { findWeatherCanvas, WEATHER_CANVAS_SELECTORS } from '../utils/weatherDetection';
-import { onActivePetInfos, startPetInfoStore, type ActivePetInfo } from '../store/pets';
+import { onActivePetInfos, startPetInfoStore, getActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { estimatePetXpTarget } from '../store/petXpTracker';
 import {
   getAllMutationSummaries,
@@ -31,7 +31,7 @@ import {
   type MutationSummarySource,
   type MutationWeatherWindow,
 } from '../store/mutationSummary';
-import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryForIdentifiers, type AbilityHistory, type AbilityEvent } from '../store/abilityLogs';
+import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryForIdentifiers, getAbilityHistorySnapshot, type AbilityHistory, type AbilityEvent } from '../store/abilityLogs';
 import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type DynamicAbilityEffect } from '../features/abilityValuation';
 import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
@@ -5045,25 +5045,57 @@ function createAnalyticsIntroSection(): HTMLElement {
 
   const statsPreview = document.createElement('div');
   statsPreview.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;';
-
-  const stats = [
-    { label: 'Session Time', value: '0m', color: '#4CAF50' },
-    { label: 'Total Procs', value: '0', color: '#2196F3' },
-    { label: 'Session Value', value: '0g', color: '#FFB74D' },
-    { label: 'Active Pets', value: '0', color: '#9C27B0' },
-  ];
-
-  stats.forEach(stat => {
-    const statCard = document.createElement('div');
-    statCard.style.cssText = `background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;text-align:center;border-top:2px solid ${stat.color};`;
-    statCard.innerHTML = `
-      <div style="font-size:20px;font-weight:700;color:${stat.color};">${stat.value}</div>
-      <div style="font-size:10px;color:#999;margin-top:4px;">${stat.label}</div>
-    `;
-    statsPreview.appendChild(statCard);
-  });
-
+  statsPreview.id = 'qpm-dashboard-stats';
   body.appendChild(statsPreview);
+
+  // Function to update dashboard stats
+  const updateDashboardStats = () => {
+    const sessionStart = performance.timeOrigin + performance.now();
+    const sessionDuration = Date.now() - sessionStart;
+    const sessionMinutes = Math.floor(sessionDuration / 60000);
+    const sessionHours = Math.floor(sessionMinutes / 60);
+    const sessionTimeStr = sessionHours > 0
+      ? `${sessionHours}h ${sessionMinutes % 60}m`
+      : `${sessionMinutes}m`;
+
+    // Count total procs from ability logs
+    const abilitySnapshot = getAbilityHistorySnapshot();
+    let totalProcs = 0;
+    for (const history of abilitySnapshot.values()) {
+      totalProcs += history.events.length;
+    }
+
+    // Get session value from mutation tracking
+    const mutationSnapshot = getMutationValueSnapshot();
+    const sessionValue = mutationSnapshot.stats.sessionValue;
+    const sessionValueStr = formatNumber(sessionValue);
+
+    // Count active pets
+    const activePets = getActivePetInfos();
+    const activePetCount = activePets.length;
+
+    const stats = [
+      { label: 'Session Time', value: sessionTimeStr, color: '#4CAF50' },
+      { label: 'Total Procs', value: totalProcs.toString(), color: '#2196F3' },
+      { label: 'Session Value', value: sessionValueStr, color: '#FFB74D' },
+      { label: 'Active Pets', value: activePetCount.toString(), color: '#9C27B0' },
+    ];
+
+    statsPreview.innerHTML = '';
+    stats.forEach(stat => {
+      const statCard = document.createElement('div');
+      statCard.style.cssText = `background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;text-align:center;border-top:2px solid ${stat.color};`;
+      statCard.innerHTML = `
+        <div style="font-size:20px;font-weight:700;color:${stat.color};">${stat.value}</div>
+        <div style="font-size:10px;color:#999;margin-top:4px;">${stat.label}</div>
+      `;
+      statsPreview.appendChild(statCard);
+    });
+  };
+
+  // Update every 5 seconds
+  updateDashboardStats();
+  setInterval(updateDashboardStats, 5000);
 
   const navHint = document.createElement('div');
   navHint.style.cssText = 'margin-top:12px;padding:8px;background:#1a1a2a;border-radius:4px;text-align:center;font-size:11px;color:#888;';

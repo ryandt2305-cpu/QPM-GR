@@ -10,8 +10,9 @@ import { startGardenBridge } from './features/gardenBridge';
 import { initializeStatsStore } from './store/stats';
 import { initializePetXpTracker } from './store/petXpTracker';
 import { initializeXpTracker } from './store/xpTracker';
-import { getActivePetsDebug } from './store/pets';
+import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore } from './store/inventory';
+import { startAbilityTriggerStore } from './store/abilityLogs';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { initializeProcRateAnalytics } from './features/procRateAnalytics';
@@ -665,6 +666,11 @@ async function initialize(): Promise<void> {
   initializeXpTracker();
   await startInventoryStore();
 
+  // Start data collection stores FIRST (before analytics need them)
+  log('📡 Starting data collection stores...');
+  await startAbilityTriggerStore();
+  await startPetInfoStore();
+
   // Initialize features
   startCropTypeLocking();
   await startGardenBridge();
@@ -675,7 +681,7 @@ async function initialize(): Promise<void> {
 
   configureTurtleTimer(cfg.turtleTimer);
 
-  // Initialize analytics features
+  // Initialize analytics features (now they have data!)
   log('📊 Initializing analytics features...');
   initializeProcRateAnalytics();
   initializePetEfficiency();

@@ -13,4 +13,4 @@ export declare const classifyWeather: typeof baseClassifyWeather;
 export declare function formatKeybind(data: KeybindData): string;
 export declare function simulateKeybind(keybindJson: string): Promise<void>;
 export declare function resetWeatherSwapStats(): void;
-//# sourceMappingURL=weatherSwap.d.ts.map
+//# sourceMappingURL=weatherUtils.d.ts.map

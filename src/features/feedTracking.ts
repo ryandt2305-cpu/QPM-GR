@@ -1,5 +1,5 @@
-// src/features/autoFeed.ts
-// Tracking and display support types
+// src/features/feedTracking.ts
+// Feed tracking types and session stats
 
 export interface FeedStatEntry {
   count: number;
@@ -29,7 +29,7 @@ export interface SessionStatsSummary {
   modelPetSamples: number;
 }
 
-// Empty/stub implementations
+// Tracking implementations
 export function getSessionStats(): SessionStatsSummary {
   return {
     uptime: '0s',
@@ -42,7 +42,7 @@ export function getSessionStats(): SessionStatsSummary {
 }
 
 export function resetFeedSession(): void {
-  // No-op in General Release
+  // Session reset
 }
 
 export function getFeedStats(): FeedStats {

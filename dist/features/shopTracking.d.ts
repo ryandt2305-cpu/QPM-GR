@@ -37,4 +37,4 @@ export declare function setAutoShopEnabled(enabled: boolean): void;
 export declare function setShopStatusCallback(callback: (status: string) => void): void;
 export declare function setShopUIRefreshCallback(callback: () => void): void;
 export declare function startAutoShop(): void;
-//# sourceMappingURL=autoShop.d.ts.map
+//# sourceMappingURL=shopTracking.d.ts.map

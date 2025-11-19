@@ -1,4 +1,4 @@
-import { ShopCategory } from '../features/autoShop';
+import { ShopCategory } from '../features/shopTracking';
 import { ActivePetInfo } from '../store/pets';
 import { AbilityDefinition } from '../data/petAbilities';
 export interface UIState {

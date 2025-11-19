@@ -1,8 +1,8 @@
 // src/ui/originalPanel.ts - Complete UI matching the working original
 // General Release v5.0.0 - Tracking and analytics
-import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind } from '../features/weatherSwap';
-import { getSessionStats, resetFeedSession } from '../features/autoFeed';
-import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/autoShop';
+import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind } from '../features/weatherUtils';
+import { getSessionStats, resetFeedSession } from '../features/feedTracking';
+import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
 import { onHarvestSummary, onHarvestToast, getHarvestSummary } from '../features/harvestReminder';
 import { onTurtleTimerState, setTurtleTimerEnabled, configureTurtleTimer, getTurtleTimerState, setManualOverride, clearManualOverride, getManualOverride, type PetManualOverride } from '../features/turtleTimer.ts';
 import type { TurtleTimerState, TurtleTimerChannel } from '../features/turtleTimer.ts';
@@ -1263,7 +1263,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     const timing = computeTimingSpread(plant);
     const unluckyText = timing.unluckyMs != null ? formatDurationPretty(timing.unluckyMs) : '';
 
-    // Build turtle booster summary with growth rates
+    // Build turtle summary
     const turtleParts: string[] = [];
     if (plant.contributions.length > 0) {
       turtleParts.push(`🌱 ${speedText} plant`);
@@ -1307,7 +1307,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     } else {
       const cropName = plant.focusSlot?.species || 'Unknown crop';
       const boosterCount = plant.contributions.length;
-      plantSummary.textContent = `${cropName} • ${boosterCount} plant booster${boosterCount === 1 ? '' : 's'}`;
+      plantSummary.textContent = `${cropName} • ${boosterCount} turtle${boosterCount === 1 ? '' : 's'}`;
     }
   }
 
@@ -1344,33 +1344,33 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
       plantTotals.textContent = 'No growing crops yet - plant something to see totals.';
     } else if (plant.status === 'no-turtles') {
       const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
-      plantTotals.textContent = `No growth turtles boosting yet. Normal ETA: ${naturalText}. Feed or assign turtles to cut this down.`;
+      plantTotals.textContent = `No turtles active • ETA: ${naturalText}`;
     } else {
-      plantTotals.textContent = `Total Growth Boost: ${formatMinutesPerHour(plantPerHourReduction)} • Normal ETA: ${
+      plantTotals.textContent = `Boost: ${formatMinutesPerHour(plantPerHourReduction)} • Base: ${
         plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—'
-      } • Estimated Time Cut: ${plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—'}`;
+      } • Saved: ${plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—'}`;
     }
   }
 
   const plantSimple = uiState.turtlePlantSimple;
   if (plantSimple) {
     if (!snapshot.enabled) {
-      plantSimple.textContent = "Enable Bella's temple to project crop finish times with turtle boosts.";
+      plantSimple.textContent = "Enable timer to track crop finish times.";
     } else if (plantFocusEnabled && !snapshot.focusTargetAvailable) {
       plantSimple.textContent = hasPlantTargets
-        ? 'Pick a target plant with Focus to show its Normal ETA and estimated cut.'
-        : 'Waiting for an active garden snapshot - move the camera or harvest to refresh.';
+        ? 'Select a plant to track.'
+        : 'Waiting for garden data...';
     } else if (plant.status === 'no-data') {
-      plantSimple.textContent = 'Waiting for an active garden snapshot - move the camera or harvest to refresh.';
+      plantSimple.textContent = 'Waiting for garden data...';
     } else if (plant.status === 'no-crops') {
-      plantSimple.textContent = 'No crops are growing. Plant seeds to start the turtle timer.';
+      plantSimple.textContent = 'No crops growing.';
     } else if (plant.status === 'no-turtles') {
       const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
-      plantSimple.textContent = `Focused crop matures in ${formatDurationPretty(plant.naturalMsRemaining)} (no turtle boost active). Normal ETA: ${naturalText}.`;
+      plantSimple.textContent = `Matures in ${formatDurationPretty(plant.naturalMsRemaining)} (no boost) • Base ETA: ${naturalText}`;
     } else {
       const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
       const savedText = plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—';
-      plantSimple.textContent = `Focused crop matures in ${formatDurationPretty(plant.adjustedMsRemaining)} (Normal ETA: ${naturalText}); Estimated Time Cut: ${savedText}.`;
+      plantSimple.textContent = `Matures in ${formatDurationPretty(plant.adjustedMsRemaining)} (Base: ${naturalText}) • Saved: ${savedText}`;
     }
   }
 
@@ -1397,7 +1397,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     } else if (egg.status === 'no-eggs') {
       eggSummary.textContent = 'No eggs incubating.';
     } else {
-  eggSummary.textContent = `${egg.growingSlots}/${egg.trackedSlots} growing eggs • ${egg.contributions.length} booster${egg.contributions.length === 1 ? '' : 's'}`;
+  eggSummary.textContent = `${egg.growingSlots}/${egg.trackedSlots} eggs • ${egg.contributions.length} turtle${egg.contributions.length === 1 ? '' : 's'}`;
     }
   }
 
@@ -1429,16 +1429,16 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
         ? 'Total Hatch Boost will appear once a target egg is selected.'
         : 'Waiting for a fresh egg snapshot...';
     } else if (egg.status === 'no-eggs') {
-      eggTotals.textContent = 'No incubating eggs detected yet – hatchery estimates will appear here.';
+      eggTotals.textContent = 'No eggs incubating.';
     } else if (egg.status === 'no-turtles') {
       const naturalText = eggNaturalMinutes != null ? formatMinutesWithUnit(eggNaturalMinutes) : '—';
-      eggTotals.textContent = `No hatch turtles boosting yet. Normal ETA: ${naturalText}. Assign turtles to speed this up.`;
+      eggTotals.textContent = `No turtles active • ETA: ${naturalText}`;
     } else if (egg.status === 'estimating') {
-      eggTotals.textContent = `Total Growth Boost: ${formatMinutesPerHour(eggPerHourReduction)} • Normal ETA: ${
+      eggTotals.textContent = `Boost: ${formatMinutesPerHour(eggPerHourReduction)} • Base: ${
         eggNaturalMinutes != null ? formatMinutesWithUnit(eggNaturalMinutes) : '—'
-      } • Estimated Time Cut: ${eggMinutesSaved != null ? formatMinutesWithUnit(eggMinutesSaved) : '—'}`;
+      } • Saved: ${eggMinutesSaved != null ? formatMinutesWithUnit(eggMinutesSaved) : '—'}`;
     } else {
-      eggTotals.textContent = 'Waiting for an egg snapshot…';
+      eggTotals.textContent = 'Waiting for data…';
     }
   }
 
@@ -1639,7 +1639,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     if (!snapshot.enabled) {
       plantTable.appendChild(createPlaceholder('Timer disabled.'));
     } else if (plant.contributions.length === 0) {
-      plantTable.appendChild(createPlaceholder('No growth turtles contributing yet.'));
+      plantTable.appendChild(createPlaceholder('No turtles active.'));
     } else {
       for (const entry of plant.contributions) {
         const row = document.createElement('div');
@@ -1679,7 +1679,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     if (!snapshot.enabled) {
       eggTable.appendChild(createPlaceholder('Timer disabled.'));
     } else if (egg.contributions.length === 0) {
-      eggTable.appendChild(createPlaceholder('No egg boosters contributing yet.'));
+      eggTable.appendChild(createPlaceholder('No egg boosters active.'));
     } else {
       for (const entry of egg.contributions) {
         const row = document.createElement('div');
@@ -2579,14 +2579,13 @@ export function createOriginalUI(): HTMLElement {
     tabs.set(key, tab);
   };
 
-  registerTab('dashboard', 'Dashboard', '📊', [statsHeader, statsSection, ...trackerSections, notificationsSection]);
+  registerTab('dashboard', 'Dashboard', '📊', [...trackerSections, notificationsSection]);
   registerTab('turtle', 'Turtle Timer', '🐢', [turtleSection]);
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   // Feed tab not included in this version
-  registerTab('weather', 'Weather & Events', '🌦️', [weatherSection, harvestSection, mutationSection]);
-  registerTab('shop', 'Shop & Locker', '🛒', [shopSection, lockerSection]);
-  registerTab('roadmap', 'Roadmap', '🚧', [roadmapSection]);
+  registerTab('mutation', 'Mutation Reminder', '🧬', [mutationSection]);
+  registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
 
   // Override tab click handlers to open windows instead
   const trackersButton = tabButtons.get('trackers');
@@ -7492,7 +7491,7 @@ function createShopSection(): HTMLElement {
   uiState.shopStatus = sStatus;
   uiState.shopItemToggles = null;
 
-  import('../features/autoShop')
+  import('../features/shopTracking')
     .then((module) => {
       module.setShopStatusCallback((status: string) => {
         sStatus.textContent = status;
@@ -7504,18 +7503,18 @@ function createShopSection(): HTMLElement {
       latestRestockInfo = module.getRestockInfo();
       updateShopCountdownViews();
     })
-    .catch((error) => log('⚠️ Failed to initialize auto shop callbacks', error));
+    .catch((error) => log('⚠️ Failed to initialize shop callbacks', error));
 
   return root;
 }
 
 function refreshShopItemsUI(container: HTMLElement): void {
   Promise.all([
-    import('../features/autoShop'),
+    import('../features/shopTracking'),
     import('../store/shopStock'),
   ])
-    .then(([autoShopModule, shopStockModule]) => {
-      const { getConfig, setItemEnabled } = autoShopModule;
+    .then(([shopTrackingModule, shopStockModule]) => {
+      const { getConfig, setItemEnabled } = shopTrackingModule;
       const { getShopStockState } = shopStockModule;
 
       const config = getConfig() as AutoShopConfig;

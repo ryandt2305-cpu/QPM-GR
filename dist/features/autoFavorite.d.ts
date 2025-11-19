@@ -10,4 +10,5 @@ export declare function subscribeToAutoFavoriteConfig(listener: (config: AutoFav
 export declare function shouldAutoFavoritePet(rarity: string): boolean;
 export declare function shouldAutoFavoriteProduce(rarity: string): boolean;
 export declare function favoriteGameItem(itemId: string, itemType: 'pet' | 'produce'): boolean;
+export declare function autoFavoriteIfNeeded(itemId: string, itemType: 'pet' | 'produce', rarity: string): boolean;
 //# sourceMappingURL=autoFavorite.d.ts.map

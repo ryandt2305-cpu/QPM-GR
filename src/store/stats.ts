@@ -20,6 +20,7 @@ interface ShopItemEntry {
 export interface StatsSnapshot {
   feed: {
     totalFeeds: number;
+    manualFeeds: number;
     perPet: Record<string, FeedEntry>;
     lastFeedAt: number | null;
     sessionStart: number;
@@ -120,6 +121,7 @@ function createDefaultState(now: number): StatsState {
   return {
     feed: {
       totalFeeds: 0,
+      manualFeeds: 0,
       perPet: {},
       lastFeedAt: null,
       sessionStart: now,
@@ -371,6 +373,7 @@ function emitSnapshot(): void {
   const snapshot: StatsSnapshot = {
     feed: {
       totalFeeds: state.feed.totalFeeds,
+      manualFeeds: state.feed.manualFeeds,
       perPet: Object.fromEntries(
         Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
       ),
@@ -534,6 +537,7 @@ export function getStatsSnapshot(): StatsSnapshot {
   return {
     feed: {
       totalFeeds: state.feed.totalFeeds,
+      manualFeeds: state.feed.manualFeeds,
       perPet: Object.fromEntries(
         Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
       ),
@@ -614,6 +618,14 @@ export function recordFeedEvent(petName: string, timestamp = Date.now()): void {
   }
   state.feed.perPet[key].count += 1;
   state.feed.perPet[key].lastFeedAt = timestamp;
+  state.feed.totalFeeds += 1;
+  state.feed.lastFeedAt = timestamp;
+  commitState();
+}
+
+export function recordFeedManual(timestamp = Date.now()): void {
+  ensureInitialized();
+  state.feed.manualFeeds += 1;
   state.feed.totalFeeds += 1;
   state.feed.lastFeedAt = timestamp;
   commitState();

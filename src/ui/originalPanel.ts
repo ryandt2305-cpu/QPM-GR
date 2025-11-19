@@ -8535,7 +8535,10 @@ function createPredictionsSection(): HTMLElement {
         petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
 
         const hoursLeft = eta.estimatedHours;
-        const timeText = hoursLeft < 1
+        const hasXpRate = eta.xpPerHour > 0;
+        const timeText = !hasXpRate
+          ? 'Calculating...'
+          : hoursLeft < 1
           ? `${Math.round(hoursLeft * 60)} minutes`
           : hoursLeft < 24
           ? `${hoursLeft.toFixed(1)} hours`
@@ -8543,12 +8546,12 @@ function createPredictionsSection(): HTMLElement {
 
         petDiv.innerHTML = `
           <div>
-            <div style="font-weight:bold;">Level ${eta.currentLevel} → ${eta.nextLevel}</div>
+            <div style="font-weight:bold;">${petId} Lvl ${eta.currentLevel} → ${eta.nextLevel}</div>
             <div style="color:#888;font-size:9px;">${eta.xpNeeded} XP needed</div>
           </div>
           <div style="text-align:right;">
-            <div style="color:#4CAF50;font-weight:bold;">${timeText}</div>
-            <div style="color:#888;font-size:9px;">${eta.xpPerHour.toFixed(0)} XP/hr</div>
+            <div style="color:${hasXpRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
+            <div style="color:#888;font-size:9px;">${hasXpRate ? `${eta.xpPerHour.toFixed(0)} XP/hr` : 'Need data'}</div>
           </div>
         `;
         levelUpGrid.appendChild(petDiv);
@@ -8705,24 +8708,7 @@ function createStatsOverviewSection(): HTMLElement {
 
     // Feed Stats
     body.appendChild(createCategoryHeader('Feeding Activity', '🍖'));
-    body.appendChild(createStatRow('Total Feeds', formatNumber(stats.feed.totalFeeds), '🍖'));
-
-    // Shop Stats
-    body.appendChild(createCategoryHeader('Shop Activity', '🏪'));
-    body.appendChild(createStatRow('Total Purchases', formatNumber(stats.shop.totalPurchases), '🛒'));
-    body.appendChild(createStatRow('Coins Spent', formatNumber(stats.shop.totalSpentCoins), '💰'));
-    body.appendChild(createStatRow('Credits Spent', formatNumber(stats.shop.totalSpentCredits), '💎'));
-    body.appendChild(createStatRow('Seeds Bought', formatNumber(stats.shop.purchasesByCategory.seeds), '🌱'));
-    body.appendChild(createStatRow('Eggs Bought', formatNumber(stats.shop.purchasesByCategory.eggs), '🥚'));
-    body.appendChild(createStatRow('Tools Bought', formatNumber(stats.shop.purchasesByCategory.tools), '🔧'));
-    body.appendChild(createStatRow('Decor Bought', formatNumber(stats.shop.purchasesByCategory.decor), '🎨'));
-
-    // Weather Stats
-    body.appendChild(createCategoryHeader('Weather Activity', '🌤️'));
-    body.appendChild(createStatRow('Total Swaps', formatNumber(stats.weather.totalSwaps), '🔄'));
-    body.appendChild(createStatRow('Weather Swaps', formatNumber(stats.weather.swapsByState.weather), '🌈'));
-    body.appendChild(createStatRow('No-Weather Swaps', formatNumber(stats.weather.swapsByState.noweather), '⚫'));
-    body.appendChild(createStatRow('Cooldown Blocks', formatNumber(stats.weather.cooldownBlocks), '🚫'));
+    body.appendChild(createStatRow('Manual Feeds', formatNumber(stats.feed.manualFeeds), '🍖'));
   };
 
   // Initial update

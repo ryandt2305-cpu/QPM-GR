@@ -93,23 +93,66 @@ export function shouldAutoFavoriteProduce(rarity: string): boolean {
   return rarityLower.includes('gold') || rarityLower.includes('rainbow');
 }
 
-// Function to actually favorite an item in the game
-// This needs to interact with the game's favorite system
+// Function to actually favorite an item in the game via websocket
+// Uses the same mechanism as crop type locking
 export function favoriteGameItem(itemId: string, itemType: 'pet' | 'produce'): boolean {
   try {
-    // This would need to interact with the game's favorite system
-    // For now, this is a placeholder that would need game-specific implementation
-    log(`🌟 Auto-favoriting ${itemType}: ${itemId}`);
+    // Access the game's websocket connection (same as crop locking)
+    const pageWindow = (typeof window !== 'undefined' ? window : global) as any;
+    const maybeConnection = pageWindow?.MagicCircle_RoomConnection;
 
-    // TODO: Implement actual game interaction to favorite items
-    // This might involve:
-    // 1. Finding the item in the UI
-    // 2. Clicking the favorite button/icon
-    // 3. Or directly modifying game state if accessible
+    if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
+      // Send the ToggleFavoriteItem message
+      maybeConnection.sendMessage({
+        scopePath: ['Room', 'Quinoa'],
+        type: 'ToggleFavoriteItem',
+        itemId
+      });
 
-    return true;
+      log(`🌟 Auto-favorited ${itemType}: ${itemId}`);
+      return true;
+    } else {
+      log(`⚠️ MagicCircle_RoomConnection not available for favoriting ${itemType}`);
+      return false;
+    }
   } catch (error) {
     log(`⚠️ Failed to favorite ${itemType} ${itemId}`, error);
     return false;
   }
+}
+
+// Check if an item is already favorited
+function isItemFavorited(itemId: string): boolean {
+  try {
+    const pageWindow = (typeof window !== 'undefined' ? window : global) as any;
+    const inventory = pageWindow?.myData?.inventory;
+
+    if (inventory && Array.isArray(inventory.favoritedItemIds)) {
+      return inventory.favoritedItemIds.includes(itemId);
+    }
+
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Favorite item only if not already favorited
+export function autoFavoriteIfNeeded(itemId: string, itemType: 'pet' | 'produce', rarity: string): boolean {
+  const shouldFavorite = itemType === 'pet'
+    ? shouldAutoFavoritePet(rarity)
+    : shouldAutoFavoriteProduce(rarity);
+
+  if (!shouldFavorite) {
+    return false;
+  }
+
+  // Check if already favorited
+  if (isItemFavorited(itemId)) {
+    log(`ℹ️ ${itemType} ${itemId} already favorited, skipping`);
+    return true;
+  }
+
+  // Favorite the item
+  return favoriteGameItem(itemId, itemType);
 }

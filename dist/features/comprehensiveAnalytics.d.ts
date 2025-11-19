@@ -27,7 +27,7 @@ export interface PersonalRecords {
         recordedAt: number;
     } | null;
 }
-export type GoalType = 'pet_level' | 'collect_items' | 'earn_coins' | 'get_procs';
+export type GoalType = 'pet_level' | 'collect_items' | 'earn_coins' | 'get_procs' | 'garden_value';
 export interface Goal {
     id: string;
     type: GoalType;

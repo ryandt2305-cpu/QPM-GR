@@ -1,9 +1,11 @@
 // src/store/petHatchingTracker.ts
 // Tracks pet hatching events by monitoring pet collection changes
+// Integrates with auto-favorite to favorite rare pets
 
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { recordPetHatch } from './stats';
 import { log } from '../utils/logger';
+import { autoFavoriteIfNeeded } from '../features/autoFavorite';
 
 const PET_INFOS_LABEL = 'myPetInfosAtom'; // Contains all owned pets
 let started = false;
@@ -91,6 +93,11 @@ function detectNewPets(pets: PetInfo[]): void {
 
       const speciesName = pet.name || pet.species || 'Unknown';
       log(`🥚 Detected new ${rarity} pet hatched: ${speciesName}`);
+
+      // Auto-favorite rare pets
+      if (rarity !== 'normal' && pet.id) {
+        autoFavoriteIfNeeded(pet.id, 'pet', rarity);
+      }
     }
   }
 
@@ -115,10 +122,24 @@ export async function startPetHatchingTracker(): Promise<void> {
     return;
   }
 
+  let isFirstCall = true;
+
   try {
     unsubscribe = await subscribeAtom(atom, (value) => {
       try {
-        processPetData(value);
+        if (isFirstCall) {
+          // On first call, initialize known pets without recording hatches
+          isFirstCall = false;
+          const pets = extractPetInfos(value);
+          for (const pet of pets) {
+            const petId = pet.id || `${pet.species}-${Math.random()}`;
+            knownPetIds.add(petId);
+          }
+          log(`✅ Pet hatching tracker initialized with ${knownPetIds.size} existing pets`);
+        } else {
+          // On subsequent calls, detect new pets
+          processPetData(value);
+        }
       } catch (error) {
         log('⚠️ Failed processing pet hatching data', error);
       }

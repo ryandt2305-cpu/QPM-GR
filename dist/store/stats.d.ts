@@ -13,6 +13,7 @@ interface ShopItemEntry {
 export interface StatsSnapshot {
     feed: {
         totalFeeds: number;
+        manualFeeds: number;
         perPet: Record<string, FeedEntry>;
         lastFeedAt: number | null;
         sessionStart: number;
@@ -92,6 +93,7 @@ export declare function subscribeToStats(listener: (snapshot: StatsSnapshot) => 
 export declare function getStatsSnapshot(): StatsSnapshot;
 export declare function recordAbilityProc(abilityId: string, estimatedValue?: number, timestamp?: number): void;
 export declare function recordFeedEvent(petName: string, timestamp?: number): void;
+export declare function recordFeedManual(timestamp?: number): void;
 export declare function recordWeatherSwap(stateType: 'weather' | 'noweather', preset: WeatherPreset, triggeredAt: number): void;
 export declare function recordWeatherCooldownBlock(): void;
 export declare function recordShopPurchase(category: ShopCategoryKey, itemName: string, count: number, coins: number, credits: number, timestamp?: number): void;

@@ -6723,17 +6723,33 @@ function renderTrackersWindow(root: HTMLElement): void {
   // Live countdown updates every second
   trackerState.updateInterval = window.setInterval(() => {
     const countdownCells = root.querySelectorAll<HTMLElement>('.eta-countdown');
+
+    // DEBUG: Log every execution to verify interval is running
+    console.log('[QPM Tracker] Interval tick - found cells:', countdownCells.length);
+
+    let updated = 0;
     countdownCells.forEach((cell) => {
       const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
       const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
 
-      if (effectiveRate === 0) return;
+      console.log('[QPM Tracker] Cell data:', { lastProc, effectiveRate });
+
+      if (effectiveRate === 0) {
+        console.log('[QPM Tracker] Skipping cell - no effective rate');
+        return;
+      }
 
       const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
       const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
+
+      console.log('[QPM Tracker] ETA result:', etaResult);
+
       cell.textContent = etaResult.text;
       cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
+      updated++;
     });
+
+    console.log('[QPM Tracker] Updated cells:', updated);
   }, 1000);
 
   // Cleanup on window close

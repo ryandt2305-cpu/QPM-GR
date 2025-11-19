@@ -9,9 +9,10 @@ const __dirname = path.dirname(__filename);
 
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         QPM - General Release
-// @namespace    Quinoa
+// @namespace    https://magicgarden.gg/
 // @version      5.0.0
 // @description  Information and analytics tools for Magic Garden. Features crop locking, mutation tracking, manual timers, and ability analytics.
+// @author       TOKYO.
 // @match        https://1227719606223765687.discordsays.com/*
 // @match        https://magiccircle.gg/r/*
 // @match        https://magicgarden.gg/r/*

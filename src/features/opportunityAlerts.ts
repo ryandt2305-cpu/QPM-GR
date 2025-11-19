@@ -1,5 +1,4 @@
 // src/features/opportunityAlerts.ts
-// PASSIVE NOTIFICATIONS ONLY - NO AUTOMATION
 // Highlights opportunities for the user to take manual action.
 
 import { getWeatherSnapshot, onWeatherSnapshot, type WeatherSnapshot } from '../store/weatherHub';

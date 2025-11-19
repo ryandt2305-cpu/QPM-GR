@@ -4319,6 +4319,29 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+function formatNumber(num: number): string {
+  if (num >= 1000000) {
+    return `${(num / 1000000).toFixed(1)}M`;
+  }
+  if (num >= 1000) {
+    return `${(num / 1000).toFixed(1)}K`;
+  }
+  return num.toFixed(0);
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const elapsed = Date.now() - timestamp;
+  const seconds = Math.floor(elapsed / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return 'just now';
+}
+
 function resetAllStats(): void {
   resetFeedSession();
   resetShopStats();
@@ -4919,7 +4942,7 @@ function createHowToUseSection(): HTMLElement {
     {
       icon: '🔒',
       name: 'Crop Locking',
-      desc: 'Lock crops to prevent accidental selling. Toggle sync mode in Inventory Settings to auto-sync with favorites.'
+      desc: 'Lock crops to prevent accidental selling. Toggle sync mode in Inventory Settings to sync with favorites.'
     },
     {
       icon: '📊',
@@ -7548,7 +7571,6 @@ function createComingSoonSection(): HTMLElement {
       items: [
         { name: 'Advanced Feeding Rules', description: 'Per-pet feed preferences and customizable feeding logic. Coming Soon!' },
         { name: 'Pet Hutch Value Dashboard', description: 'Surface value and stats from the Pet Hutch atom. Coming Soon!' },
-        { name: 'Aries Pet Log Sync', description: 'Auto-load presets from Aries mod logs. Coming Soon!' },
         { name: 'Smart Pet Manager', description: 'Context-aware pet swapping for weather, crops, and abilities. Coming Soon!' },
         { name: 'Pet Ability Tracker', description: 'Proc chance estimates plus unlucky streak timestamps. Coming Soon!' },
         { name: 'Pet Identity Enhancements', description: 'Show pet names directly on each card. Coming Soon!' },
@@ -7563,7 +7585,7 @@ function createComingSoonSection(): HTMLElement {
         { name: 'Unified Notification Center', description: 'Consistent styling and filtering across all alerts. Coming Soon!' },
         { name: 'Detailed Performance Stats', description: 'Expanded analytics leveraging atom data. Coming Soon!' },
         { name: 'Feeds Per Hour Metrics', description: 'Live feeds-per-hour tracking with history. Coming Soon!' },
-        { name: 'Shop Purchase Logbook', description: 'Auto-buy and manual purchase history in stats. Coming Soon!' },
+        { name: 'Shop Purchase Logbook', description: 'Track purchase history in stats. Coming Soon!' },
         { name: 'Turtle Timer Revamp', description: 'Rebuild of the turtle timer inspired by MGTools. Coming Soon!' },
       ],
     },
@@ -7896,18 +7918,87 @@ function createProcAnalyticsSection(): HTMLElement {
   const info = document.createElement('div');
   info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
   info.innerHTML = `
-    <strong>📈 Track proc performance:</strong><br>
-    • Expected vs actual proc rates (% variance)<br>
-    • Hot streaks (>150% expected) and cold streaks (<50%)<br>
-    • Average time between procs<br>
-    • Historical rates per hour/day
+    <strong>📈 Track proc performance:</strong> Expected vs actual proc rates, hot/cold streaks, and average time between procs.
   `;
   body.appendChild(info);
 
-  const comingSoon = document.createElement('div');
-  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-  comingSoon.textContent = 'Analytics UI coming soon! Data is being collected in the background.';
-  body.appendChild(comingSoon);
+  // Container for ability stats
+  const abilitiesContainer = document.createElement('div');
+  abilitiesContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  body.appendChild(abilitiesContainer);
+
+  // Function to render the analytics
+  const render = () => {
+    const snapshot = getProcRateSnapshot();
+    abilitiesContainer.innerHTML = '';
+
+    if (snapshot.abilities.size === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+      emptyState.textContent = 'No ability procs recorded yet. Data will appear as your pets use abilities.';
+      abilitiesContainer.appendChild(emptyState);
+      return;
+    }
+
+    snapshot.abilities.forEach((stats, abilityId) => {
+      const abilityCard = document.createElement('div');
+      abilityCard.style.cssText = 'padding:12px;background:#1a1a2a;border-radius:6px;border-left:3px solid #42A5F5;';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'font-weight:bold;font-size:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;';
+      header.innerHTML = `
+        <span>${stats.abilityName}</span>
+        <span style="color:#888;font-size:10px;">${stats.totalProcs} procs</span>
+      `;
+      abilityCard.appendChild(header);
+
+      const statsGrid = document.createElement('div');
+      statsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px;';
+
+      const varianceColor = stats.variance > 0 ? '#4CAF50' : stats.variance < -20 ? '#FF5252' : '#888';
+      const varianceIcon = stats.variance > 0 ? '📈' : stats.variance < -20 ? '📉' : '➡️';
+
+      statsGrid.innerHTML = `
+        <div><span style="color:#888;">Procs/Hour:</span> <strong>${stats.procsPerHour.toFixed(1)}</strong></div>
+        <div><span style="color:#888;">Expected/Hour:</span> <strong>${stats.expectedProcsPerHour.toFixed(1)}</strong></div>
+        <div><span style="color:#888;">Variance:</span> <strong style="color:${varianceColor};">${varianceIcon} ${stats.variance.toFixed(0)}%</strong></div>
+        <div><span style="color:#888;">Avg Time:</span> <strong>${formatDuration(stats.avgTimeBetweenProcs)}</strong></div>
+      `;
+      abilityCard.appendChild(statsGrid);
+
+      // Show current streak if exists
+      if (stats.currentStreak) {
+        const streak = stats.currentStreak;
+        const streakDiv = document.createElement('div');
+        streakDiv.style.cssText = `margin-top:8px;padding:6px 8px;background:${streak.type === 'hot' ? 'rgba(76,175,80,0.2)' : 'rgba(255,82,82,0.2)'};border-radius:4px;font-size:10px;`;
+        streakDiv.innerHTML = `<strong>${streak.type === 'hot' ? '🔥 Hot Streak' : '❄️ Cold Streak'}:</strong> ${streak.variance.toFixed(0)}% ${streak.type === 'hot' ? 'above' : 'below'} expected`;
+        abilityCard.appendChild(streakDiv);
+      }
+
+      abilitiesContainer.appendChild(abilityCard);
+    });
+  };
+
+  // Initial render
+  render();
+
+  // Subscribe to updates
+  const unsubscribe = subscribeToProcRateAnalytics(render);
+
+  // Cleanup on removal (if tab navigation destroys the element)
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === root || (node as HTMLElement).contains?.(root)) {
+          unsubscribe();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }
@@ -7922,18 +8013,92 @@ function createPetEfficiencySection(): HTMLElement {
   const info = document.createElement('div');
   info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
   info.innerHTML = `
-    <strong>🏅 Pet performance rankings:</strong><br>
-    • XP gain rate (XP per hour)<br>
-    • Ability value generated (gold/hour)<br>
-    • Overall efficiency scores (0-100)<br>
-    • Daily and weekly bests
+    <strong>🏅 Pet performance rankings:</strong> XP gain rates, ability value per hour, and overall efficiency scores.
   `;
   body.appendChild(info);
 
-  const comingSoon = document.createElement('div');
-  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-  comingSoon.textContent = 'Rankings UI coming soon! Pet efficiency is being tracked.';
-  body.appendChild(comingSoon);
+  const rankingsContainer = document.createElement('div');
+  rankingsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  body.appendChild(rankingsContainer);
+
+  const render = () => {
+    const snapshot = getPetEfficiencySnapshot();
+    rankingsContainer.innerHTML = '';
+
+    if (snapshot.pets.size === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+      emptyState.textContent = 'No pet data recorded yet. Data will appear as your pets gain XP and use abilities.';
+      rankingsContainer.appendChild(emptyState);
+      return;
+    }
+
+    // Top 3 by XP Rate
+    const xpSection = document.createElement('div');
+    xpSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">⚡ Top 3 XP Earners</div>';
+    const xpGrid = document.createElement('div');
+    xpGrid.style.cssText = 'display:grid;gap:6px;';
+    snapshot.rankings.byXpRate.slice(0, 3).forEach((pet, idx) => {
+      const medal = ['🥇', '🥈', '🥉'][idx] || '';
+      const petDiv = document.createElement('div');
+      petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
+      petDiv.innerHTML = `
+        <span>${medal} ${pet.name || pet.species} (Lv${pet.level})</span>
+        <span style="color:#4CAF50;font-weight:bold;">${pet.xpGainRate.toFixed(0)} XP/hr</span>
+      `;
+      xpGrid.appendChild(petDiv);
+    });
+    xpSection.appendChild(xpGrid);
+    rankingsContainer.appendChild(xpSection);
+
+    // Top 3 by Ability Value
+    const valueSection = document.createElement('div');
+    valueSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">💰 Top 3 Value Generators</div>';
+    const valueGrid = document.createElement('div');
+    valueGrid.style.cssText = 'display:grid;gap:6px;';
+    snapshot.rankings.byAbilityValue.slice(0, 3).forEach((pet, idx) => {
+      const medal = ['🥇', '🥈', '🥉'][idx] || '';
+      const petDiv = document.createElement('div');
+      petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
+      petDiv.innerHTML = `
+        <span>${medal} ${pet.name || pet.species} (${pet.totalAbilityProcs} procs)</span>
+        <span style="color:#4CAF50;font-weight:bold;">${formatNumber(pet.abilityValuePerHour)}/hr</span>
+      `;
+      valueGrid.appendChild(petDiv);
+    });
+    valueSection.appendChild(valueGrid);
+    rankingsContainer.appendChild(valueSection);
+
+    // Overall Top Performer
+    const bestOverall = snapshot.rankings.byEfficiencyScore[0];
+    if (bestOverall) {
+      const bestDiv = document.createElement('div');
+      bestDiv.style.cssText = 'margin-top:12px;padding:12px;background:linear-gradient(135deg,rgba(255,215,0,0.15),rgba(76,175,80,0.15));border-radius:6px;border:1px solid rgba(255,215,0,0.3);';
+      bestDiv.innerHTML = `
+        <div style="font-weight:bold;font-size:11px;margin-bottom:6px;">⭐ Best Overall Performer</div>
+        <div style="font-size:12px;font-weight:bold;">${bestOverall.name || bestOverall.species}</div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">Efficiency Score: <strong style="color:#FFD700;">${bestOverall.efficiencyScore.toFixed(0)}/100</strong></div>
+      `;
+      rankingsContainer.appendChild(bestDiv);
+    }
+  };
+
+  render();
+  const unsubscribe = subscribeToPetEfficiency(render);
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === root || (node as HTMLElement).contains?.(root)) {
+          unsubscribe();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }
@@ -7948,18 +8113,87 @@ function createMutationValueSection(): HTMLElement {
   const info = document.createElement('div');
   info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
   info.innerHTML = `
-    <strong>💰 Value generation tracking:</strong><br>
-    • Gold/Rainbow proc rates per hour<br>
-    • Session total value<br>
-    • Best hour/session records<br>
-    • Weekly trend analysis
+    <strong>💰 Value generation tracking:</strong> Gold/Rainbow proc rates, session value, and best records.
   `;
   body.appendChild(info);
 
-  const comingSoon = document.createElement('div');
-  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-  comingSoon.textContent = 'Value tracking UI coming soon! Generation rates being monitored.';
-  body.appendChild(comingSoon);
+  const valueContainer = document.createElement('div');
+  valueContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  body.appendChild(valueContainer);
+
+  const render = () => {
+    const snapshot = getMutationValueSnapshot();
+    valueContainer.innerHTML = '';
+
+    const stats = snapshot.stats;
+
+    // Session Value Summary
+    const sessionCard = document.createElement('div');
+    sessionCard.style.cssText = 'padding:12px;background:linear-gradient(135deg,rgba(255,215,0,0.1),rgba(139,69,19,0.1));border-radius:6px;border-left:3px solid #FFD700;';
+    sessionCard.innerHTML = `
+      <div style="font-weight:bold;font-size:12px;margin-bottom:8px;">💰 Current Session Value</div>
+      <div style="font-size:20px;font-weight:bold;color:#FFD700;">${formatNumber(stats.sessionValue)}</div>
+      <div style="font-size:10px;color:#888;margin-top:4px;">Session started ${formatTimeAgo(stats.sessionStart)}</div>
+    `;
+    valueContainer.appendChild(sessionCard);
+
+    // Proc Rates Grid
+    const ratesGrid = document.createElement('div');
+    ratesGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;';
+
+    ratesGrid.innerHTML = `
+      <div style="padding:10px;background:#1a1a2a;border-radius:6px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:4px;">🟡</div>
+        <div style="font-size:14px;font-weight:bold;color:#FFD700;">${stats.goldProcs}</div>
+        <div style="font-size:9px;color:#888;margin-top:2px;">Gold Procs</div>
+        <div style="font-size:10px;color:#4CAF50;margin-top:4px;">${stats.goldPerHour.toFixed(1)}/hr</div>
+      </div>
+      <div style="padding:10px;background:#1a1a2a;border-radius:6px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:4px;">🌈</div>
+        <div style="font-size:14px;font-weight:bold;color:#FFD700;">${stats.rainbowProcs}</div>
+        <div style="font-size:9px;color:#888;margin-top:2px;">Rainbow Procs</div>
+        <div style="font-size:10px;color:#4CAF50;margin-top:4px;">${stats.rainbowPerHour.toFixed(1)}/hr</div>
+      </div>
+      <div style="padding:10px;background:#1a1a2a;border-radius:6px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:4px;">📈</div>
+        <div style="font-size:14px;font-weight:bold;color:#FFD700;">${stats.cropBoostProcs}</div>
+        <div style="font-size:9px;color:#888;margin-top:2px;">Crop Boosts</div>
+        <div style="font-size:10px;color:#4CAF50;margin-top:4px;">${stats.cropBoostPerHour.toFixed(1)}/hr</div>
+      </div>
+    `;
+    valueContainer.appendChild(ratesGrid);
+
+    // Best Records
+    if (stats.bestSessionValue > 0 || stats.bestHourValue > 0) {
+      const recordsCard = document.createElement('div');
+      recordsCard.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;';
+      recordsCard.innerHTML = `
+        <div style="font-weight:bold;font-size:11px;margin-bottom:8px;">🏆 Best Records</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px;">
+          <div><span style="color:#888;">Best Hour:</span> <strong style="color:#FFD700;">${formatNumber(stats.bestHourValue)}</strong></div>
+          <div><span style="color:#888;">Best Session:</span> <strong style="color:#FFD700;">${formatNumber(stats.bestSessionValue)}</strong></div>
+        </div>
+      `;
+      valueContainer.appendChild(recordsCard);
+    }
+  };
+
+  render();
+  const unsubscribe = subscribeToMutationValueTracking(render);
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === root || (node as HTMLElement).contains?.(root)) {
+          unsubscribe();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }
@@ -7974,18 +8208,117 @@ function createGoalsRecordsSection(): HTMLElement {
   const info = document.createElement('div');
   info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
   info.innerHTML = `
-    <strong>🏆 Track your achievements:</strong><br>
-    • Custom goal system with progress bars<br>
-    • Personal records (fastest level-up, most procs, etc.)<br>
-    • Highest value mutations<br>
-    • Best XP gain rates
+    <strong>🏆 Track your achievements:</strong> Personal records and custom goal tracking with progress bars.
   `;
   body.appendChild(info);
 
-  const comingSoon = document.createElement('div');
-  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-  comingSoon.textContent = 'Goals UI coming soon! Records are being tracked automatically.';
-  body.appendChild(comingSoon);
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  body.appendChild(container);
+
+  const render = () => {
+    const snapshot = getComprehensiveSnapshot();
+    container.innerHTML = '';
+
+    // Personal Records Section
+    const recordsSection = document.createElement('div');
+    recordsSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">🏆 Personal Records</div>';
+
+    const recordsGrid = document.createElement('div');
+    recordsGrid.style.cssText = 'display:grid;gap:6px;';
+
+    const records = snapshot.records;
+    const recordsList = [];
+
+    if (records.fastestLevelUp) {
+      recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
+        <strong>⚡ Fastest Level-Up:</strong> ${records.fastestLevelUp.species} (${records.fastestLevelUp.fromLevel} → ${records.fastestLevelUp.toLevel}) in ${formatDuration(records.fastestLevelUp.timeMs)}
+      </div>`);
+    }
+
+    if (records.mostProcsInSession) {
+      recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
+        <strong>🎯 Most Procs:</strong> ${records.mostProcsInSession.count} procs in one session
+      </div>`);
+    }
+
+    if (records.highestValueMutation) {
+      recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
+        <strong>💎 Best Mutation:</strong> ${records.highestValueMutation.type} ${records.highestValueMutation.species} (${formatNumber(records.highestValueMutation.estimatedValue)})
+      </div>`);
+    }
+
+    if (records.bestXpGainRate) {
+      recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
+        <strong>📈 Best XP Rate:</strong> ${records.bestXpGainRate.xpPerHour.toFixed(0)} XP/hr (${records.bestXpGainRate.species})
+      </div>`);
+    }
+
+    if (recordsList.length > 0) {
+      recordsGrid.innerHTML = recordsList.join('');
+      recordsSection.appendChild(recordsGrid);
+      container.appendChild(recordsSection);
+    } else {
+      const emptyRecords = document.createElement('div');
+      emptyRecords.style.cssText = 'padding:12px;text-align:center;color:#888;font-size:10px;font-style:italic;';
+      emptyRecords.textContent = 'No records yet. Keep playing to set your first records!';
+      recordsSection.appendChild(emptyRecords);
+      container.appendChild(recordsSection);
+    }
+
+    // Goals Section (show active goals)
+    const goalsSection = document.createElement('div');
+    goalsSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎯 Active Goals</div>';
+
+    const activeGoals = snapshot.goals.filter(g => !g.completedAt);
+
+    if (activeGoals.length > 0) {
+      const goalsContainer = document.createElement('div');
+      goalsContainer.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+
+      activeGoals.slice(0, 5).forEach(goal => {
+        const progress = Math.min(100, (goal.current / goal.target) * 100);
+        const goalDiv = document.createElement('div');
+        goalDiv.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:4px;';
+        goalDiv.innerHTML = `
+          <div style="font-size:10px;margin-bottom:4px;display:flex;justify-content:space-between;">
+            <strong>${goal.description}</strong>
+            <span style="color:#888;">${goal.current}/${goal.target}</span>
+          </div>
+          <div style="width:100%;height:6px;background:#2a2a3a;border-radius:3px;overflow:hidden;">
+            <div style="width:${progress}%;height:100%;background:linear-gradient(90deg,#4CAF50,#8BC34A);transition:width 0.3s;"></div>
+          </div>
+        `;
+        goalsContainer.appendChild(goalDiv);
+      });
+
+      goalsSection.appendChild(goalsContainer);
+    } else {
+      const emptyGoals = document.createElement('div');
+      emptyGoals.style.cssText = 'padding:12px;text-align:center;color:#888;font-size:10px;font-style:italic;';
+      emptyGoals.textContent = 'No active goals. Goals feature coming soon!';
+      goalsSection.appendChild(emptyGoals);
+    }
+
+    container.appendChild(goalsSection);
+  };
+
+  render();
+  const unsubscribe = subscribeToComprehensiveAnalytics(render);
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === root || (node as HTMLElement).contains?.(root)) {
+          unsubscribe();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }
@@ -8000,18 +8333,114 @@ function createPredictionsSection(): HTMLElement {
   const info = document.createElement('div');
   info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
   info.innerHTML = `
-    <strong>🔮 Prediction system:</strong><br>
-    • Pet level-up ETAs<br>
-    • Next ability proc estimates<br>
-    • Goal completion timelines<br>
-    • Trend-based forecasts
+    <strong>🔮 Prediction system:</strong> Pet level-up ETAs, ability proc estimates, and goal completion timelines.
   `;
   body.appendChild(info);
 
-  const comingSoon = document.createElement('div');
-  comingSoon.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-  comingSoon.textContent = 'Predictions UI coming soon! Data collection in progress.';
-  body.appendChild(comingSoon);
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  body.appendChild(container);
+
+  const render = () => {
+    const snapshot = getComprehensiveSnapshot();
+    container.innerHTML = '';
+
+    const predictions = snapshot.predictions;
+
+    // Pet Level-Up Predictions
+    if (predictions.petLevelUp.size > 0) {
+      const levelUpSection = document.createElement('div');
+      levelUpSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">⚡ Pet Level-Up ETAs</div>';
+
+      const levelUpGrid = document.createElement('div');
+      levelUpGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+
+      let count = 0;
+      predictions.petLevelUp.forEach((eta, petId) => {
+        if (count >= 5) return; // Show top 5
+        const petDiv = document.createElement('div');
+        petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
+
+        const hoursLeft = eta.estimatedHours;
+        const timeText = hoursLeft < 1
+          ? `${Math.round(hoursLeft * 60)} minutes`
+          : hoursLeft < 24
+          ? `${hoursLeft.toFixed(1)} hours`
+          : `${(hoursLeft / 24).toFixed(1)} days`;
+
+        petDiv.innerHTML = `
+          <div>
+            <div style="font-weight:bold;">Level ${eta.currentLevel} → ${eta.nextLevel}</div>
+            <div style="color:#888;font-size:9px;">${eta.xpNeeded} XP needed</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="color:#4CAF50;font-weight:bold;">${timeText}</div>
+            <div style="color:#888;font-size:9px;">${eta.xpPerHour.toFixed(0)} XP/hr</div>
+          </div>
+        `;
+        levelUpGrid.appendChild(petDiv);
+        count++;
+      });
+
+      levelUpSection.appendChild(levelUpGrid);
+      container.appendChild(levelUpSection);
+    }
+
+    // Next Ability Proc Predictions
+    if (predictions.nextAbilityProc.size > 0) {
+      const procSection = document.createElement('div');
+      procSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎲 Next Ability Procs</div>';
+
+      const procGrid = document.createElement('div');
+      procGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+
+      let count = 0;
+      predictions.nextAbilityProc.forEach((eta, abilityId) => {
+        if (count >= 5) return; // Show top 5
+        const timeLeft = eta.estimatedNextProc - Date.now();
+        if (timeLeft < 0) return; // Skip overdue
+
+        const procDiv = document.createElement('div');
+        procDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
+        procDiv.innerHTML = `
+          <strong>${eta.abilityName}</strong>
+          <span style="color:#4CAF50;">${formatDuration(timeLeft)}</span>
+        `;
+        procGrid.appendChild(procDiv);
+        count++;
+      });
+
+      if (procGrid.children.length > 0) {
+        procSection.appendChild(procGrid);
+        container.appendChild(procSection);
+      }
+    }
+
+    // Empty state
+    if (container.children.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
+      emptyState.textContent = 'No predictions available yet. Data will appear as your pets gain XP and use abilities.';
+      container.appendChild(emptyState);
+    }
+  };
+
+  render();
+  const unsubscribe = subscribeToComprehensiveAnalytics(render);
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === root || (node as HTMLElement).contains?.(root)) {
+          unsubscribe();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }

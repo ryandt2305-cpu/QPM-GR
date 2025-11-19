@@ -6368,14 +6368,15 @@ function createTrackersSection(): HTMLElement[] {
     log('⚠️ Failed to start ability trigger store', error);
   });
 
-  uiState.trackerAbilityTicker = window.setInterval(() => {
-    renderAbilitySection(latestAnalysis);
-  }, 15000);
-
-  // Update ETA countdowns every second
+  // Update ETA countdowns every second in Trackers tab
   window.setInterval(() => {
     updateDashboardETACountdowns();
   }, 1000);
+
+  /*
+  uiState.trackerAbilityTicker = window.setInterval(() => {
+    renderAbilitySection(latestAnalysis);
+  }, 15000);
   */
 
   // END OLD TRACKER SECTIONS
@@ -6403,6 +6404,7 @@ function updateDashboardETACountdowns(): void {
     const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
     const etaResult = calculateLiveETA(lastProc, expectedMinutesBetween, effectiveRate);
     cell.textContent = etaResult.text;
+    cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger, #ff4444)' : '';
   });
 }
 

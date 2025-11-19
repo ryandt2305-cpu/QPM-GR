@@ -99,11 +99,15 @@ export function calculateLiveETA(
     const fallbackMinutes = expectedMinutesBetween;
     if (fallbackMinutes && fallbackMinutes > 0) {
       const hours = Math.floor(fallbackMinutes / 60);
-      const mins = Math.round(fallbackMinutes % 60);
+      const mins = Math.floor(fallbackMinutes % 60);
+      const secs = Math.round((fallbackMinutes % 1) * 60);
       if (hours > 0) {
-        return { text: `${hours}h ${mins}m Est.`, isOverdue: false };
+        return { text: `${hours}h ${mins}m ${secs}s Est.`, isOverdue: false };
+      } else if (mins > 0) {
+        return { text: `${mins}m ${secs}s Est.`, isOverdue: false };
+      } else {
+        return { text: `${secs}s Est.`, isOverdue: false };
       }
-      return { text: `${mins}m Est.`, isOverdue: false };
     }
     return { text: '—', isOverdue: false };
   }

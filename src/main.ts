@@ -22,6 +22,7 @@ import { initializePetEfficiency } from './features/petEfficiency';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeComprehensiveAnalytics } from './features/comprehensiveAnalytics';
 import { initializeOpportunityAlerts } from './features/opportunityAlerts';
+import { initializeAutoFavorite } from './features/autoFavorite';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -692,6 +693,7 @@ async function initialize(): Promise<void> {
   initializeMutationValueTracking();
   initializeComprehensiveAnalytics();
   initializeOpportunityAlerts();
+  initializeAutoFavorite();
 
   // Set configuration for UI
   setCfg(cfg);

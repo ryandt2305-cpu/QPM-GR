@@ -5,6 +5,7 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 import { getPetEfficiencySnapshot, subscribeToPetEfficiency } from '../features/petEfficiency';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
+import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
 import { onHarvestSummary, onHarvestToast, getHarvestSummary } from '../features/harvestReminder';
@@ -2595,6 +2596,7 @@ export function createOriginalUI(): HTMLElement {
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
   registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
+  registerTab('settings', 'Settings', '⚙️', [createSettingsSection()]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
   // Override tab click handlers to open windows instead
@@ -8265,11 +8267,25 @@ function showGoalCreationModal(onComplete: () => void): void {
     </div>
   `;
 
+  // Prevent game hotbar from intercepting number inputs
+  const targetInput = form.querySelector('#goal-target') as HTMLInputElement;
+  const specificInput = form.querySelector('#goal-specific-value') as HTMLInputElement;
+
+  const stopGameHotbarIntercept = (e: KeyboardEvent) => {
+    e.stopPropagation();
+  };
+
+  targetInput.addEventListener('keydown', stopGameHotbarIntercept);
+  targetInput.addEventListener('keypress', stopGameHotbarIntercept);
+  targetInput.addEventListener('keyup', stopGameHotbarIntercept);
+  specificInput.addEventListener('keydown', stopGameHotbarIntercept);
+  specificInput.addEventListener('keypress', stopGameHotbarIntercept);
+  specificInput.addEventListener('keyup', stopGameHotbarIntercept);
+
   form.querySelector('#goal-type')!.addEventListener('change', (e) => {
     const type = (e.target as HTMLSelectElement).value;
     const specificDiv = form.querySelector('#goal-specific') as HTMLElement;
     const specificLabel = form.querySelector('#goal-specific-label') as HTMLElement;
-    const specificInput = form.querySelector('#goal-specific-value') as HTMLInputElement;
 
     if (type === 'get_procs') {
       specificDiv.style.display = 'block';
@@ -8593,6 +8609,78 @@ function createPredictionsSection(): HTMLElement {
         }
       });
     });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
+
+  return root;
+}
+
+function createSettingsSection(): HTMLElement {
+  const { root, body } = createCard('⚙️ General Settings', {
+    subtitle: 'Configure QPM behavior',
+  });
+  root.dataset.qpmSection = 'settings';
+
+  // Auto-Favorite Settings
+  const autoFavoriteHeader = document.createElement('div');
+  autoFavoriteHeader.style.cssText = 'font-weight:bold;font-size:12px;color:#FFD700;margin-bottom:8px;margin-top:12px;';
+  autoFavoriteHeader.textContent = 'Auto-Favorite (Gold & Rainbow)';
+  body.appendChild(autoFavoriteHeader);
+
+  const autoFavoriteDesc = document.createElement('div');
+  autoFavoriteDesc.style.cssText = 'font-size:10px;color:#888;margin-bottom:12px;line-height:1.4;';
+  autoFavoriteDesc.textContent = 'Automatically favorite rare (Gold and Rainbow) pets and produce when detected. Note: This feature requires game interaction capabilities.';
+  body.appendChild(autoFavoriteDesc);
+
+  // Get current auto-favorite configuration
+  let currentConfig = getAutoFavoriteConfig();
+
+  // Main toggle
+  const mainToggle = createCheckboxOption(
+    'Enable Auto-Favorite',
+    currentConfig.enabled,
+    (checked) => {
+      updateAutoFavoriteConfig({ enabled: checked });
+      return checked;
+    }
+  );
+  body.appendChild(mainToggle);
+
+  // Rare pets toggle
+  const rarePetsToggle = createCheckboxOption(
+    'Auto-Favorite Rare Pets (Gold & Rainbow)',
+    currentConfig.autoFavoriteRarePets,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRarePets: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rarePetsToggle);
+
+  // Rare produce toggle
+  const rareProduceToggle = createCheckboxOption(
+    'Auto-Favorite Rare Produce (Gold & Rainbow)',
+    currentConfig.autoFavoriteRareProduce,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRareProduce: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rareProduceToggle);
+
+  // Subscribe to config changes to update UI
+  const unsubscribe = subscribeToAutoFavoriteConfig((config) => {
+    currentConfig = config;
+  });
+
+  // Cleanup on element removal
+  const observer = new MutationObserver(() => {
+    if (!document.contains(root)) {
+      unsubscribe();
+      observer.disconnect();
+    }
   });
   if (root.parentElement) {
     observer.observe(root.parentElement, { childList: true, subtree: true });

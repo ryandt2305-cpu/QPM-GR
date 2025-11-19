@@ -1,6 +1,5 @@
 // src/features/autoShop.ts
-// STUB FILE - Automation removed in General Release v5.0.0
-// This file now only exports types and empty functions needed for shop restock tracking
+// Tracking and display support types
 
 import { SHOP_CATEGORIES, type ShopCategory } from '../types/shops';
 

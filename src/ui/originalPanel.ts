@@ -310,7 +310,7 @@ interface HarvestMutationOption {
 const HARVEST_MUTATION_OPTIONS: readonly HarvestMutationOption[] = [
   { key: 'Rainbow', label: 'Rainbow', description: 'Any weather • Rare mutation' },
   { key: 'Gold', label: 'Gold', description: 'Any weather • Very rare mutation' },
-  { key: 'Frozen', label: 'Frozen', description: 'Rain → Snow weather swap' },
+  { key: 'Frozen', label: 'Frozen', description: 'Rain → Snow transition' },
   { key: 'Wet', label: 'Wet', description: 'Rain weather active' },
   { key: 'Chilled', label: 'Chilled', description: 'Snow weather active' },
   { key: 'Dawnlit', label: 'Dawnlit', description: 'Dawn weather active' },
@@ -7254,7 +7254,7 @@ function createFeedSection(): HTMLElement {
     collapsible: true,
     startCollapsed: true,
   });
-  root.dataset.qpmSection = 'auto-feed';
+  root.dataset.qpmSection = 'feed-tracking';
 
   const infoText = document.createElement('div');
   infoText.className = 'qpm-section-muted';
@@ -7455,7 +7455,7 @@ function createShopSection(): HTMLElement {
     subtitleElement: statusChip,
     headerActions: [sTitleSummary],
   });
-  root.dataset.qpmSection = 'auto-shop';
+  root.dataset.qpmSection = 'shop-tracking';
 
   const sStatus = document.createElement('div');
   sStatus.textContent = 'Watching for shops...';
@@ -8112,7 +8112,7 @@ async function testWeatherDetection(): Promise<string> {
 
 function triggerSunnyKey(): void {
   if (!cfg.weatherSwap?.noWeatherKey) {
-    throw new Error('No sunny keybind set - configure it in Weather Swap section');
+    throw new Error('No sunny keybind set - configure weather tracking');
   }
   
   simulateKeybind(cfg.weatherSwap.noWeatherKey);
@@ -8120,7 +8120,7 @@ function triggerSunnyKey(): void {
 
 function triggerWeatherKey(): void {
   if (!cfg.weatherSwap?.weatherKey) {
-    throw new Error('No weather keybind set - configure it in Weather Swap section');
+    throw new Error('No weather keybind set - configure weather tracking');
   }
   
   simulateKeybind(cfg.weatherSwap.weatherKey);

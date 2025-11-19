@@ -1,6 +1,5 @@
 // src/features/weatherSwap.ts
-// STUB FILE - Automation removed in General Release v5.0.0
-// This file now only exports types and utility functions needed for weather tracking
+// Tracking and display support types
 
 import { classifyWeather as baseClassifyWeather } from '../utils/weatherDetection';
 

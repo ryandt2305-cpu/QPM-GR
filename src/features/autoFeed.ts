@@ -1,6 +1,5 @@
 // src/features/autoFeed.ts
-// STUB FILE - Automation removed in General Release v5.0.0
-// This file now only exports types and empty functions needed for tracking/display
+// Tracking and display support types
 
 export interface FeedStatEntry {
   count: number;

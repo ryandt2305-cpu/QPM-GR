@@ -6703,19 +6703,44 @@ function renderTrackersWindow(root: HTMLElement): void {
     updateInterval: null as number | null,
   };
 
-  // Subscribe to pet updates
+  // Throttle tracker window rebuilds to prevent destroying countdown cells
+  let lastFullUpdate = 0;
+  let pendingUpdate = false;
+
+  // Subscribe to pet updates (throttled to avoid destroying live countdowns)
   onActivePetInfos((infos) => {
     modalLatestInfos = infos;
     modalLatestAnalysis = analyzeActivePetAbilities(infos);
-    updateTrackerWindow(trackerState);
+
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastFullUpdate;
+
+    // Only do full rebuild every 5 seconds to preserve live countdowns
+    if (timeSinceLastUpdate >= 5000) {
+      lastFullUpdate = now;
+      pendingUpdate = false;
+      updateTrackerWindow(trackerState);
+    } else {
+      // Mark that we have a pending update
+      pendingUpdate = true;
+    }
   });
 
   // Initial render
   updateTrackerWindow(trackerState);
+  lastFullUpdate = Date.now();
 
   // Auto-update every second for live countdowns
   trackerState.updateInterval = window.setInterval(() => {
     updateTrackerWindowCountdowns(trackerState.tbody);
+
+    // Check if we have a pending update and enough time has passed
+    const now = Date.now();
+    if (pendingUpdate && (now - lastFullUpdate) >= 5000) {
+      lastFullUpdate = now;
+      pendingUpdate = false;
+      updateTrackerWindow(trackerState);
+    }
   }, 1000);
 
   // Cleanup on window close
@@ -7713,13 +7738,14 @@ function createGuideSection(): HTMLElement {
   img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
-    width: 150%;
-    max-width: 1200px;
+    width: 100%;
+    max-width: 100%;
     height: auto;
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     cursor: pointer;
     transition: transform 0.2s;
+    display: block;
   `;
 
   img.addEventListener('mouseenter', () => {

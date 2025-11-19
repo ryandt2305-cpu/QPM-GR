@@ -449,7 +449,7 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
       </div>
     `;
   } else {
-    const xpGenPets = allStats.map(s => `${s.petName} (${s.abilityName}, ${s.actualChancePerSecond.toFixed(3)}%/sec)`).join(', ');
+    const xpGenPets = allStats.map(s => `${s.petName} (${s.abilityName}, ${s.actualChancePerMinute.toFixed(2)}%/min)`).join(', ');
     (state.tbody as unknown as HTMLDivElement).innerHTML = `
       <div style="margin-bottom: 8px;">
         <strong style="color: var(--qpm-accent, #4CAF50);">Total XP Generation:</strong>
@@ -458,8 +458,8 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
       </div>
       <div style="margin-bottom: 8px;">
         <strong style="color: var(--qpm-accent, #4CAF50);">Combined Chance:</strong>
-        <span style="color: var(--qpm-accent, #4CAF50); font-weight: 600; font-family: monospace;">${combined!.combinedChancePerSecond.toFixed(3)}%/sec</span>
-        <span style="color: var(--qpm-text-muted, #aaa); font-size: 11px; margin-left: 8px;">(${combined!.combinedChancePerMinute.toFixed(2)}%/min)</span>
+        <span style="color: var(--qpm-accent, #4CAF50); font-weight: 600; font-family: monospace;">${combined!.combinedChancePerMinute.toFixed(2)}%/min</span>
+        <span style="color: var(--qpm-text-muted, #aaa); font-size: 11px; margin-left: 8px;">(~${combined!.totalProcsPerHour.toFixed(1)} procs/hr)</span>
       </div>
       <div style="margin-bottom: 6px; color: var(--qpm-text-muted, #aaa); font-size: 11px; font-style: italic;">
         Note: Combined chance is statistical (≥1 proc/sec). Each ability rolls independently.
@@ -477,7 +477,7 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
   } else {
     state.summaryText.innerHTML = `
       <strong>Total XP/Hour:</strong> ${formatCoins(state.totalTeamXpPerHour)} XP •
-      <strong>Combined Chance:</strong> ${combined!.combinedChancePerSecond.toFixed(3)}%/sec (${combined!.combinedChancePerMinute.toFixed(2)}%/min) •
+      <strong>Combined Chance:</strong> ${combined!.combinedChancePerMinute.toFixed(2)}%/min •
       <strong>Active Pets:</strong> ${state.latestPets.length} (${allStats.length} with XP Boost)
     `;
   }
@@ -537,16 +537,16 @@ function createXpRow(tbody: HTMLTableSectionElement, stats: XpAbilityStats): voi
     color: var(--qpm-text, #fff);
   `;
 
-  // Chance Per Second (game checks every second)
+  // Chance Per Minute
   const chanceCell = row.insertCell();
-  chanceCell.textContent = `${stats.actualChancePerSecond.toFixed(3)}%/sec`;
+  chanceCell.textContent = `${stats.actualChancePerMinute.toFixed(2)}%/min`;
   chanceCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
     color: var(--qpm-accent, #4CAF50);
     font-family: monospace;
   `;
-  chanceCell.title = `Per Second: ${stats.baseChancePerSecond.toFixed(3)}% × ${stats.strength}/100 = ${stats.actualChancePerSecond.toFixed(3)}%\nPer Minute: ${stats.actualChancePerMinute.toFixed(2)}% (game checks every second)`;
+  chanceCell.title = `Base: ${(stats.baseChancePerSecond * 60).toFixed(2)}%/min × ${stats.strength}/100 = ${stats.actualChancePerMinute.toFixed(2)}%/min (game checks every second)`;
 
   // XP Per Proc
   const xpProcCell = row.insertCell();

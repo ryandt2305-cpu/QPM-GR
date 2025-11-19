@@ -3,9 +3,10 @@
 
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAbilityHistorySnapshot, type AbilityHistory } from '../store/abilityLogs';
-import { abilityDefinitions } from '../data/petAbilities';
+import { abilityDefinitions, getAbilityDefinition, computeAbilityStats, computeEffectPerHour } from '../data/petAbilities';
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
+import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from './abilityValuation';
 
 const STORAGE_KEY = 'qpm.petEfficiency.v1';
 const SAVE_DEBOUNCE_MS = 3000;
@@ -127,66 +128,54 @@ let initialized = false;
 let unsubscribe: (() => void) | null = null;
 const listeners = new Set<(snapshot: PetEfficiencySnapshot) => void>();
 
-// Simplified ability value estimation (coin values based on common abilities)
-const ABILITY_VALUE_ESTIMATES: Record<string, number> = {
-  // Coin finders (average coin value)
-  'CoinFinder': 60000, // Coin Finder I: avg ~60k per proc
-  'CoinFinderII': 600000, // Coin Finder II: avg ~600k per proc
-  'CoinFinderIII': 5000000, // Coin Finder III: avg ~5M per proc
+function estimateAbilityValue(abilityId: string, strength: number | null | undefined, petId: string): number {
+  // Get ability definition
+  const def = getAbilityDefinition(abilityId);
+  if (!def) return 0;
 
-  // Gold/Rainbow granters (very valuable - estimate based on crop value)
-  'GoldGranter': 500000, // Assuming avg gold crop worth ~500k
-  'RainbowGranter': 1000000, // Assuming avg rainbow crop worth ~1M
-
-  // Crop size boost (harder to estimate, conservative)
-  'ProduceScaleBoost': 50000, // Conservative estimate
-  'ProduceScaleBoostII': 80000,
-
-  // XP boost (value in terms of progression)
-  'XPBoost': 30000, // XP valued at ~100 coins per point (300 XP * 100)
-  'XPBoostII': 40000, // 400 XP * 100
-
-  // Growth boosters (time savings, lower direct coin value)
-  'PlantGrowthBoost': 20000,
-  'PlantGrowthBoostII': 30000,
-  'EggGrowthBoost': 25000,
-  'EggGrowthBoostII': 35000,
-
-  // Sell boosts (depends on selling, medium value)
-  'SellBoostI': 40000,
-  'SellBoostII': 50000,
-  'SellBoostIII': 60000,
-  'SellBoostIV': 70000,
-
-  // Other abilities
-  'DoubleHarvest': 100000, // Very valuable on proc
-  'ProduceEater': 80000, // Eats crops but generates coins
-  'ProduceRefund': 50000,
-};
-
-function estimateAbilityValue(abilityId: string): number {
-  // Check direct match
-  if (ABILITY_VALUE_ESTIMATES[abilityId]) {
-    return ABILITY_VALUE_ESTIMATES[abilityId];
+  // For abilities with static effectValuePerProc, use real calculation
+  if (def.effectValuePerProc && def.effectUnit === 'coins') {
+    const stats = computeAbilityStats(def, strength);
+    return def.effectValuePerProc; // Coins per proc
   }
 
-  // Find ability definition to categorize
-  const def = abilityDefinitions.find(d => d.id === abilityId);
-  if (!def) return 10000; // Default low value
+  // For coin finders, use the exact values from the definition
+  if (def.id === 'CoinFinderI' || def.id === 'CoinFinder') {
+    return 120000; // 0-120k range, use midpoint ~60k average
+  }
+  if (def.id === 'CoinFinderII' || def.id === 'CoinFinder II') {
+    return 1200000; // 0-1.2M range, use midpoint ~600k average
+  }
+  if (def.id === 'CoinFinderIII' || def.id === 'CoinFinder III') {
+    return 10000000; // 0-10M range, use midpoint ~5M average
+  }
 
-  // Categorize by type
-  if (def.category === 'coins') return 100000;
-  if (def.category === 'xp') return 30000;
-  if (def.category === 'plantGrowth') return 20000;
-  if (def.category === 'eggGrowth') return 25000;
+  // For dynamic abilities (Gold/Rainbow Granter, Crop Size Boost), use live garden data
+  const gardenContext = buildAbilityValuationContext();
+  const dynamicEffect = resolveDynamicAbilityEffect(abilityId, gardenContext, strength);
+  if (dynamicEffect && dynamicEffect.effectPerProc > 0) {
+    return dynamicEffect.effectPerProc;
+  }
 
-  return 10000; // Default for misc
+  // XP abilities have NO coin value (don't count towards garden value)
+  if (def.category === 'xp' || def.effectUnit === 'xp') {
+    return 0;
+  }
+
+  // Growth boosters (time savings) - minimal direct coin value
+  if (def.category === 'plantGrowth' || def.category === 'eggGrowth') {
+    return 0; // Time savings, not coins
+  }
+
+  // Default fallback for unknown abilities
+  return 0;
 }
 
 function calculateAbilityMetrics(
   petId: string,
   slotIndex: number,
   abilities: string[],
+  strength: number | null | undefined,
   now: number
 ): {
   totalProcs: number;
@@ -197,9 +186,15 @@ function calculateAbilityMetrics(
   const historySnapshot = getAbilityHistorySnapshot();
   let totalProcs = 0;
   let oldestProc: number | null = null;
+  let newestProc: number | null = null;
   const abilityValues = new Map<string, number>();
 
   for (const abilityId of abilities) {
+    // Skip Crop Mutation Boost abilities - they only proc during weather events
+    if (abilityId === 'ProduceMutationBoost' || abilityId === 'ProduceMutationBoostII') {
+      continue;
+    }
+
     // Try to find history by slotIndex or petId
     const lookupKeys = [
       `slotIndex:${slotIndex}::${abilityId}`,
@@ -215,20 +210,23 @@ function calculateAbilityMetrics(
 
     if (!history || history.events.length === 0) continue;
 
+    // Include ALL events (don't filter by session start)
     const procCount = history.events.length;
     totalProcs += procCount;
 
+    // Track timestamp range of actual procs for accurate rate calculation
     const firstProc = Math.min(...history.events.map(e => e.performedAt));
+    const lastProc = Math.max(...history.events.map(e => e.performedAt));
+
     if (oldestProc === null || firstProc < oldestProc) {
       oldestProc = firstProc;
     }
-
-    // Skip XP boost abilities from value calculations (they don't generate coins/crops)
-    const isXpBoost = abilityId.includes('XPBoost');
-    if (!isXpBoost) {
-      const valueEstimate = estimateAbilityValue(abilityId);
-      abilityValues.set(abilityId, procCount * valueEstimate);
+    if (newestProc === null || lastProc > newestProc) {
+      newestProc = lastProc;
     }
+
+    const valueEstimate = estimateAbilityValue(abilityId, strength, petId);
+    abilityValues.set(abilityId, procCount * valueEstimate);
   }
 
   if (totalProcs === 0) {
@@ -240,8 +238,20 @@ function calculateAbilityMetrics(
     };
   }
 
-  const duration = oldestProc ? now - oldestProc : HOUR_MS;
-  const hours = Math.max(0.01, duration / HOUR_MS);
+  // Calculate accurate duration from first proc to last proc
+  // This gives true procs-per-hour rate based on actual event timespan
+  let duration: number;
+  if (oldestProc !== null && newestProc !== null && oldestProc !== newestProc) {
+    // Use actual timespan between first and last proc
+    duration = newestProc - oldestProc;
+  } else {
+    // Only one proc or all at same time - use time since that proc
+    duration = now - (oldestProc ?? now);
+  }
+
+  // Ensure minimum duration to avoid division issues
+  duration = Math.max(duration, 60 * 1000); // Minimum 1 minute
+  const hours = duration / HOUR_MS;
 
   const procsPerHour = totalProcs / hours;
 
@@ -307,10 +317,6 @@ function updatePetMetrics(pets: ActivePetInfo[]): void {
       };
       xpTracking.set(petId, xpTracked);
     } else {
-      // Fix for restored tracking with initialXp=0: update baseline if this is first real update
-      if (xpTracked.initialXp === 0 && xpTracked.currentXp === 0) {
-        xpTracked.initialXp = xp;
-      }
       xpTracked.currentXp = xp;
     }
 
@@ -326,6 +332,7 @@ function updatePetMetrics(pets: ActivePetInfo[]): void {
       petId,
       pet.slotIndex,
       pet.abilities,
+      pet.strength,
       now
     );
 

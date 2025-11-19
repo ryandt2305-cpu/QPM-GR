@@ -14,6 +14,11 @@ import { getActivePetsDebug } from './store/pets';
 import { startInventoryStore } from './store/inventory';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
+import { initializeProcRateAnalytics } from './features/procRateAnalytics';
+import { initializePetEfficiency } from './features/petEfficiency';
+import { initializeMutationValueTracking } from './features/mutationValueTracking';
+import { initializeComprehensiveAnalytics } from './features/comprehensiveAnalytics';
+import { initializeOpportunityAlerts } from './features/opportunityAlerts';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -669,6 +674,14 @@ async function initialize(): Promise<void> {
   startMutationTracker();
 
   configureTurtleTimer(cfg.turtleTimer);
+
+  // Initialize analytics features
+  log('📊 Initializing analytics features...');
+  initializeProcRateAnalytics();
+  initializePetEfficiency();
+  initializeMutationValueTracking();
+  initializeComprehensiveAnalytics();
+  initializeOpportunityAlerts();
 
   // Set configuration for UI
   setCfg(cfg);

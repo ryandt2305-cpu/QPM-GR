@@ -73,6 +73,14 @@ export interface StatsSnapshot {
         lastHatchedAt: number | null;
         lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
     };
+    abilities: {
+        totalProcs: number;
+        totalEstimatedValue: number;
+        procsByAbility: Record<string, number>;
+        valueByAbility: Record<string, number>;
+        lastProcAt: number | null;
+        lastProcAbility: string | null;
+    };
     meta: {
         initializedAt: number;
         updatedAt: number;
@@ -82,6 +90,7 @@ export interface StatsSnapshot {
 export declare function initializeStatsStore(): void;
 export declare function subscribeToStats(listener: (snapshot: StatsSnapshot) => void): () => void;
 export declare function getStatsSnapshot(): StatsSnapshot;
+export declare function recordAbilityProc(abilityId: string, estimatedValue?: number, timestamp?: number): void;
 export declare function recordFeedEvent(petName: string, timestamp?: number): void;
 export declare function recordWeatherSwap(stateType: 'weather' | 'noweather', preset: WeatherPreset, triggeredAt: number): void;
 export declare function recordWeatherCooldownBlock(): void;

@@ -80,6 +80,14 @@ export interface StatsSnapshot {
     lastHatchedAt: number | null;
     lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
   };
+  abilities: {
+    totalProcs: number;
+    totalEstimatedValue: number; // Sum of all ability values in coins
+    procsByAbility: Record<string, number>; // abilityId -> count
+    valueByAbility: Record<string, number>; // abilityId -> estimated total value
+    lastProcAt: number | null;
+    lastProcAbility: string | null;
+  };
   meta: {
     initializedAt: number;
     updatedAt: number;
@@ -169,6 +177,14 @@ function createDefaultState(now: number): StatsState {
       },
       lastHatchedAt: null,
       lastHatchedRarity: null,
+    },
+    abilities: {
+      totalProcs: 0,
+      totalEstimatedValue: 0,
+      procsByAbility: {},
+      valueByAbility: {},
+      lastProcAt: null,
+      lastProcAbility: null,
     },
     meta: {
       initializedAt: now,
@@ -317,6 +333,24 @@ function hydrateState(): StatsState {
     base.pets.lastHatchedRarity = stored.pets.lastHatchedRarity ?? null;
   }
 
+  // Abilities
+  if (stored.abilities) {
+    base.abilities.totalProcs = Number(stored.abilities.totalProcs ?? 0);
+    base.abilities.totalEstimatedValue = Number(stored.abilities.totalEstimatedValue ?? 0);
+    if (stored.abilities.procsByAbility && typeof stored.abilities.procsByAbility === 'object') {
+      for (const [abilityId, count] of Object.entries(stored.abilities.procsByAbility)) {
+        base.abilities.procsByAbility[abilityId] = Number(count ?? 0);
+      }
+    }
+    if (stored.abilities.valueByAbility && typeof stored.abilities.valueByAbility === 'object') {
+      for (const [abilityId, value] of Object.entries(stored.abilities.valueByAbility)) {
+        base.abilities.valueByAbility[abilityId] = Number(value ?? 0);
+      }
+    }
+    base.abilities.lastProcAt = stored.abilities.lastProcAt ?? null;
+    base.abilities.lastProcAbility = stored.abilities.lastProcAbility ?? null;
+  }
+
   // Meta
   if (stored.meta) {
     base.meta.initializedAt = stored.meta.initializedAt ?? base.meta.initializedAt;
@@ -383,6 +417,14 @@ function emitSnapshot(): void {
       hatchedByRarity: { ...state.pets.hatchedByRarity },
       lastHatchedAt: state.pets.lastHatchedAt,
       lastHatchedRarity: state.pets.lastHatchedRarity,
+    },
+    abilities: {
+      totalProcs: state.abilities.totalProcs,
+      totalEstimatedValue: state.abilities.totalEstimatedValue,
+      procsByAbility: { ...state.abilities.procsByAbility },
+      valueByAbility: { ...state.abilities.valueByAbility },
+      lastProcAt: state.abilities.lastProcAt,
+      lastProcAbility: state.abilities.lastProcAbility,
     },
     meta: { ...state.meta },
   };
@@ -539,8 +581,29 @@ export function getStatsSnapshot(): StatsSnapshot {
       lastHatchedAt: state.pets.lastHatchedAt,
       lastHatchedRarity: state.pets.lastHatchedRarity,
     },
+    abilities: {
+      totalProcs: state.abilities.totalProcs,
+      totalEstimatedValue: state.abilities.totalEstimatedValue,
+      procsByAbility: { ...state.abilities.procsByAbility },
+      valueByAbility: { ...state.abilities.valueByAbility },
+      lastProcAt: state.abilities.lastProcAt,
+      lastProcAbility: state.abilities.lastProcAbility,
+    },
     meta: { ...state.meta },
   };
+}
+
+export function recordAbilityProc(abilityId: string, estimatedValue: number = 0, timestamp = Date.now()): void {
+  ensureInitialized();
+
+  state.abilities.totalProcs += 1;
+  state.abilities.totalEstimatedValue += estimatedValue;
+  state.abilities.procsByAbility[abilityId] = (state.abilities.procsByAbility[abilityId] ?? 0) + 1;
+  state.abilities.valueByAbility[abilityId] = (state.abilities.valueByAbility[abilityId] ?? 0) + estimatedValue;
+  state.abilities.lastProcAt = timestamp;
+  state.abilities.lastProcAbility = abilityId;
+
+  commitState();
 }
 
 export function recordFeedEvent(petName: string, timestamp = Date.now()): void {

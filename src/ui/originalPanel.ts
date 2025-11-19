@@ -2522,7 +2522,7 @@ export function createOriginalUI(): HTMLElement {
 
   const statsHeader = createStatsHeader();
   const statsSection = createStatsSection();
-  const notificationsSection = createNotificationSection();
+  // const notificationsSection = createNotificationSection(); // REMOVED: Notifications section removed per user request
   const turtleSection = createTurtleTimerSection();
   const trackerSections = createTrackersSection();
 
@@ -2579,7 +2579,7 @@ export function createOriginalUI(): HTMLElement {
     tabs.set(key, tab);
   };
 
-  registerTab('dashboard', 'Dashboard', '📊', [...trackerSections, notificationsSection]);
+  registerTab('dashboard', 'Dashboard', '📊', [...trackerSections]);
   registerTab('turtle', 'Turtle Timer', '🐢', [turtleSection]);
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
@@ -6054,8 +6054,9 @@ function createTrackersSection(): HTMLElement[] {
           etaCell.className = 'eta-countdown-dashboard';
           etaCell.dataset.lastProc = String(entry.lastProcAt ?? 0);
           etaCell.dataset.effectiveRate = String(entry.procsPerHour);
-          const etaText = entry.expectedMinutesBetween != null ? formatMinutesPretty(entry.expectedMinutesBetween) : '—';
-          etaCell.textContent = `${etaText} Est.`;
+          const etaResult = calculateLiveETA(entry.lastProcAt, entry.expectedMinutesBetween, entry.procsPerHour);
+          etaCell.textContent = etaResult.text;
+          etaCell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : '';
           etaCell.title = entry.lastProcAt != null ? `Last proc ${formatSince(entry.lastProcAt)}` : 'No proc observed yet';
           row.appendChild(etaCell);
 
@@ -6110,7 +6111,9 @@ function createTrackersSection(): HTMLElement[] {
         totalEtaCell.className = 'eta-countdown-dashboard';
         totalEtaCell.dataset.lastProc = String(group.lastProcAt ?? 0);
         totalEtaCell.dataset.effectiveRate = String(group.totalProcsPerHour);
-        totalEtaCell.textContent = group.combinedEtaMinutes != null ? `${formatMinutesPretty(group.combinedEtaMinutes)} Est.` : '—';
+        const totalEtaResult = calculateLiveETA(group.lastProcAt, group.combinedEtaMinutes, group.totalProcsPerHour);
+        totalEtaCell.textContent = totalEtaResult.text;
+        totalEtaCell.style.color = totalEtaResult.isOverdue ? 'var(--qpm-danger)' : '';
         totalEtaCell.title = group.lastProcAt != null ? `Latest proc ${formatSince(group.lastProcAt)}` : 'No proc observed yet';
         totalRow.appendChild(totalEtaCell);
 
@@ -7688,7 +7691,7 @@ function createGuideSection(): HTMLElement {
   `;
 
   const img = document.createElement('img');
-  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/MGGuide.jpeg';
+  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
     max-width: 100%;
@@ -7700,7 +7703,7 @@ function createGuideSection(): HTMLElement {
   img.onerror = () => {
     imageContainer.innerHTML = `
       <div style="padding: 40px; color: var(--qpm-text-muted, #999); font-style: italic;">
-        📖 Guide image not found. Please ensure MGGuide.jpeg is uploaded to the main branch of the repository.
+        📖 Guide image not found. Please ensure MGGuide.jpeg is uploaded to the master branch of the repository.
       </div>
     `;
   };

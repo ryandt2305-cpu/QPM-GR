@@ -4,10 +4,13 @@
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
 import { getActivePetsDebug } from '../store/pets';
-import { getAbilityHistorySnapshot } from '../store/abilityLogs';
+import { getAbilityHistorySnapshot, onAbilityHistoryUpdate } from '../store/abilityLogs';
 import { getPetXpSnapshots } from '../store/petXpTracker';
 import { getMutationSummary } from '../store/mutationSummary';
 import { getStatsSnapshot } from '../store/stats';
+import { getPetEfficiencySnapshot } from './petEfficiency';
+import { getGardenSnapshot } from './gardenBridge';
+import { calculateGardenValue } from './valueCalculator';
 
 const STORAGE_KEY = 'qpm.comprehensiveAnalytics.v1';
 const SAVE_DEBOUNCE_MS = 3000;
@@ -60,7 +63,8 @@ export type GoalType =
   | 'pet_level' // Pet reaches level X
   | 'collect_items' // Collect Y of item
   | 'earn_coins' // Earn Z coins
-  | 'get_procs'; // Get X procs of ability
+  | 'get_procs' // Get X procs of ability
+  | 'garden_value'; // Reach garden value of X
 
 export interface Goal {
   id: string;
@@ -340,11 +344,11 @@ export function recordMutation(type: 'gold' | 'rainbow', species: string, estima
 function calculatePredictions(): void {
   const pets = getActivePetsDebug();
   const xpSnapshots = getPetXpSnapshots();
+  const efficiencySnapshot = getPetEfficiencySnapshot();
 
   snapshot.predictions.petLevelUp.clear();
 
   // Predict pet level-ups based on recent XP gain
-  // This is simplified - real implementation would track XP over time
   for (const pet of pets) {
     if (!pet.species || !pet.level || !pet.xp) continue;
 
@@ -359,22 +363,24 @@ function calculatePredictions(): void {
     const xpNeeded = nextLevelData.xp - pet.xp;
     if (xpNeeded <= 0) continue;
 
-    // Estimate XP rate (this would be tracked over time in reality)
-    const estimatedXpPerHour = 1000; // Placeholder
+    // Get actual XP rate from pet efficiency tracking
+    const petId = pet.petId || pet.slotId || `slot-${pet.slotIndex}`;
+    const efficiencyMetrics = efficiencySnapshot.pets.get(petId);
+    const estimatedXpPerHour = efficiencyMetrics?.xpGainRate || 0;
 
-    if (estimatedXpPerHour > 0) {
-      const estimatedHours = xpNeeded / estimatedXpPerHour;
-      snapshot.predictions.petLevelUp.set(pet.species, {
-        currentLevel: pet.level,
-        nextLevel: pet.level + 1,
-        currentXp: pet.xp,
-        targetXp: nextLevelData.xp,
-        xpNeeded,
-        xpPerHour: estimatedXpPerHour,
-        estimatedHours,
-        estimatedTimestamp: Date.now() + (estimatedHours * HOUR_MS),
-      });
-    }
+    // Always add prediction, even if XP rate is unknown (0)
+    // If XP rate is 0, show "Calculating..." instead of an ETA
+    const estimatedHours = estimatedXpPerHour > 0 ? xpNeeded / estimatedXpPerHour : 999999; // Large number for "unknown"
+    snapshot.predictions.petLevelUp.set(pet.species, {
+      currentLevel: pet.level,
+      nextLevel: pet.level + 1,
+      currentXp: pet.xp,
+      targetXp: nextLevelData.xp,
+      xpNeeded,
+      xpPerHour: estimatedXpPerHour,
+      estimatedHours,
+      estimatedTimestamp: estimatedXpPerHour > 0 ? Date.now() + (estimatedHours * HOUR_MS) : Date.now(),
+    });
   }
 
   // Predict next ability procs based on historical timing
@@ -494,10 +500,29 @@ function recalculateAll(): void {
   calculatePredictions();
   calculateComparisons();
   calculateMutationAnalytics();
+  updateGoalProgressFromData();
+
+  snapshot.updatedAt = Date.now();
+  scheduleSave();
+  notifyListeners();
+}
+
+function updateGoalProgressFromData(): void {
+  // Get current garden value
+  const gardenSnapshot = getGardenSnapshot();
+  const currentGardenValue = calculateGardenValue(gardenSnapshot);
 
   // Update goal progress and ETAs
   for (const goal of snapshot.goals) {
     if (goal.completedAt) continue;
+
+    // Update garden_value goals
+    if (goal.type === 'garden_value') {
+      goal.current = currentGardenValue;
+      if (currentGardenValue >= goal.target && !goal.completedAt) {
+        goal.completedAt = Date.now();
+      }
+    }
 
     // Estimate completion time based on current progress rate
     // This is simplified - real implementation would track historical progress
@@ -509,10 +534,6 @@ function recalculateAll(): void {
       goal.estimatedCompletion = Date.now() + (hoursNeeded * HOUR_MS);
     }
   }
-
-  snapshot.updatedAt = Date.now();
-  scheduleSave();
-  notifyListeners();
 }
 
 const scheduleSave = debounce(() => {
@@ -570,10 +591,44 @@ export function initializeComprehensiveAnalytics(): void {
   // Recalculate on init
   recalculateAll();
 
+  // Subscribe to ability logs to auto-update goal progress
+  onAbilityHistoryUpdate(() => {
+    updateGoalProgressFromAbilityLogs();
+  });
+
   // Recalculate periodically (every 60 seconds)
   setInterval(() => {
     recalculateAll();
   }, 60000);
+}
+
+function updateGoalProgressFromAbilityLogs(): void {
+  const historySnapshot = getAbilityHistorySnapshot();
+
+  for (const goal of snapshot.goals) {
+    if (goal.completedAt) continue; // Skip completed goals
+
+    if (goal.type === 'get_procs' && goal.abilityId) {
+      // Count procs for this ability
+      let procCount = 0;
+      for (const history of historySnapshot.values()) {
+        if (history.abilityId === goal.abilityId ||
+            history.abilityId.toLowerCase().includes(goal.abilityId.toLowerCase()) ||
+            goal.abilityId.toLowerCase().includes(history.abilityId.toLowerCase())) {
+          procCount += history.events.length;
+        }
+      }
+
+      if (procCount !== goal.current) {
+        goal.current = procCount;
+        if (procCount >= goal.target && !goal.completedAt) {
+          goal.completedAt = Date.now();
+        }
+      }
+    }
+  }
+
+  notifyListeners();
 }
 
 export function getComprehensiveSnapshot(): ComprehensiveSnapshot {

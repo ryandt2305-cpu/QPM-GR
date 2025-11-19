@@ -5,6 +5,7 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 import { getPetEfficiencySnapshot, subscribeToPetEfficiency } from '../features/petEfficiency';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
+import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
 import { onHarvestSummary, onHarvestToast, getHarvestSummary } from '../features/harvestReminder';
@@ -19,9 +20,9 @@ import { storage } from '../utils/storage';
 import { getCropLockConfig, setCropLockSyncMode } from '../features/cropTypeLocking';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
-import { subscribeToStats, resetStats, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
+import { subscribeToStats, resetStats, getStatsSnapshot, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
 import { findWeatherCanvas, WEATHER_CANVAS_SELECTORS } from '../utils/weatherDetection';
-import { onActivePetInfos, startPetInfoStore, type ActivePetInfo } from '../store/pets';
+import { onActivePetInfos, startPetInfoStore, getActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { estimatePetXpTarget } from '../store/petXpTracker';
 import {
   getAllMutationSummaries,
@@ -31,7 +32,7 @@ import {
   type MutationSummarySource,
   type MutationWeatherWindow,
 } from '../store/mutationSummary';
-import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryForIdentifiers, type AbilityHistory, type AbilityEvent } from '../store/abilityLogs';
+import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryForIdentifiers, getAbilityHistorySnapshot, type AbilityHistory, type AbilityEvent } from '../store/abilityLogs';
 import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type DynamicAbilityEffect } from '../features/abilityValuation';
 import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
@@ -2595,6 +2596,8 @@ export function createOriginalUI(): HTMLElement {
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
   registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
+  registerTab('settings', 'Settings', '⚙️', [createSettingsSection()]);
+  registerTab('stats-overview', 'Stats Overview', '📊', [createStatsOverviewSection()]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
   // Override tab click handlers to open windows instead
@@ -5045,25 +5048,57 @@ function createAnalyticsIntroSection(): HTMLElement {
 
   const statsPreview = document.createElement('div');
   statsPreview.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;';
-
-  const stats = [
-    { label: 'Session Time', value: '0m', color: '#4CAF50' },
-    { label: 'Total Procs', value: '0', color: '#2196F3' },
-    { label: 'Session Value', value: '0g', color: '#FFB74D' },
-    { label: 'Active Pets', value: '0', color: '#9C27B0' },
-  ];
-
-  stats.forEach(stat => {
-    const statCard = document.createElement('div');
-    statCard.style.cssText = `background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;text-align:center;border-top:2px solid ${stat.color};`;
-    statCard.innerHTML = `
-      <div style="font-size:20px;font-weight:700;color:${stat.color};">${stat.value}</div>
-      <div style="font-size:10px;color:#999;margin-top:4px;">${stat.label}</div>
-    `;
-    statsPreview.appendChild(statCard);
-  });
-
+  statsPreview.id = 'qpm-dashboard-stats';
   body.appendChild(statsPreview);
+
+  // Function to update dashboard stats
+  const updateDashboardStats = () => {
+    const sessionStart = performance.timeOrigin + performance.now();
+    const sessionDuration = Date.now() - sessionStart;
+    const sessionMinutes = Math.floor(sessionDuration / 60000);
+    const sessionHours = Math.floor(sessionMinutes / 60);
+    const sessionTimeStr = sessionHours > 0
+      ? `${sessionHours}h ${sessionMinutes % 60}m`
+      : `${sessionMinutes}m`;
+
+    // Count total procs from ability logs
+    const abilitySnapshot = getAbilityHistorySnapshot();
+    let totalProcs = 0;
+    for (const history of abilitySnapshot.values()) {
+      totalProcs += history.events.length;
+    }
+
+    // Get session value from mutation tracking
+    const mutationSnapshot = getMutationValueSnapshot();
+    const sessionValue = mutationSnapshot.stats.sessionValue;
+    const sessionValueStr = formatNumber(sessionValue);
+
+    // Count active pets
+    const activePets = getActivePetInfos();
+    const activePetCount = activePets.length;
+
+    const stats = [
+      { label: 'Session Time', value: sessionTimeStr, color: '#4CAF50' },
+      { label: 'Total Procs', value: totalProcs.toString(), color: '#2196F3' },
+      { label: 'Session Value', value: sessionValueStr, color: '#FFB74D' },
+      { label: 'Active Pets', value: activePetCount.toString(), color: '#9C27B0' },
+    ];
+
+    statsPreview.innerHTML = '';
+    stats.forEach(stat => {
+      const statCard = document.createElement('div');
+      statCard.style.cssText = `background:var(--qpm-surface-1,#1a1a1a);padding:10px;border-radius:6px;text-align:center;border-top:2px solid ${stat.color};`;
+      statCard.innerHTML = `
+        <div style="font-size:20px;font-weight:700;color:${stat.color};">${stat.value}</div>
+        <div style="font-size:10px;color:#999;margin-top:4px;">${stat.label}</div>
+      `;
+      statsPreview.appendChild(statCard);
+    });
+  };
+
+  // Update every 5 seconds
+  updateDashboardStats();
+  setInterval(updateDashboardStats, 5000);
 
   const navHint = document.createElement('div');
   navHint.style.cssText = 'margin-top:12px;padding:8px;background:#1a1a2a;border-radius:4px;text-align:center;font-size:11px;color:#888;';
@@ -8233,11 +8268,25 @@ function showGoalCreationModal(onComplete: () => void): void {
     </div>
   `;
 
+  // Prevent game hotbar from intercepting number inputs
+  const targetInput = form.querySelector('#goal-target') as HTMLInputElement;
+  const specificInput = form.querySelector('#goal-specific-value') as HTMLInputElement;
+
+  const stopGameHotbarIntercept = (e: KeyboardEvent) => {
+    e.stopPropagation();
+  };
+
+  targetInput.addEventListener('keydown', stopGameHotbarIntercept);
+  targetInput.addEventListener('keypress', stopGameHotbarIntercept);
+  targetInput.addEventListener('keyup', stopGameHotbarIntercept);
+  specificInput.addEventListener('keydown', stopGameHotbarIntercept);
+  specificInput.addEventListener('keypress', stopGameHotbarIntercept);
+  specificInput.addEventListener('keyup', stopGameHotbarIntercept);
+
   form.querySelector('#goal-type')!.addEventListener('change', (e) => {
     const type = (e.target as HTMLSelectElement).value;
     const specificDiv = form.querySelector('#goal-specific') as HTMLElement;
     const specificLabel = form.querySelector('#goal-specific-label') as HTMLElement;
-    const specificInput = form.querySelector('#goal-specific-value') as HTMLInputElement;
 
     if (type === 'get_procs') {
       specificDiv.style.display = 'block';
@@ -8486,7 +8535,10 @@ function createPredictionsSection(): HTMLElement {
         petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
 
         const hoursLeft = eta.estimatedHours;
-        const timeText = hoursLeft < 1
+        const hasXpRate = eta.xpPerHour > 0;
+        const timeText = !hasXpRate
+          ? 'Calculating...'
+          : hoursLeft < 1
           ? `${Math.round(hoursLeft * 60)} minutes`
           : hoursLeft < 24
           ? `${hoursLeft.toFixed(1)} hours`
@@ -8494,12 +8546,12 @@ function createPredictionsSection(): HTMLElement {
 
         petDiv.innerHTML = `
           <div>
-            <div style="font-weight:bold;">Level ${eta.currentLevel} → ${eta.nextLevel}</div>
+            <div style="font-weight:bold;">${petId} Lvl ${eta.currentLevel} → ${eta.nextLevel}</div>
             <div style="color:#888;font-size:9px;">${eta.xpNeeded} XP needed</div>
           </div>
           <div style="text-align:right;">
-            <div style="color:#4CAF50;font-weight:bold;">${timeText}</div>
-            <div style="color:#888;font-size:9px;">${eta.xpPerHour.toFixed(0)} XP/hr</div>
+            <div style="color:${hasXpRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
+            <div style="color:#888;font-size:9px;">${hasXpRate ? `${eta.xpPerHour.toFixed(0)} XP/hr` : 'Need data'}</div>
           </div>
         `;
         levelUpGrid.appendChild(petDiv);
@@ -8561,6 +8613,190 @@ function createPredictionsSection(): HTMLElement {
         }
       });
     });
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
+
+  return root;
+}
+
+function createStatsOverviewSection(): HTMLElement {
+  const { root, body } = createCard('📊 Statistics Overview', {
+    subtitle: 'Comprehensive stats across all sessions',
+  });
+  root.dataset.qpmSection = 'stats-overview';
+
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toString();
+  };
+
+  const createStatRow = (label: string, value: string, icon: string = '•') => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #2a2a2a;font-size:11px;';
+    row.innerHTML = `
+      <span style="color:#888;">${icon} ${label}</span>
+      <span style="color:#FFD700;font-weight:bold;">${value}</span>
+    `;
+    return row;
+  };
+
+  const createCategoryHeader = (title: string, icon: string) => {
+    const header = document.createElement('div');
+    header.style.cssText = 'font-weight:bold;font-size:13px;color:#FFD700;margin:16px 0 8px 0;padding-bottom:4px;border-bottom:2px solid #FFD700;';
+    header.textContent = `${icon} ${title}`;
+    return header;
+  };
+
+  const updateStats = () => {
+    body.innerHTML = '';
+
+    const stats = getStatsSnapshot();
+
+    // Garden Stats
+    body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
+    body.appendChild(createStatRow('Total Planted', formatNumber(stats.garden.totalPlanted), '🌱'));
+    body.appendChild(createStatRow('Total Harvested', formatNumber(stats.garden.totalHarvested), '🌾'));
+    body.appendChild(createStatRow('Total Destroyed', formatNumber(stats.garden.totalDestroyed), '💥'));
+    body.appendChild(createStatRow('Watering Cans Used', formatNumber(stats.garden.totalWateringCans), '💧'));
+
+    // Pet Stats
+    body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
+    body.appendChild(createStatRow('Total Hatched', formatNumber(stats.pets.totalHatched), '🥚'));
+    body.appendChild(createStatRow('Normal Pets', formatNumber(stats.pets.hatchedByRarity.normal), '⚪'));
+    body.appendChild(createStatRow('Gold Pets', formatNumber(stats.pets.hatchedByRarity.gold), '🟡'));
+    body.appendChild(createStatRow('Rainbow Pets', formatNumber(stats.pets.hatchedByRarity.rainbow), '🌈'));
+
+    // Ability Stats
+    body.appendChild(createCategoryHeader('Ability Performance', '⚡'));
+    body.appendChild(createStatRow('Total Ability Procs', formatNumber(stats.abilities.totalProcs), '⚡'));
+    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(stats.abilities.totalEstimatedValue)} coins`, '💰'));
+
+    // Top 5 abilities by proc count
+    const topByProcs = Object.entries(stats.abilities.procsByAbility)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .slice(0, 5);
+
+    if (topByProcs.length > 0) {
+      const topProcsHeader = document.createElement('div');
+      topProcsHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
+      topProcsHeader.textContent = 'Top Abilities by Count:';
+      body.appendChild(topProcsHeader);
+
+      topByProcs.forEach(([abilityId, count]) => {
+        body.appendChild(createStatRow(abilityId, formatNumber(count as number), '▸'));
+      });
+    }
+
+    // Top 5 abilities by value
+    const topByValue = Object.entries(stats.abilities.valueByAbility)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .slice(0, 5);
+
+    if (topByValue.length > 0) {
+      const topValueHeader = document.createElement('div');
+      topValueHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
+      topValueHeader.textContent = 'Top Abilities by Value:';
+      body.appendChild(topValueHeader);
+
+      topByValue.forEach(([abilityId, value]) => {
+        body.appendChild(createStatRow(abilityId, `${formatNumber(value as number)} coins`, '▸'));
+      });
+    }
+
+    // Feed Stats
+    body.appendChild(createCategoryHeader('Feeding Activity', '🍖'));
+    body.appendChild(createStatRow('Manual Feeds', formatNumber(stats.feed.manualFeeds), '🍖'));
+  };
+
+  // Initial update
+  updateStats();
+
+  // Subscribe to stats changes for live updates
+  const unsubscribe = subscribeToStats(() => {
+    updateStats();
+  });
+
+  // Cleanup on element removal
+  const observer = new MutationObserver(() => {
+    if (!document.contains(root)) {
+      unsubscribe();
+      observer.disconnect();
+    }
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
+
+  return root;
+}
+
+function createSettingsSection(): HTMLElement {
+  const { root, body } = createCard('⚙️ General Settings', {
+    subtitle: 'Configure QPM behavior',
+  });
+  root.dataset.qpmSection = 'settings';
+
+  // Auto-Favorite Settings
+  const autoFavoriteHeader = document.createElement('div');
+  autoFavoriteHeader.style.cssText = 'font-weight:bold;font-size:12px;color:#FFD700;margin-bottom:8px;margin-top:12px;';
+  autoFavoriteHeader.textContent = 'Auto-Favorite (Gold & Rainbow)';
+  body.appendChild(autoFavoriteHeader);
+
+  const autoFavoriteDesc = document.createElement('div');
+  autoFavoriteDesc.style.cssText = 'font-size:10px;color:#888;margin-bottom:12px;line-height:1.4;';
+  autoFavoriteDesc.textContent = 'Automatically favorite rare (Gold and Rainbow) pets and produce when detected. Note: This feature requires game interaction capabilities.';
+  body.appendChild(autoFavoriteDesc);
+
+  // Get current auto-favorite configuration
+  let currentConfig = getAutoFavoriteConfig();
+
+  // Main toggle
+  const mainToggle = createCheckboxOption(
+    'Enable Auto-Favorite',
+    currentConfig.enabled,
+    (checked) => {
+      updateAutoFavoriteConfig({ enabled: checked });
+      return checked;
+    }
+  );
+  body.appendChild(mainToggle);
+
+  // Rare pets toggle
+  const rarePetsToggle = createCheckboxOption(
+    'Auto-Favorite Rare Pets (Gold & Rainbow)',
+    currentConfig.autoFavoriteRarePets,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRarePets: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rarePetsToggle);
+
+  // Rare produce toggle
+  const rareProduceToggle = createCheckboxOption(
+    'Auto-Favorite Rare Produce (Gold & Rainbow)',
+    currentConfig.autoFavoriteRareProduce,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRareProduce: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rareProduceToggle);
+
+  // Subscribe to config changes to update UI
+  const unsubscribe = subscribeToAutoFavoriteConfig((config) => {
+    currentConfig = config;
+  });
+
+  // Cleanup on element removal
+  const observer = new MutationObserver(() => {
+    if (!document.contains(root)) {
+      unsubscribe();
+      observer.disconnect();
+    }
   });
   if (root.parentElement) {
     observer.observe(root.parentElement, { childList: true, subtree: true });

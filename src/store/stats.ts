@@ -20,6 +20,7 @@ interface ShopItemEntry {
 export interface StatsSnapshot {
   feed: {
     totalFeeds: number;
+    manualFeeds: number;
     perPet: Record<string, FeedEntry>;
     lastFeedAt: number | null;
     sessionStart: number;
@@ -60,6 +61,34 @@ export interface StatsSnapshot {
     totalFailures: number;
     failuresByCategory: Record<ShopCategoryKey, number>;
   };
+  garden: {
+    totalPlanted: number;
+    totalHarvested: number;
+    totalDestroyed: number;
+    totalWateringCans: number;
+    lastPlantedAt: number | null;
+    lastHarvestedAt: number | null;
+    lastDestroyedAt: number | null;
+    lastWateredAt: number | null;
+  };
+  pets: {
+    totalHatched: number;
+    hatchedByRarity: {
+      normal: number;
+      gold: number;
+      rainbow: number;
+    };
+    lastHatchedAt: number | null;
+    lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
+  };
+  abilities: {
+    totalProcs: number;
+    totalEstimatedValue: number; // Sum of all ability values in coins
+    procsByAbility: Record<string, number>; // abilityId -> count
+    valueByAbility: Record<string, number>; // abilityId -> estimated total value
+    lastProcAt: number | null;
+    lastProcAbility: string | null;
+  };
   meta: {
     initializedAt: number;
     updatedAt: number;
@@ -92,6 +121,7 @@ function createDefaultState(now: number): StatsState {
   return {
     feed: {
       totalFeeds: 0,
+      manualFeeds: 0,
       perPet: {},
       lastFeedAt: null,
       sessionStart: now,
@@ -129,6 +159,34 @@ function createDefaultState(now: number): StatsState {
         tools: 0,
         decor: 0,
       },
+    },
+    garden: {
+      totalPlanted: 0,
+      totalHarvested: 0,
+      totalDestroyed: 0,
+      totalWateringCans: 0,
+      lastPlantedAt: null,
+      lastHarvestedAt: null,
+      lastDestroyedAt: null,
+      lastWateredAt: null,
+    },
+    pets: {
+      totalHatched: 0,
+      hatchedByRarity: {
+        normal: 0,
+        gold: 0,
+        rainbow: 0,
+      },
+      lastHatchedAt: null,
+      lastHatchedRarity: null,
+    },
+    abilities: {
+      totalProcs: 0,
+      totalEstimatedValue: 0,
+      procsByAbility: {},
+      valueByAbility: {},
+      lastProcAt: null,
+      lastProcAbility: null,
     },
     meta: {
       initializedAt: now,
@@ -253,6 +311,48 @@ function hydrateState(): StatsState {
     }
   }
 
+  // Garden
+  if (stored.garden) {
+    base.garden.totalPlanted = Number(stored.garden.totalPlanted ?? 0);
+    base.garden.totalHarvested = Number(stored.garden.totalHarvested ?? 0);
+    base.garden.totalDestroyed = Number(stored.garden.totalDestroyed ?? 0);
+    base.garden.totalWateringCans = Number(stored.garden.totalWateringCans ?? 0);
+    base.garden.lastPlantedAt = stored.garden.lastPlantedAt ?? null;
+    base.garden.lastHarvestedAt = stored.garden.lastHarvestedAt ?? null;
+    base.garden.lastDestroyedAt = stored.garden.lastDestroyedAt ?? null;
+    base.garden.lastWateredAt = stored.garden.lastWateredAt ?? null;
+  }
+
+  // Pets
+  if (stored.pets) {
+    base.pets.totalHatched = Number(stored.pets.totalHatched ?? 0);
+    if (stored.pets.hatchedByRarity) {
+      base.pets.hatchedByRarity.normal = Number(stored.pets.hatchedByRarity.normal ?? 0);
+      base.pets.hatchedByRarity.gold = Number(stored.pets.hatchedByRarity.gold ?? 0);
+      base.pets.hatchedByRarity.rainbow = Number(stored.pets.hatchedByRarity.rainbow ?? 0);
+    }
+    base.pets.lastHatchedAt = stored.pets.lastHatchedAt ?? null;
+    base.pets.lastHatchedRarity = stored.pets.lastHatchedRarity ?? null;
+  }
+
+  // Abilities
+  if (stored.abilities) {
+    base.abilities.totalProcs = Number(stored.abilities.totalProcs ?? 0);
+    base.abilities.totalEstimatedValue = Number(stored.abilities.totalEstimatedValue ?? 0);
+    if (stored.abilities.procsByAbility && typeof stored.abilities.procsByAbility === 'object') {
+      for (const [abilityId, count] of Object.entries(stored.abilities.procsByAbility)) {
+        base.abilities.procsByAbility[abilityId] = Number(count ?? 0);
+      }
+    }
+    if (stored.abilities.valueByAbility && typeof stored.abilities.valueByAbility === 'object') {
+      for (const [abilityId, value] of Object.entries(stored.abilities.valueByAbility)) {
+        base.abilities.valueByAbility[abilityId] = Number(value ?? 0);
+      }
+    }
+    base.abilities.lastProcAt = stored.abilities.lastProcAt ?? null;
+    base.abilities.lastProcAbility = stored.abilities.lastProcAbility ?? null;
+  }
+
   // Meta
   if (stored.meta) {
     base.meta.initializedAt = stored.meta.initializedAt ?? base.meta.initializedAt;
@@ -273,6 +373,7 @@ function emitSnapshot(): void {
   const snapshot: StatsSnapshot = {
     feed: {
       totalFeeds: state.feed.totalFeeds,
+      manualFeeds: state.feed.manualFeeds,
       perPet: Object.fromEntries(
         Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
       ),
@@ -303,6 +404,30 @@ function emitSnapshot(): void {
       lastPurchase: state.shop.lastPurchase ? { ...state.shop.lastPurchase } : null,
       totalFailures: state.shop.totalFailures,
       failuresByCategory: { ...state.shop.failuresByCategory },
+    },
+    garden: {
+      totalPlanted: state.garden.totalPlanted,
+      totalHarvested: state.garden.totalHarvested,
+      totalDestroyed: state.garden.totalDestroyed,
+      totalWateringCans: state.garden.totalWateringCans,
+      lastPlantedAt: state.garden.lastPlantedAt,
+      lastHarvestedAt: state.garden.lastHarvestedAt,
+      lastDestroyedAt: state.garden.lastDestroyedAt,
+      lastWateredAt: state.garden.lastWateredAt,
+    },
+    pets: {
+      totalHatched: state.pets.totalHatched,
+      hatchedByRarity: { ...state.pets.hatchedByRarity },
+      lastHatchedAt: state.pets.lastHatchedAt,
+      lastHatchedRarity: state.pets.lastHatchedRarity,
+    },
+    abilities: {
+      totalProcs: state.abilities.totalProcs,
+      totalEstimatedValue: state.abilities.totalEstimatedValue,
+      procsByAbility: { ...state.abilities.procsByAbility },
+      valueByAbility: { ...state.abilities.valueByAbility },
+      lastProcAt: state.abilities.lastProcAt,
+      lastProcAbility: state.abilities.lastProcAbility,
     },
     meta: { ...state.meta },
   };
@@ -412,6 +537,7 @@ export function getStatsSnapshot(): StatsSnapshot {
   return {
     feed: {
       totalFeeds: state.feed.totalFeeds,
+      manualFeeds: state.feed.manualFeeds,
       perPet: Object.fromEntries(
         Object.entries(state.feed.perPet).map(([key, value]) => [key, { ...value }])
       ),
@@ -443,8 +569,45 @@ export function getStatsSnapshot(): StatsSnapshot {
       totalFailures: state.shop.totalFailures,
       failuresByCategory: { ...state.shop.failuresByCategory },
     },
+    garden: {
+      totalPlanted: state.garden.totalPlanted,
+      totalHarvested: state.garden.totalHarvested,
+      totalDestroyed: state.garden.totalDestroyed,
+      totalWateringCans: state.garden.totalWateringCans,
+      lastPlantedAt: state.garden.lastPlantedAt,
+      lastHarvestedAt: state.garden.lastHarvestedAt,
+      lastDestroyedAt: state.garden.lastDestroyedAt,
+      lastWateredAt: state.garden.lastWateredAt,
+    },
+    pets: {
+      totalHatched: state.pets.totalHatched,
+      hatchedByRarity: { ...state.pets.hatchedByRarity },
+      lastHatchedAt: state.pets.lastHatchedAt,
+      lastHatchedRarity: state.pets.lastHatchedRarity,
+    },
+    abilities: {
+      totalProcs: state.abilities.totalProcs,
+      totalEstimatedValue: state.abilities.totalEstimatedValue,
+      procsByAbility: { ...state.abilities.procsByAbility },
+      valueByAbility: { ...state.abilities.valueByAbility },
+      lastProcAt: state.abilities.lastProcAt,
+      lastProcAbility: state.abilities.lastProcAbility,
+    },
     meta: { ...state.meta },
   };
+}
+
+export function recordAbilityProc(abilityId: string, estimatedValue: number = 0, timestamp = Date.now()): void {
+  ensureInitialized();
+
+  state.abilities.totalProcs += 1;
+  state.abilities.totalEstimatedValue += estimatedValue;
+  state.abilities.procsByAbility[abilityId] = (state.abilities.procsByAbility[abilityId] ?? 0) + 1;
+  state.abilities.valueByAbility[abilityId] = (state.abilities.valueByAbility[abilityId] ?? 0) + estimatedValue;
+  state.abilities.lastProcAt = timestamp;
+  state.abilities.lastProcAbility = abilityId;
+
+  commitState();
 }
 
 export function recordFeedEvent(petName: string, timestamp = Date.now()): void {
@@ -455,6 +618,14 @@ export function recordFeedEvent(petName: string, timestamp = Date.now()): void {
   }
   state.feed.perPet[key].count += 1;
   state.feed.perPet[key].lastFeedAt = timestamp;
+  state.feed.totalFeeds += 1;
+  state.feed.lastFeedAt = timestamp;
+  commitState();
+}
+
+export function recordFeedManual(timestamp = Date.now()): void {
+  ensureInitialized();
+  state.feed.manualFeeds += 1;
   state.feed.totalFeeds += 1;
   state.feed.lastFeedAt = timestamp;
   commitState();
@@ -562,6 +733,43 @@ export function recordShopFailure(
     state.shop.history.splice(0, state.shop.history.length - MAX_HISTORY);
   }
 
+  commitState();
+}
+
+export function recordGardenPlant(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalPlanted += count;
+  state.garden.lastPlantedAt = timestamp;
+  commitState();
+}
+
+export function recordGardenHarvest(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalHarvested += count;
+  state.garden.lastHarvestedAt = timestamp;
+  commitState();
+}
+
+export function recordGardenDestroy(count: number = 1, timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalDestroyed += count;
+  state.garden.lastDestroyedAt = timestamp;
+  commitState();
+}
+
+export function recordWateringCan(timestamp = Date.now()): void {
+  ensureInitialized();
+  state.garden.totalWateringCans += 1;
+  state.garden.lastWateredAt = timestamp;
+  commitState();
+}
+
+export function recordPetHatch(rarity: 'normal' | 'gold' | 'rainbow', timestamp = Date.now()): void {
+  ensureInitialized();
+  state.pets.totalHatched += 1;
+  state.pets.hatchedByRarity[rarity] += 1;
+  state.pets.lastHatchedAt = timestamp;
+  state.pets.lastHatchedRarity = rarity;
   commitState();
 }
 

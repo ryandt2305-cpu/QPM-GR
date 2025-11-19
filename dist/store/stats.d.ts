@@ -13,6 +13,7 @@ interface ShopItemEntry {
 export interface StatsSnapshot {
     feed: {
         totalFeeds: number;
+        manualFeeds: number;
         perPet: Record<string, FeedEntry>;
         lastFeedAt: number | null;
         sessionStart: number;
@@ -53,6 +54,34 @@ export interface StatsSnapshot {
         totalFailures: number;
         failuresByCategory: Record<ShopCategoryKey, number>;
     };
+    garden: {
+        totalPlanted: number;
+        totalHarvested: number;
+        totalDestroyed: number;
+        totalWateringCans: number;
+        lastPlantedAt: number | null;
+        lastHarvestedAt: number | null;
+        lastDestroyedAt: number | null;
+        lastWateredAt: number | null;
+    };
+    pets: {
+        totalHatched: number;
+        hatchedByRarity: {
+            normal: number;
+            gold: number;
+            rainbow: number;
+        };
+        lastHatchedAt: number | null;
+        lastHatchedRarity: 'normal' | 'gold' | 'rainbow' | null;
+    };
+    abilities: {
+        totalProcs: number;
+        totalEstimatedValue: number;
+        procsByAbility: Record<string, number>;
+        valueByAbility: Record<string, number>;
+        lastProcAt: number | null;
+        lastProcAbility: string | null;
+    };
     meta: {
         initializedAt: number;
         updatedAt: number;
@@ -62,11 +91,18 @@ export interface StatsSnapshot {
 export declare function initializeStatsStore(): void;
 export declare function subscribeToStats(listener: (snapshot: StatsSnapshot) => void): () => void;
 export declare function getStatsSnapshot(): StatsSnapshot;
+export declare function recordAbilityProc(abilityId: string, estimatedValue?: number, timestamp?: number): void;
 export declare function recordFeedEvent(petName: string, timestamp?: number): void;
+export declare function recordFeedManual(timestamp?: number): void;
 export declare function recordWeatherSwap(stateType: 'weather' | 'noweather', preset: WeatherPreset, triggeredAt: number): void;
 export declare function recordWeatherCooldownBlock(): void;
 export declare function recordShopPurchase(category: ShopCategoryKey, itemName: string, count: number, coins: number, credits: number, timestamp?: number): void;
 export declare function recordShopFailure(category: ShopCategoryKey, itemName: string, reason: string, timestamp?: number): void;
+export declare function recordGardenPlant(count?: number, timestamp?: number): void;
+export declare function recordGardenHarvest(count?: number, timestamp?: number): void;
+export declare function recordGardenDestroy(count?: number, timestamp?: number): void;
+export declare function recordWateringCan(timestamp?: number): void;
+export declare function recordPetHatch(rarity: 'normal' | 'gold' | 'rainbow', timestamp?: number): void;
 export declare function resetStats(): void;
 export {};
 //# sourceMappingURL=stats.d.ts.map

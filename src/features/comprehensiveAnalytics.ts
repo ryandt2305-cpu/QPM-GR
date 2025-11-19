@@ -477,7 +477,7 @@ function calculateMutationAnalytics(): void {
 
   // This would analyze mutations by weather type
   // Simplified implementation
-  snapshot.mutations.totalMutations = mutationData?.pending?.size ?? 0;
+  snapshot.mutations.totalMutations = mutationData?.overallPendingFruitCount ?? 0;
   snapshot.mutations.byWeather = [];
 
   // Would need historical weather correlation data for full implementation

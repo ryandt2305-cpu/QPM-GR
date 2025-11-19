@@ -7022,12 +7022,13 @@ function updateTrackerWindowCountdowns(tbody: HTMLTableSectionElement): void {
     const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
     const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
 
-    if (lastProc === 0 || effectiveRate === 0) {
+    // Skip only if there's no rate data at all
+    if (effectiveRate === 0) {
       return;
     }
 
     const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
-    const etaResult = calculateLiveETA(lastProc, expectedMinutesBetween, effectiveRate);
+    const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
     cell.textContent = etaResult.text;
     cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)';
   });
@@ -7689,21 +7690,45 @@ function createGuideSection(): HTMLElement {
     padding: 12px;
     background: var(--qpm-surface-1, #1a1a1a);
     border-radius: 8px;
-    overflow-x: auto;
-    overflow-y: hidden;
+    position: relative;
+  `;
+
+  const clickHint = document.createElement('div');
+  clickHint.textContent = '(Click Me!)';
+  clickHint.style.cssText = `
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    color: rgba(150, 150, 150, 0.7);
+    font-size: 12px;
+    font-style: italic;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 10;
   `;
 
   const img = document.createElement('img');
   img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
-    width: 100%;
-    min-width: 900px;
+    width: 150%;
+    max-width: 1200px;
     height: auto;
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    cursor: zoom-in;
+    cursor: pointer;
+    transition: transform 0.2s;
   `;
+
+  img.addEventListener('mouseenter', () => {
+    img.style.transform = 'scale(1.02)';
+  });
+
+  img.addEventListener('mouseleave', () => {
+    img.style.transform = 'scale(1)';
+  });
 
   // Click to open full-size in new tab
   img.addEventListener('click', () => {
@@ -7718,6 +7743,7 @@ function createGuideSection(): HTMLElement {
     `;
   };
 
+  imageContainer.appendChild(clickHint);
   imageContainer.appendChild(img);
   body.appendChild(imageContainer);
 

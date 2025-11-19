@@ -6400,12 +6400,13 @@ function updateDashboardETACountdowns(): void {
     const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
     const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
 
-    if (lastProc === 0 || effectiveRate === 0) {
+    // Skip only if there's no rate data at all
+    if (effectiveRate === 0) {
       return;
     }
 
     const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
-    const etaResult = calculateLiveETA(lastProc, expectedMinutesBetween, effectiveRate);
+    const etaResult = calculateLiveETA(lastProc || null, expectedMinutesBetween, effectiveRate);
     cell.textContent = etaResult.text;
     cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger, #ff4444)' : '';
   });
@@ -7688,17 +7689,26 @@ function createGuideSection(): HTMLElement {
     padding: 12px;
     background: var(--qpm-surface-1, #1a1a1a);
     border-radius: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
   `;
 
   const img = document.createElement('img');
   img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
-    max-width: 100%;
+    width: 100%;
+    min-width: 900px;
     height: auto;
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    cursor: zoom-in;
   `;
+
+  // Click to open full-size in new tab
+  img.addEventListener('click', () => {
+    window.open(img.src, '_blank');
+  });
 
   img.onerror = () => {
     imageContainer.innerHTML = `

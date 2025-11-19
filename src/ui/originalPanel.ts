@@ -6703,44 +6703,19 @@ function renderTrackersWindow(root: HTMLElement): void {
     updateInterval: null as number | null,
   };
 
-  // Throttle tracker window rebuilds to prevent destroying countdown cells
-  let lastFullUpdate = 0;
-  let pendingUpdate = false;
-
-  // Subscribe to pet updates (throttled to avoid destroying live countdowns)
+  // Subscribe to pet updates
   onActivePetInfos((infos) => {
     modalLatestInfos = infos;
     modalLatestAnalysis = analyzeActivePetAbilities(infos);
-
-    const now = Date.now();
-    const timeSinceLastUpdate = now - lastFullUpdate;
-
-    // Only do full rebuild every 5 seconds to preserve live countdowns
-    if (timeSinceLastUpdate >= 5000) {
-      lastFullUpdate = now;
-      pendingUpdate = false;
-      updateTrackerWindow(trackerState);
-    } else {
-      // Mark that we have a pending update
-      pendingUpdate = true;
-    }
+    updateTrackerWindow(trackerState);
   });
 
   // Initial render
   updateTrackerWindow(trackerState);
-  lastFullUpdate = Date.now();
 
-  // Auto-update every second for live countdowns
+  // Auto-update every second for live countdowns (like XP tracker)
   trackerState.updateInterval = window.setInterval(() => {
-    updateTrackerWindowCountdowns(trackerState.tbody);
-
-    // Check if we have a pending update and enough time has passed
-    const now = Date.now();
-    if (pendingUpdate && (now - lastFullUpdate) >= 5000) {
-      lastFullUpdate = now;
-      pendingUpdate = false;
-      updateTrackerWindow(trackerState);
-    }
+    updateTrackerWindowCountdowns(trackerState);
   }, 1000);
 
   // Cleanup on window close
@@ -7039,11 +7014,16 @@ function updateTrackerWindow(state: {
 /**
  * Update only the countdown cells (called every second)
  */
-function updateTrackerWindowCountdowns(tbody: HTMLTableSectionElement): void {
-  const countdownCells = tbody.querySelectorAll('.eta-countdown');
+function updateTrackerWindowCountdowns(state: {
+  root: HTMLElement;
+  summaryText: HTMLElement;
+  tbody: HTMLTableSectionElement;
+  footer: HTMLElement;
+  abilityCheckboxGrid: HTMLElement;
+}): void {
+  // Query from root like XP tracker does - more reliable
+  const countdownCells = state.root.querySelectorAll<HTMLElement>('.eta-countdown');
   countdownCells.forEach((cell) => {
-    if (!(cell instanceof HTMLElement)) return;
-
     const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
     const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
 

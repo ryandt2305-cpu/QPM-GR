@@ -273,14 +273,23 @@ function analyzeAbilityHistory(
   }
 
   const sortedEvents = [...history.events].sort((a, b) => a.performedAt - b.performedAt);
-  const firstProcAt = sortedEvents[0]!.performedAt;
-  const lastProcAt = sortedEvents[sortedEvents.length - 1]!.performedAt;
-  const totalProcs = sortedEvents.length;
 
-  // Calculate time between procs
+  // Filter events to only those since session start
+  const sessionEvents = sortedEvents.filter(e => e.performedAt >= snapshot.sessionStart);
+
+  // If no events in this session, return null
+  if (sessionEvents.length === 0) {
+    return null;
+  }
+
+  const firstProcAt = sessionEvents[0]!.performedAt;
+  const lastProcAt = sessionEvents[sessionEvents.length - 1]!.performedAt;
+  const totalProcs = sessionEvents.length;
+
+  // Calculate time between procs (session only)
   const timeBetweenProcs: number[] = [];
-  for (let i = 1; i < sortedEvents.length; i++) {
-    timeBetweenProcs.push(sortedEvents[i]!.performedAt - sortedEvents[i - 1]!.performedAt);
+  for (let i = 1; i < sessionEvents.length; i++) {
+    timeBetweenProcs.push(sessionEvents[i]!.performedAt - sessionEvents[i - 1]!.performedAt);
   }
 
   const avgTimeBetweenProcs = timeBetweenProcs.length > 0
@@ -293,10 +302,10 @@ function analyzeAbilityHistory(
     ? Math.max(...timeBetweenProcs)
     : 0;
 
-  // Calculate rates
-  const duration = Math.max(1, now - firstProcAt);
-  const hoursElapsed = duration / HOUR_MS;
-  const daysElapsed = duration / DAY_MS;
+  // Calculate rates based on session duration (not first proc)
+  const sessionDuration = Math.max(1, now - snapshot.sessionStart);
+  const hoursElapsed = sessionDuration / HOUR_MS;
+  const daysElapsed = sessionDuration / DAY_MS;
 
   const procsPerHour = totalProcs / hoursElapsed;
   const procsPerDay = totalProcs / Math.max(0.001, daysElapsed);
@@ -312,14 +321,14 @@ function analyzeAbilityHistory(
 
   // Recent performance (last hour)
   const oneHourAgo = now - HOUR_MS;
-  const recentEvents = sortedEvents.filter(e => e.performedAt >= oneHourAgo);
+  const recentEvents = sessionEvents.filter(e => e.performedAt >= oneHourAgo);
   const recentProcs = recentEvents.length;
   const recentVariance = expectedProcsPerHour > 0
     ? ((recentProcs - expectedProcsPerHour) / expectedProcsPerHour) * 100
     : 0;
 
-  // Detect streaks
-  const streaks = detectStreaks(sortedEvents, expectedProcsPerHour);
+  // Detect streaks (use session events only)
+  const streaks = detectStreaks(sessionEvents, expectedProcsPerHour);
 
   // Current streak (if the most recent streak includes "now")
   const currentStreak =

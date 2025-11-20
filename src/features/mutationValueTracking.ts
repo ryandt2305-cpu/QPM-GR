@@ -4,6 +4,7 @@
 import { getAbilityHistorySnapshot } from '../store/abilityLogs';
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
+import { resetWeatherMutationTracking } from './weatherMutationTracking';
 
 const STORAGE_KEY = 'qpm.mutationValueTracking.v1';
 const SAVE_DEBOUNCE_MS = 3000;
@@ -370,6 +371,9 @@ export function forceRecalculateMutationValue(): void {
 
 export function resetMutationValueTracking(): void {
   endCurrentSession(); // Save current session before reset
+
+  // Reset weather mutation tracking too
+  resetWeatherMutationTracking();
 
   snapshot = {
     stats: {

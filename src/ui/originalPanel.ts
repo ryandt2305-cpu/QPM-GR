@@ -8776,7 +8776,7 @@ function createGuideSection(): HTMLElement {
     </div>
 
     <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">💡 Pro Tips:</div>
-    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">• Plant lots of crops during special weather</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">• Make sure you have your fully-grown, unmutated plants placed down in your garden during weather events</div>
     <div style="font-size:11px;color:#ccc;margin-bottom:4px;">• Use pets with Gold Granter or Rainbow Granter abilities</div>
     <div style="font-size:11px;color:#ccc;">• Higher tier weather mutations (Frozen, Dawnbound, Amberbound) are rarer but worth more!</div>
   `;

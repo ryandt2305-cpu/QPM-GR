@@ -5,8 +5,10 @@
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { recordPetHatch } from './stats';
 import { log } from '../utils/logger';
+import { storage } from '../utils/storage';
 
 const PET_INFOS_LABEL = 'myPetInfosAtom'; // Contains all owned pets
+const STORAGE_KEY = 'qpm.petHatchingTracker.knownPetIds.v1';
 let started = false;
 let unsubscribe: (() => void) | null = null;
 
@@ -21,8 +23,31 @@ interface PetInfo {
   [key: string]: unknown;
 }
 
-// Track known pet IDs to detect new hatches
+// Track known pet IDs to detect new hatches - PERSISTED to prevent compounding bug
 let knownPetIds = new Set<string>();
+
+// Load known pet IDs from storage
+function loadKnownPetIds(): void {
+  try {
+    const stored = storage.get<string[]>(STORAGE_KEY, []);
+    knownPetIds = new Set(stored);
+    if (knownPetIds.size > 0) {
+      log(`✅ Loaded ${knownPetIds.size} known pet IDs from storage`);
+    }
+  } catch (error) {
+    log('⚠️ Failed to load known pet IDs from storage', error);
+    knownPetIds = new Set();
+  }
+}
+
+// Save known pet IDs to storage
+function saveKnownPetIds(): void {
+  try {
+    storage.set(STORAGE_KEY, Array.from(knownPetIds));
+  } catch (error) {
+    log('⚠️ Failed to save known pet IDs to storage', error);
+  }
+}
 
 function determinePetRarity(pet: PetInfo): 'normal' | 'gold' | 'rainbow' {
   // Method 1: Check explicit rarity property
@@ -80,6 +105,7 @@ function extractPetInfos(value: unknown): PetInfo[] {
 function detectNewPets(pets: PetInfo[]): void {
   const now = Date.now();
   const currentPetIds = new Set<string>();
+  let newPetsDetected = false;
 
   for (const pet of pets) {
     const petId = pet.id || `${pet.species}-${Math.random()}`;
@@ -92,11 +118,17 @@ function detectNewPets(pets: PetInfo[]): void {
 
       const speciesName = pet.name || pet.species || 'Unknown';
       log(`🥚 Detected new ${rarity} pet hatched: ${speciesName}`);
+      newPetsDetected = true;
     }
   }
 
   // Update known pets
   knownPetIds = currentPetIds;
+
+  // Save to storage if new pets were detected
+  if (newPetsDetected) {
+    saveKnownPetIds();
+  }
 }
 
 function processPetData(value: unknown): void {
@@ -109,6 +141,9 @@ function processPetData(value: unknown): void {
 
 export async function startPetHatchingTracker(): Promise<void> {
   if (started) return;
+
+  // Load known pet IDs from storage first
+  loadKnownPetIds();
 
   const atom = getAtomByLabel(PET_INFOS_LABEL);
   if (!atom) {
@@ -129,6 +164,8 @@ export async function startPetHatchingTracker(): Promise<void> {
             const petId = pet.id || `${pet.species}-${Math.random()}`;
             knownPetIds.add(petId);
           }
+          // Save the initial state
+          saveKnownPetIds();
           log(`✅ Pet hatching tracker initialized with ${knownPetIds.size} existing pets`);
         } else {
           // On subsequent calls, detect new pets
@@ -151,8 +188,14 @@ export function stopPetHatchingTracker(): void {
   unsubscribe?.();
   unsubscribe = null;
   started = false;
-  knownPetIds.clear();
+  // Note: We don't clear knownPetIds here to prevent compounding on restart
   log('🛑 Pet hatching tracker stopped');
+}
+
+export function resetPetHatchingTracker(): void {
+  knownPetIds.clear();
+  saveKnownPetIds();
+  log('🗑️ Pet hatching tracker reset - all known pet IDs cleared');
 }
 
 export function isPetHatchingTrackerStarted(): boolean {

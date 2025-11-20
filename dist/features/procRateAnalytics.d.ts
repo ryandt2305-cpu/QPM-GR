@@ -17,6 +17,8 @@ export interface AbilityProcRateStats {
     procsPerDay: number;
     expectedProcsPerHour: number;
     variance: number;
+    varianceDataQuality: 'expected' | 'blended' | 'actual';
+    varianceDataSource: string;
     avgTimeBetweenProcs: number;
     minTimeBetweenProcs: number;
     maxTimeBetweenProcs: number;

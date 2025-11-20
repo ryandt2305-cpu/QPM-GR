@@ -1,12 +1,13 @@
-import { GardenSnapshot } from '../features/gardenBridge';
-interface HighlightDescriptor {
-    tileId: string;
-    slotIndex: number;
-    species: string;
-    mutations: string[];
+export interface HighlightOptions {
+    color?: string;
+    opacity?: number;
+    borderWidth?: number;
+    label?: string;
 }
-export declare function updateGardenHighlightOverlay(highlights: HighlightDescriptor[], snapshot: GardenSnapshot | null): boolean;
+export declare function highlightGardenSlot(slotId: string | number, options?: HighlightOptions): void;
+export declare function clearGardenHighlights(): void;
+export declare function removeGardenHighlight(slotId: string | number): void;
+export declare function updateGardenHighlightOverlay(matches?: any, snapshot?: any): void;
 export declare function clearGardenHighlightOverlay(): void;
 export declare function disposeGardenHighlightOverlay(): void;
-export {};
 //# sourceMappingURL=gardenHighlightOverlay.d.ts.map

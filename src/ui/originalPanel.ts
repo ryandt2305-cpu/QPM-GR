@@ -7805,7 +7805,7 @@ function refreshShopItemsUI(container: HTMLElement): void {
         const orderIndex = new Map<string, number>();
         categoryState?.items.forEach((item) => {
           const normalizedId = String(item.id);
-          const order = Number.isFinite(item.orderIndex) ? item.orderIndex : Number.MAX_SAFE_INTEGER;
+          const order = (Number.isFinite(item.orderIndex) ? item.orderIndex : Number.MAX_SAFE_INTEGER) as number;
           orderIndex.set(normalizedId, order);
         });
 

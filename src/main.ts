@@ -23,6 +23,7 @@ import { initializeProcRateAnalytics } from './features/procRateAnalytics';
 import { initializePetEfficiency } from './features/petEfficiency';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeWeatherMutationTracking } from './features/weatherMutationTracking';
+import { initializePredictions } from './features/predictions';
 import { initializeComprehensiveAnalytics } from './features/comprehensiveAnalytics';
 import { initializeOpportunityAlerts } from './features/opportunityAlerts';
 import { initializeAutoFavorite } from './features/autoFavorite';
@@ -697,6 +698,7 @@ async function initialize(): Promise<void> {
   initializePetEfficiency();
   initializeMutationValueTracking();
   initializeWeatherMutationTracking();
+  initializePredictions();
   initializeComprehensiveAnalytics();
   initializeOpportunityAlerts();
   initializeAutoFavorite();

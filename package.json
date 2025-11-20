@@ -16,7 +16,7 @@
     "analytics",
     "information-tool"
   ],
-  "author": "QPM Team",
+  "author": "TOKYO.",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.10.2",

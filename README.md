@@ -251,7 +251,6 @@ This tool enhances your gameplay experience by providing better information and 
 ## 🙏 Acknowledgments
 
 - Magic Garden community for feedback and testing
-- Contributors to the codebase and documentation
 - Data sourced from community research and game analysis
 
 ---

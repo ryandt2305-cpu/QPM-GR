@@ -6,7 +6,6 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { abilityDefinitions } from '../data/petAbilities';
-import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { formatNumber as formatNum, formatNumberFull, createNumberSpan } from '../utils/formatNumber';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
@@ -3870,7 +3869,6 @@ function buildNotificationListItem(event: NotificationEvent): HTMLButtonElement 
   button.dataset.accent = accent;
   button.setAttribute('aria-pressed', 'false');
 
-  // Modern card design inspired by Aries mod
   button.style.cssText = `
     text-align: left;
     background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
@@ -7582,7 +7580,6 @@ function createComingSoonSection(): HTMLElement {
         { name: 'Detailed Performance Stats', description: 'Expanded analytics leveraging atom data. Coming Soon!' },
         { name: 'Feeds Per Hour Metrics', description: 'Live feeds-per-hour tracking with history. Coming Soon!' },
         { name: 'Shop Purchase Logbook', description: 'Track purchase history in stats. Coming Soon!' },
-        { name: 'Turtle Timer Revamp', description: 'Rebuild of the turtle timer inspired by MGTools. Coming Soon!' },
       ],
     },
     {

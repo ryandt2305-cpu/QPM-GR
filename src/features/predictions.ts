@@ -313,10 +313,10 @@ export function initializePredictions(): void {
   // Initial calculation
   recalculatePredictions();
 
-  // Recalculate periodically (every 60 seconds)
+  // Recalculate periodically (every 10 seconds)
   setInterval(() => {
     recalculatePredictions();
-  }, 60000);
+  }, 10000);
 }
 
 export function getPredictionsSnapshot(): PredictionsSnapshot {

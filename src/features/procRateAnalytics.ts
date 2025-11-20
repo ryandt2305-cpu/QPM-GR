@@ -477,10 +477,10 @@ export function initializeProcRateAnalytics(): void {
   // Recalculate on init
   recalculateSnapshot();
 
-  // Recalculate periodically (every 60 seconds)
+  // Recalculate periodically (every 10 seconds)
   setInterval(() => {
     recalculateSnapshot();
-  }, 60000);
+  }, 10000);
 }
 
 export function getProcRateSnapshot(): ProcRateSnapshot {

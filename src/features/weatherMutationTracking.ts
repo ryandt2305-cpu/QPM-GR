@@ -426,10 +426,10 @@ export function initializeWeatherMutationTracking(): void {
     processGardenUpdate(gardenSnapshot);
   }, true);
 
-  // Recalculate periodically (every 60 seconds)
+  // Recalculate periodically (every 10 seconds)
   setInterval(() => {
     recalculateRates();
-  }, 60000);
+  }, 10000);
 }
 
 export function getWeatherMutationSnapshot(): WeatherMutationSnapshot {

@@ -6,6 +6,7 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
 import { abilityDefinitions } from '../data/petAbilities';
 import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
+import { formatNumber as formatNum, formatNumberFull, createNumberSpan } from '../utils/formatNumber';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
@@ -8223,16 +8224,18 @@ function showGoalCreationModal(onComplete: () => void): void {
     };
 
     if (type === 'earn_coins') {
-      description = `Earn ${formatNumber(target)} coins`;
+      description = `Earn ${formatNum(target)} coins`;
     } else if (type === 'get_procs') {
       if (!specificValue) {
         alert('Please enter ability name');
         return;
       }
       goalData.abilityId = specificValue;
-      description = `Get ${target} ${specificValue} procs`;
+      const abilityDef = abilityDefinitions.find(d => d.id === specificValue);
+      const abilityName = abilityDef?.name || specificValue;
+      description = `Get ${target} ${abilityName} procs`;
     } else if (type === 'garden_value') {
-      description = `Reach ${formatNumber(target)} garden value`;
+      description = `Reach ${formatNum(target)} garden value`;
     }
 
     goalData.description = description;

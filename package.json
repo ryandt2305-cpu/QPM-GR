@@ -1,6 +1,6 @@
 {
   "name": "qpm-general-release",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "QPM General Release - Information and analytics tools for Magic Garden. Features crop locking, mutation tracking, manual timers, and ability analytics.",
   "type": "module",
   "scripts": {

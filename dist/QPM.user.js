@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         QPM - General Release
 // @namespace    https://magicgarden.gg/
-// @version      5.0.0
+// @version      5.0.1
 // @description  Information and analytics tools for Magic Garden. Features crop locking, mutation tracking, manual timers, and ability analytics.
 // @author       TOKYO.
 // @match        https://1227719606223765687.discordsays.com/*

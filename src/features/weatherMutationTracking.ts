@@ -395,9 +395,19 @@ function serializeSnapshot(): PersistedSnapshot {
 function restoreSnapshot(persisted: PersistedSnapshot | null): void {
   if (!persisted || persisted.version !== 1) return;
 
-  snapshot.stats = persisted.stats;
-  snapshot.updatedAt = persisted.updatedAt;
-  trackedSlots = persisted.trackedSlots || new Set();
+  // Only restore best records from previous sessions
+  // Reset all counts and session data for current session
+  snapshot.stats.bestHourValue = persisted.stats.bestHourValue || 0;
+  snapshot.stats.bestHourTime = persisted.stats.bestHourTime || null;
+  snapshot.stats.bestSessionValue = persisted.stats.bestSessionValue || 0;
+  snapshot.stats.bestSessionTime = persisted.stats.bestSessionTime || null;
+
+  // Reset session start to now (current session only)
+  snapshot.stats.sessionStart = Date.now();
+  snapshot.updatedAt = Date.now();
+
+  // Do NOT restore trackedSlots - start fresh for new session
+  trackedSlots = new Set();
 }
 
 function notifyListeners(): void {

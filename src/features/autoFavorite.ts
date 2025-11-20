@@ -75,16 +75,36 @@ function checkAndFavoriteNewItems(inventory: any): void {
       const hasGoldMutation = petMutations.includes('Gold');
       const hasRainbowMutation = petMutations.includes('Rainbow');
 
-      if (hasGoldMutation || hasRainbowMutation) {
+      // Also check abilities array for granter abilities
+      const petAbilities = item.abilities || [];
+      const hasGoldGranterAbility = petAbilities.some((a: any) => {
+        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+        return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
+      });
+      const hasRainbowGranterAbility = petAbilities.some((a: any) => {
+        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+        return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
+      });
+
+      if (hasGoldMutation || hasRainbowMutation || hasGoldGranterAbility || hasRainbowGranterAbility) {
         if (favoriteGameItem(item.id)) {
+          log(`🌟 Auto-favorited pet: ${item.species || 'unknown'} (${hasGoldMutation || hasGoldGranterAbility ? 'Gold' : 'Rainbow'})`);
           petCount++;
         }
       }
       continue;
     }
 
-    // Check if it's produce
-    if (item.itemType === 'Produce' && config.autoFavoriteRareProduce) {
+    // Check if it's produce (CRITICAL: Exclude eggs and tools)
+    if (config.autoFavoriteRareProduce) {
+      // Only auto-favorite crops beyond this point
+      if (item.itemType !== 'Produce') continue;
+
+      // CRITICAL: Explicitly exclude eggs and tools - CROPS ONLY
+      if (item.itemType === 'Egg' || item.itemType === 'Tool') continue;
+      if (item.category === 'Egg' || item.category === 'Tool') continue;
+      if (item.species && (item.species.includes('Pet') || item.species.includes('Egg'))) continue;
+
       // Check item mutations for Gold or Rainbow
       const itemMutations = item.mutations || [];
       const hasGoldMutation = itemMutations.some((mut: string) =>
@@ -96,6 +116,7 @@ function checkAndFavoriteNewItems(inventory: any): void {
 
       if (hasGoldMutation || hasRainbowMutation) {
         if (favoriteGameItem(item.id)) {
+          log(`🌟 Auto-favorited crop: ${item.species || 'unknown'} (${hasGoldMutation ? 'Gold' : 'Rainbow'})`);
           cropCount++;
         }
       }
@@ -103,10 +124,10 @@ function checkAndFavoriteNewItems(inventory: any): void {
   }
 
   if (cropCount > 0) {
-    log(`🌟 Auto-favorited ${cropCount} new crops`);
+    log(`✨ Auto-favorited ${cropCount} new gold/rainbow crops`);
   }
   if (petCount > 0) {
-    log(`🌟 Auto-favorited ${petCount} new pets`);
+    log(`✨ Auto-favorited ${petCount} new gold/rainbow pets`);
   }
 }
 

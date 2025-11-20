@@ -1,7 +1,8 @@
 export interface AutoFavoriteConfig {
     enabled: boolean;
-    autoFavoriteRarePets: boolean;
-    autoFavoriteRareProduce: boolean;
+    species: string[];
+    mutations: string[];
+    petAbilities: string[];
 }
 export declare function initializeAutoFavorite(): void;
 export declare function getAutoFavoriteConfig(): AutoFavoriteConfig;

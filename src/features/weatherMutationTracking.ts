@@ -504,6 +504,13 @@ export function resetWeatherMutationTracking(): void {
   };
 
   trackedSlots = new Set();
-  scheduleSave();
+
+  // Immediately save (don't wait for debounce)
+  try {
+    storage.set(STORAGE_KEY, serializeSnapshot());
+  } catch (error) {
+    console.error('[weatherMutationTracking] Failed to save after reset:', error);
+  }
+
   notifyListeners();
 }

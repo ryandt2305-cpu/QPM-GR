@@ -42,6 +42,8 @@ export interface AbilityProcRateStats {
   // Expected vs actual
   expectedProcsPerHour: number;
   variance: number; // % deviation from expected
+  varianceDataQuality: 'expected' | 'blended' | 'actual'; // Indicates data source quality
+  varianceDataSource: string; // Human-readable description
 
   // Time between procs
   avgTimeBetweenProcs: number; // milliseconds
@@ -273,14 +275,99 @@ function analyzeAbilityHistory(
   }
 
   const sortedEvents = [...history.events].sort((a, b) => a.performedAt - b.performedAt);
-  const firstProcAt = sortedEvents[0]!.performedAt;
-  const lastProcAt = sortedEvents[sortedEvents.length - 1]!.performedAt;
-  const totalProcs = sortedEvents.length;
 
-  // Calculate time between procs
+  // Filter events to only those since session start
+  const sessionEvents = sortedEvents.filter(e => e.performedAt >= snapshot.sessionStart);
+
+  const sessionDuration = now - snapshot.sessionStart;
+  const totalProcs = sessionEvents.length;
+
+  // Calculate expected rate for comparison
+  const expectedProcsPerHour = abilityDef
+    ? calculateExpectedProcsPerHour(abilityDef, history.abilityId)
+    : 0;
+
+  // Hybrid variance system: blend expected + actual based on data quantity
+  let variance: number;
+  let varianceDataQuality: 'expected' | 'blended' | 'actual';
+  let varianceDataSource: string;
+
+  if (totalProcs === 0) {
+    // Phase 1: No procs yet - show purely expected variance (which is 0% by definition)
+    variance = 0;
+    varianceDataQuality = 'expected';
+    varianceDataSource = 'Theoretical (no procs yet)';
+  } else if (totalProcs >= 1 && totalProcs <= 2) {
+    // Phase 1: Very limited data (1-2 procs) - show expected variance
+    // Calculate what variance WOULD be if current rate continued
+    const hoursElapsed = sessionDuration / HOUR_MS;
+    const actualRate = totalProcs / Math.max(0.001, hoursElapsed);
+    const theoreticalVariance = expectedProcsPerHour > 0
+      ? ((actualRate - expectedProcsPerHour) / expectedProcsPerHour) * 100
+      : 0;
+
+    variance = theoreticalVariance;
+    varianceDataQuality = 'expected';
+    varianceDataSource = `Expected (${totalProcs} proc${totalProcs > 1 ? 's' : ''})`;
+  } else if (totalProcs >= 3 && totalProcs <= 9) {
+    // Phase 2: Early data (3-9 procs) - blend expected + actual
+    const hoursElapsed = sessionDuration / HOUR_MS;
+    const actualRate = totalProcs / Math.max(0.001, hoursElapsed);
+    const actualVariance = expectedProcsPerHour > 0
+      ? ((actualRate - expectedProcsPerHour) / expectedProcsPerHour) * 100
+      : 0;
+
+    // Gradually shift weight from expected (70%) to actual (30%) as procs increase
+    const actualWeight = (totalProcs - 3) / (9 - 3); // 0 at 3 procs, 1 at 9 procs
+    const expectedWeight = 1 - actualWeight;
+
+    // Blend: start with more weight on expected, gradually shift to actual
+    variance = (0 * expectedWeight) + (actualVariance * (0.3 + actualWeight * 0.7));
+    varianceDataQuality = 'blended';
+    varianceDataSource = `Blended (${totalProcs} procs)`;
+  } else {
+    // Phase 3: Sufficient data (10+ procs) - show actual variance only
+    const hoursElapsed = sessionDuration / HOUR_MS;
+    const actualRate = totalProcs / Math.max(0.001, hoursElapsed);
+    variance = expectedProcsPerHour > 0
+      ? ((actualRate - expectedProcsPerHour) / expectedProcsPerHour) * 100
+      : 0;
+    varianceDataQuality = 'actual';
+    varianceDataSource = `Actual (${totalProcs} procs)`;
+  }
+
+  // If no events in this session, return early with theoretical stats
+  if (sessionEvents.length === 0) {
+    return {
+      abilityId: history.abilityId,
+      abilityName,
+      totalProcs: 0,
+      firstProcAt: null,
+      lastProcAt: null,
+      procsPerHour: 0,
+      procsPerDay: 0,
+      expectedProcsPerHour,
+      variance: 0,
+      varianceDataQuality: 'expected',
+      varianceDataSource: 'Theoretical (no procs yet)',
+      avgTimeBetweenProcs: 0,
+      minTimeBetweenProcs: 0,
+      maxTimeBetweenProcs: 0,
+      currentStreak: null,
+      hotStreaks: [],
+      coldStreaks: [],
+      recentProcs: 0,
+      recentVariance: 0,
+    };
+  }
+
+  const firstProcAt = sessionEvents[0]!.performedAt;
+  const lastProcAt = sessionEvents[sessionEvents.length - 1]!.performedAt;
+
+  // Calculate time between procs (session only)
   const timeBetweenProcs: number[] = [];
-  for (let i = 1; i < sortedEvents.length; i++) {
-    timeBetweenProcs.push(sortedEvents[i]!.performedAt - sortedEvents[i - 1]!.performedAt);
+  for (let i = 1; i < sessionEvents.length; i++) {
+    timeBetweenProcs.push(sessionEvents[i]!.performedAt - sessionEvents[i - 1]!.performedAt);
   }
 
   const avgTimeBetweenProcs = timeBetweenProcs.length > 0
@@ -293,33 +380,23 @@ function analyzeAbilityHistory(
     ? Math.max(...timeBetweenProcs)
     : 0;
 
-  // Calculate rates
-  const duration = Math.max(1, now - firstProcAt);
-  const hoursElapsed = duration / HOUR_MS;
-  const daysElapsed = duration / DAY_MS;
+  // Calculate rates based on session duration (not first proc)
+  const hoursElapsed = sessionDuration / HOUR_MS;
+  const daysElapsed = sessionDuration / DAY_MS;
 
   const procsPerHour = totalProcs / hoursElapsed;
   const procsPerDay = totalProcs / Math.max(0.001, daysElapsed);
 
-  // Expected rate
-  const expectedProcsPerHour = abilityDef
-    ? calculateExpectedProcsPerHour(abilityDef, history.abilityId)
-    : 0;
-
-  const variance = expectedProcsPerHour > 0
-    ? ((procsPerHour - expectedProcsPerHour) / expectedProcsPerHour) * 100
-    : 0;
-
   // Recent performance (last hour)
   const oneHourAgo = now - HOUR_MS;
-  const recentEvents = sortedEvents.filter(e => e.performedAt >= oneHourAgo);
+  const recentEvents = sessionEvents.filter(e => e.performedAt >= oneHourAgo);
   const recentProcs = recentEvents.length;
   const recentVariance = expectedProcsPerHour > 0
     ? ((recentProcs - expectedProcsPerHour) / expectedProcsPerHour) * 100
     : 0;
 
-  // Detect streaks
-  const streaks = detectStreaks(sortedEvents, expectedProcsPerHour);
+  // Detect streaks (use session events only)
+  const streaks = detectStreaks(sessionEvents, expectedProcsPerHour);
 
   // Current streak (if the most recent streak includes "now")
   const currentStreak =
@@ -337,6 +414,8 @@ function analyzeAbilityHistory(
     procsPerDay,
     expectedProcsPerHour,
     variance,
+    varianceDataQuality,
+    varianceDataSource,
     avgTimeBetweenProcs,
     minTimeBetweenProcs,
     maxTimeBetweenProcs,
@@ -435,6 +514,8 @@ function restoreSnapshot(persisted: PersistedSnapshot | null): void {
       procsPerDay: stats.procsPerDay,
       expectedProcsPerHour: stats.expectedProcsPerHour,
       variance: stats.variance,
+      varianceDataQuality: (stats as any).varianceDataQuality || 'actual', // Default to actual for old data
+      varianceDataSource: (stats as any).varianceDataSource || 'Historical',
       avgTimeBetweenProcs: stats.avgTimeBetweenProcs,
       minTimeBetweenProcs: stats.minTimeBetweenProcs,
       maxTimeBetweenProcs: stats.maxTimeBetweenProcs,

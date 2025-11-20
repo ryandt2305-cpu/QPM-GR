@@ -4,6 +4,8 @@
 import { getAbilityHistorySnapshot } from '../store/abilityLogs';
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
+import { log } from '../utils/logger';
+import { resetWeatherMutationTracking } from './weatherMutationTracking';
 
 const STORAGE_KEY = 'qpm.mutationValueTracking.v1';
 const SAVE_DEBOUNCE_MS = 3000;
@@ -371,6 +373,12 @@ export function forceRecalculateMutationValue(): void {
 export function resetMutationValueTracking(): void {
   endCurrentSession(); // Save current session before reset
 
+  // Reset weather mutation tracking too
+  resetWeatherMutationTracking();
+
+  // Create new snapshot with fresh session start
+  const newSessionStart = Date.now();
+
   snapshot = {
     stats: {
       goldProcs: 0,
@@ -386,7 +394,7 @@ export function resetMutationValueTracking(): void {
       cropBoostTotalValue: 0,
       cropBoostLastProcAt: null,
       sessionValue: 0,
-      sessionStart: Date.now(),
+      sessionStart: newSessionStart,
       bestHourValue: snapshot.stats.bestHourValue, // Keep best records
       bestHourTime: snapshot.stats.bestHourTime,
       bestSessionValue: snapshot.stats.bestSessionValue,
@@ -397,8 +405,17 @@ export function resetMutationValueTracking(): void {
     updatedAt: Date.now(),
   };
 
-  scheduleSave();
+  // Immediately save (don't wait for debounce)
+  try {
+    storage.set(STORAGE_KEY, serializeSnapshot());
+  } catch (error) {
+    console.error('[mutationValueTracking] Failed to save after reset:', error);
+  }
+
+  // Notify listeners with reset state
   notifyListeners();
+
+  log('✅ [MUTATION-VALUE] Reset complete - session stats cleared');
 }
 
 export function getWeekTrend(): { current: number; previous: number; percentChange: number } {

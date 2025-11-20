@@ -2,8 +2,10 @@
 // General Release v5.0.0 - Tracking and analytics
 import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind } from '../features/weatherUtils';
 import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/procRateAnalytics';
-import { getPetEfficiencySnapshot, subscribeToPetEfficiency } from '../features/petEfficiency';
+// Pet Efficiency removed
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
+import { abilityDefinitions } from '../data/petAbilities';
+import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
@@ -2591,7 +2593,6 @@ export function createOriginalUI(): HTMLElement {
   // Feed tab not included in this version
   registerTab('mutation', 'Mutation Reminder', '🧬', [mutationSection]);
   registerTab('proc-analytics', 'Proc Analytics', '📊', [createProcAnalyticsSection()]);
-  registerTab('pet-efficiency', 'Pet Efficiency', '🏆', [createPetEfficiencySection()]);
   registerTab('mutation-value', 'Mutation Value', '💎', [createMutationValueSection()]);
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
   registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
@@ -5013,37 +5014,7 @@ function createAnalyticsIntroSection(): HTMLElement {
   const intro = document.createElement('div');
   intro.style.cssText = 'padding:12px;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:8px;margin-bottom:12px;';
 
-  const introText = document.createElement('div');
-  introText.style.cssText = 'font-size:12px;line-height:1.6;color:#ccc;margin-bottom:10px;';
-  introText.innerHTML = `
-    <strong style="color:#4CAF50;font-size:14px;">Welcome to QPM Analytics!</strong><br>
-    Your comprehensive performance tracking system for Magic Garden.<br><br>
-    Use the tabs below to access detailed analytics:
-  `;
-
-  const tabList = document.createElement('div');
-  tabList.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:8px;';
-
-  const tabs = [
-    { icon: '📊', name: 'Proc Analytics', desc: 'Variance & streaks' },
-    { icon: '🏆', name: 'Pet Efficiency', desc: 'Rankings & scores' },
-    { icon: '💎', name: 'Mutation Value', desc: 'Generation rates' },
-    { icon: '🎯', name: 'Goals & Records', desc: 'Progress tracking' },
-    { icon: '⏰', name: 'Predictions', desc: 'ETAs & forecasts' },
-  ];
-
-  tabs.forEach(tab => {
-    const item = document.createElement('div');
-    item.style.cssText = 'padding:8px;background:rgba(76,175,80,0.1);border-radius:4px;border:1px solid rgba(76,175,80,0.3);';
-    item.innerHTML = `
-      <div style="font-weight:600;font-size:12px;color:#4CAF50;">${tab.icon} ${tab.name}</div>
-      <div style="font-size:10px;color:#999;margin-top:2px;">${tab.desc}</div>
-    `;
-    tabList.appendChild(item);
-  });
-
-  intro.appendChild(introText);
-  intro.appendChild(tabList);
+  // Session overview stats only - tabs are accessible from main navigation
   body.appendChild(intro);
 
   const statsPreview = document.createElement('div');
@@ -7967,15 +7938,31 @@ function createProcAnalyticsSection(): HTMLElement {
     const snapshot = getProcRateSnapshot();
     abilitiesContainer.innerHTML = '';
 
-    if (snapshot.abilities.size === 0) {
+    // Filter to only show "Chance Per Minute" abilities (continuous with rollPeriodMinutes=1)
+    // Exclude ProduceMutationBoost I/II as they only proc during weather events
+    const filteredAbilities = new Map();
+    snapshot.abilities.forEach((stats, abilityId) => {
+      // Skip Crop Mutation Boost abilities
+      if (abilityId === 'ProduceMutationBoost' || abilityId === 'ProduceMutationBoostII') {
+        return;
+      }
+
+      // Only show continuous abilities with rollPeriodMinutes = 1
+      const def = abilityDefinitions.find(d => d.id === abilityId);
+      if (def && def.trigger === 'continuous' && def.rollPeriodMinutes === 1) {
+        filteredAbilities.set(abilityId, stats);
+      }
+    });
+
+    if (filteredAbilities.size === 0) {
       const emptyState = document.createElement('div');
       emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-      emptyState.textContent = 'No ability procs recorded yet. Data will appear as your pets use abilities.';
+      emptyState.textContent = 'No Chance Per Minute ability procs recorded yet. Data will appear as your pets use abilities with continuous proc chances.';
       abilitiesContainer.appendChild(emptyState);
       return;
     }
 
-    snapshot.abilities.forEach((stats, abilityId) => {
+    filteredAbilities.forEach((stats, abilityId) => {
       const abilityCard = document.createElement('div');
       abilityCard.style.cssText = 'padding:12px;background:#1a1a2a;border-radius:6px;border-left:3px solid #42A5F5;';
 
@@ -8038,105 +8025,7 @@ function createProcAnalyticsSection(): HTMLElement {
   return root;
 }
 
-function createPetEfficiencySection(): HTMLElement {
-  const { root, body } = createCard('🏆 Pet Efficiency Rankings', {
-    subtitle: 'Performance scores and rankings',
-    collapsible: true,
-  });
-  root.dataset.qpmSection = 'pet-efficiency';
-
-  const info = document.createElement('div');
-  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
-  info.innerHTML = `
-    <strong>🏅 Pet performance rankings:</strong> XP gain rates, ability value per hour, and overall efficiency scores.
-  `;
-  body.appendChild(info);
-
-  const rankingsContainer = document.createElement('div');
-  rankingsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
-  body.appendChild(rankingsContainer);
-
-  const render = () => {
-    const snapshot = getPetEfficiencySnapshot();
-    rankingsContainer.innerHTML = '';
-
-    if (snapshot.pets.size === 0) {
-      const emptyState = document.createElement('div');
-      emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-      emptyState.textContent = 'No pet data recorded yet. Data will appear as your pets gain XP and use abilities.';
-      rankingsContainer.appendChild(emptyState);
-      return;
-    }
-
-    // Top 3 by XP Rate
-    const xpSection = document.createElement('div');
-    xpSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">⚡ Top 3 XP Earners</div>';
-    const xpGrid = document.createElement('div');
-    xpGrid.style.cssText = 'display:grid;gap:6px;';
-    snapshot.rankings.byXpRate.slice(0, 3).forEach((pet, idx) => {
-      const medal = ['🥇', '🥈', '🥉'][idx] || '';
-      const petDiv = document.createElement('div');
-      petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
-      petDiv.innerHTML = `
-        <span>${medal} ${pet.name || pet.species} (Lv${pet.level})</span>
-        <span style="color:#4CAF50;font-weight:bold;">${pet.xpGainRate.toFixed(0)} XP/hr</span>
-      `;
-      xpGrid.appendChild(petDiv);
-    });
-    xpSection.appendChild(xpGrid);
-    rankingsContainer.appendChild(xpSection);
-
-    // Top 3 by Ability Value
-    const valueSection = document.createElement('div');
-    valueSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">💰 Top 3 Value Generators</div>';
-    const valueGrid = document.createElement('div');
-    valueGrid.style.cssText = 'display:grid;gap:6px;';
-    snapshot.rankings.byAbilityValue.slice(0, 3).forEach((pet, idx) => {
-      const medal = ['🥇', '🥈', '🥉'][idx] || '';
-      const petDiv = document.createElement('div');
-      petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
-      petDiv.innerHTML = `
-        <span>${medal} ${pet.name || pet.species} (${pet.totalAbilityProcs} procs)</span>
-        <span style="color:#4CAF50;font-weight:bold;">${formatNumber(pet.abilityValuePerHour)}/hr</span>
-      `;
-      valueGrid.appendChild(petDiv);
-    });
-    valueSection.appendChild(valueGrid);
-    rankingsContainer.appendChild(valueSection);
-
-    // Overall Top Performer
-    const bestOverall = snapshot.rankings.byEfficiencyScore[0];
-    if (bestOverall) {
-      const bestDiv = document.createElement('div');
-      bestDiv.style.cssText = 'margin-top:12px;padding:12px;background:linear-gradient(135deg,rgba(255,215,0,0.15),rgba(76,175,80,0.15));border-radius:6px;border:1px solid rgba(255,215,0,0.3);';
-      bestDiv.innerHTML = `
-        <div style="font-weight:bold;font-size:11px;margin-bottom:6px;">⭐ Best Overall Performer</div>
-        <div style="font-size:12px;font-weight:bold;">${bestOverall.name || bestOverall.species}</div>
-        <div style="font-size:10px;color:#888;margin-top:4px;">Efficiency Score: <strong style="color:#FFD700;">${bestOverall.efficiencyScore.toFixed(0)}/100</strong></div>
-      `;
-      rankingsContainer.appendChild(bestDiv);
-    }
-  };
-
-  render();
-  const unsubscribe = subscribeToPetEfficiency(render);
-
-  const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      mutation.removedNodes.forEach((node) => {
-        if (node === root || (node as HTMLElement).contains?.(root)) {
-          unsubscribe();
-          observer.disconnect();
-        }
-      });
-    });
-  });
-  if (root.parentElement) {
-    observer.observe(root.parentElement, { childList: true, subtree: true });
-  }
-
-  return root;
-}
+// Pet Efficiency section removed - functionality consolidated into other analytics tabs
 
 function createMutationValueSection(): HTMLElement {
   const { root, body } = createCard('💎 Mutation Value Tracking', {
@@ -8283,15 +8172,33 @@ function showGoalCreationModal(onComplete: () => void): void {
   specificInput.addEventListener('keypress', stopGameHotbarIntercept);
   specificInput.addEventListener('keyup', stopGameHotbarIntercept);
 
+  // Create ability dropdown for get_procs goal type
+  const abilitySelectHTML = (() => {
+    const continuousAbilities = abilityDefinitions.filter(d => d.trigger === 'continuous' && d.rollPeriodMinutes === 1);
+    return continuousAbilities.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+  })();
+
   form.querySelector('#goal-type')!.addEventListener('change', (e) => {
     const type = (e.target as HTMLSelectElement).value;
     const specificDiv = form.querySelector('#goal-specific') as HTMLElement;
     const specificLabel = form.querySelector('#goal-specific-label') as HTMLElement;
+    const inputContainer = form.querySelector('#goal-specific-value')!.parentElement!;
 
     if (type === 'get_procs') {
       specificDiv.style.display = 'block';
-      specificLabel.textContent = 'Ability Name:';
-      specificInput.placeholder = 'e.g., Midas Touch';
+      specificLabel.textContent = 'Ability:';
+
+      // Replace text input with select dropdown
+      const select = document.createElement('select');
+      select.id = 'goal-specific-value';
+      select.style.cssText = 'width:100%;padding:6px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:4px;font-size:11px;';
+      select.innerHTML = `<option value="">Select an ability...</option>${abilitySelectHTML}`;
+      select.addEventListener('keydown', stopGameHotbarIntercept);
+
+      const oldInput = inputContainer.querySelector('#goal-specific-value');
+      if (oldInput) {
+        oldInput.replaceWith(select);
+      }
     } else {
       specificDiv.style.display = 'none';
     }
@@ -8300,7 +8207,8 @@ function showGoalCreationModal(onComplete: () => void): void {
   form.querySelector('#create-goal-btn')!.addEventListener('click', () => {
     const type = (form.querySelector('#goal-type') as HTMLSelectElement).value;
     const target = parseInt((form.querySelector('#goal-target') as HTMLInputElement).value);
-    const specificValue = (form.querySelector('#goal-specific-value') as HTMLInputElement).value;
+    const specificElement = form.querySelector('#goal-specific-value') as HTMLInputElement | HTMLSelectElement;
+    const specificValue = specificElement?.value || '';
 
     if (!target || target <= 0) {
       alert('Please enter a valid target amount');
@@ -8650,65 +8558,98 @@ function createStatsOverviewSection(): HTMLElement {
     return header;
   };
 
+  // Value-generating abilities only (for Top Abilities filter)
+  const VALUE_ABILITIES = new Set([
+    'GoldGranter', 'RainbowGranter',
+    'ProduceScaleBoost', 'ProduceScaleBoostII',
+    'ProduceRefund', 'DoubleHarvest',
+    'SellBoostI', 'SellBoostII', 'SellBoostIII', 'SellBoostIV',
+    'CoinFinderI', 'CoinFinderII', 'CoinFinderIII',
+    'PetRefund', 'PetRefundII'
+  ]);
+
   const updateStats = () => {
     body.innerHTML = '';
 
-    const stats = getStatsSnapshot();
+    // Try to get Aries stats first (more comprehensive), fallback to our stats
+    const ariesStats = getAriesStats();
+    const qpmStats = getStatsSnapshot();
+    const hasAries = ariesStats !== null;
 
-    // Garden Stats
+    // Garden Stats - prefer Aries data
     body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
-    body.appendChild(createStatRow('Total Planted', formatNumber(stats.garden.totalPlanted), '🌱'));
-    body.appendChild(createStatRow('Total Harvested', formatNumber(stats.garden.totalHarvested), '🌾'));
-    body.appendChild(createStatRow('Total Destroyed', formatNumber(stats.garden.totalDestroyed), '💥'));
-    body.appendChild(createStatRow('Watering Cans Used', formatNumber(stats.garden.totalWateringCans), '💧'));
+    if (hasAries && ariesStats.garden) {
+      body.appendChild(createStatRow('Total Planted', formatNumber(ariesStats.garden.totalPlanted), '🌱'));
+      body.appendChild(createStatRow('Total Harvested', formatNumber(ariesStats.garden.totalHarvested), '🌾'));
+      body.appendChild(createStatRow('Total Destroyed', formatNumber(ariesStats.garden.totalDestroyed), '💥'));
+      body.appendChild(createStatRow('Watering Cans Used', formatNumber(ariesStats.garden.watercanUsed), '💧'));
+    } else {
+      body.appendChild(createStatRow('Total Planted', formatNumber(qpmStats.garden.totalPlanted), '🌱'));
+      body.appendChild(createStatRow('Total Harvested', formatNumber(qpmStats.garden.totalHarvested), '🌾'));
+      body.appendChild(createStatRow('Total Destroyed', formatNumber(qpmStats.garden.totalDestroyed), '💥'));
+      body.appendChild(createStatRow('Watering Cans Used', formatNumber(qpmStats.garden.totalWateringCans), '💧'));
+    }
 
-    // Pet Stats
+    // Pet Stats - prefer Aries data for accurate rarity counts
     body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
-    body.appendChild(createStatRow('Total Hatched', formatNumber(stats.pets.totalHatched), '🥚'));
-    body.appendChild(createStatRow('Normal Pets', formatNumber(stats.pets.hatchedByRarity.normal), '⚪'));
-    body.appendChild(createStatRow('Gold Pets', formatNumber(stats.pets.hatchedByRarity.gold), '🟡'));
-    body.appendChild(createStatRow('Rainbow Pets', formatNumber(stats.pets.hatchedByRarity.rainbow), '🌈'));
+    if (hasAries && ariesStats.pets?.hatchedByType) {
+      // Sum all pets across all species
+      let totalNormal = 0;
+      let totalGold = 0;
+      let totalRainbow = 0;
+
+      for (const species in ariesStats.pets.hatchedByType) {
+        const counts = ariesStats.pets.hatchedByType[species];
+        if (counts) {
+          totalNormal += counts.normal || 0;
+          totalGold += counts.gold || 0;
+          totalRainbow += counts.rainbow || 0;
+        }
+      }
+
+      const totalHatched = totalNormal + totalGold + totalRainbow;
+      body.appendChild(createStatRow('Total Hatched', formatNumber(totalHatched), '🥚'));
+      body.appendChild(createStatRow('Normal Pets', formatNumber(totalNormal), '⚪'));
+      body.appendChild(createStatRow('Gold Pets', formatNumber(totalGold), '🟡'));
+      body.appendChild(createStatRow('Rainbow Pets', formatNumber(totalRainbow), '🌈'));
+    } else {
+      body.appendChild(createStatRow('Total Hatched', formatNumber(qpmStats.pets.totalHatched), '🥚'));
+      body.appendChild(createStatRow('Normal Pets', formatNumber(qpmStats.pets.hatchedByRarity.normal), '⚪'));
+      body.appendChild(createStatRow('Gold Pets', formatNumber(qpmStats.pets.hatchedByRarity.gold), '🟡'));
+      body.appendChild(createStatRow('Rainbow Pets', formatNumber(qpmStats.pets.hatchedByRarity.rainbow), '🌈'));
+    }
 
     // Ability Stats
     body.appendChild(createCategoryHeader('Ability Performance', '⚡'));
-    body.appendChild(createStatRow('Total Ability Procs', formatNumber(stats.abilities.totalProcs), '⚡'));
-    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(stats.abilities.totalEstimatedValue)} coins`, '💰'));
+    body.appendChild(createStatRow('Total Ability Procs', formatNumber(qpmStats.abilities.totalProcs), '⚡'));
+    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(qpmStats.abilities.totalEstimatedValue)} coins`, '💰'));
 
-    // Top 5 abilities by proc count
-    const topByProcs = Object.entries(stats.abilities.procsByAbility)
+    // Top 5 value-generating abilities only (filter out XP, growth boosters, etc.)
+    const valueAbilities = Object.entries(qpmStats.abilities.valueByAbility)
+      .filter(([abilityId]) => VALUE_ABILITIES.has(abilityId))
       .sort(([, a], [, b]) => (b as number) - (a as number))
       .slice(0, 5);
 
-    if (topByProcs.length > 0) {
-      const topProcsHeader = document.createElement('div');
-      topProcsHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
-      topProcsHeader.textContent = 'Top Abilities by Count:';
-      body.appendChild(topProcsHeader);
-
-      topByProcs.forEach(([abilityId, count]) => {
-        body.appendChild(createStatRow(abilityId, formatNumber(count as number), '▸'));
-      });
-    }
-
-    // Top 5 abilities by value
-    const topByValue = Object.entries(stats.abilities.valueByAbility)
-      .sort(([, a], [, b]) => (b as number) - (a as number))
-      .slice(0, 5);
-
-    if (topByValue.length > 0) {
+    if (valueAbilities.length > 0) {
       const topValueHeader = document.createElement('div');
       topValueHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
-      topValueHeader.textContent = 'Top Abilities by Value:';
+      topValueHeader.textContent = 'Top Abilities by Value (Coin-Generating):';
       body.appendChild(topValueHeader);
 
-      topByValue.forEach(([abilityId, value]) => {
-        body.appendChild(createStatRow(abilityId, `${formatNumber(value as number)} coins`, '▸'));
+      valueAbilities.forEach(([abilityId, value]) => {
+        const def = abilityDefinitions.find(d => d.id === abilityId);
+        const name = def?.name || abilityId;
+        body.appendChild(createStatRow(name, `${formatNumber(value as number)} coins`, '▸'));
       });
     }
 
-    // Feed Stats
-    body.appendChild(createCategoryHeader('Feeding Activity', '🍖'));
-    body.appendChild(createStatRow('Manual Feeds', formatNumber(stats.feed.manualFeeds), '🍖'));
+    // Data source indicator
+    if (hasAries) {
+      const indicator = document.createElement('div');
+      indicator.style.cssText = 'margin-top:16px;padding:8px;background:rgba(76,175,80,0.1);border-radius:4px;font-size:10px;color:#4CAF50;text-align:center;';
+      indicator.innerHTML = '✓ Using Aries Mod stats (enhanced accuracy)';
+      body.appendChild(indicator);
+    }
   };
 
   // Initial update

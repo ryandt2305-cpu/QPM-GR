@@ -17,12 +17,12 @@ import { startGardenTracker } from './store/gardenTracker';
 import { startPetHatchingTracker } from './store/petHatchingTracker';
 import { startAbilityStatsTracker } from './store/abilityStatsTracker';
 import { startFeedTracker } from './store/feedTracker';
+import { initializeExtendedAbilityHistory } from './store/abilityHistoryExtended';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { initializeProcRateAnalytics } from './features/procRateAnalytics';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeWeatherMutationTracking } from './features/weatherMutationTracking';
-import { initializePredictions } from './features/predictions';
 import { initializeComprehensiveAnalytics } from './features/comprehensiveAnalytics';
 import { initializeOpportunityAlerts } from './features/opportunityAlerts';
 import { initializeAutoFavorite } from './features/autoFavorite';
@@ -680,6 +680,7 @@ async function initialize(): Promise<void> {
   await startPetHatchingTracker();
   await startAbilityStatsTracker();
   await startFeedTracker();
+  initializeExtendedAbilityHistory(); // Initialize extended ability history with localStorage
 
   // Initialize features
   startCropTypeLocking();
@@ -696,7 +697,6 @@ async function initialize(): Promise<void> {
   initializeProcRateAnalytics();
   initializeMutationValueTracking();
   initializeWeatherMutationTracking();
-  initializePredictions();
   initializeComprehensiveAnalytics();
   initializeOpportunityAlerts();
   initializeAutoFavorite();

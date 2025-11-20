@@ -9,7 +9,6 @@ import { abilityDefinitions } from '../data/petAbilities';
 import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { formatNumber as formatNum, formatNumberFull, createNumberSpan } from '../utils/formatNumber';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
-import { getPredictionsSnapshot, subscribeToPredictions, formatETA } from '../features/predictions';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
@@ -2598,7 +2597,6 @@ export function createOriginalUI(): HTMLElement {
   registerTab('proc-analytics', 'Proc Analytics', '📊', [createProcAnalyticsSection()]);
   registerTab('mutation-value', 'Mutation Value', '💎', [createMutationValueSection()]);
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
-  registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
   registerTab('stats-overview', 'Stats Overview', '📊', [createStatsOverviewSection()]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
@@ -4956,11 +4954,6 @@ function createHowToUseSection(): HTMLElement {
       desc: 'View proc rate variance, hot/cold streaks, and expected vs actual rates. (See Analytics tabs below)'
     },
     {
-      icon: '🏆',
-      name: 'Pet Efficiency',
-      desc: 'Ranks pets by XP rate, ability value/hour, and efficiency scores. (See Analytics tabs below)'
-    },
-    {
       icon: '💎',
       name: 'Mutation Value',
       desc: 'Tracks gold/rainbow generation rates and session value. (See Analytics tabs below)'
@@ -4971,9 +4964,9 @@ function createHowToUseSection(): HTMLElement {
       desc: 'Set custom goals and track personal records like fastest level-up. (See Analytics tabs below)'
     },
     {
-      icon: '⏰',
-      name: 'Predictions',
-      desc: 'View ETAs for pet level-ups, next procs, and goal completion. (See Analytics tabs below)'
+      icon: '⭐',
+      name: 'Auto-Favorite',
+      desc: 'Automatically favorites gold and rainbow crops and pets when they appear in your inventory. (See Inventory Settings)'
     },
   ];
 
@@ -4998,11 +4991,6 @@ function createHowToUseSection(): HTMLElement {
   });
 
   body.appendChild(grid);
-
-  const note = document.createElement('div');
-  note.style.cssText = 'margin-top:12px;padding:10px;background:#2a1a2a;border-radius:6px;font-size:11px;line-height:1.5;color:#aaa;border:1px dashed #9C27B0;';
-  note.innerHTML = '💡 <strong>Tip:</strong> QPM is a <em>passive information tool</em> - it shows you data to help make decisions, but never automates actions. All game interactions must be done manually!';
-  body.appendChild(note);
 
   return root;
 }
@@ -8395,8 +8383,11 @@ function createGoalsRecordsSection(): HTMLElement {
     }
 
     if (records.mostProcsInSession) {
+      const abilityName = records.mostProcsInSession.abilityId
+        .replace(/([A-Z])/g, ' $1')
+        .trim();
       recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
-        <strong>🎯 Most Procs:</strong> ${records.mostProcsInSession.count} procs in one session
+        <strong>🎯 Most Procs:</strong> (${records.mostProcsInSession.count})x ${abilityName} in one session
       </div>`);
     }
 
@@ -8712,7 +8703,7 @@ function createStatsOverviewSection(): HTMLElement {
     const qpmStats = getStatsSnapshot();
     const hasAries = ariesStats !== null;
 
-    // Garden Stats - prefer Aries data
+    // Garden Stats - prefer Aries data (QPM garden tracking limited)
     body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
     if (hasAries && ariesStats.garden) {
       body.appendChild(createStatRow('Total Planted', formatNumber(ariesStats.garden.totalPlanted), '🌱'));
@@ -8720,16 +8711,17 @@ function createStatsOverviewSection(): HTMLElement {
       body.appendChild(createStatRow('Total Destroyed', formatNumber(ariesStats.garden.totalDestroyed), '💥'));
       body.appendChild(createStatRow('Watering Cans Used', formatNumber(ariesStats.garden.watercanUsed), '💧'));
     } else {
-      body.appendChild(createStatRow('Total Planted', formatNumber(qpmStats.garden.totalPlanted), '🌱'));
-      body.appendChild(createStatRow('Total Harvested', formatNumber(qpmStats.garden.totalHarvested), '🌾'));
-      body.appendChild(createStatRow('Total Destroyed', formatNumber(qpmStats.garden.totalDestroyed), '💥'));
-      body.appendChild(createStatRow('Watering Cans Used', formatNumber(qpmStats.garden.totalWateringCans), '💧'));
+      // QPM garden stats - currently not tracking all events
+      const gardenNote = document.createElement('div');
+      gardenNote.style.cssText = 'padding:8px;background:rgba(255,152,0,0.1);border-radius:4px;font-size:10px;color:#FF9800;margin-bottom:8px;';
+      gardenNote.innerHTML = 'ℹ️ Garden stats require Aries Mod for full tracking. Install Aries Mod for accurate metrics.';
+      body.appendChild(gardenNote);
     }
 
-    // Pet Stats - prefer Aries data for accurate rarity counts
+    // Pet Stats - prefer Aries data for accurate counts
     body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
     if (hasAries && ariesStats.pets?.hatchedByType) {
-      // Sum all pets across all species
+      // Sum all pets across all species from Aries Mod
       let totalNormal = 0;
       let totalGold = 0;
       let totalRainbow = 0;
@@ -8746,13 +8738,21 @@ function createStatsOverviewSection(): HTMLElement {
       const totalHatched = totalNormal + totalGold + totalRainbow;
       body.appendChild(createStatRow('Total Hatched', formatNumber(totalHatched), '🥚'));
       body.appendChild(createStatRow('Normal Pets', formatNumber(totalNormal), '⚪'));
-      body.appendChild(createStatRow('Gold Pets', formatNumber(totalGold), '🟡'));
-      body.appendChild(createStatRow('Rainbow Pets', formatNumber(totalRainbow), '🌈'));
+      body.appendChild(createStatRow('Gold Mutation Pets', formatNumber(totalGold), '🟡'));
+      body.appendChild(createStatRow('Rainbow Mutation Pets', formatNumber(totalRainbow), '🌈'));
     } else {
-      body.appendChild(createStatRow('Total Hatched', formatNumber(qpmStats.pets.totalHatched), '🥚'));
-      body.appendChild(createStatRow('Normal Pets', formatNumber(qpmStats.pets.hatchedByRarity.normal), '⚪'));
-      body.appendChild(createStatRow('Gold Pets', formatNumber(qpmStats.pets.hatchedByRarity.gold), '🟡'));
-      body.appendChild(createStatRow('Rainbow Pets', formatNumber(qpmStats.pets.hatchedByRarity.rainbow), '🌈'));
+      // QPM pet stats - session only
+      if (qpmStats.pets.totalHatched > 0) {
+        body.appendChild(createStatRow('Hatched (This Session)', formatNumber(qpmStats.pets.totalHatched), '🥚'));
+        body.appendChild(createStatRow('Normal Pets', formatNumber(qpmStats.pets.hatchedByRarity.normal), '⚪'));
+        body.appendChild(createStatRow('Gold Mutation Pets', formatNumber(qpmStats.pets.hatchedByRarity.gold), '🟡'));
+        body.appendChild(createStatRow('Rainbow Mutation Pets', formatNumber(qpmStats.pets.hatchedByRarity.rainbow), '🌈'));
+      } else {
+        const petNote = document.createElement('div');
+        petNote.style.cssText = 'padding:8px;background:rgba(255,152,0,0.1);border-radius:4px;font-size:10px;color:#FF9800;margin-bottom:8px;';
+        petNote.innerHTML = 'ℹ️ Pet stats require Aries Mod for historical tracking. Install Aries Mod or hatch pets this session.';
+        body.appendChild(petNote);
+      }
     }
 
     // Ability Stats

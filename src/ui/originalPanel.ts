@@ -8632,9 +8632,43 @@ function createStatsOverviewSection(): HTMLElement {
       });
     }
 
+    // Reset stats button
+    const resetButton = btn('🗑️ Reset All Stats', async () => {
+      if (!confirm('⚠️ This will reset ALL statistics including:\n\n• Pet hatching counts\n• Garden metrics\n• Ability performance\n\nThis action cannot be undone. Continue?')) {
+        return;
+      }
+
+      resetButton.disabled = true;
+      resetButton.textContent = '⏳ Resetting...';
+
+      try {
+        // Import and call reset functions
+        const { resetPetHatchingTracker } = await import('../store/petHatchingTracker');
+        resetStats();
+        resetPetHatchingTracker();
+
+        resetButton.textContent = '✅ Reset Complete!';
+        setTimeout(() => {
+          resetButton.textContent = '🗑️ Reset All Stats';
+          resetButton.disabled = false;
+          updateStats(); // Refresh display
+        }, 2000);
+      } catch (error) {
+        log('Error resetting stats:', error);
+        resetButton.textContent = '❌ Error';
+        setTimeout(() => {
+          resetButton.textContent = '🗑️ Reset All Stats';
+          resetButton.disabled = false;
+        }, 2000);
+      }
+    });
+    resetButton.style.cssText = 'width:100%;margin-top:16px;background:#d32f2f;';
+    resetButton.title = 'Reset all QPM statistics (pet hatching, garden, abilities)';
+    body.appendChild(resetButton);
+
     // Data source indicator
     const indicator = document.createElement('div');
-    indicator.style.cssText = 'margin-top:16px;padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;text-align:center;';
+    indicator.style.cssText = 'margin-top:12px;padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;text-align:center;';
     indicator.innerHTML = '✓ QPM Native Tracking (Session-Based)';
     body.appendChild(indicator);
   };

@@ -24,7 +24,7 @@ let config: AutoFavoriteConfig = {
 
 const listeners = new Set<(config: AutoFavoriteConfig) => void>();
 let intervalId: number | null = null;
-let lastInventoryCount = 0;
+let seenItemIds = new Set<string>();
 
 function loadConfig(): void {
   try {
@@ -317,6 +317,19 @@ function unfavoritePetAbility(abilityName: string): void {
   // Do nothing - script only adds favorites, never removes them
 }
 
+/**
+ * Get the current scope path for WebSocket messages
+ * Uses dynamic scope path from game if available
+ */
+function getScopePath(): string[] {
+  try {
+    const typedPageWindow = pageWindow as any;
+    return typedPageWindow?.__mga_lastScopePath?.slice() ?? ['Room', 'Quinoa'];
+  } catch {
+    return ['Room', 'Quinoa'];
+  }
+}
+
 // Function to actually send the favorite message via websocket
 function sendFavoriteMessage(itemId: string): boolean {
   try {
@@ -325,7 +338,7 @@ function sendFavoriteMessage(itemId: string): boolean {
 
     if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
       maybeConnection.sendMessage({
-        scopePath: ['Room', 'Quinoa'],
+        scopePath: getScopePath(),
         type: 'ToggleFavoriteItem',
         itemId,
       });
@@ -362,12 +375,40 @@ function startAutoFavoritePolling(): void {
       return;
     }
 
-    const currentCount = typedPageWindow.myData.inventory.items.length;
-    // Only process if inventory count increased (new items added)
-    if (currentCount > lastInventoryCount) {
-      checkAndFavoriteNewItems(typedPageWindow.myData.inventory);
+    const inventory = typedPageWindow.myData.inventory;
+    const currentItems = inventory.items || [];
+
+    // Get all current item IDs
+    const currentItemIds = new Set<string>();
+    for (const item of currentItems) {
+      if (item?.id) {
+        currentItemIds.add(item.id);
+      }
     }
-    lastInventoryCount = currentCount;
+
+    // Find new items (IDs we haven't seen before)
+    const newItemIds = new Set<string>();
+    for (const id of currentItemIds) {
+      if (!seenItemIds.has(id)) {
+        newItemIds.add(id);
+      }
+    }
+
+    // Process new items only
+    if (newItemIds.size > 0) {
+      // Create a filtered inventory with only new items
+      const newItems = currentItems.filter((item: any) => item?.id && newItemIds.has(item.id));
+      if (newItems.length > 0) {
+        const filteredInventory = {
+          ...inventory,
+          items: newItems
+        };
+        checkAndFavoriteNewItems(filteredInventory);
+      }
+    }
+
+    // Update seen IDs to current state
+    seenItemIds = currentItemIds;
   }, 2000); // Every 2 seconds (optimized)
 
   log('✅ Auto-favorite polling started (2 second interval)');

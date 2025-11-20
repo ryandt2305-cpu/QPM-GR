@@ -282,6 +282,17 @@ function analyzeAbilityHistory(
     return null;
   }
 
+  // Require minimum data for meaningful variance calculation
+  // Either 5+ procs OR 1+ hour of session time
+  const sessionDuration = now - snapshot.sessionStart;
+  const hasMinimumProcs = sessionEvents.length >= 5;
+  const hasMinimumTime = sessionDuration >= HOUR_MS;
+
+  if (!hasMinimumProcs && !hasMinimumTime) {
+    // Not enough data yet - return null so UI can show "Collecting data..."
+    return null;
+  }
+
   const firstProcAt = sessionEvents[0]!.performedAt;
   const lastProcAt = sessionEvents[sessionEvents.length - 1]!.performedAt;
   const totalProcs = sessionEvents.length;
@@ -303,7 +314,6 @@ function analyzeAbilityHistory(
     : 0;
 
   // Calculate rates based on session duration (not first proc)
-  const sessionDuration = Math.max(1, now - snapshot.sessionStart);
   const hoursElapsed = sessionDuration / HOUR_MS;
   const daysElapsed = sessionDuration / DAY_MS;
 

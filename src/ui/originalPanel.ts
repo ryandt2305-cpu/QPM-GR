@@ -8421,8 +8421,10 @@ function createGoalsRecordsSection(): HTMLElement {
     }
 
     if (records.mostProcsInSession) {
+      // Format ability name: insert space before capitals that follow lowercase
+      // This preserves "II" as a unit (doesn't split to "I I")
       const abilityName = records.mostProcsInSession.abilityId
-        .replace(/([A-Z])/g, ' $1')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
         .trim();
       recordsList.push(`<div style="padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;">
         <strong>🎯 Most Procs:</strong> ${abilityName} triggered ${records.mostProcsInSession.count}x in one session

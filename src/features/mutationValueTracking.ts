@@ -6,17 +6,18 @@ import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
 import { log } from '../utils/logger';
 import { resetWeatherMutationTracking } from './weatherMutationTracking';
+import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from './abilityValuation';
 
 const STORAGE_KEY = 'qpm.mutationValueTracking.v1';
 const SAVE_DEBOUNCE_MS = 3000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-// Estimated values for high-value mutations/procs
-const MUTATION_VALUES = {
-  gold: 500000, // Avg gold crop value (conservative)
-  rainbow: 1000000, // Avg rainbow crop value (conservative)
-  cropBoost: 5000000, // Avg value of a crop size boost proc (5M based on ability tracker data)
+// Fallback values if dynamic calculation unavailable
+const FALLBACK_VALUES = {
+  gold: 500000,
+  rainbow: 1000000,
+  cropBoost: 5000000,
 };
 
 export interface MutationValueStats {
@@ -150,18 +151,31 @@ function recalculateStats(): void {
   const duration = Math.max(1, now - sessionStart);
   const hours = duration / HOUR_MS;
 
+  // Get dynamic ability valuations based on current garden state
+  const context = buildAbilityValuationContext();
+  const goldEffect = resolveDynamicAbilityEffect('GoldGranter', context, null);
+  const rainbowEffect = resolveDynamicAbilityEffect('RainbowGranter', context, null);
+  const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
+  const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
+
+  // Use dynamic values or fallback to static
+  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
+  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+
   // Count gold granters
   const goldData = countAbilityProcs('GoldGranter', sessionStart);
   snapshot.stats.goldProcs = goldData.count;
   snapshot.stats.goldLastProcAt = goldData.lastProcAt;
-  snapshot.stats.goldTotalValue = goldData.count * MUTATION_VALUES.gold;
+  snapshot.stats.goldTotalValue = goldData.count * goldValue;
   snapshot.stats.goldPerHour = hours > 0 ? goldData.count / hours : 0;
 
   // Count rainbow granters
   const rainbowData = countAbilityProcs('RainbowGranter', sessionStart);
   snapshot.stats.rainbowProcs = rainbowData.count;
   snapshot.stats.rainbowLastProcAt = rainbowData.lastProcAt;
-  snapshot.stats.rainbowTotalValue = rainbowData.count * MUTATION_VALUES.rainbow;
+  snapshot.stats.rainbowTotalValue = rainbowData.count * rainbowValue;
   snapshot.stats.rainbowPerHour = hours > 0 ? rainbowData.count / hours : 0;
 
   // Count crop boosts
@@ -172,9 +186,14 @@ function recalculateStats(): void {
     ? Math.max(cropBoostData1.lastProcAt, cropBoostData2.lastProcAt)
     : (cropBoostData1.lastProcAt || cropBoostData2.lastProcAt);
 
+  // Calculate weighted average for crop boost (ProduceScaleBoost vs II)
+  const cropBoostTotalValue =
+    (cropBoostData1.count * cropBoost1Value) +
+    (cropBoostData2.count * cropBoost2Value);
+
   snapshot.stats.cropBoostProcs = totalCropBoosts;
   snapshot.stats.cropBoostLastProcAt = lastCropBoost;
-  snapshot.stats.cropBoostTotalValue = totalCropBoosts * MUTATION_VALUES.cropBoost;
+  snapshot.stats.cropBoostTotalValue = cropBoostTotalValue;
   snapshot.stats.cropBoostPerHour = hours > 0 ? totalCropBoosts / hours : 0;
 
   // Calculate session value
@@ -184,10 +203,10 @@ function recalculateStats(): void {
     snapshot.stats.cropBoostTotalValue;
 
   // Calculate hourly breakdown
-  calculateHourlyBreakdown();
+  calculateHourlyBreakdown(context);
 
   // Update best hour/session
-  const currentHourValue = calculateCurrentHourValue(now);
+  const currentHourValue = calculateCurrentHourValue(now, context);
   if (currentHourValue > snapshot.stats.bestHourValue) {
     snapshot.stats.bestHourValue = currentHourValue;
     snapshot.stats.bestHourTime = now;
@@ -203,25 +222,46 @@ function recalculateStats(): void {
   notifyListeners();
 }
 
-function calculateCurrentHourValue(now: number): number {
+function calculateCurrentHourValue(now: number, context: ReturnType<typeof buildAbilityValuationContext>): number {
   const oneHourAgo = now - HOUR_MS;
   const goldData = countAbilityProcs('GoldGranter', oneHourAgo);
   const rainbowData = countAbilityProcs('RainbowGranter', oneHourAgo);
   const cropBoostData1 = countAbilityProcs('ProduceScaleBoost', oneHourAgo);
   const cropBoostData2 = countAbilityProcs('ProduceScaleBoostII', oneHourAgo);
 
+  // Get dynamic values
+  const goldEffect = resolveDynamicAbilityEffect('GoldGranter', context, null);
+  const rainbowEffect = resolveDynamicAbilityEffect('RainbowGranter', context, null);
+  const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
+  const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
+
+  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
+  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+
   return (
-    goldData.count * MUTATION_VALUES.gold +
-    rainbowData.count * MUTATION_VALUES.rainbow +
-    (cropBoostData1.count + cropBoostData2.count) * MUTATION_VALUES.cropBoost
+    goldData.count * goldValue +
+    rainbowData.count * rainbowValue +
+    cropBoostData1.count * cropBoost1Value +
+    cropBoostData2.count * cropBoost2Value
   );
 }
 
-function calculateHourlyBreakdown(): void {
+function calculateHourlyBreakdown(context: ReturnType<typeof buildAbilityValuationContext>): void {
   const hourlyTotals = new Map<number, {value: number, count: number}>();
 
-  // This is a simplified version - in a real implementation, we'd track
-  // historical proc times to calculate true hourly averages
+  // Get dynamic ability values based on current garden state
+  const goldEffect = resolveDynamicAbilityEffect('GoldGranter', context, null);
+  const rainbowEffect = resolveDynamicAbilityEffect('RainbowGranter', context, null);
+  const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
+  const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
+
+  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
+  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+
   const historySnapshot = getAbilityHistorySnapshot();
 
   for (const history of historySnapshot.values()) {
@@ -230,11 +270,13 @@ function calculateHourlyBreakdown(): void {
 
       let value = 0;
       if (history.abilityId === 'GoldGranter') {
-        value = MUTATION_VALUES.gold;
+        value = goldValue;
       } else if (history.abilityId === 'RainbowGranter') {
-        value = MUTATION_VALUES.rainbow;
-      } else if (history.abilityId === 'ProduceScaleBoost' || history.abilityId === 'ProduceScaleBoostII') {
-        value = MUTATION_VALUES.cropBoost;
+        value = rainbowValue;
+      } else if (history.abilityId === 'ProduceScaleBoost') {
+        value = cropBoost1Value;
+      } else if (history.abilityId === 'ProduceScaleBoostII') {
+        value = cropBoost2Value;
       }
 
       if (value > 0) {

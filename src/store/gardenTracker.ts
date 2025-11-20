@@ -5,7 +5,6 @@
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { recordGardenPlant, recordGardenHarvest, recordGardenDestroy, recordWateringCan } from './stats';
 import { log } from '../utils/logger';
-import { autoFavoriteIfNeeded } from '../features/autoFavorite';
 
 const GARDEN_ATOM_LABEL = 'myDataAtom'; // Contains garden state
 let started = false;
@@ -109,14 +108,6 @@ function detectGardenChanges(cells: GardenCell[]): void {
     // Detect planting: cell was empty, now has produce
     if (previousCell && (previousCell.isEmpty || !previousCell.produce) && cell.produce && !cell.isEmpty) {
       plantsAdded++;
-
-      // Auto-favorite rare produce when planted (in case it's a rare seed)
-      if (cell.produce.id) {
-        const rarity = determineProduceRarity(cell.produce);
-        if (rarity !== 'normal') {
-          autoFavoriteIfNeeded(cell.produce.id, 'produce', rarity);
-        }
-      }
     }
 
     // Detect harvesting: cell had fully grown produce, now empty

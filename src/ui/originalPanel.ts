@@ -4,10 +4,12 @@ import { classifyWeather, formatKeybind, resetWeatherSwapStats, simulateKeybind 
 import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/procRateAnalytics';
 // Pet Efficiency removed
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
+import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { abilityDefinitions } from '../data/petAbilities';
 import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { formatNumber as formatNum, formatNumberFull, createNumberSpan } from '../utils/formatNumber';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
+import { getPredictionsSnapshot, subscribeToPredictions, formatETA } from '../features/predictions';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
 import { getShopStats, resetShopStats, type ShopCategory, type RestockInfo, type AutoShopItemConfig, type AutoShopConfig } from '../features/shopTracking';
@@ -2598,7 +2600,6 @@ export function createOriginalUI(): HTMLElement {
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
   registerTab('predictions', 'Predictions', '⏰', [createPredictionsSection()]);
   registerTab('inventory', 'Inventory Settings', '🔒', [lockerSection]);
-  registerTab('settings', 'Settings', '⚙️', [createSettingsSection()]);
   registerTab('stats-overview', 'Stats Overview', '📊', [createStatsOverviewSection()]);
   registerTab('guide', 'Guide', '📖', [createGuideSection()]);
 
@@ -7868,7 +7869,7 @@ function createInventoryLockerSection(initialSyncMode: boolean): HTMLElement {
   statusChip.className = 'qpm-chip';
   statusChip.textContent = initialSyncMode ? 'Sync Mode' : 'Basic Mode';
 
-  const { root, body } = createCard('🔒 Inventory Locker', {
+  const { root, body } = createCard('🔒 Inventory Settings', {
     collapsible: true,
     startCollapsed: true,
     subtitleElement: statusChip,
@@ -7911,6 +7912,73 @@ function createInventoryLockerSection(initialSyncMode: boolean): HTMLElement {
   helper.textContent = 'Tip: open inventory to lock species. Sync mode avoids unfavoriting crops you already starred.';
   helper.style.cssText = 'font-size:10px;color:#A5D6A7;line-height:1.4;margin-top:8px;';
   body.appendChild(helper);
+
+  // Auto-Favorite Settings (moved from Settings tab)
+  const divider = document.createElement('div');
+  divider.style.cssText = 'border-top:1px solid #444;margin:16px 0;';
+  body.appendChild(divider);
+
+  const autoFavoriteHeader = document.createElement('div');
+  autoFavoriteHeader.style.cssText = 'font-weight:bold;font-size:12px;color:#FFD700;margin-bottom:8px;';
+  autoFavoriteHeader.textContent = 'Auto-Favorite (Gold & Rainbow)';
+  body.appendChild(autoFavoriteHeader);
+
+  const autoFavoriteDesc = document.createElement('div');
+  autoFavoriteDesc.style.cssText = 'font-size:10px;color:#888;margin-bottom:12px;line-height:1.4;';
+  autoFavoriteDesc.textContent = 'Automatically favorite rare (Gold and Rainbow) pets and produce when detected.';
+  body.appendChild(autoFavoriteDesc);
+
+  // Get current auto-favorite configuration
+  let currentConfig = getAutoFavoriteConfig();
+
+  // Main toggle
+  const mainToggle = createCheckboxOption(
+    'Enable Auto-Favorite',
+    currentConfig.enabled,
+    (checked) => {
+      updateAutoFavoriteConfig({ enabled: checked });
+      return checked;
+    }
+  );
+  body.appendChild(mainToggle);
+
+  // Rare pets toggle
+  const rarePetsToggle = createCheckboxOption(
+    'Auto-Favorite Rare Pets (Gold & Rainbow)',
+    currentConfig.autoFavoriteRarePets,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRarePets: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rarePetsToggle);
+
+  // Rare produce toggle
+  const rareProduceToggle = createCheckboxOption(
+    'Auto-Favorite Rare Produce (Gold & Rainbow)',
+    currentConfig.autoFavoriteRareProduce,
+    (checked) => {
+      updateAutoFavoriteConfig({ autoFavoriteRareProduce: checked });
+      return checked;
+    }
+  );
+  body.appendChild(rareProduceToggle);
+
+  // Subscribe to config changes to update UI
+  const unsubscribe = subscribeToAutoFavoriteConfig((config) => {
+    currentConfig = config;
+  });
+
+  // Cleanup on element removal
+  const observer = new MutationObserver(() => {
+    if (!document.contains(root)) {
+      unsubscribe();
+      observer.disconnect();
+    }
+  });
+  if (root.parentElement) {
+    observer.observe(root.parentElement, { childList: true, subtree: true });
+  }
 
   return root;
 }
@@ -8048,9 +8116,30 @@ function createMutationValueSection(): HTMLElement {
 
   const render = () => {
     const snapshot = getMutationValueSnapshot();
+    const weatherSnapshot = getWeatherMutationSnapshot();
     valueContainer.innerHTML = '';
 
     const stats = snapshot.stats;
+    const weatherStats = weatherSnapshot.stats;
+
+    // Calculate total weather procs
+    const totalWeatherProcs =
+      weatherStats.wetCount +
+      weatherStats.chilledCount +
+      weatherStats.frozenCount +
+      weatherStats.dawnlitCount +
+      weatherStats.dawnboundCount +
+      weatherStats.amberlitCount +
+      weatherStats.amberboundCount;
+
+    const totalWeatherProcsPerHour =
+      weatherStats.wetPerHour +
+      weatherStats.chilledPerHour +
+      weatherStats.frozenPerHour +
+      weatherStats.dawnlitPerHour +
+      weatherStats.dawnboundPerHour +
+      weatherStats.amberlitPerHour +
+      weatherStats.amberboundPerHour;
 
     // Session Value Summary
     const sessionCard = document.createElement('div');
@@ -8062,9 +8151,9 @@ function createMutationValueSection(): HTMLElement {
     `;
     valueContainer.appendChild(sessionCard);
 
-    // Proc Rates Grid
+    // Proc Rates Grid (2x2 layout)
     const ratesGrid = document.createElement('div');
-    ratesGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;';
+    ratesGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
 
     ratesGrid.innerHTML = `
       <div style="padding:10px;background:#1a1a2a;border-radius:6px;text-align:center;">
@@ -8084,6 +8173,12 @@ function createMutationValueSection(): HTMLElement {
         <div style="font-size:14px;font-weight:bold;color:#FFD700;">${stats.cropBoostProcs}</div>
         <div style="font-size:9px;color:#888;margin-top:2px;">Crop Boosts</div>
         <div style="font-size:10px;color:#4CAF50;margin-top:4px;">${stats.cropBoostPerHour.toFixed(1)}/hr</div>
+      </div>
+      <div style="padding:10px;background:#1a1a2a;border-radius:6px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:4px;">☁️</div>
+        <div style="font-size:14px;font-weight:bold;color:#FFD700;">${totalWeatherProcs}</div>
+        <div style="font-size:9px;color:#888;margin-top:2px;">Weather Procs</div>
+        <div style="font-size:10px;color:#4CAF50;margin-top:4px;">${totalWeatherProcsPerHour.toFixed(1)}/hr</div>
       </div>
     `;
     valueContainer.appendChild(ratesGrid);
@@ -8105,12 +8200,14 @@ function createMutationValueSection(): HTMLElement {
 
   render();
   const unsubscribe = subscribeToMutationValueTracking(render);
+  const weatherUnsubscribe = subscribeToWeatherMutationTracking(render);
 
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       mutation.removedNodes.forEach((node) => {
         if (node === root || (node as HTMLElement).contains?.(root)) {
           unsubscribe();
+          weatherUnsubscribe();
           observer.disconnect();
         }
       });
@@ -8426,81 +8523,117 @@ function createPredictionsSection(): HTMLElement {
   body.appendChild(container);
 
   const render = () => {
-    const snapshot = getComprehensiveSnapshot();
+    const predictionsSnapshot = getPredictionsSnapshot();
     container.innerHTML = '';
 
-    const predictions = snapshot.predictions;
-
     // Pet Level-Up Predictions
-    if (predictions.petLevelUp.size > 0) {
+    if (predictionsSnapshot.petPredictions.length > 0) {
       const levelUpSection = document.createElement('div');
       levelUpSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">⚡ Pet Level-Up ETAs</div>';
 
       const levelUpGrid = document.createElement('div');
       levelUpGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
 
-      let count = 0;
-      predictions.petLevelUp.forEach((eta, petId) => {
-        if (count >= 5) return; // Show top 5
+      // Show first 5 predictions
+      const topPredictions = predictionsSnapshot.petPredictions.slice(0, 5);
+
+      for (const prediction of topPredictions) {
         const petDiv = document.createElement('div');
         petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
 
-        const hoursLeft = eta.estimatedHours;
-        const hasXpRate = eta.xpPerHour > 0;
-        const timeText = !hasXpRate
-          ? 'Calculating...'
-          : hoursLeft < 1
-          ? `${Math.round(hoursLeft * 60)} minutes`
-          : hoursLeft < 24
-          ? `${hoursLeft.toFixed(1)} hours`
-          : `${(hoursLeft / 24).toFixed(1)} days`;
+        const hasXpRate = prediction.xpGainRate > 0;
+        const timeText = prediction.estimatedCompletionAt
+          ? formatETA(prediction.estimatedCompletionAt)
+          : 'Calculating...';
 
         petDiv.innerHTML = `
           <div>
-            <div style="font-weight:bold;">${petId} Lvl ${eta.currentLevel} → ${eta.nextLevel}</div>
-            <div style="color:#888;font-size:9px;">${eta.xpNeeded} XP needed</div>
+            <div style="font-weight:bold;">${prediction.petName} Lvl ${prediction.currentLevel} → ${prediction.maxLevel}</div>
+            <div style="color:#888;font-size:9px;">${formatNum(prediction.xpRemaining)} XP needed</div>
           </div>
           <div style="text-align:right;">
             <div style="color:${hasXpRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
-            <div style="color:#888;font-size:9px;">${hasXpRate ? `${eta.xpPerHour.toFixed(0)} XP/hr` : 'Need data'}</div>
+            <div style="color:#888;font-size:9px;">${hasXpRate ? `${formatNum(prediction.xpGainRate * 3600)} XP/hr` : 'Need data'}</div>
           </div>
         `;
         levelUpGrid.appendChild(petDiv);
-        count++;
-      });
+      }
 
       levelUpSection.appendChild(levelUpGrid);
       container.appendChild(levelUpSection);
     }
 
-    // Next Ability Proc Predictions
-    if (predictions.nextAbilityProc.size > 0) {
+    // Ability Milestone Predictions
+    if (predictionsSnapshot.abilityPredictions.length > 0) {
       const procSection = document.createElement('div');
-      procSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎲 Next Ability Procs</div>';
+      procSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎲 Ability Milestones</div>';
 
       const procGrid = document.createElement('div');
       procGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
 
-      let count = 0;
-      predictions.nextAbilityProc.forEach((eta, abilityId) => {
-        if (count >= 5) return; // Show top 5
-        const timeLeft = eta.estimatedNextProc - Date.now();
-        if (timeLeft < 0) return; // Skip overdue
+      // Show first 5 ability predictions
+      const topAbilities = predictionsSnapshot.abilityPredictions.slice(0, 5);
+
+      for (const prediction of topAbilities) {
+        // Find the next uncompleted milestone
+        const nextMilestone = prediction.milestones.find(m => m.estimatedAt !== null);
+        if (!nextMilestone) continue;
 
         const procDiv = document.createElement('div');
-        procDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;';
+        procDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
         procDiv.innerHTML = `
-          <strong>${eta.abilityName}</strong>
-          <span style="color:#4CAF50;">${formatDuration(timeLeft)}</span>
+          <div>
+            <div style="font-weight:bold;">${prediction.abilityName}</div>
+            <div style="color:#888;font-size:9px;">${prediction.currentProcs} → ${nextMilestone.target} procs</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="color:#4CAF50;font-weight:bold;">${formatETA(nextMilestone.estimatedAt)}</div>
+            <div style="color:#888;font-size:9px;">${prediction.procsPerHour.toFixed(1)}/hr</div>
+          </div>
         `;
         procGrid.appendChild(procDiv);
-        count++;
-      });
+      }
 
       if (procGrid.children.length > 0) {
         procSection.appendChild(procGrid);
         container.appendChild(procSection);
       }
+    }
+
+    // Goal Predictions
+    if (predictionsSnapshot.goalPredictions.length > 0) {
+      const goalSection = document.createElement('div');
+      goalSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎯 Goal ETAs</div>';
+
+      const goalGrid = document.createElement('div');
+      goalGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+
+      for (const goal of predictionsSnapshot.goalPredictions) {
+        const goalDiv = document.createElement('div');
+        goalDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
+
+        const hasRate = goal.progressRate > 0;
+        const timeText = goal.estimatedCompletionAt
+          ? formatETA(goal.estimatedCompletionAt)
+          : 'Calculating...';
+
+        const progress = goal.target > 0 ? ((goal.current / goal.target) * 100).toFixed(0) : '0';
+
+        goalDiv.innerHTML = `
+          <div style="flex:1;">
+            <div style="font-weight:bold;">${goal.description}</div>
+            <div style="color:#888;font-size:9px;">${formatNum(goal.current)} / ${formatNum(goal.target)} (${progress}%)</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="color:${hasRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
+            <div style="color:#888;font-size:9px;">${goal.confidence}</div>
+          </div>
+        `;
+        goalGrid.appendChild(goalDiv);
+      }
+
+      goalSection.appendChild(goalGrid);
+      container.appendChild(goalSection);
     }
 
     // Empty state
@@ -8513,7 +8646,7 @@ function createPredictionsSection(): HTMLElement {
   };
 
   render();
-  const unsubscribe = subscribeToComprehensiveAnalytics(render);
+  const unsubscribe = subscribeToPredictions(render);
 
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
@@ -8661,78 +8794,6 @@ function createStatsOverviewSection(): HTMLElement {
   // Subscribe to stats changes for live updates
   const unsubscribe = subscribeToStats(() => {
     updateStats();
-  });
-
-  // Cleanup on element removal
-  const observer = new MutationObserver(() => {
-    if (!document.contains(root)) {
-      unsubscribe();
-      observer.disconnect();
-    }
-  });
-  if (root.parentElement) {
-    observer.observe(root.parentElement, { childList: true, subtree: true });
-  }
-
-  return root;
-}
-
-function createSettingsSection(): HTMLElement {
-  const { root, body } = createCard('⚙️ General Settings', {
-    subtitle: 'Configure QPM behavior',
-  });
-  root.dataset.qpmSection = 'settings';
-
-  // Auto-Favorite Settings
-  const autoFavoriteHeader = document.createElement('div');
-  autoFavoriteHeader.style.cssText = 'font-weight:bold;font-size:12px;color:#FFD700;margin-bottom:8px;margin-top:12px;';
-  autoFavoriteHeader.textContent = 'Auto-Favorite (Gold & Rainbow)';
-  body.appendChild(autoFavoriteHeader);
-
-  const autoFavoriteDesc = document.createElement('div');
-  autoFavoriteDesc.style.cssText = 'font-size:10px;color:#888;margin-bottom:12px;line-height:1.4;';
-  autoFavoriteDesc.textContent = 'Automatically favorite rare (Gold and Rainbow) pets and produce when detected. Note: This feature requires game interaction capabilities.';
-  body.appendChild(autoFavoriteDesc);
-
-  // Get current auto-favorite configuration
-  let currentConfig = getAutoFavoriteConfig();
-
-  // Main toggle
-  const mainToggle = createCheckboxOption(
-    'Enable Auto-Favorite',
-    currentConfig.enabled,
-    (checked) => {
-      updateAutoFavoriteConfig({ enabled: checked });
-      return checked;
-    }
-  );
-  body.appendChild(mainToggle);
-
-  // Rare pets toggle
-  const rarePetsToggle = createCheckboxOption(
-    'Auto-Favorite Rare Pets (Gold & Rainbow)',
-    currentConfig.autoFavoriteRarePets,
-    (checked) => {
-      updateAutoFavoriteConfig({ autoFavoriteRarePets: checked });
-      return checked;
-    }
-  );
-  body.appendChild(rarePetsToggle);
-
-  // Rare produce toggle
-  const rareProduceToggle = createCheckboxOption(
-    'Auto-Favorite Rare Produce (Gold & Rainbow)',
-    currentConfig.autoFavoriteRareProduce,
-    (checked) => {
-      updateAutoFavoriteConfig({ autoFavoriteRareProduce: checked });
-      return checked;
-    }
-  );
-  body.appendChild(rareProduceToggle);
-
-  // Subscribe to config changes to update UI
-  const unsubscribe = subscribeToAutoFavoriteConfig((config) => {
-    currentConfig = config;
   });
 
   // Cleanup on element removal

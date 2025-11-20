@@ -314,9 +314,18 @@ function serializeSnapshot(): PersistedSnapshot {
 function restoreSnapshot(persisted: PersistedSnapshot | null): void {
   if (!persisted || persisted.version !== 1) return;
 
-  snapshot.stats = persisted.stats;
-  snapshot.sessions = persisted.sessions;
-  snapshot.updatedAt = persisted.updatedAt;
+  // Only restore best records - all session data starts fresh
+  snapshot.stats.bestHourValue = persisted.stats.bestHourValue || 0;
+  snapshot.stats.bestHourTime = persisted.stats.bestHourTime || null;
+  snapshot.stats.bestSessionValue = persisted.stats.bestSessionValue || 0;
+  snapshot.stats.bestSessionTime = persisted.stats.bestSessionTime || null;
+
+  // Keep session history for trends
+  snapshot.sessions = persisted.sessions || [];
+
+  // Reset session start to now (current session only)
+  snapshot.stats.sessionStart = Date.now();
+  snapshot.updatedAt = Date.now();
 }
 
 function notifyListeners(): void {
@@ -336,6 +345,7 @@ export function initializeMutationValueTracking(): void {
   try {
     const persisted = storage.get<PersistedSnapshot | null>(STORAGE_KEY, null);
     restoreSnapshot(persisted);
+    log('🔄 Mutation value tracking initialized - session data reset, tracking only current session');
   } catch (error) {
     console.error('[mutationValueTracking] Failed to restore:', error);
   }
@@ -347,6 +357,45 @@ export function initializeMutationValueTracking(): void {
   setInterval(() => {
     recalculateStats();
   }, 10000);
+}
+
+export function clearAllMutationValueHistory(): void {
+  // Completely wipe all stored data
+  try {
+    storage.remove(STORAGE_KEY);
+    log('🗑️ [MUTATION-VALUE] All history cleared from storage');
+  } catch (error) {
+    console.error('[mutationValueTracking] Failed to clear storage:', error);
+  }
+
+  // Reset in-memory snapshot to defaults
+  snapshot = {
+    stats: {
+      goldProcs: 0,
+      goldPerHour: 0,
+      goldTotalValue: 0,
+      goldLastProcAt: null,
+      rainbowProcs: 0,
+      rainbowPerHour: 0,
+      rainbowTotalValue: 0,
+      rainbowLastProcAt: null,
+      cropBoostProcs: 0,
+      cropBoostPerHour: 0,
+      cropBoostTotalValue: 0,
+      cropBoostLastProcAt: null,
+      sessionValue: 0,
+      sessionStart: Date.now(),
+      bestHourValue: 0,
+      bestHourTime: null,
+      bestSessionValue: 0,
+      bestSessionTime: null,
+    },
+    sessions: [],
+    hourlyBreakdown: new Map(),
+    updatedAt: Date.now(),
+  };
+
+  notifyListeners();
 }
 
 export function getMutationValueSnapshot(): MutationValueSnapshot {

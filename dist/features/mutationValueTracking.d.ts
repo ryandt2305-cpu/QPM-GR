@@ -33,6 +33,7 @@ export interface MutationValueSnapshot {
     updatedAt: number;
 }
 export declare function initializeMutationValueTracking(): void;
+export declare function clearAllMutationValueHistory(): void;
 export declare function getMutationValueSnapshot(): MutationValueSnapshot;
 export declare function subscribeToMutationValueTracking(listener: (snapshot: MutationValueSnapshot) => void): () => void;
 export declare function forceRecalculateMutationValue(): void;

@@ -40,6 +40,7 @@ export interface WeatherMutationSnapshot {
     updatedAt: number;
 }
 export declare function initializeWeatherMutationTracking(): void;
+export declare function clearAllWeatherMutationHistory(): void;
 export declare function getWeatherMutationSnapshot(): WeatherMutationSnapshot;
 export declare function subscribeToWeatherMutationTracking(listener: (snapshot: WeatherMutationSnapshot) => void): () => void;
 export declare function forceRecalculateWeatherMutations(): void;

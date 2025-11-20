@@ -7485,10 +7485,6 @@ function renderWeatherEventsWindow(root: HTMLElement): void {
   const harvestSection = createHarvestSection();
   harvestSection.style.margin = '0';
   root.appendChild(harvestSection);
-
-  const mutationSection = createMutationSection();
-  mutationSection.style.margin = '0';
-  root.appendChild(mutationSection);
 }
 
 /**
@@ -8683,6 +8679,24 @@ function createStatsOverviewSection(): HTMLElement {
     }
 
     // Weather Mutation Stats
+    const totalWeatherProcs =
+      weatherData.stats.wetCount +
+      weatherData.stats.chilledCount +
+      weatherData.stats.frozenCount +
+      weatherData.stats.dawnlitCount +
+      weatherData.stats.dawnboundCount +
+      weatherData.stats.amberlitCount +
+      weatherData.stats.amberboundCount;
+
+    const totalWeatherProcsPerHour =
+      weatherData.stats.wetPerHour +
+      weatherData.stats.chilledPerHour +
+      weatherData.stats.frozenPerHour +
+      weatherData.stats.dawnlitPerHour +
+      weatherData.stats.dawnboundPerHour +
+      weatherData.stats.amberlitPerHour +
+      weatherData.stats.amberboundPerHour;
+
     const totalWeatherValue =
       weatherData.stats.wetTotalValue +
       weatherData.stats.chilledTotalValue +
@@ -8692,10 +8706,10 @@ function createStatsOverviewSection(): HTMLElement {
       weatherData.stats.amberlitTotalValue +
       weatherData.stats.amberboundTotalValue;
 
-    if (weatherData.stats.totalProcs > 0) {
+    if (totalWeatherProcs > 0) {
       body.appendChild(createCategoryHeader('Weather Mutations', '🌤️'));
-      body.appendChild(createStatRow('Total Weather Procs', formatNumber(weatherData.stats.totalProcs), '🌤️'));
-      body.appendChild(createStatRow('Procs per Hour', weatherData.stats.procsPerHour.toFixed(1), '⚡'));
+      body.appendChild(createStatRow('Total Weather Procs', formatNumber(totalWeatherProcs), '🌤️'));
+      body.appendChild(createStatRow('Procs per Hour', totalWeatherProcsPerHour.toFixed(1), '⚡'));
       body.appendChild(createStatRow('Total Value', formatNumber(totalWeatherValue) + ' coins', '💰'));
     }
 
@@ -8712,7 +8726,8 @@ function createStatsOverviewSection(): HTMLElement {
         const name = def?.name || abilityId;
         const procs = (qpmStats.abilities.procsByAbility as Record<string, number>)[abilityId] || 0;
         const labelText = name + " (" + String(procs) + "x)";
-        body.appendChild(createStatRow(labelText, valueText, "▸"));
+        const valueDisplay = formatNumber(value as number) + " coins";
+        body.appendChild(createStatRow(labelText, valueDisplay, "▸"));
       });
     } else {
       const abilityNote = document.createElement('div');

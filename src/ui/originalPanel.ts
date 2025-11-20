@@ -5,6 +5,7 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 // Pet Efficiency removed
 import { getMutationValueSnapshot, subscribeToMutationValueTracking } from '../features/mutationValueTracking';
 import { abilityDefinitions } from '../data/petAbilities';
+import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { getSessionStats, resetFeedSession } from '../features/feedTracking';
@@ -8557,65 +8558,98 @@ function createStatsOverviewSection(): HTMLElement {
     return header;
   };
 
+  // Value-generating abilities only (for Top Abilities filter)
+  const VALUE_ABILITIES = new Set([
+    'GoldGranter', 'RainbowGranter',
+    'ProduceScaleBoost', 'ProduceScaleBoostII',
+    'ProduceRefund', 'DoubleHarvest',
+    'SellBoostI', 'SellBoostII', 'SellBoostIII', 'SellBoostIV',
+    'CoinFinderI', 'CoinFinderII', 'CoinFinderIII',
+    'PetRefund', 'PetRefundII'
+  ]);
+
   const updateStats = () => {
     body.innerHTML = '';
 
-    const stats = getStatsSnapshot();
+    // Try to get Aries stats first (more comprehensive), fallback to our stats
+    const ariesStats = getAriesStats();
+    const qpmStats = getStatsSnapshot();
+    const hasAries = ariesStats !== null;
 
-    // Garden Stats
+    // Garden Stats - prefer Aries data
     body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
-    body.appendChild(createStatRow('Total Planted', formatNumber(stats.garden.totalPlanted), '🌱'));
-    body.appendChild(createStatRow('Total Harvested', formatNumber(stats.garden.totalHarvested), '🌾'));
-    body.appendChild(createStatRow('Total Destroyed', formatNumber(stats.garden.totalDestroyed), '💥'));
-    body.appendChild(createStatRow('Watering Cans Used', formatNumber(stats.garden.totalWateringCans), '💧'));
+    if (hasAries && ariesStats.garden) {
+      body.appendChild(createStatRow('Total Planted', formatNumber(ariesStats.garden.totalPlanted), '🌱'));
+      body.appendChild(createStatRow('Total Harvested', formatNumber(ariesStats.garden.totalHarvested), '🌾'));
+      body.appendChild(createStatRow('Total Destroyed', formatNumber(ariesStats.garden.totalDestroyed), '💥'));
+      body.appendChild(createStatRow('Watering Cans Used', formatNumber(ariesStats.garden.watercanUsed), '💧'));
+    } else {
+      body.appendChild(createStatRow('Total Planted', formatNumber(qpmStats.garden.totalPlanted), '🌱'));
+      body.appendChild(createStatRow('Total Harvested', formatNumber(qpmStats.garden.totalHarvested), '🌾'));
+      body.appendChild(createStatRow('Total Destroyed', formatNumber(qpmStats.garden.totalDestroyed), '💥'));
+      body.appendChild(createStatRow('Watering Cans Used', formatNumber(qpmStats.garden.totalWateringCans), '💧'));
+    }
 
-    // Pet Stats
+    // Pet Stats - prefer Aries data for accurate rarity counts
     body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
-    body.appendChild(createStatRow('Total Hatched', formatNumber(stats.pets.totalHatched), '🥚'));
-    body.appendChild(createStatRow('Normal Pets', formatNumber(stats.pets.hatchedByRarity.normal), '⚪'));
-    body.appendChild(createStatRow('Gold Pets', formatNumber(stats.pets.hatchedByRarity.gold), '🟡'));
-    body.appendChild(createStatRow('Rainbow Pets', formatNumber(stats.pets.hatchedByRarity.rainbow), '🌈'));
+    if (hasAries && ariesStats.pets?.hatchedByType) {
+      // Sum all pets across all species
+      let totalNormal = 0;
+      let totalGold = 0;
+      let totalRainbow = 0;
+
+      for (const species in ariesStats.pets.hatchedByType) {
+        const counts = ariesStats.pets.hatchedByType[species];
+        if (counts) {
+          totalNormal += counts.normal || 0;
+          totalGold += counts.gold || 0;
+          totalRainbow += counts.rainbow || 0;
+        }
+      }
+
+      const totalHatched = totalNormal + totalGold + totalRainbow;
+      body.appendChild(createStatRow('Total Hatched', formatNumber(totalHatched), '🥚'));
+      body.appendChild(createStatRow('Normal Pets', formatNumber(totalNormal), '⚪'));
+      body.appendChild(createStatRow('Gold Pets', formatNumber(totalGold), '🟡'));
+      body.appendChild(createStatRow('Rainbow Pets', formatNumber(totalRainbow), '🌈'));
+    } else {
+      body.appendChild(createStatRow('Total Hatched', formatNumber(qpmStats.pets.totalHatched), '🥚'));
+      body.appendChild(createStatRow('Normal Pets', formatNumber(qpmStats.pets.hatchedByRarity.normal), '⚪'));
+      body.appendChild(createStatRow('Gold Pets', formatNumber(qpmStats.pets.hatchedByRarity.gold), '🟡'));
+      body.appendChild(createStatRow('Rainbow Pets', formatNumber(qpmStats.pets.hatchedByRarity.rainbow), '🌈'));
+    }
 
     // Ability Stats
     body.appendChild(createCategoryHeader('Ability Performance', '⚡'));
-    body.appendChild(createStatRow('Total Ability Procs', formatNumber(stats.abilities.totalProcs), '⚡'));
-    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(stats.abilities.totalEstimatedValue)} coins`, '💰'));
+    body.appendChild(createStatRow('Total Ability Procs', formatNumber(qpmStats.abilities.totalProcs), '⚡'));
+    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(qpmStats.abilities.totalEstimatedValue)} coins`, '💰'));
 
-    // Top 5 abilities by proc count
-    const topByProcs = Object.entries(stats.abilities.procsByAbility)
+    // Top 5 value-generating abilities only (filter out XP, growth boosters, etc.)
+    const valueAbilities = Object.entries(qpmStats.abilities.valueByAbility)
+      .filter(([abilityId]) => VALUE_ABILITIES.has(abilityId))
       .sort(([, a], [, b]) => (b as number) - (a as number))
       .slice(0, 5);
 
-    if (topByProcs.length > 0) {
-      const topProcsHeader = document.createElement('div');
-      topProcsHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
-      topProcsHeader.textContent = 'Top Abilities by Count:';
-      body.appendChild(topProcsHeader);
-
-      topByProcs.forEach(([abilityId, count]) => {
-        body.appendChild(createStatRow(abilityId, formatNumber(count as number), '▸'));
-      });
-    }
-
-    // Top 5 abilities by value
-    const topByValue = Object.entries(stats.abilities.valueByAbility)
-      .sort(([, a], [, b]) => (b as number) - (a as number))
-      .slice(0, 5);
-
-    if (topByValue.length > 0) {
+    if (valueAbilities.length > 0) {
       const topValueHeader = document.createElement('div');
       topValueHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
-      topValueHeader.textContent = 'Top Abilities by Value:';
+      topValueHeader.textContent = 'Top Abilities by Value (Coin-Generating):';
       body.appendChild(topValueHeader);
 
-      topByValue.forEach(([abilityId, value]) => {
-        body.appendChild(createStatRow(abilityId, `${formatNumber(value as number)} coins`, '▸'));
+      valueAbilities.forEach(([abilityId, value]) => {
+        const def = abilityDefinitions.find(d => d.id === abilityId);
+        const name = def?.name || abilityId;
+        body.appendChild(createStatRow(name, `${formatNumber(value as number)} coins`, '▸'));
       });
     }
 
-    // Feed Stats
-    body.appendChild(createCategoryHeader('Feeding Activity', '🍖'));
-    body.appendChild(createStatRow('Manual Feeds', formatNumber(stats.feed.manualFeeds), '🍖'));
+    // Data source indicator
+    if (hasAries) {
+      const indicator = document.createElement('div');
+      indicator.style.cssText = 'margin-top:16px;padding:8px;background:rgba(76,175,80,0.1);border-radius:4px;font-size:10px;color:#4CAF50;text-align:center;';
+      indicator.innerHTML = '✓ Using Aries Mod stats (enhanced accuracy)';
+      body.appendChild(indicator);
+    }
   };
 
   // Initial update

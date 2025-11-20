@@ -26,6 +26,41 @@ export interface AriesAbilityStats {
   [key: string]: unknown;
 }
 
+export interface AriesStatsSnapshot {
+  createdAt?: number;
+  garden?: {
+    totalPlanted: number;
+    totalHarvested: number;
+    totalDestroyed: number;
+    watercanUsed: number;
+    waterTimeSavedMs: number;
+  };
+  shops?: {
+    seedsBought: number;
+    decorBought: number;
+    eggsBought: number;
+    toolsBought: number;
+    cropsSoldCount: number;
+    cropsSoldValue: number;
+    petsSoldCount: number;
+    petsSoldValue: number;
+  };
+  pets?: {
+    hatchedByType: Record<string, {
+      normal: number;
+      gold: number;
+      rainbow: number;
+    }>;
+  };
+  abilities?: Record<string, {
+    triggers: number;
+    totalValue: number;
+  }>;
+  weather?: Record<string, {
+    triggers: number;
+  }>;
+}
+
 interface AriesModData {
   petAbilityLogs?: AriesPetLog[];
   abilityStats?: Record<string, AriesAbilityStats>;
@@ -178,4 +213,51 @@ export function getAriesLogsForAbility(abilityId: string): AriesPetLog[] {
 export function getAriesLogsForPet(petId: string): AriesPetLog[] {
   const allLogs = getAriesPetLogs();
   return allLogs.filter(log => log.petId === petId || log.slotId === petId);
+}
+
+/**
+ * Get stats snapshot from Aries mod
+ * Returns null if Aries mod is not available or stats not found
+ */
+export function getAriesStats(): AriesStatsSnapshot | null {
+  try {
+    const ariesData = getAriesModData();
+    if (!ariesData) {
+      return null;
+    }
+
+    // Try multiple possible locations for stats
+    const statsService = (ariesData as any).StatsService
+      || (ariesData as any).statsService
+      || (ariesData as any).stats;
+
+    if (statsService && typeof statsService === 'object') {
+      // Try to get snapshot from service
+      if (typeof statsService.getSnapshot === 'function') {
+        const snapshot = statsService.getSnapshot();
+        if (snapshot && typeof snapshot === 'object') {
+          return snapshot as AriesStatsSnapshot;
+        }
+      }
+
+      // Try to access stats directly
+      if (statsService.garden || statsService.pets || statsService.abilities) {
+        return statsService as AriesStatsSnapshot;
+      }
+    }
+
+    // Try direct stats property on window
+    const win = pageWindow as any;
+    if (win.qwsStats || win.AriesStats || win.MGStats) {
+      const stats = win.qwsStats || win.AriesStats || win.MGStats;
+      if (stats && typeof stats === 'object') {
+        return stats as AriesStatsSnapshot;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    log('⚠️ Failed to get Aries stats', error);
+    return null;
+  }
 }

@@ -17,6 +17,40 @@ export interface AriesAbilityStats {
     lastProcAt: number;
     [key: string]: unknown;
 }
+export interface AriesStatsSnapshot {
+    createdAt?: number;
+    garden?: {
+        totalPlanted: number;
+        totalHarvested: number;
+        totalDestroyed: number;
+        watercanUsed: number;
+        waterTimeSavedMs: number;
+    };
+    shops?: {
+        seedsBought: number;
+        decorBought: number;
+        eggsBought: number;
+        toolsBought: number;
+        cropsSoldCount: number;
+        cropsSoldValue: number;
+        petsSoldCount: number;
+        petsSoldValue: number;
+    };
+    pets?: {
+        hatchedByType: Record<string, {
+            normal: number;
+            gold: number;
+            rainbow: number;
+        }>;
+    };
+    abilities?: Record<string, {
+        triggers: number;
+        totalValue: number;
+    }>;
+    weather?: Record<string, {
+        triggers: number;
+    }>;
+}
 /**
  * Get pet ability logs from Aries mod
  * Returns an empty array if Aries mod is not available
@@ -43,4 +77,9 @@ export declare function getAriesLogsForAbility(abilityId: string): AriesPetLog[]
  * Get all ability logs from Aries mod for a specific pet
  */
 export declare function getAriesLogsForPet(petId: string): AriesPetLog[];
+/**
+ * Get stats snapshot from Aries mod
+ * Returns null if Aries mod is not available or stats not found
+ */
+export declare function getAriesStats(): AriesStatsSnapshot | null;
 //# sourceMappingURL=ariesModBridge.d.ts.map

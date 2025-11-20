@@ -1,0 +1,44 @@
+Crops in Magic Garden are divided into Single-Harvest Crops and Multiple-Harvest Crops.
+
+Single-Harvest Crops can only be harvest once. More seeds must be purchased to grow additional Crops.
+Multiple-Harvest Crops will grow until they reach maturity before producing their respective Crops; these can then be harvested infinitely.
+The sale price of a crop is determined by its scale and associated multipliers.
+
+When harvested, Multiple-Harvest Crops have a cooldown of 0.5*CropGrowTime*n, where n is equal to the number of unmatured crops. For example, in a fully grown Strawberry Crop, the first harvested Strawberry will have a 5 second cooldown, the second will have a 10 second cooldown, and so on. This formula also applies to Multiple-Harvest Crops with only a single slot; consequently Multiple-Harvest Crops have longer in-game times to grow than their stated crop grow time. The total grow time can be calculated with this formula: CropGrowTime*scale+(0.5*CropGrowTime*n) where the scale is different depending on crop species and size.
+
+Note: Weights displayed in-game are often rounded. The values listed here are used internally for price calculations and Journal Achievements.
+
+Crop	Seed price	Rarity	Credit Price	Base Sell-price	Crop Grow Time	Regrow	Mature Time	Base Weight	Max Weight	Exclusive
+ Carrot	 10		 7	 20	4s	No		0.100 Kg	0.300 Kg	
+ Strawberry	 50		 21	 14	10s	5 Slots	1:10min	0.050 Kg	0.100 Kg	
+ Aloe	 135		 18	 310	45s	No		1.500 Kg	3.750 Kg	
+ Delphinium	-		-	 530	25s	No		0.020 Kg	0.060 Kg	Carnival Stand
+ Blueberry	 400		 49	 23	22s	5 Slots	1:45min	0.010 Kg	0.020 Kg	
+ Apple	 500		 67	 73	1:30h	7 Slots	6h	0.180 Kg	0.360 Kg	
+ Tulip	 600		 14	 767	8s	No		0.010 Kg	0.030 Kg	
+ Tomato	 800		 79	 27	40s	2 Slots	18:20min	0.300 Kg	0.600 Kg	
+ Daffodil	 1,000		 19	 1,090	50s	No		0.010 Kg	0.030 Kg	
+ Corn	 1,300		 135	 36	30s	1 Slot	2:10min	1.20 Kg	2.40 Kg	
+ Watermelon	 2,500		 195	 2,708	12min	No		4.50 Kg	13.50 Kg	
+ Pumpkin	 3,000		 210	 3,700	35min	No		6.00 Kg	18.00 Kg	
+ Echeveria	 4,200		 113	 5,520	2min	No		0.80 Kg	2.2 Kg	
+ Coconut	 6,000		 235	 302	1h	7 Slots	12h	5.00 Kg	15.00 Kg	
+ Banana	 7,500		 199	 1,750	1:15h	5 Slots	4h	0.120 Kg	0.204 Kg	Discord Server with even ID
+ Lily	 20.0 K		 34	 20,123	4min	No		0.0200 Kg	0.0550 Kg	
+ Camellia	 55.0 K		 289	 4,875	3h	8 Slots	24h	0.300 Kg	0.750 Kg	
+ Squash	-		-	 3,500	3:20min	3 Slots	25min	0.300 Kg	0.750 Kg	Carnival Stand
+ Burro's Tail	 93.0 K		 338	 6,000	1:40min	2 Slots	30min	0.40 Kg	1.0 Kg	
+ Mushroom	 150 K		 249	 160 K	24h	No		25.00 Kg	87.50 Kg	
+ Cactus	 250 K		 250	 261 K	2:30h	No		1500 Kg	2700Kg	
+ Bamboo	 400 K		 300	 500 K	12h	No		1.00 Kg	2.00 Kg	
+ Chrysanthemum	 670 K		 567	 18,000	3h	7 Slots	24h	0.0100 Kg	0.0275 Kg	
+ Grape	 850 K		 599	 12,500	15min	1 Slot	24h	3.00 Kg	6.00 Kg	Discord Server ID ending in 1
+ Pepper	 1.00 M		 629	 7,220	10min	9 Slots	9:20min	0.500 Kg	1.000 Kg	
+ Lemon	 2.00 M		 500	 10.0 K	1h	6 Slots	12h	0.500 Kg	1.500 Kg	Discord Server ID ending in 2
+ Passion Fruit	 2.75 M		 679	 24.5K	45min	2 Slots	24h	9.50 Kg	19.00 Kg	
+ Dragon Fruit	 5.00 M		 715	 24.5 K	15min	7 Slots	10min	8.40 Kg	17.00 Kg	
+ Lychee	 25.0 M		 819	 50.0 K	30min	6 Slots	24h	9.00 Kg	18.00 Kg	Discord Server ID ending in 2
+ Sunflower	 100 M		 900	 750 K	5h	1 Slot	24h	10.00 Kg	25.00 Kg	
+ Starweaver	 1.00 B		 1,000	 10.0 M	24h	1 Slot	60h	10.00 Kg	20.00 Kg	
+ Dawnbinder	 10.0 B		 1,129	 11.0 M	24h	1 Slot	24h	6.00 Kg	15.00 Kg	
+ Moonbinder	 50.0 B		 1,249	 11.0 M	24h	3 Slots	24h	2.00 Kg	4.00 Kg	

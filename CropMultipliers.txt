@@ -1,0 +1,47 @@
+Here are each of the multiplier and their respective multiplication value:
+
+Mutations: Crops and Pets can gain these.
+
+Golden: 25x
+Rainbow: 50x
+Weather Conditions: Only crops can gain these.
+
+Wet: 2x
+Chilled: 2x
+Frozen: 10x
+Dawnlit: 2x
+Dawnbound: 3x
+Amberlit: 5x
+Amberbound: 6x
+Wet, Chilled and Frozen multipliers don't stack multiplicatively with Dawnlit/Dawnbound and Amberlit/Amberbound. Instead they stack like this:
+
+Wet/Chilled & Dawnlit: 3x
+Wet/Chilled & Amberlit: 6x
+Frozen & Dawnlit: 11x
+Frozen & Dawnbound: 12x
+Frozen & Amberlit: 14x
+Frozen & Amberbound: 15x
+The above combination bonuses multiply with the 25x bonus of Golden and the 50x bonus of Rainbow to produce the following multipliers:
+
+Golden, Wet/Chilled, & Dawnlit: 75x
+Golden, Wet/Chilled, & Amberlit: 150x
+Gold & Frozen: 250x
+Golden, Frozen, & Dawnlit: 275x
+Golden, Frozen, & Dawnbound: 300x
+Golden, Frozen, & Amberlit: 350x
+Golden, Frozen, & Amberbound: 375x
+Rainbow, Wet/Chilled & Dawnlit: 150x
+Rainbow, Wet/Chilled & Amberlit: 300x
+Rainbow & Frozen: 500x
+Rainbow, Frozen & Dawnlit: 550x
+Rainbow, Frozen & Dawnbound: 600x
+Rainbow, Frozen & Amberlit: 700x
+Rainbow, Frozen & Amberbound: 750x
+Gold and Rainbow do not stack, only one mutation can occur at once. Similarly a crop can only be Wet, Chilled, or Frozen, as the Frozen condition is obtained by combining Wet and Chilled. Dawnlit/Dawnbound and Amberlit/Amberbound do not stack and don't allow to be replaced by the other condition. With pet abilities that add mutations, it's possible to get Golden/Rainbow to overlap with Dawnlit/Dawnbound/Amberlit/Amberbound and Wet/Chilled/Frozen.
+
+Common combinations that players use to increase coin yield are:
+
+Gold & Frozen: 250x
+Gold, Frozen & Amberlit: 350x
+Rainbow & Frozen: 500x
+Rainbow, Frozen & Amberlit: 700x

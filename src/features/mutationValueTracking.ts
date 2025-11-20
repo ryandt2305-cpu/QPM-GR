@@ -16,7 +16,7 @@ const DAY_MS = 24 * HOUR_MS;
 const MUTATION_VALUES = {
   gold: 500000, // Avg gold crop value (conservative)
   rainbow: 1000000, // Avg rainbow crop value (conservative)
-  cropBoost: 50000, // Avg value of a crop size boost proc
+  cropBoost: 5000000, // Avg value of a crop size boost proc (5M based on ability tracker data)
 };
 
 export interface MutationValueStats {

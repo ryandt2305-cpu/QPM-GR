@@ -13,12 +13,14 @@ export interface AutoFavoriteConfig {
 }
 
 let config: AutoFavoriteConfig = {
-  enabled: true,
-  autoFavoriteRarePets: true,
-  autoFavoriteRareProduce: true,
+  enabled: false,
+  autoFavoriteRarePets: false,
+  autoFavoriteRareProduce: false,
 };
 
 const listeners = new Set<(config: AutoFavoriteConfig) => void>();
+let intervalId: number | null = null;
+let lastInventoryCount = 0;
 
 function loadConfig(): void {
   try {
@@ -54,8 +56,100 @@ function notifyListeners(): void {
   }
 }
 
+function checkAndFavoriteNewItems(inventory: any): void {
+  if (!inventory?.items) return;
+
+  if (!config.autoFavoriteRarePets && !config.autoFavoriteRareProduce) return;
+
+  const favoritedIds = new Set(inventory.favoritedItemIds || []);
+  let cropCount = 0;
+  let petCount = 0;
+
+  for (const item of inventory.items) {
+    if (favoritedIds.has(item.id)) continue; // Already favorited
+
+    // Check if it's a pet
+    if (item.itemType === 'Pet' && config.autoFavoriteRarePets) {
+      // Check pet mutations for Gold or Rainbow
+      const petMutations = item.mutations || [];
+      const hasGoldMutation = petMutations.includes('Gold');
+      const hasRainbowMutation = petMutations.includes('Rainbow');
+
+      if (hasGoldMutation || hasRainbowMutation) {
+        if (favoriteGameItem(item.id)) {
+          petCount++;
+        }
+      }
+      continue;
+    }
+
+    // Check if it's produce
+    if (item.itemType === 'Produce' && config.autoFavoriteRareProduce) {
+      // Check item mutations for Gold or Rainbow
+      const itemMutations = item.mutations || [];
+      const hasGoldMutation = itemMutations.some((mut: string) =>
+        mut.toLowerCase().includes('gold')
+      );
+      const hasRainbowMutation = itemMutations.some((mut: string) =>
+        mut.toLowerCase().includes('rainbow')
+      );
+
+      if (hasGoldMutation || hasRainbowMutation) {
+        if (favoriteGameItem(item.id)) {
+          cropCount++;
+        }
+      }
+    }
+  }
+
+  if (cropCount > 0) {
+    log(`🌟 Auto-favorited ${cropCount} new crops`);
+  }
+  if (petCount > 0) {
+    log(`🌟 Auto-favorited ${petCount} new pets`);
+  }
+}
+
+function startAutoFavoritePolling(): void {
+  if (intervalId !== null) return;
+
+  intervalId = window.setInterval(() => {
+    // Early exit if auto-favorite is disabled
+    if (!config.enabled) {
+      return;
+    }
+
+    if (!config.autoFavoriteRarePets && !config.autoFavoriteRareProduce) {
+      return;
+    }
+
+    const pageWindow = (typeof window !== 'undefined' ? window : global) as any;
+    if (!pageWindow?.myData?.inventory?.items) {
+      return;
+    }
+
+    const currentCount = pageWindow.myData.inventory.items.length;
+    // Only process if inventory count increased (new items added)
+    if (currentCount > lastInventoryCount) {
+      checkAndFavoriteNewItems(pageWindow.myData.inventory);
+    }
+    lastInventoryCount = currentCount;
+  }, 2000); // Check every 2 seconds
+
+  log('✅ Auto-favorite polling started (2 second interval)');
+}
+
+function stopAutoFavoritePolling(): void {
+  if (intervalId !== null) {
+    window.clearInterval(intervalId);
+    intervalId = null;
+    log('⏹️ Auto-favorite polling stopped');
+  }
+}
+
 export function initializeAutoFavorite(): void {
   loadConfig();
+  startAutoFavoritePolling();
   log('✅ Auto-favorite initialized', config);
 }
 
@@ -66,6 +160,11 @@ export function getAutoFavoriteConfig(): AutoFavoriteConfig {
 export function updateAutoFavoriteConfig(updates: Partial<AutoFavoriteConfig>): void {
   config = { ...config, ...updates };
   saveConfig();
+
+  // Restart polling if config changed
+  if (config.enabled && (config.autoFavoriteRarePets || config.autoFavoriteRareProduce)) {
+    startAutoFavoritePolling();
+  }
 }
 
 export function subscribeToAutoFavoriteConfig(listener: (config: AutoFavoriteConfig) => void): () => void {
@@ -74,85 +173,23 @@ export function subscribeToAutoFavoriteConfig(listener: (config: AutoFavoriteCon
   return () => listeners.delete(listener);
 }
 
-// Helper function to determine if auto-favoriting should occur
-export function shouldAutoFavoritePet(rarity: string): boolean {
-  if (!config.enabled || !config.autoFavoriteRarePets) {
-    return false;
-  }
-
-  const rarityLower = String(rarity).toLowerCase();
-  return rarityLower.includes('gold') || rarityLower.includes('rainbow');
-}
-
-export function shouldAutoFavoriteProduce(rarity: string): boolean {
-  if (!config.enabled || !config.autoFavoriteRareProduce) {
-    return false;
-  }
-
-  const rarityLower = String(rarity).toLowerCase();
-  return rarityLower.includes('gold') || rarityLower.includes('rainbow');
-}
-
 // Function to actually favorite an item in the game via websocket
-// Uses the same mechanism as crop type locking
-export function favoriteGameItem(itemId: string, itemType: 'pet' | 'produce'): boolean {
+function favoriteGameItem(itemId: string): boolean {
   try {
-    // Access the game's websocket connection (same as crop locking)
     const pageWindow = (typeof window !== 'undefined' ? window : global) as any;
     const maybeConnection = pageWindow?.MagicCircle_RoomConnection;
 
     if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
-      // Send the ToggleFavoriteItem message
       maybeConnection.sendMessage({
         scopePath: ['Room', 'Quinoa'],
         type: 'ToggleFavoriteItem',
         itemId
       });
-
-      log(`🌟 Auto-favorited ${itemType}: ${itemId}`);
       return true;
-    } else {
-      log(`⚠️ MagicCircle_RoomConnection not available for favoriting ${itemType}`);
-      return false;
     }
-  } catch (error) {
-    log(`⚠️ Failed to favorite ${itemType} ${itemId}`, error);
-    return false;
-  }
-}
-
-// Check if an item is already favorited
-function isItemFavorited(itemId: string): boolean {
-  try {
-    const pageWindow = (typeof window !== 'undefined' ? window : global) as any;
-    const inventory = pageWindow?.myData?.inventory;
-
-    if (inventory && Array.isArray(inventory.favoritedItemIds)) {
-      return inventory.favoritedItemIds.includes(itemId);
-    }
-
     return false;
   } catch (error) {
+    log(`⚠️ Failed to favorite item ${itemId}`, error);
     return false;
   }
-}
-
-// Favorite item only if not already favorited
-export function autoFavoriteIfNeeded(itemId: string, itemType: 'pet' | 'produce', rarity: string): boolean {
-  const shouldFavorite = itemType === 'pet'
-    ? shouldAutoFavoritePet(rarity)
-    : shouldAutoFavoriteProduce(rarity);
-
-  if (!shouldFavorite) {
-    return false;
-  }
-
-  // Check if already favorited
-  if (isItemFavorited(itemId)) {
-    log(`ℹ️ ${itemType} ${itemId} already favorited, skipping`);
-    return true;
-  }
-
-  // Favorite the item
-  return favoriteGameItem(itemId, itemType);
 }

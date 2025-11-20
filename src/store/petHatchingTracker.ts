@@ -5,7 +5,6 @@
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { recordPetHatch } from './stats';
 import { log } from '../utils/logger';
-import { autoFavoriteIfNeeded } from '../features/autoFavorite';
 
 const PET_INFOS_LABEL = 'myPetInfosAtom'; // Contains all owned pets
 let started = false;
@@ -93,11 +92,6 @@ function detectNewPets(pets: PetInfo[]): void {
 
       const speciesName = pet.name || pet.species || 'Unknown';
       log(`🥚 Detected new ${rarity} pet hatched: ${speciesName}`);
-
-      // Auto-favorite rare pets
-      if (rarity !== 'normal' && pet.id) {
-        autoFavoriteIfNeeded(pet.id, 'pet', rarity);
-      }
     }
   }
 

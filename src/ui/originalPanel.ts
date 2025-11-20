@@ -8495,167 +8495,6 @@ function createGoalsRecordsSection(): HTMLElement {
   return root;
 }
 
-function createPredictionsSection(): HTMLElement {
-  const { root, body } = createCard('⏰ Predictions & ETAs', {
-    subtitle: 'Forecasts and time estimates',
-    collapsible: true,
-  });
-  root.dataset.qpmSection = 'predictions';
-
-  const info = document.createElement('div');
-  info.style.cssText = 'padding:10px;background:#1a1a2a;border-radius:6px;font-size:11px;line-height:1.5;margin-bottom:12px;';
-  info.innerHTML = `
-    <strong>🔮 Prediction system:</strong> Pet level-up ETAs, ability proc estimates, and goal completion timelines.
-  `;
-  body.appendChild(info);
-
-  const container = document.createElement('div');
-  container.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
-  body.appendChild(container);
-
-  const render = () => {
-    const predictionsSnapshot = getPredictionsSnapshot();
-    container.innerHTML = '';
-
-    // Pet Level-Up Predictions
-    if (predictionsSnapshot.petPredictions.length > 0) {
-      const levelUpSection = document.createElement('div');
-      levelUpSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin-bottom:8px;color:#FFD700;">⚡ Pet Level-Up ETAs</div>';
-
-      const levelUpGrid = document.createElement('div');
-      levelUpGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-
-      // Show first 5 predictions
-      const topPredictions = predictionsSnapshot.petPredictions.slice(0, 5);
-
-      for (const prediction of topPredictions) {
-        const petDiv = document.createElement('div');
-        petDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
-
-        const hasXpRate = prediction.xpGainRate > 0;
-        const timeText = prediction.estimatedCompletionAt
-          ? formatETA(prediction.estimatedCompletionAt)
-          : 'Calculating...';
-
-        petDiv.innerHTML = `
-          <div>
-            <div style="font-weight:bold;">${prediction.petName} Lvl ${prediction.currentLevel} → ${prediction.maxLevel}</div>
-            <div style="color:#888;font-size:9px;">${formatNum(prediction.xpRemaining)} XP needed</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="color:${hasXpRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
-            <div style="color:#888;font-size:9px;">${hasXpRate ? `${formatNum(prediction.xpGainRate * 3600)} XP/hr` : 'Need data'}</div>
-          </div>
-        `;
-        levelUpGrid.appendChild(petDiv);
-      }
-
-      levelUpSection.appendChild(levelUpGrid);
-      container.appendChild(levelUpSection);
-    }
-
-    // Ability Milestone Predictions
-    if (predictionsSnapshot.abilityPredictions.length > 0) {
-      const procSection = document.createElement('div');
-      procSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎲 Ability Milestones</div>';
-
-      const procGrid = document.createElement('div');
-      procGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-
-      // Show first 5 ability predictions
-      const topAbilities = predictionsSnapshot.abilityPredictions.slice(0, 5);
-
-      for (const prediction of topAbilities) {
-        // Find the next uncompleted milestone
-        const nextMilestone = prediction.milestones.find(m => m.estimatedAt !== null);
-        if (!nextMilestone) continue;
-
-        const procDiv = document.createElement('div');
-        procDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
-        procDiv.innerHTML = `
-          <div>
-            <div style="font-weight:bold;">${prediction.abilityName}</div>
-            <div style="color:#888;font-size:9px;">${prediction.currentProcs} → ${nextMilestone.target} procs</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="color:#4CAF50;font-weight:bold;">${formatETA(nextMilestone.estimatedAt)}</div>
-            <div style="color:#888;font-size:9px;">${prediction.procsPerHour.toFixed(1)}/hr</div>
-          </div>
-        `;
-        procGrid.appendChild(procDiv);
-      }
-
-      if (procGrid.children.length > 0) {
-        procSection.appendChild(procGrid);
-        container.appendChild(procSection);
-      }
-    }
-
-    // Goal Predictions
-    if (predictionsSnapshot.goalPredictions.length > 0) {
-      const goalSection = document.createElement('div');
-      goalSection.innerHTML = '<div style="font-weight:bold;font-size:11px;margin:12px 0 8px 0;color:#FFD700;">🎯 Goal ETAs</div>';
-
-      const goalGrid = document.createElement('div');
-      goalGrid.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-
-      for (const goal of predictionsSnapshot.goalPredictions) {
-        const goalDiv = document.createElement('div');
-        goalDiv.style.cssText = 'padding:8px;background:#1a1a2a;border-radius:4px;font-size:10px;display:flex;justify-content:space-between;align-items:center;';
-
-        const hasRate = goal.progressRate > 0;
-        const timeText = goal.estimatedCompletionAt
-          ? formatETA(goal.estimatedCompletionAt)
-          : 'Calculating...';
-
-        const progress = goal.target > 0 ? ((goal.current / goal.target) * 100).toFixed(0) : '0';
-
-        goalDiv.innerHTML = `
-          <div style="flex:1;">
-            <div style="font-weight:bold;">${goal.description}</div>
-            <div style="color:#888;font-size:9px;">${formatNum(goal.current)} / ${formatNum(goal.target)} (${progress}%)</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="color:${hasRate ? '#4CAF50' : '#FFB74D'};font-weight:bold;">${timeText}</div>
-            <div style="color:#888;font-size:9px;">${goal.confidence}</div>
-          </div>
-        `;
-        goalGrid.appendChild(goalDiv);
-      }
-
-      goalSection.appendChild(goalGrid);
-      container.appendChild(goalSection);
-    }
-
-    // Empty state
-    if (container.children.length === 0) {
-      const emptyState = document.createElement('div');
-      emptyState.style.cssText = 'padding:20px;text-align:center;color:#888;font-style:italic;';
-      emptyState.textContent = 'No predictions available yet. Data will appear as your pets gain XP and use abilities.';
-      container.appendChild(emptyState);
-    }
-  };
-
-  render();
-  const unsubscribe = subscribeToPredictions(render);
-
-  const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      mutation.removedNodes.forEach((node) => {
-        if (node === root || (node as HTMLElement).contains?.(root)) {
-          unsubscribe();
-          observer.disconnect();
-        }
-      });
-    });
-  });
-  if (root.parentElement) {
-    observer.observe(root.parentElement, { childList: true, subtree: true });
-  }
-
-  return root;
-}
-
 function createStatsOverviewSection(): HTMLElement {
   const { root, body } = createCard('📊 Statistics Overview', {
     subtitle: 'Comprehensive stats across all sessions',
@@ -8880,6 +8719,57 @@ function createGuideSection(): HTMLElement {
   imageContainer.appendChild(clickHint);
   imageContainer.appendChild(img);
   body.appendChild(imageContainer);
+
+  // Guide Content
+  const guideContent = document.createElement('div');
+  guideContent.style.cssText = 'margin-top:16px;padding:16px;background:#1a1a2a;border-radius:8px;line-height:1.6;';
+
+  guideContent.innerHTML = `
+    <div style="font-size:14px;font-weight:bold;color:#FFD700;margin-bottom:12px;">🌟 What Are Mutations?</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:16px;">
+      Mutations are special bonuses that make your crops worth more coins! Think of them as magical upgrades.
+    </div>
+
+    <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">✨ Mutation Types & Values:</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🟡 <strong>Gold</strong> → 3x value (Your crop is worth 3 times more!)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌈 <strong>Rainbow</strong> → 10x value (10 times more coins!)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">💧 <strong>Wet</strong> → 1.5x value (Happens during rain)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">❄️ <strong>Chilled</strong> → 2x value (From snow weather)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🧊 <strong>Frozen</strong> → 3x value (Super cold!)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌅 <strong>Dawnlit</strong> → 1.5x value (Morning magic)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">⛅ <strong>Dawnbound</strong> → 2x value (Strong morning power)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌙 <strong>Amberlit</strong> → 1.5x value (Moon glow)</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:16px;">🌕 <strong>Amberbound</strong> → 2x value (Full moon power)</div>
+
+    <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">📊 How Mutations Stack:</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:8px;">
+      When you get multiple mutations on one crop, they multiply together!
+    </div>
+    <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;padding-left:12px;">• Gold + Wet = 3x × 1.5x = <strong>4.5x value!</strong></div>
+    <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;padding-left:12px;">• Rainbow + Frozen = 10x × 3x = <strong>30x value!</strong> 🎉</div>
+    <div style="font-size:11px;color:#4CAF50;margin-bottom:16px;padding-left:12px;">• Gold + Frozen + Dawnbound = 3x × 3x × 2x = <strong>18x value!</strong></div>
+
+    <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">☁️ When Do Mutations Happen?</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌧️ <strong>Rain</strong> → Wet, Chilled, or Frozen mutations</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌅 <strong>Dawn</strong> → Dawnlit mutations</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">🌙 <strong>Amber Moon</strong> → Amberlit mutations</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:16px;">⚡ <strong>Pet Abilities</strong> → Gold or Rainbow mutations from special pets!</div>
+
+    <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">🔮 Special Bound Mutations:</div>
+    <div style="font-size:11px;color:#FF9800;margin-bottom:4px;">
+      ⛅ <strong>Dawnbound</strong> is created when a <strong>Dawnlit</strong> crop is placed next to a <strong>Dawnbinder</strong> pet during Dawn weather.
+    </div>
+    <div style="font-size:11px;color:#FF9800;margin-bottom:16px;">
+      🌕 <strong>Amberbound</strong> is created when an <strong>Amberlit</strong> crop is placed next to a <strong>Moonbinder</strong> pet during Amber Moon.
+    </div>
+
+    <div style="font-size:13px;font-weight:bold;color:#FFD700;margin-bottom:8px;">💡 Pro Tips:</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">• Plant lots of crops during special weather</div>
+    <div style="font-size:11px;color:#ccc;margin-bottom:4px;">• Use pets with Gold Granter or Rainbow Granter abilities</div>
+    <div style="font-size:11px;color:#ccc;">• Higher tier weather mutations (Frozen, Dawnbound, Amberbound) are rarer but worth more!</div>
+  `;
+
+  body.appendChild(guideContent);
 
   return root;
 }

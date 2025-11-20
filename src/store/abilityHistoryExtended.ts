@@ -99,7 +99,7 @@ function getPetInfoForAbility(petId: string | null): { name: string; species: st
 
   if (petInfo) {
     return {
-      name: petInfo.petName || 'Unknown Pet',
+      name: petInfo.name || 'Unknown Pet',
       species: petInfo.species || 'Unknown',
       level: petInfo.level || 1,
     };
@@ -118,6 +118,7 @@ function processAbilityHistory(histories: ReadonlyMap<string, AbilityHistory>): 
 
     // Get the latest event
     const latestEvent = history.events[history.events.length - 1];
+    if (!latestEvent) continue; // Safety check
 
     // Check if we've already logged this event (by timestamp)
     const alreadyLogged = extendedHistory.some(

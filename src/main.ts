@@ -22,6 +22,7 @@ import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { initializeProcRateAnalytics } from './features/procRateAnalytics';
 import { initializePetEfficiency } from './features/petEfficiency';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
+import { initializeWeatherMutationTracking } from './features/weatherMutationTracking';
 import { initializeComprehensiveAnalytics } from './features/comprehensiveAnalytics';
 import { initializeOpportunityAlerts } from './features/opportunityAlerts';
 import { initializeAutoFavorite } from './features/autoFavorite';
@@ -695,6 +696,7 @@ async function initialize(): Promise<void> {
   initializeProcRateAnalytics();
   initializePetEfficiency();
   initializeMutationValueTracking();
+  initializeWeatherMutationTracking();
   initializeComprehensiveAnalytics();
   initializeOpportunityAlerts();
   initializeAutoFavorite();

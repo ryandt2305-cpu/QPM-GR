@@ -1,6 +1,5 @@
 // src/features/autoFavorite.ts
 // Automatically favorites rare (gold/rainbow) pets and produce when detected
-// Implementation based on MGtools v2.0.0 for compatibility
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
@@ -37,22 +36,6 @@ function loadConfig(): void {
         petAbilities: stored.petAbilities ?? config.petAbilities,
       };
     }
-
-    // Also load from backup location if available (MGtools compatibility)
-    try {
-      const backupData = localStorage.getItem('qpm_auto_favorites');
-      if (backupData) {
-        const backup = JSON.parse(backupData);
-        if (backup && typeof backup === 'object') {
-          config = {
-            enabled: backup.enabled ?? config.enabled,
-            species: backup.species ?? config.species,
-            mutations: backup.mutations ?? config.mutations,
-            petAbilities: backup.petAbilities ?? config.petAbilities,
-          };
-        }
-      }
-    } catch {}
   } catch (error) {
     log('⚠️ Failed to load auto-favorite config', error);
   }
@@ -61,16 +44,6 @@ function loadConfig(): void {
 function saveConfig(): void {
   try {
     storage.set(STORAGE_KEY, config);
-
-    // Also save to backup location for redundancy
-    try {
-      const autoFavData = JSON.stringify(config);
-      localStorage.setItem('qpm_auto_favorites', autoFavData);
-      log('💾 [AUTO-FAV] Saved auto-favorites to localStorage backup');
-    } catch (e) {
-      log('⚠️ [AUTO-FAV] Failed to save localStorage backup', e);
-    }
-
     notifyListeners();
   } catch (error) {
     log('⚠️ Failed to save auto-favorite config', error);
@@ -354,7 +327,6 @@ function sendFavoriteMessage(itemId: string): boolean {
 function startAutoFavoritePolling(): void {
   if (intervalId !== null) return;
 
-  // PERFORMANCE OPTIMIZATION: 2 second interval (like MGtools)
   intervalId = window.setInterval(() => {
     // Early exit if auto-favorite is disabled or no watched items
     if (!config.enabled) {

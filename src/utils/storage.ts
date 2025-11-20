@@ -1,10 +1,12 @@
 // src/utils/storage.ts
 declare const GM_getValue: ((key: string) => string | undefined) | undefined;
 declare const GM_setValue: ((key: string, value: string) => void) | undefined;
+declare const GM_deleteValue: ((key: string) => void) | undefined;
 
 export interface Storage {
   get<T = any>(key: string, fallback?: T): T;
   set(key: string, value: any): void;
+  remove(key: string): void;
 }
 
 export const storage: Storage = {
@@ -37,9 +39,22 @@ export const storage: Storage = {
         return;
       }
     } catch {}
-    
-    try { 
-      localStorage.setItem(key, JSON.stringify(value)); 
+
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  },
+
+  remove(key: string): void {
+    try {
+      if (typeof GM_deleteValue === 'function') {
+        GM_deleteValue(key);
+        return;
+      }
+    } catch {}
+
+    try {
+      localStorage.removeItem(key);
     } catch {}
   }
 };

@@ -427,6 +427,7 @@ export function initializeWeatherMutationTracking(): void {
   try {
     const persisted = storage.get<PersistedSnapshot | null>(STORAGE_KEY, null);
     restoreSnapshot(persisted);
+    console.log('[QPM] 🔄 Weather mutation tracking initialized - session data reset, tracking only current session');
   } catch (error) {
     console.error('[weatherMutationTracking] Failed to restore:', error);
   }
@@ -440,6 +441,60 @@ export function initializeWeatherMutationTracking(): void {
   setInterval(() => {
     recalculateRates();
   }, 10000);
+}
+
+export function clearAllWeatherMutationHistory(): void {
+  // Completely wipe all stored data
+  try {
+    storage.remove(STORAGE_KEY);
+    console.log('[QPM] 🗑️ All weather mutation history cleared from storage');
+  } catch (error) {
+    console.error('[weatherMutationTracking] Failed to clear storage:', error);
+  }
+
+  // Reset in-memory snapshot to defaults
+  snapshot = {
+    stats: {
+      wetCount: 0,
+      wetPerHour: 0,
+      wetTotalValue: 0,
+      wetLastAt: null,
+      chilledCount: 0,
+      chilledPerHour: 0,
+      chilledTotalValue: 0,
+      chilledLastAt: null,
+      frozenCount: 0,
+      frozenPerHour: 0,
+      frozenTotalValue: 0,
+      frozenLastAt: null,
+      dawnlitCount: 0,
+      dawnlitPerHour: 0,
+      dawnlitTotalValue: 0,
+      dawnlitLastAt: null,
+      dawnboundCount: 0,
+      dawnboundPerHour: 0,
+      dawnboundTotalValue: 0,
+      dawnboundLastAt: null,
+      amberlitCount: 0,
+      amberlitPerHour: 0,
+      amberlitTotalValue: 0,
+      amberlitLastAt: null,
+      amberboundCount: 0,
+      amberboundPerHour: 0,
+      amberboundTotalValue: 0,
+      amberboundLastAt: null,
+      sessionValue: 0,
+      sessionStart: Date.now(),
+      bestHourValue: 0,
+      bestHourTime: null,
+      bestSessionValue: 0,
+      bestSessionTime: null,
+    },
+    updatedAt: Date.now(),
+  };
+
+  trackedSlots = new Set();
+  notifyListeners();
 }
 
 export function getWeatherMutationSnapshot(): WeatherMutationSnapshot {
@@ -503,7 +558,17 @@ export function resetWeatherMutationTracking(): void {
     updatedAt: Date.now(),
   };
 
+  // CRITICAL FIX: Re-populate trackedSlots with current garden state
+  // This prevents existing crops from being counted as "new" after reset
   trackedSlots = new Set();
+  const currentGarden = getGardenSnapshot();
+  const currentSlots = extractCropSlots(currentGarden);
+
+  // Mark all current slots as "already seen" without counting them
+  for (const slot of currentSlots) {
+    const slotId = `${slot.tileId}-${slot.slotIndex}`;
+    trackedSlots.add(slotId);
+  }
 
   // Immediately save (don't wait for debounce)
   try {
@@ -513,4 +578,5 @@ export function resetWeatherMutationTracking(): void {
   }
 
   notifyListeners();
+  console.log(`[QPM] 🔄 Weather mutation tracking reset - ${trackedSlots.size} existing slots marked as seen`);
 }

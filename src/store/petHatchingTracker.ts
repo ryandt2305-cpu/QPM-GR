@@ -108,7 +108,9 @@ function detectNewPets(pets: PetInfo[]): void {
   let newPetsDetected = false;
 
   for (const pet of pets) {
-    const petId = pet.id || `${pet.species}-${Math.random()}`;
+    // Create stable pet ID - use actual ID or create a stable fallback based on pet properties
+    // CRITICAL FIX: Do NOT use Math.random() as it creates a new ID every time, causing pets to be counted multiple times!
+    const petId = pet.id || `${pet.species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
     currentPetIds.add(petId);
 
     // Check if this is a new pet (not seen before)
@@ -161,7 +163,9 @@ export async function startPetHatchingTracker(): Promise<void> {
           isFirstCall = false;
           const pets = extractPetInfos(value);
           for (const pet of pets) {
-            const petId = pet.id || `${pet.species}-${Math.random()}`;
+            // Create stable pet ID - use actual ID or create a stable fallback based on pet properties
+            // CRITICAL FIX: Do NOT use Math.random() as it creates a new ID every time
+            const petId = pet.id || `${pet.species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
             knownPetIds.add(petId);
           }
           // Save the initial state

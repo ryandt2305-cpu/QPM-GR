@@ -6,7 +6,6 @@ import { getProcRateSnapshot, subscribeToProcRateAnalytics } from '../features/p
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { abilityDefinitions } from '../data/petAbilities';
-import { getAriesStats, isAriesModAvailable } from '../integrations/ariesModBridge';
 import { formatNumber as formatNum, formatNumberFull, createNumberSpan } from '../utils/formatNumber';
 import { getComprehensiveSnapshot, subscribeToComprehensiveAnalytics, addGoal, removeGoal } from '../features/comprehensiveAnalytics';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
@@ -2550,9 +2549,6 @@ export function createOriginalUI(): HTMLElement {
   // Inventory locker section
   const lockerSection = createInventoryLockerSection(resolvedSyncMode);
 
-  // Mutation reminder section
-  const mutationSection = createMutationSection();
-
   const roadmapSection = createComingSoonSection();
 
   const tabs = new Map<string, HTMLElement>();
@@ -2593,7 +2589,6 @@ export function createOriginalUI(): HTMLElement {
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   // Feed tab not included in this version
-  registerTab('mutation', 'Mutation Reminder', '🧬', [mutationSection]);
   registerTab('proc-analytics', 'Proc Analytics', '📊', [createProcAnalyticsSection()]);
   registerTab('mutation-value', 'Mutation Value', '💎', [createMutationValueSection()]);
   registerTab('goals-records', 'Goals & Records', '🎯', [createGoalsRecordsSection()]);
@@ -3870,7 +3865,6 @@ function buildNotificationListItem(event: NotificationEvent): HTMLButtonElement 
   button.dataset.accent = accent;
   button.setAttribute('aria-pressed', 'false');
 
-  // Modern card design inspired by Aries mod
   button.style.cssText = `
     text-align: left;
     background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
@@ -6969,19 +6963,46 @@ function renderTrackersWindow(root: HTMLElement): void {
     });
   }, 1000);
 
+  // Subscribe to ability log updates for live data refresh (throttled to every 5 seconds)
+  let lastUpdate = Date.now();
+  const UPDATE_THROTTLE_MS = 5000;
+  let unsubscribeAbilityLogs: (() => void) | null = null;
+  let unsubscribePets: (() => void) | null = null;
+
+  Promise.all([
+    import('../store/abilityLogs'),
+    import('../store/pets')
+  ]).then(([{ onAbilityHistoryUpdate }, { onActivePetInfos }]) => {
+    unsubscribeAbilityLogs = onAbilityHistoryUpdate(() => {
+      const now = Date.now();
+      if (now - lastUpdate >= UPDATE_THROTTLE_MS) {
+        lastUpdate = now;
+        updateTrackerWindow(trackerState);
+      }
+    });
+
+    unsubscribePets = onActivePetInfos(() => {
+      updateTrackerWindow(trackerState);
+    });
+  }).catch(err => {
+    log('Failed to set up tracker subscriptions:', err);
+  });
+
   // Cleanup on window close
   const observer = new MutationObserver(() => {
     if (!document.body.contains(root)) {
       if (trackerState.updateInterval !== null) {
         clearInterval(trackerState.updateInterval);
       }
+      if (unsubscribeAbilityLogs) unsubscribeAbilityLogs();
+      if (unsubscribePets) unsubscribePets();
       observer.disconnect();
-      log('Tracker window cleanup: interval cleared');
+      log('Tracker window cleanup: interval cleared, subscriptions removed');
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  log('Trackers window rendered with live updates');
+  log('Trackers window rendered with live countdown + data updates (throttled every 5s)');
 }
 
 /**
@@ -7491,10 +7512,6 @@ function renderWeatherEventsWindow(root: HTMLElement): void {
   const harvestSection = createHarvestSection();
   harvestSection.style.margin = '0';
   root.appendChild(harvestSection);
-
-  const mutationSection = createMutationSection();
-  mutationSection.style.margin = '0';
-  root.appendChild(mutationSection);
 }
 
 /**
@@ -7582,7 +7599,6 @@ function createComingSoonSection(): HTMLElement {
         { name: 'Detailed Performance Stats', description: 'Expanded analytics leveraging atom data. Coming Soon!' },
         { name: 'Feeds Per Hour Metrics', description: 'Live feeds-per-hour tracking with history. Coming Soon!' },
         { name: 'Shop Purchase Logbook', description: 'Track purchase history in stats. Coming Soon!' },
-        { name: 'Turtle Timer Revamp', description: 'Rebuild of the turtle timer inspired by MGTools. Coming Soon!' },
       ],
     },
     {
@@ -8103,8 +8119,8 @@ function createProcAnalyticsSection(): HTMLElement {
 // Pet Efficiency section removed - functionality consolidated into other analytics tabs
 
 function createMutationValueSection(): HTMLElement {
-  const { root, body } = createCard('💎 Mutation Value Tracking', {
-    subtitle: 'Gold/Rainbow generation rates',
+  const { root, body } = createCard('💎 Mutation Value & Reminders', {
+    subtitle: 'Gold/Rainbow generation and mutation alerts',
     collapsible: true,
   });
   root.dataset.qpmSection = 'mutation-value';
@@ -8115,6 +8131,63 @@ function createMutationValueSection(): HTMLElement {
     <strong>💰 Value generation tracking:</strong> Gold/Rainbow proc rates, session value, and best records.
   `;
   body.appendChild(info);
+
+  // Mutation Reminder Controls
+  const reminderSection = document.createElement('div');
+  reminderSection.style.cssText = 'margin-bottom:16px;padding:12px;background:#2a1a3a;border-radius:6px;border-left:3px solid #9C27B0;';
+
+  const reminderHeader = document.createElement('div');
+  reminderHeader.style.cssText = 'font-weight:bold;font-size:12px;margin-bottom:8px;color:#9C27B0;';
+  reminderHeader.textContent = '🧬 Mutation Reminder';
+  reminderSection.appendChild(reminderHeader);
+
+  const reminderInfo = document.createElement('div');
+  reminderInfo.innerHTML = '💡 Detects weather events (Rain/Snow/Dawn/Amber) and notifies which plants to place for mutations.';
+  reminderInfo.style.cssText = 'font-size:10px;line-height:1.5;color:#aaa;margin-bottom:8px;';
+  reminderSection.appendChild(reminderInfo);
+
+  const reminderToggle = btn(cfg.mutationReminder?.enabled ? '✓ Reminders Enabled' : '✗ Reminders Disabled', async () => {
+    if (!cfg.mutationReminder) return;
+    cfg.mutationReminder.enabled = !cfg.mutationReminder.enabled;
+    reminderToggle.textContent = cfg.mutationReminder.enabled ? '✓ Reminders Enabled' : '✗ Reminders Disabled';
+    reminderToggle.classList.toggle('qpm-button--positive', cfg.mutationReminder.enabled);
+    reminderToggle.classList.toggle('qpm-button--accent', cfg.mutationReminder.enabled);
+    saveCfg();
+
+    const { setMutationReminderEnabled } = await import('../features/mutationReminder');
+    setMutationReminderEnabled(cfg.mutationReminder.enabled);
+  });
+  reminderToggle.style.cssText = 'width:100%;margin-bottom:6px;';
+  if (cfg.mutationReminder?.enabled) {
+    reminderToggle.classList.add('qpm-button--positive', 'qpm-button--accent');
+  }
+  reminderSection.appendChild(reminderToggle);
+
+  const checkBtn = btn('🔍 Check Now', async () => {
+    checkBtn.disabled = true;
+    checkBtn.textContent = '⏳ Checking...';
+    try {
+      const { checkForMutations } = await import('../features/mutationReminder');
+      await checkForMutations();
+      checkBtn.textContent = '✅ Done!';
+      setTimeout(() => {
+        checkBtn.textContent = '🔍 Check Now';
+        checkBtn.disabled = false;
+      }, 2000);
+    } catch (error) {
+      checkBtn.textContent = '❌ Error';
+      log('Error checking mutations:', error);
+      setTimeout(() => {
+        checkBtn.textContent = '🔍 Check Now';
+        checkBtn.disabled = false;
+      }, 2000);
+    }
+  });
+  checkBtn.style.cssText = 'width:100%;background:#9C27B0;';
+  checkBtn.title = 'Manually check for mutation opportunities';
+  reminderSection.appendChild(checkBtn);
+
+  body.appendChild(reminderSection);
 
   // Reset button
   const resetButton = document.createElement('button');
@@ -8537,14 +8610,21 @@ function createGoalsRecordsSection(): HTMLElement {
 
 function createStatsOverviewSection(): HTMLElement {
   const { root, body } = createCard('📊 Statistics Overview', {
-    subtitle: 'Comprehensive stats across all sessions',
+    subtitle: 'Session performance and value tracking',
   });
   root.dataset.qpmSection = 'stats-overview';
 
   const formatNumber = (num: number): string => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
     return num.toString();
+  };
+
+  const formatDuration = (ms: number): string => {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
   };
 
   const createStatRow = (label: string, value: string, icon: string = '•') => {
@@ -8564,7 +8644,7 @@ function createStatsOverviewSection(): HTMLElement {
     return header;
   };
 
-  // Value-generating abilities only (for Top Abilities filter)
+  // Value-generating abilities only
   const VALUE_ABILITIES = new Set([
     'GoldGranter', 'RainbowGranter',
     'ProduceScaleBoost', 'ProduceScaleBoostII',
@@ -8577,64 +8657,151 @@ function createStatsOverviewSection(): HTMLElement {
   const updateStats = () => {
     body.innerHTML = '';
 
-    // Get QPM stats
+    // Get mutation value tracking data
+    const mutationData = getMutationValueSnapshot();
     const qpmStats = getStatsSnapshot();
+    const weatherData = getWeatherMutationSnapshot();
 
-    // Garden Stats - QPM native tracking
-    body.appendChild(createCategoryHeader('Garden Metrics', '🌱'));
-    if (qpmStats.garden.totalPlanted > 0 || qpmStats.garden.totalHarvested > 0 || qpmStats.garden.totalDestroyed > 0) {
-      body.appendChild(createStatRow('Total Planted', formatNumber(qpmStats.garden.totalPlanted), '🌱'));
-      body.appendChild(createStatRow('Total Harvested', formatNumber(qpmStats.garden.totalHarvested), '🌾'));
-      body.appendChild(createStatRow('Total Destroyed', formatNumber(qpmStats.garden.totalDestroyed), '💥'));
-      body.appendChild(createStatRow('Watering Cans Used', formatNumber(qpmStats.garden.totalWateringCans), '💧'));
-    } else {
-      const gardenNote = document.createElement('div');
-      gardenNote.style.cssText = 'padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;margin-bottom:8px;';
-      gardenNote.innerHTML = 'ℹ️ Garden metrics will appear as you plant and harvest crops during this session.';
-      body.appendChild(gardenNote);
+    // Session Stats
+    body.appendChild(createCategoryHeader('Current Session', '⏱️'));
+    const sessionDuration = Date.now() - mutationData.stats.sessionStart;
+    body.appendChild(createStatRow('Session Duration', formatDuration(sessionDuration), '⏱️'));
+    body.appendChild(createStatRow('Session Value', formatNumber(mutationData.stats.sessionValue) + ' coins', '💰'));
+
+    const valuePerHour = sessionDuration > 0
+      ? Math.round((mutationData.stats.sessionValue / sessionDuration) * (60 * 60 * 1000))
+      : 0;
+    body.appendChild(createStatRow('Value per Hour', formatNumber(valuePerHour) + ' coins/hr', '📊'));
+
+    // Mutation Value Tracking
+    body.appendChild(createCategoryHeader('Mutation Value', '💎'));
+    body.appendChild(createStatRow('Gold Procs', mutationData.stats.goldProcs + ' (' + mutationData.stats.goldPerHour.toFixed(1) + '/hr)', '🟡'));
+    body.appendChild(createStatRow('Gold Value', formatNumber(mutationData.stats.goldTotalValue) + ' coins', '💰'));
+    body.appendChild(createStatRow('Rainbow Procs', mutationData.stats.rainbowProcs + ' (' + mutationData.stats.rainbowPerHour.toFixed(1) + '/hr)', '🌈'));
+    body.appendChild(createStatRow('Rainbow Value', formatNumber(mutationData.stats.rainbowTotalValue) + ' coins', '💰'));
+    body.appendChild(createStatRow('Crop Boost Procs', mutationData.stats.cropBoostProcs + ' (' + mutationData.stats.cropBoostPerHour.toFixed(1) + '/hr)', '📈'));
+    body.appendChild(createStatRow('Boost Value', formatNumber(mutationData.stats.cropBoostTotalValue) + ' coins', '💰'));
+
+    // Personal Records
+    body.appendChild(createCategoryHeader('Personal Records', '🏆'));
+    if (mutationData.stats.bestHourValue > 0) {
+      body.appendChild(createStatRow('Best Hour', formatNumber(mutationData.stats.bestHourValue) + ' coins', '⭐'));
+      if (mutationData.stats.bestHourTime) {
+        const date = new Date(mutationData.stats.bestHourTime);
+        body.appendChild(createStatRow('Best Hour Date', date.toLocaleDateString(), '📅'));
+      }
+    }
+    if (mutationData.stats.bestSessionValue > 0) {
+      body.appendChild(createStatRow('Best Session', formatNumber(mutationData.stats.bestSessionValue) + ' coins', '🌟'));
+      if (mutationData.stats.bestSessionTime) {
+        const date = new Date(mutationData.stats.bestSessionTime);
+        body.appendChild(createStatRow('Best Session Date', date.toLocaleDateString(), '📅'));
+      }
+    }
+    if (mutationData.stats.bestHourValue === 0 && mutationData.stats.bestSessionValue === 0) {
+      const recordsNote = document.createElement('div');
+      recordsNote.style.cssText = 'padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;margin-top:4px;';
+      recordsNote.innerHTML = 'ℹ️ Personal records will be tracked as you play.';
+      body.appendChild(recordsNote);
     }
 
-    // Pet Stats - QPM native tracking
-    body.appendChild(createCategoryHeader('Pet Statistics', '🥚'));
-    if (qpmStats.pets.totalHatched > 0) {
-      body.appendChild(createStatRow('Total Hatched', formatNumber(qpmStats.pets.totalHatched), '🥚'));
-      body.appendChild(createStatRow('Normal Pets', formatNumber(qpmStats.pets.hatchedByRarity.normal), '⚪'));
-      body.appendChild(createStatRow('Gold Mutation Pets', formatNumber(qpmStats.pets.hatchedByRarity.gold), '🟡'));
-      body.appendChild(createStatRow('Rainbow Mutation Pets', formatNumber(qpmStats.pets.hatchedByRarity.rainbow), '🌈'));
-    } else {
-      const petNote = document.createElement('div');
-      petNote.style.cssText = 'padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;margin-bottom:8px;';
-      petNote.innerHTML = 'ℹ️ Pet statistics will appear as you hatch pets during this session.';
-      body.appendChild(petNote);
+    // Weather Mutation Stats
+    const totalWeatherProcs =
+      weatherData.stats.wetCount +
+      weatherData.stats.chilledCount +
+      weatherData.stats.frozenCount +
+      weatherData.stats.dawnlitCount +
+      weatherData.stats.dawnboundCount +
+      weatherData.stats.amberlitCount +
+      weatherData.stats.amberboundCount;
+
+    const totalWeatherProcsPerHour =
+      weatherData.stats.wetPerHour +
+      weatherData.stats.chilledPerHour +
+      weatherData.stats.frozenPerHour +
+      weatherData.stats.dawnlitPerHour +
+      weatherData.stats.dawnboundPerHour +
+      weatherData.stats.amberlitPerHour +
+      weatherData.stats.amberboundPerHour;
+
+    const totalWeatherValue =
+      weatherData.stats.wetTotalValue +
+      weatherData.stats.chilledTotalValue +
+      weatherData.stats.frozenTotalValue +
+      weatherData.stats.dawnlitTotalValue +
+      weatherData.stats.dawnboundTotalValue +
+      weatherData.stats.amberlitTotalValue +
+      weatherData.stats.amberboundTotalValue;
+
+    if (totalWeatherProcs > 0) {
+      body.appendChild(createCategoryHeader('Weather Mutations', '🌤️'));
+      body.appendChild(createStatRow('Total Weather Procs', formatNumber(totalWeatherProcs), '🌤️'));
+      body.appendChild(createStatRow('Procs per Hour', totalWeatherProcsPerHour.toFixed(1), '⚡'));
+      body.appendChild(createStatRow('Total Value', formatNumber(totalWeatherValue) + ' coins', '💰'));
     }
 
-    // Ability Stats
-    body.appendChild(createCategoryHeader('Ability Performance', '⚡'));
-    body.appendChild(createStatRow('Total Ability Procs', formatNumber(qpmStats.abilities.totalProcs), '⚡'));
-    body.appendChild(createStatRow('Estimated Total Value', `${formatNumber(qpmStats.abilities.totalEstimatedValue)} coins`, '💰'));
-
-    // Top 5 value-generating abilities only (filter out XP, growth boosters, etc.)
+    // Ability Performance by Value
+    body.appendChild(createCategoryHeader('Top Abilities by Value', '⚡'));
     const valueAbilities = Object.entries(qpmStats.abilities.valueByAbility)
       .filter(([abilityId]) => VALUE_ABILITIES.has(abilityId))
       .sort(([, a], [, b]) => (b as number) - (a as number))
       .slice(0, 5);
 
     if (valueAbilities.length > 0) {
-      const topValueHeader = document.createElement('div');
-      topValueHeader.style.cssText = 'font-size:11px;color:#aaa;margin-top:12px;margin-bottom:4px;';
-      topValueHeader.textContent = 'Top Abilities by Value (Coin-Generating):';
-      body.appendChild(topValueHeader);
-
       valueAbilities.forEach(([abilityId, value]) => {
         const def = abilityDefinitions.find(d => d.id === abilityId);
         const name = def?.name || abilityId;
-        body.appendChild(createStatRow(name, `${formatNumber(value as number)} coins`, '▸'));
+        const procs = (qpmStats.abilities.procsByAbility as Record<string, number>)[abilityId] || 0;
+        const labelText = name + " (" + String(procs) + "x)";
+        const valueDisplay = formatNumber(value as number) + " coins";
+        body.appendChild(createStatRow(labelText, valueDisplay, "▸"));
       });
+    } else {
+      const abilityNote = document.createElement('div');
+      abilityNote.style.cssText = 'padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;margin-top:4px;';
+      abilityNote.innerHTML = 'ℹ️ Ability stats will appear as your pets proc abilities.';
+      body.appendChild(abilityNote);
+    }
+
+    // Week-over-week trends (if we have session history)
+    if (mutationData.sessions && mutationData.sessions.length > 0) {
+      body.appendChild(createCategoryHeader('Session History', '📈'));
+
+      const last7Days = mutationData.sessions.slice(-7);
+      const totalValue = last7Days.reduce((sum, s) => sum + s.value, 0);
+      const avgValue = totalValue / last7Days.length;
+
+      body.appendChild(createStatRow('Sessions Logged', mutationData.sessions.length.toString(), '📝'));
+      const avgLabel = formatNumber(Math.round(avgValue)) + " coins/session";
+      body.appendChild(createStatRow("Last 7 Days Avg", avgLabel, "📊"));
+
+      // Trend indicator
+      if (last7Days.length >= 2) {
+        const recent = last7Days.slice(-3).reduce((sum, s) => sum + s.value, 0) / Math.min(3, last7Days.length);
+        const older = last7Days.slice(0, -3).reduce((sum, s) => sum + s.value, 0) / Math.max(1, last7Days.length - 3);
+        const trend = recent > older ? '📈 Improving' : recent < older ? '📉 Declining' : '➡️ Stable';
+        body.appendChild(createStatRow('Trend', trend, '📉'));
+      }
+    }
+
+    // Garden Insights (only show if there's data)
+    if (qpmStats.garden.totalHarvested > 0) {
+      body.appendChild(createCategoryHeader('Garden Insights', '🌱'));
+      body.appendChild(createStatRow('Total Harvested', formatNumber(qpmStats.garden.totalHarvested), '🌾'));
+
+      const harvestRate = sessionDuration > 0
+        ? Math.round((qpmStats.garden.totalHarvested / sessionDuration) * (60 * 60 * 1000))
+        : 0;
+      body.appendChild(createStatRow('Harvest Rate', harvestRate + '/hr', '⚡'));
+
+      if (qpmStats.garden.totalWateringCans > 0) {
+        body.appendChild(createStatRow('Watering Cans Used', formatNumber(qpmStats.garden.totalWateringCans), '💧'));
+      }
     }
 
     // Reset stats button
     const resetButton = btn('🗑️ Reset All Stats', async () => {
-      if (!confirm('⚠️ This will reset ALL statistics including:\n\n• Pet hatching counts\n• Garden metrics\n• Ability performance\n\nThis action cannot be undone. Continue?')) {
+      if (!confirm('⚠️ This will reset ALL statistics including:\n\n• Session value tracking\n• Mutation records\n• Ability performance\n• Garden metrics\n\nThis action cannot be undone. Continue?')) {
         return;
       }
 
@@ -8642,16 +8809,16 @@ function createStatsOverviewSection(): HTMLElement {
       resetButton.textContent = '⏳ Resetting...';
 
       try {
-        // Import and call reset functions
         const { resetPetHatchingTracker } = await import('../store/petHatchingTracker');
         resetStats();
         resetPetHatchingTracker();
+        resetMutationValueTracking();
 
         resetButton.textContent = '✅ Reset Complete!';
         setTimeout(() => {
           resetButton.textContent = '🗑️ Reset All Stats';
           resetButton.disabled = false;
-          updateStats(); // Refresh display
+          updateStats();
         }, 2000);
       } catch (error) {
         log('Error resetting stats:', error);
@@ -8663,28 +8830,24 @@ function createStatsOverviewSection(): HTMLElement {
       }
     });
     resetButton.style.cssText = 'width:100%;margin-top:16px;background:#d32f2f;';
-    resetButton.title = 'Reset all QPM statistics (pet hatching, garden, abilities)';
+    resetButton.title = 'Reset all QPM statistics';
     body.appendChild(resetButton);
-
-    // Data source indicator
-    const indicator = document.createElement('div');
-    indicator.style.cssText = 'margin-top:12px;padding:8px;background:rgba(139,195,74,0.1);border-radius:4px;font-size:10px;color:#8BC34A;text-align:center;';
-    indicator.innerHTML = '✓ QPM Native Tracking (Session-Based)';
-    body.appendChild(indicator);
   };
 
   // Initial update
   updateStats();
 
-  // Subscribe to stats changes for live updates
-  const unsubscribe = subscribeToStats(() => {
-    updateStats();
-  });
+  // Subscribe to all relevant data sources for live updates
+  const unsubscribe1 = subscribeToStats(() => updateStats());
+  const unsubscribe2 = subscribeToMutationValueTracking(() => updateStats());
+  const unsubscribe3 = subscribeToWeatherMutationTracking(() => updateStats());
 
   // Cleanup on element removal
   const observer = new MutationObserver(() => {
     if (!document.contains(root)) {
-      unsubscribe();
+      unsubscribe1();
+      unsubscribe2();
+      unsubscribe3();
       observer.disconnect();
     }
   });

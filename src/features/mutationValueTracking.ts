@@ -341,10 +341,10 @@ export function initializeMutationValueTracking(): void {
   // Recalculate on init
   recalculateStats();
 
-  // Recalculate periodically (every 60 seconds)
+  // Recalculate periodically (every 10 seconds)
   setInterval(() => {
     recalculateStats();
-  }, 60000);
+  }, 10000);
 }
 
 export function getMutationValueSnapshot(): MutationValueSnapshot {

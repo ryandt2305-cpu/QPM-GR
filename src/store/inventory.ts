@@ -3,6 +3,7 @@
 
 import { getAtomByLabel, subscribeAtom, readAtomValue } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
+import { autoFavoriteIfNeeded } from '../features/autoFavorite';
 
 export interface InventoryItem {
   id: string;
@@ -28,8 +29,10 @@ const CROP_INVENTORY_ATOM_LABEL = 'myCropInventoryAtom';
 
 let cachedInventory: InventoryItem[] = [];
 let cachedFavorites: Set<string> = new Set();
+let previousInventoryIds: Set<string> = new Set();
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
+let isFirstInventoryUpdate = true;
 
 function normalizeInventoryItem(raw: any): InventoryItem | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -96,14 +99,94 @@ function normalizeInventoryData(raw: any): InventoryData | null {
   };
 }
 
+/**
+ * Determine if a produce item is rainbow/gold by checking its properties
+ */
+function determineProduceRarity(item: InventoryItem): 'normal' | 'gold' | 'rainbow' {
+  const raw = item.raw as any;
+  if (!raw) return 'normal';
+
+  // Check mutations array (like the harvest event: ['Rainbow', 'Ambercharged', 'Frozen'])
+  if (Array.isArray(raw.mutations)) {
+    const mutationStr = raw.mutations.join(' ').toLowerCase();
+    if (mutationStr.includes('rainbow')) return 'rainbow';
+    if (mutationStr.includes('gold') || mutationStr.includes('golden')) return 'gold';
+  }
+
+  // Check rarity property
+  if (raw.rarity) {
+    const rarityLower = String(raw.rarity).toLowerCase();
+    if (rarityLower.includes('rainbow')) return 'rainbow';
+    if (rarityLower.includes('gold')) return 'gold';
+  }
+
+  // Check boolean flags
+  if (raw.isRainbow === true) return 'rainbow';
+  if (raw.isGold === true || raw.isGolden === true) return 'gold';
+
+  // Check targetScale
+  if (raw.targetScale !== undefined && typeof raw.targetScale === 'number') {
+    if (raw.targetScale >= 1.25) return 'rainbow'; // 1.25x or higher is rainbow
+    if (raw.targetScale >= 1.1) return 'gold'; // 1.1x to 1.24x is gold
+  }
+
+  // Check cropSlot (for harvested items)
+  if (raw.cropSlot && typeof raw.cropSlot === 'object') {
+    const cropSlot = raw.cropSlot;
+
+    // Check targetScale in cropSlot
+    if (cropSlot.targetScale !== undefined && typeof cropSlot.targetScale === 'number') {
+      if (cropSlot.targetScale >= 1.25) return 'rainbow';
+      if (cropSlot.targetScale >= 1.1) return 'gold';
+    }
+
+    // Check mutations in cropSlot
+    if (Array.isArray(cropSlot.mutations)) {
+      const mutationStr = cropSlot.mutations.join(' ').toLowerCase();
+      if (mutationStr.includes('rainbow')) return 'rainbow';
+      if (mutationStr.includes('gold') || mutationStr.includes('golden')) return 'gold';
+    }
+  }
+
+  return 'normal';
+}
+
 function updateCache(raw: any): void {
   const data = normalizeInventoryData(raw);
   if (data) {
-    cachedInventory = data.items;
+    const newItems = data.items;
+    const currentIds = new Set(newItems.map(item => item.id));
+
+    // Detect newly added items (skip on first update)
+    if (!isFirstInventoryUpdate) {
+      for (const item of newItems) {
+        if (!previousInventoryIds.has(item.id)) {
+          // New item detected! Check if it's produce and if it's rainbow/gold
+          const itemType = (item.itemType?.toLowerCase() || '').toLowerCase();
+
+          // Check if it's a crop/produce item
+          if (itemType.includes('crop') || itemType.includes('produce') ||
+              item.species || (item.raw as any)?.species) {
+            const rarity = determineProduceRarity(item);
+
+            if (rarity !== 'normal') {
+              log(`✨ Detected new ${rarity} produce in inventory: ${item.displayName || item.name || item.species} (${item.id})`);
+              autoFavoriteIfNeeded(item.id, 'produce', rarity);
+            }
+          }
+        }
+      }
+    } else {
+      isFirstInventoryUpdate = false;
+    }
+
+    cachedInventory = newItems;
     cachedFavorites = new Set(data.favoritedItemIds ?? []);
+    previousInventoryIds = currentIds;
   } else {
     cachedInventory = [];
     cachedFavorites = new Set();
+    previousInventoryIds = new Set();
   }
 }
 
@@ -148,6 +231,8 @@ export function stopInventoryStore(): void {
   }
   cachedInventory = [];
   cachedFavorites = new Set();
+  previousInventoryIds = new Set();
+  isFirstInventoryUpdate = true;
 }
 
 /**

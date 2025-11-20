@@ -127,17 +127,32 @@ function findAbilityDefinition(abilityId: string): AbilityDefinition | null {
   ) ?? null;
 }
 
-function findPetStrength(abilityId: string): number {
+function findPetsWithAbility(abilityId: string): Array<{strength: number, count: number}> {
   const pets = getActivePetsDebug();
-  const petWithAbility = pets.find(pet =>
+  const petsWithAbility = pets.filter(pet =>
     pet.abilities.some(ability => ability === abilityId)
   );
-  return petWithAbility?.strength ?? STRENGTH_BASELINE;
+
+  if (petsWithAbility.length === 0) {
+    return [{ strength: STRENGTH_BASELINE, count: 1 }]; // Fallback
+  }
+
+  // Group by strength to handle pets with same strength
+  const strengthGroups = new Map<number, number>();
+  for (const pet of petsWithAbility) {
+    const str = pet.strength ?? STRENGTH_BASELINE;
+    strengthGroups.set(str, (strengthGroups.get(str) || 0) + 1);
+  }
+
+  return Array.from(strengthGroups.entries()).map(([strength, count]) => ({
+    strength,
+    count,
+  }));
 }
 
 function calculateExpectedProcsPerHour(
   abilityDef: AbilityDefinition,
-  strength: number
+  abilityId: string
 ): number {
   if (!abilityDef.baseProbability || !abilityDef.rollPeriodMinutes) {
     return 0;
@@ -147,9 +162,18 @@ function calculateExpectedProcsPerHour(
     return 0; // Can't calculate expected rate for event-triggered abilities
   }
 
-  const rollsPerHour = 60 / abilityDef.rollPeriodMinutes;
-  const chancePerRoll = computeChancePerRoll(abilityDef.baseProbability, strength);
-  return rollsPerHour * chancePerRoll;
+  // Get all active pets with this ability
+  const petsWithAbility = findPetsWithAbility(abilityId);
+
+  let totalExpectedRate = 0;
+  for (const { strength, count } of petsWithAbility) {
+    const rollsPerHour = 60 / abilityDef.rollPeriodMinutes;
+    const chancePerRoll = computeChancePerRoll(abilityDef.baseProbability, strength);
+    const ratePerPet = rollsPerHour * chancePerRoll;
+    totalExpectedRate += ratePerPet * count;
+  }
+
+  return totalExpectedRate;
 }
 
 function detectStreaks(
@@ -278,9 +302,8 @@ function analyzeAbilityHistory(
   const procsPerDay = totalProcs / Math.max(0.001, daysElapsed);
 
   // Expected rate
-  const strength = findPetStrength(history.abilityId);
   const expectedProcsPerHour = abilityDef
-    ? calculateExpectedProcsPerHour(abilityDef, strength)
+    ? calculateExpectedProcsPerHour(abilityDef, history.abilityId)
     : 0;
 
   const variance = expectedProcsPerHour > 0
@@ -454,10 +477,10 @@ export function initializeProcRateAnalytics(): void {
   // Recalculate on init
   recalculateSnapshot();
 
-  // Recalculate periodically (every 60 seconds)
+  // Recalculate periodically (every 10 seconds)
   setInterval(() => {
     recalculateSnapshot();
-  }, 60000);
+  }, 10000);
 }
 
 export function getProcRateSnapshot(): ProcRateSnapshot {

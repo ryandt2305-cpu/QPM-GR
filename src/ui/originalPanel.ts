@@ -8171,15 +8171,33 @@ function showGoalCreationModal(onComplete: () => void): void {
   specificInput.addEventListener('keypress', stopGameHotbarIntercept);
   specificInput.addEventListener('keyup', stopGameHotbarIntercept);
 
+  // Create ability dropdown for get_procs goal type
+  const abilitySelectHTML = (() => {
+    const continuousAbilities = abilityDefinitions.filter(d => d.trigger === 'continuous' && d.rollPeriodMinutes === 1);
+    return continuousAbilities.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+  })();
+
   form.querySelector('#goal-type')!.addEventListener('change', (e) => {
     const type = (e.target as HTMLSelectElement).value;
     const specificDiv = form.querySelector('#goal-specific') as HTMLElement;
     const specificLabel = form.querySelector('#goal-specific-label') as HTMLElement;
+    const inputContainer = form.querySelector('#goal-specific-value')!.parentElement!;
 
     if (type === 'get_procs') {
       specificDiv.style.display = 'block';
-      specificLabel.textContent = 'Ability Name:';
-      specificInput.placeholder = 'e.g., Midas Touch';
+      specificLabel.textContent = 'Ability:';
+
+      // Replace text input with select dropdown
+      const select = document.createElement('select');
+      select.id = 'goal-specific-value';
+      select.style.cssText = 'width:100%;padding:6px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:4px;font-size:11px;';
+      select.innerHTML = `<option value="">Select an ability...</option>${abilitySelectHTML}`;
+      select.addEventListener('keydown', stopGameHotbarIntercept);
+
+      const oldInput = inputContainer.querySelector('#goal-specific-value');
+      if (oldInput) {
+        oldInput.replaceWith(select);
+      }
     } else {
       specificDiv.style.display = 'none';
     }
@@ -8188,7 +8206,8 @@ function showGoalCreationModal(onComplete: () => void): void {
   form.querySelector('#create-goal-btn')!.addEventListener('click', () => {
     const type = (form.querySelector('#goal-type') as HTMLSelectElement).value;
     const target = parseInt((form.querySelector('#goal-target') as HTMLInputElement).value);
-    const specificValue = (form.querySelector('#goal-specific-value') as HTMLInputElement).value;
+    const specificElement = form.querySelector('#goal-specific-value') as HTMLInputElement | HTMLSelectElement;
+    const specificValue = specificElement?.value || '';
 
     if (!target || target <= 0) {
       alert('Please enter a valid target amount');

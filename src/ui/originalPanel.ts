@@ -6963,19 +6963,46 @@ function renderTrackersWindow(root: HTMLElement): void {
     });
   }, 1000);
 
+  // Subscribe to ability log updates for live data refresh (throttled to every 5 seconds)
+  let lastUpdate = Date.now();
+  const UPDATE_THROTTLE_MS = 5000;
+  let unsubscribeAbilityLogs: (() => void) | null = null;
+  let unsubscribePets: (() => void) | null = null;
+
+  Promise.all([
+    import('../store/abilityLogs'),
+    import('../store/pets')
+  ]).then(([{ onAbilityHistoryUpdate }, { onActivePetInfos }]) => {
+    unsubscribeAbilityLogs = onAbilityHistoryUpdate(() => {
+      const now = Date.now();
+      if (now - lastUpdate >= UPDATE_THROTTLE_MS) {
+        lastUpdate = now;
+        updateTrackerWindow(trackerState);
+      }
+    });
+
+    unsubscribePets = onActivePetInfos(() => {
+      updateTrackerWindow(trackerState);
+    });
+  }).catch(err => {
+    log('Failed to set up tracker subscriptions:', err);
+  });
+
   // Cleanup on window close
   const observer = new MutationObserver(() => {
     if (!document.body.contains(root)) {
       if (trackerState.updateInterval !== null) {
         clearInterval(trackerState.updateInterval);
       }
+      if (unsubscribeAbilityLogs) unsubscribeAbilityLogs();
+      if (unsubscribePets) unsubscribePets();
       observer.disconnect();
-      log('Tracker window cleanup: interval cleared');
+      log('Tracker window cleanup: interval cleared, subscriptions removed');
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  log('Trackers window rendered with live updates');
+  log('Trackers window rendered with live countdown + data updates (throttled every 5s)');
 }
 
 /**

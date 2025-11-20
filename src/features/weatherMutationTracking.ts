@@ -558,7 +558,17 @@ export function resetWeatherMutationTracking(): void {
     updatedAt: Date.now(),
   };
 
+  // CRITICAL FIX: Re-populate trackedSlots with current garden state
+  // This prevents existing crops from being counted as "new" after reset
   trackedSlots = new Set();
+  const currentGarden = getGardenSnapshot();
+  const currentSlots = extractCropSlots(currentGarden);
+
+  // Mark all current slots as "already seen" without counting them
+  for (const slot of currentSlots) {
+    const slotId = `${slot.tileId}-${slot.slotIndex}`;
+    trackedSlots.add(slotId);
+  }
 
   // Immediately save (don't wait for debounce)
   try {
@@ -568,4 +578,5 @@ export function resetWeatherMutationTracking(): void {
   }
 
   notifyListeners();
+  console.log(`[QPM] 🔄 Weather mutation tracking reset - ${trackedSlots.size} existing slots marked as seen`);
 }

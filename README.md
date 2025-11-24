@@ -34,7 +34,7 @@ It plugs into your existing Magic Garden tooling and surfaces detailed pet and g
 ### 🌈 Ability Tracker
 - Logs every time a pet ability triggers.
 - Shows total procs, timing between procs, and which pets contribute the most.
-- Great for comparing ability effectiveness (e.g., Rainbow, Yield, Growth, Fishing, Weather).
+- Great for comparing ability effectiveness 
 - Perfect for finding your most profitable pet setups
 
 

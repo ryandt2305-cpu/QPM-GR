@@ -571,7 +571,18 @@ export function predictItemNextAppearance(itemName: string): number | null {
   const expectedRestocksUntilAppearance = 1 / probabilityDecimal;
 
   // Predict next appearance based on last seen + expected wait time
-  const nextAppearance = itemStats.lastSeen + (intervalMs * expectedRestocksUntilAppearance);
+  let nextAppearance = itemStats.lastSeen + (intervalMs * expectedRestocksUntilAppearance);
+
+  // If prediction is in the past, project forward to next future occurrence
+  const now = Date.now();
+  if (nextAppearance < now) {
+    // Calculate how many intervals have passed since the prediction
+    const timeSincePrediction = now - nextAppearance;
+    const intervalsPassed = Math.ceil(timeSincePrediction / (intervalMs * expectedRestocksUntilAppearance));
+
+    // Add enough intervals to get to the future
+    nextAppearance += (intervalMs * expectedRestocksUntilAppearance * intervalsPassed);
+  }
 
   return nextAppearance;
 }

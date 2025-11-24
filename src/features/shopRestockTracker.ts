@@ -3,9 +3,12 @@
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import { notify } from '../core/notifications';
 
 const STORAGE_KEY_RESTOCKS = 'qpm.shopRestocks.v1';
 const STORAGE_KEY_CONFIG = 'qpm.shopRestockConfig.v1';
+const STORAGE_KEY_MIGRATION = 'qpm.shopRestocks.migration';
+const CURRENT_MIGRATION_VERSION = 1;
 
 /**
  * Restock event data structure
@@ -122,6 +125,67 @@ let updateCallbacks: Array<() => void> = [];
 let isInitialized = false;
 
 /**
+ * Migrate old restock data to fix timezone issues
+ * Migration v1: Convert timestamps that were interpreted as local time to AEST
+ */
+function migrateRestockData(): number {
+  const migrationVersion = storage.get<number>(STORAGE_KEY_MIGRATION, 0);
+
+  // Already migrated to current version
+  if (migrationVersion >= CURRENT_MIGRATION_VERSION) {
+    return 0;
+  }
+
+  // Skip migration if no data exists
+  if (restockEvents.length === 0) {
+    storage.set(STORAGE_KEY_MIGRATION, CURRENT_MIGRATION_VERSION);
+    return 0;
+  }
+
+  log('🔄 Migrating restock data to fix timezone interpretation...');
+
+  /**
+   * Migration v1: Fix AEST timezone interpretation
+   *
+   * OLD BEHAVIOR: Timestamps were interpreted as local time
+   *   parseTimestamp("22/11/2025 8:00 pm") → new Date(2025, 10, 22, 20, 0) → local 8pm as Unix timestamp
+   *
+   * NEW BEHAVIOR: Timestamps should be interpreted as AEST (UTC+10)
+   *   parseTimestamp("22/11/2025 8:00 pm") → Date.UTC(...) - AEST_OFFSET → AEST 8pm as Unix timestamp
+   *
+   * CORRECTION: Add the difference between AEST offset and local offset
+   */
+
+  // Get local timezone offset (in milliseconds)
+  const localOffsetMinutes = new Date().getTimezoneOffset(); // Minutes BEHIND UTC (negative for ahead)
+  const localOffsetMs = -localOffsetMinutes * 60 * 1000; // Convert to ms AHEAD of UTC
+
+  // AEST is UTC+10
+  const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
+
+  // Calculate correction: difference between how data should be stored vs how it was stored
+  const correctionMs = AEST_OFFSET_MS - localOffsetMs;
+
+  let correctedCount = 0;
+
+  for (const event of restockEvents) {
+    event.timestamp += correctionMs;
+    correctedCount++;
+  }
+
+  // Save corrected data
+  if (correctedCount > 0) {
+    storage.set(STORAGE_KEY_RESTOCKS, restockEvents);
+    log(`✅ Migrated ${correctedCount} restock events (adjusted by ${(correctionMs / (1000 * 60 * 60)).toFixed(1)} hours)`);
+  }
+
+  // Mark as migrated
+  storage.set(STORAGE_KEY_MIGRATION, CURRENT_MIGRATION_VERSION);
+
+  return correctedCount;
+}
+
+/**
  * Initialize restock tracker from storage
  * Only loads once - subsequent calls are ignored to prevent data loss
  */
@@ -141,13 +205,29 @@ export function initializeRestockTracker(): void {
     });
     config = savedConfig;
 
+    // Migrate old data if needed
+    const migratedCount = migrateRestockData();
+
     // Load default restock data on first run (if no data exists)
     if (restockEvents.length === 0) {
       loadDefaultRestockData();
     }
 
     isInitialized = true;
-    log(`📊 Loaded ${restockEvents.length} restock events from storage`);
+
+    if (migratedCount > 0) {
+      log(`📊 Loaded ${restockEvents.length} restock events from storage (${migratedCount} migrated to correct timezone)`);
+      // Notify user about successful migration
+      setTimeout(() => {
+        notify({
+          feature: 'shop-restock-tracker',
+          level: 'success',
+          message: `✅ Updated ${migratedCount} restock times to correct timezone`
+        });
+      }, 2000); // Delay to ensure UI is ready
+    } else {
+      log(`📊 Loaded ${restockEvents.length} restock events from storage`);
+    }
   } catch (error) {
     log('⚠️ Failed to load restock data', error);
   }

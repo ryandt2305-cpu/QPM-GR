@@ -1,0 +1,1 @@
+{"version":3,"file":"weatherEvents.d.ts","sourceRoot":"","sources":["../../src/data/weatherEvents.ts"],"names":[],"mappings":"AAGA,MAAM,WAAW,YAAY;IAC3B,IAAI,EAAE,MAAM,CAAC;IACb,UAAU,EAAE,MAAM,CAAC;IACnB,aAAa,EAAE,MAAM,EAAE,CAAC;IACxB,SAAS,EAAE,MAAM,CAAC;IAClB,QAAQ,EAAE,MAAM,CAAC;CAClB;AAED,eAAO,MAAM,cAAc,EAAE,MAAM,CAAC,MAAM,EAAE,YAAY,CAoCvD,CAAC;AAGF,eAAO,MAAM,yBAAyB,MAAO,CAAC"}

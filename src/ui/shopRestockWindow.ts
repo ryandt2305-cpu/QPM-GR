@@ -709,12 +709,15 @@ function exportRestockDataAsHtml(): void {
 <body>
   <h1>Shop Restock Data Export</h1>
   <p>Total Events: ${events.length} | Exported: ${new Date().toLocaleString()}</p>
+  <p style="font-size: 12px; color: #72767d;">Note: All times are shown in your local timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone})</p>
 
   <div class="chatlog__message-group">
     <div class="chatlog__author">Magic Shopkeeper</div>
 ${sortedEvents.map(event => {
   const date = new Date(event.timestamp);
-  const dateStr = event.dateString || date.toLocaleString('en-GB', {
+
+  // Use user's locale for date formatting (instead of hardcoded en-GB)
+  const dateStr = date.toLocaleString(undefined, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -723,7 +726,8 @@ ${sortedEvents.map(event => {
     hour12: true
   }).replace(',', '');
 
-  const timeStr = date.toLocaleTimeString('en-US', {
+  // Use user's locale for time formatting (instead of hardcoded en-US)
+  const timeStr = date.toLocaleTimeString(undefined, {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true

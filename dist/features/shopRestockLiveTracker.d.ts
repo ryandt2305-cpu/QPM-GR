@@ -1,7 +1,7 @@
 /**
  * Start live shop tracking using shop stock system
  */
-export declare function startLiveShopTracking(): void;
+export declare function startLiveShopTracking(): Promise<void>;
 /**
  * Stop live shop tracking
  */

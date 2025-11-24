@@ -4095,8 +4095,10 @@ function createStatsHeader(): HTMLElement {
   // Initialize the shop restock tracker
   initializeRestockTracker();
 
-  // Start live tracking
-  startLiveShopTracking();
+  // Start live tracking (async - shop stock store initialization)
+  startLiveShopTracking().catch(error => {
+    log('⚠️ Failed to start live shop tracking', error);
+  });
 
   // Subscribe to restock updates to refresh cards
   onRestockUpdate(() => {

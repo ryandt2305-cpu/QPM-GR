@@ -163,8 +163,10 @@ function migrateRestockData(): number {
   // AEST is UTC+10
   const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
 
-  // Calculate correction: difference between how data should be stored vs how it was stored
-  const correctionMs = AEST_OFFSET_MS - localOffsetMs;
+  // Calculate correction: old data was stored as if times were in local TZ, but should be AEST
+  // Example: PST user (UTC-8) saw "8PM" and stored as "PST 8PM", but it should be "AEST 8PM" = "PST 2AM"
+  // Correction: "PST 2AM" - "PST 8PM" = -18 hours (subtract)
+  const correctionMs = localOffsetMs - AEST_OFFSET_MS;
 
   let correctedCount = 0;
 

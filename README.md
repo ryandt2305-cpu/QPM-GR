@@ -16,32 +16,17 @@ It plugs into your existing Magic Garden tooling and surfaces detailed pet and g
 - Estimate procs-per-minute / procs-per-hour based on game events, not just tooltip text.
 - Helps you compare pets in “real conditions” instead of guessing from the wiki blurbs.
 
-### 🌈 Ability Proc & Buff Tracking
+### 🌈 Ability Proc & XP Tracking
 
-- Logs when important pet abilities trigger (e.g. bonus crop / rainbow / buff effects).
-- Aggregates procs over time so you can see:
+- Collects data on procs over time so you can see:
   - How often an ability actually fires.
   - Rough “expected” procs per hour for each pet.
 - Useful for:
   - Deciding which pets to keep on the field.
-  - Understanding how ability wording maps to actual game behaviour.
+  - Figuring out which pets make the most money
 
-### 🌱 Garden / Economy Insights
 
-- Designed to complement existing Magic Garden overlays / mods:
-  - Gives you context for how pet behaviour impacts overall profit.
-  - Pairs nicely with seed/shop tools for planning what to plant and when.
-- Focus is on **information density** rather than automation:
-  - You play; QPM-GR tells you what’s going on behind the scenes.
 
-### 💬 (Optional) Discord / External Output
-
-> This repo contains code intended to cooperate with Discord tools / parsers, so you can pipe data into Discord bots or logs.
-
-- Normalises data so external tools (e.g. a Discord bot) can:
-  - Read structured pet/garden information.
-  - Post summaries, session reports, or alerts to a Discord channel.
-- The exact integration depends on your own bot / webhook setup.
 
 ---
 

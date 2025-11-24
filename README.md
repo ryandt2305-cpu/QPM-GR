@@ -9,25 +9,53 @@ It plugs into your existing Magic Garden tooling and surfaces detailed pet and g
 
 ## Key Features
 
+
 ### 🐾 Pet Overview & Analytics
+- View all pets with their rarity, level, and ability.
+- See real ability uptime: procs per minute/hour based on actual behaviour.
+- Compare pets in real gameplay conditions
 
-- See all active pets, their levels, rarities, and equipped abilities at a glance.
-- Track ability uptime and the *real* value of each pet over a session.
-- Estimate procs-per-minute / procs-per-hour based on game events, not just tooltip text.
-- Helps you compare pets in “real conditions” instead of guessing from the wiki blurbs.
+### ⭐ Auto Favourite (Smart Pet/Produce Favouriting)
+- Automatically favourites pets or produce based on user configured variables.
 
-### 🌈 Ability Proc & XP Tracking
-
-- Collects data on procs over time so you can see:
-  - How often an ability actually fires.
-  - Rough “expected” procs per hour for each pet.
+### 🧺 Bulk Inventory Crop Favouriting (Crop-Type Locking)
+- Instantly favourite large groups of crops in your inventory.
 - Useful for:
-  - Deciding which pets to keep on the field.
-  - Figuring out which pets make the most money
+  - Cleaning up messy inventories
+  - Locking all crops of the same type (e.g., all Carrots or all Strawberries)
+  - Preventing accidental selling or discarding
+- Saves a huge amount of manual clicking.
+
+### 📘 Journal Checker
+- Identifies seeds/crops you still need for journal completion.
+- Shows missing entries at a glance.
+- Helps you plan planting cycles to finish your journal efficiently.
+
+### 🌈 Ability Tracker
+- Logs every time a pet ability triggers.
+- Shows total procs, timing between procs, and which pets contribute the most.
+- Great for comparing ability effectiveness (e.g., Rainbow, Yield, Growth, Fishing, Weather).
+- Perfect for finding your most profitable pet setups
 
 
+### 🛒 Shop Restock Tracker
+- Tracks all Magic Garden shop restocks.
+- Based off the data, it can predict when the next restock for every item will be
+- Find out when rare seeds and eggs might drop
+
+### 🐢 Turtle Timer
+- A small utility timer specifically for Turtle pets, calculating plant growth, egg growth, and food support
 
 
+### 🧠 XP Tracker
+- Tracks your XP gained during the session.
+Displays:
+  XP per minute 
+  XP per hour
+  Total XP gained
+  Session runtime
+
+Helps compare pets, garden layouts, and farming setups for leveling efficiency.
 ---
 
 ## Repository Layout

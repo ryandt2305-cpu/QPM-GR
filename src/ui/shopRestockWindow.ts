@@ -1,0 +1,818 @@
+// src/ui/shopRestockWindow.ts
+// Shop Restock Tracker UI
+
+import {
+  initializeRestockTracker,
+  addRestockEvents,
+  getAllRestockEvents,
+  calculateItemStats,
+  getSummaryStats,
+  clearAllRestocks,
+  onRestockUpdate,
+  predictNextRestock,
+  getTopLikelyItems,
+  predictItemNextAppearance,
+} from '../features/shopRestockTracker';
+import {
+  startLiveShopTracking,
+  stopLiveShopTracking,
+  isLiveTrackingActive,
+} from '../features/shopRestockLiveTracker';
+import { parseDiscordHtmlFile } from '../features/shopRestockParser';
+import { log } from '../utils/logger';
+
+export interface ShopRestockWindowState {
+  root: HTMLElement;
+  contentContainer: HTMLElement;
+  countdownInterval: number | null;
+}
+
+/**
+ * Format number with commas
+ */
+function formatNumber(num: number): string {
+  return num.toLocaleString();
+}
+
+/**
+ * Format date
+ */
+function formatDate(timestamp: number): string {
+  const date = new Date(timestamp);
+  return date.toLocaleString();
+}
+
+/**
+ * Create Shop Restock Tracker window
+ */
+export function createShopRestockWindow(): ShopRestockWindowState {
+  const root = document.createElement('div');
+  root.style.cssText = `
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    width: 900px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--qpm-background, rgba(0, 0, 0, 0.92));
+    border: 2px solid var(--qpm-border, #555);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    z-index: 10003;
+    font-family: Arial, sans-serif;
+    display: none;
+  `;
+
+  // Title bar
+  const titleBar = document.createElement('div');
+  titleBar.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--qpm-surface-1, #1a1a1a);
+    border-bottom: 2px solid var(--qpm-border, #555);
+    cursor: move;
+  `;
+
+  const title = document.createElement('h3');
+  title.textContent = '🏪 Shop Restock Tracker';
+  title.style.cssText = `
+    margin: 0;
+    color: var(--qpm-text, #fff);
+    font-size: 16px;
+    font-weight: 600;
+  `;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = `
+    background: transparent;
+    border: none;
+    color: var(--qpm-text, #fff);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 8px;
+    line-height: 1;
+  `;
+  closeBtn.onclick = () => {
+    root.style.display = 'none';
+  };
+
+  titleBar.appendChild(title);
+  titleBar.appendChild(closeBtn);
+  root.appendChild(titleBar);
+
+  // Content container
+  const contentContainer = document.createElement('div');
+  contentContainer.style.cssText = `
+    padding: 16px;
+    color: var(--qpm-text, #fff);
+  `;
+  root.appendChild(contentContainer);
+
+  // Make draggable
+  makeDraggable(root, titleBar);
+
+  // Add to DOM
+  document.body.appendChild(root);
+
+  const state: ShopRestockWindowState = {
+    root,
+    contentContainer,
+    countdownInterval: null,
+  };
+
+  // Initialize
+  initializeRestockTracker();
+
+  // Start live tracking automatically
+  startLiveShopTracking();
+
+  // Initial render
+  renderContent(state);
+
+  // Subscribe to updates
+  onRestockUpdate(() => {
+    renderContent(state);
+  });
+
+  return state;
+}
+
+/**
+ * Render window content
+ */
+function renderContent(state: ShopRestockWindowState): void {
+  const events = getAllRestockEvents();
+  const summary = getSummaryStats();
+
+  // Clear countdown interval if exists
+  if (state.countdownInterval !== null) {
+    clearInterval(state.countdownInterval);
+    state.countdownInterval = null;
+  }
+
+  state.contentContainer.innerHTML = '';
+
+  // Live tracking section (always show)
+  const liveTrackingSection = createLiveTrackingSection();
+  state.contentContainer.appendChild(liveTrackingSection);
+
+  // Import section
+  const importSection = createImportSection(state);
+  state.contentContainer.appendChild(importSection);
+
+  // Summary section
+  if (events.length > 0) {
+    // Prediction section
+    const predictionSection = createPredictionSection(state);
+    state.contentContainer.appendChild(predictionSection);
+
+    const summarySection = createSummarySection(summary);
+    state.contentContainer.appendChild(summarySection);
+
+    // Item statistics
+    const statsSection = createItemStatsSection();
+    state.contentContainer.appendChild(statsSection);
+  } else {
+    const emptyState = document.createElement('div');
+    emptyState.style.cssText = `
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--qpm-text-muted, #aaa);
+      font-style: italic;
+    `;
+    emptyState.textContent = 'No restock data imported yet. Upload a Discord HTML export to get started!';
+    state.contentContainer.appendChild(emptyState);
+  }
+}
+
+/**
+ * Create live tracking section
+ */
+function createLiveTrackingSection(): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    margin-bottom: 20px;
+    padding: 16px;
+    background: rgba(76, 175, 80, 0.1);
+    border-radius: 8px;
+    border: 2px solid rgba(76, 175, 80, 0.3);
+  `;
+
+  const heading = document.createElement('h4');
+  heading.textContent = '📡 Live Shop Monitoring';
+  heading.style.cssText = `
+    margin: 0 0 12px 0;
+    color: var(--qpm-accent, #4CAF50);
+    font-size: 14px;
+  `;
+  section.appendChild(heading);
+
+  const status = document.createElement('div');
+  const isTracking = isLiveTrackingActive();
+  status.style.cssText = `
+    margin-bottom: 12px;
+    font-size: 12px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+  `;
+  status.innerHTML = isTracking
+    ? `<span style="color: #4CAF50;">● Active</span> - Monitoring shop for restocks in real-time`
+    : `<span style="color: #aaa;">○ Inactive</span> - Live tracking is not running`;
+  section.appendChild(status);
+
+  const description = document.createElement('p');
+  description.style.cssText = `
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: var(--qpm-text-muted, #aaa);
+    line-height: 1.5;
+  `;
+  description.textContent = 'Automatically detects and records shop restocks while you play.';
+  section.appendChild(description);
+
+  return section;
+}
+
+/**
+ * Create prediction section
+ */
+function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    margin-bottom: 20px;
+    padding: 16px;
+    background: rgba(66, 165, 245, 0.1);
+    border-radius: 8px;
+    border: 2px solid rgba(66, 165, 245, 0.3);
+  `;
+
+  const heading = document.createElement('h4');
+  heading.textContent = '🔮 Next Rare Restock Prediction';
+  heading.style.cssText = `
+    margin: 0 0 12px 0;
+    color: #42A5F5;
+    font-size: 14px;
+  `;
+  section.appendChild(heading);
+
+  // Specific rare items to track
+  const rareItems = [
+    { name: 'Sunflower', color: '#FFD700' },
+    { name: 'Mythical Eggs', color: '#9C27B0' },
+    { name: 'Starweaver', color: '#FFD700' },
+    { name: 'Moonbinder', color: '#CE93D8' },
+    { name: 'Dawnbinder', color: '#FF9800' },
+  ];
+
+  const itemsList = document.createElement('div');
+  itemsList.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  `;
+
+  for (const rareItem of rareItems) {
+    const nextAppearance = predictItemNextAppearance(rareItem.name);
+
+    const itemRow = document.createElement('div');
+    itemRow.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 6px;
+      border-left: 3px solid ${rareItem.color};
+    `;
+
+    const itemName = document.createElement('span');
+    itemName.textContent = rareItem.name;
+    itemName.style.cssText = `
+      color: ${rareItem.color};
+      font-weight: 600;
+      font-size: 12px;
+    `;
+
+    const predictionText = document.createElement('span');
+    predictionText.style.cssText = `
+      color: var(--qpm-text-muted, #aaa);
+      font-size: 11px;
+    `;
+
+    if (nextAppearance) {
+      const nextDate = new Date(nextAppearance);
+      const now = Date.now();
+      const diffMs = nextAppearance - now;
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffHours / 24);
+
+      let timeText = '';
+      if (diffDays > 0) {
+        timeText = `~${diffDays}d ${diffHours % 24}h`;
+      } else if (diffHours > 0) {
+        timeText = `~${diffHours}h`;
+      } else {
+        timeText = 'Soon';
+      }
+
+      const timeString = nextDate.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      const dateString = nextDate.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric'
+      });
+
+      predictionText.innerHTML = `
+        <span style="color: #42A5F5; font-weight: 600;">${timeText}</span>
+        <span style="margin-left: 8px; font-size: 10px;">(${timeString}, ${dateString})</span>
+      `;
+    } else {
+      predictionText.textContent = 'Insufficient data';
+    }
+
+    itemRow.appendChild(itemName);
+    itemRow.appendChild(predictionText);
+    itemsList.appendChild(itemRow);
+  }
+
+  section.appendChild(itemsList);
+
+  return section;
+}
+
+/**
+ * Create import section
+ */
+function createImportSection(state: ShopRestockWindowState): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    margin-bottom: 20px;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border: 2px dashed rgba(255, 255, 255, 0.2);
+  `;
+
+  const heading = document.createElement('h4');
+  heading.textContent = '📥 Import Discord Data';
+  heading.style.cssText = `
+    margin: 0 0 12px 0;
+    color: var(--qpm-accent, #4CAF50);
+    font-size: 14px;
+  `;
+  section.appendChild(heading);
+
+  const description = document.createElement('p');
+  description.style.cssText = `
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: var(--qpm-text-muted, #aaa);
+    line-height: 1.5;
+  `;
+  description.textContent = 'Upload a Discord HTML export from the restock channel to import historical data.';
+  section.appendChild(description);
+
+  // File input
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.html';
+  fileInput.style.display = 'none';
+
+  const uploadBtn = document.createElement('button');
+  uploadBtn.textContent = '📁 Choose HTML File';
+  uploadBtn.style.cssText = `
+    padding: 8px 16px;
+    background: var(--qpm-accent, #4CAF50);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: 8px;
+  `;
+  uploadBtn.onclick = () => fileInput.click();
+
+  fileInput.onchange = async (e) => {
+    const target = e.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (!file) return;
+
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = '⏳ Parsing...';
+
+    try {
+      const events = await parseDiscordHtmlFile(file);
+      addRestockEvents(events);
+
+      uploadBtn.textContent = `✅ Imported ${events.length} restocks`;
+      setTimeout(() => {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '📁 Choose HTML File';
+      }, 3000);
+    } catch (error) {
+      log('❌ Failed to parse Discord HTML:', error);
+      uploadBtn.textContent = '❌ Import failed';
+      setTimeout(() => {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '📁 Choose HTML File';
+      }, 3000);
+    }
+  };
+
+  section.appendChild(fileInput);
+  section.appendChild(uploadBtn);
+
+  // Export and Clear buttons
+  const events = getAllRestockEvents();
+  if (events.length > 0) {
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'display: flex; gap: 8px; margin-top: 12px;';
+
+    // Export HTML button
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = '📤 Export HTML';
+    exportBtn.style.cssText = `
+      padding: 8px 16px;
+      background: rgba(66, 165, 245, 0.2);
+      color: #42A5F5;
+      border: 1px solid #42A5F5;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    `;
+    exportBtn.onclick = () => {
+      exportRestockDataAsHtml();
+    };
+    buttonContainer.appendChild(exportBtn);
+
+    // Clear data button
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '🗑️ Clear All Data';
+    clearBtn.style.cssText = `
+      padding: 8px 16px;
+      background: rgba(244, 67, 54, 0.2);
+      color: #f44336;
+      border: 1px solid #f44336;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    `;
+    clearBtn.onclick = () => {
+      if (confirm('Are you sure you want to clear all restock data? This cannot be undone.')) {
+        clearAllRestocks();
+      }
+    };
+    buttonContainer.appendChild(clearBtn);
+
+    section.appendChild(buttonContainer);
+  }
+
+  return section;
+}
+
+/**
+ * Create summary section
+ */
+function createSummarySection(summary: ReturnType<typeof getSummaryStats>): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    margin-bottom: 20px;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+  `;
+
+  const heading = document.createElement('h4');
+  heading.textContent = '📊 Summary Statistics';
+  heading.style.cssText = `
+    margin: 0 0 12px 0;
+    color: var(--qpm-accent, #4CAF50);
+    font-size: 14px;
+  `;
+  section.appendChild(heading);
+
+  const grid = document.createElement('div');
+  grid.style.cssText = `
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  `;
+
+  const stats = [
+    { label: 'Total Restocks', value: formatNumber(summary.totalRestocks), icon: '🔄' },
+    { label: 'Unique Items', value: formatNumber(summary.uniqueItems), icon: '📦' },
+    { label: 'Avg Interval', value: `${summary.avgRestockInterval.toFixed(1)} min`, icon: '⏱️' },
+    { label: 'Total Items', value: formatNumber(summary.totalItems), icon: '📊' },
+  ];
+
+  if (summary.dateRange) {
+    stats.push(
+      { label: 'First Restock', value: formatDate(summary.dateRange.start), icon: '📅' },
+      { label: 'Last Restock', value: formatDate(summary.dateRange.end), icon: '📅' }
+    );
+  }
+
+  for (const stat of stats) {
+    const card = document.createElement('div');
+    card.style.cssText = `
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    `;
+
+    const label = document.createElement('div');
+    label.textContent = `${stat.icon} ${stat.label}`;
+    label.style.cssText = `
+      font-size: 11px;
+      color: var(--qpm-text-muted, #aaa);
+      margin-bottom: 4px;
+    `;
+
+    const value = document.createElement('div');
+    value.textContent = stat.value;
+    value.style.cssText = `
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--qpm-text, #fff);
+    `;
+
+    card.appendChild(label);
+    card.appendChild(value);
+    grid.appendChild(card);
+  }
+
+  section.appendChild(grid);
+  return section;
+}
+
+/**
+ * Create item statistics section
+ */
+function createItemStatsSection(): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    margin-bottom: 20px;
+  `;
+
+  const heading = document.createElement('h4');
+  heading.textContent = '🎯 Item Statistics';
+  heading.style.cssText = `
+    margin: 0 0 12px 0;
+    color: var(--qpm-accent, #4CAF50);
+    font-size: 14px;
+  `;
+  section.appendChild(heading);
+
+  const statsMap = calculateItemStats();
+  const stats = Array.from(statsMap.values())
+    .filter(stat => stat.type !== 'unknown') // Filter out unknown items
+    .sort((a, b) => b.totalRestocks - a.totalRestocks);
+
+  // Create table
+  const table = document.createElement('table');
+  table.style.cssText = `
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  `;
+
+  // Header
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  headerRow.style.cssText = `
+    border-bottom: 2px solid var(--qpm-border, #444);
+    background: rgba(255, 255, 255, 0.05);
+  `;
+
+  const headers = ['Item', 'Type', 'Restocks', 'Avg Qty', 'Rate', 'Rarity', 'Last Seen', 'Next Restock'];
+  for (const header of headers) {
+    const th = document.createElement('th');
+    th.textContent = header;
+    th.style.cssText = `
+      padding: 10px 12px;
+      text-align: left;
+      color: var(--qpm-text-muted, #aaa);
+      font-weight: 600;
+    `;
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  // Body
+  const tbody = document.createElement('tbody');
+  for (const stat of stats) {
+    const row = document.createElement('tr');
+    row.style.cssText = `
+      border-bottom: 1px solid var(--qpm-border, #444);
+    `;
+
+    // Rarity color
+    const rarityColors: Record<string, string> = {
+      'common': '#aaa',
+      'uncommon': '#4CAF50',
+      'rare': '#42A5F5',
+      'mythic': '#9C27B0',
+      'divine': '#FF9800',
+      'celestial': '#FFD700',
+    };
+
+    // Format next restock time for this specific item
+    let nextRestockValue = 'N/A';
+    let nextRestockStyle = 'font-size: 11px; color: #aaa;';
+    const itemNextAppearance = predictItemNextAppearance(stat.name);
+
+    if (itemNextAppearance) {
+      const nextRestockDate = new Date(itemNextAppearance);
+      const timeString = nextRestockDate.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      const dateString = nextRestockDate.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric'
+      });
+      nextRestockValue = `${dateString} ${timeString}`;
+      nextRestockStyle = 'font-size: 11px; color: #42A5F5; font-weight: 600;';
+    }
+
+    const cells = [
+      { value: stat.name, style: 'font-weight: 600;' },
+      { value: stat.type, style: 'text-transform: capitalize; color: #aaa;' },
+      { value: formatNumber(stat.totalRestocks), style: '' },
+      { value: stat.avgQuantity.toFixed(1), style: '' },
+      { value: `${stat.appearanceRate.toFixed(1)}%`, style: '' },
+      { value: stat.rarity, style: `color: ${rarityColors[stat.rarity]}; text-transform: capitalize; font-weight: 600;` },
+      { value: new Date(stat.lastSeen).toLocaleDateString(), style: 'font-size: 11px; color: #aaa;' },
+      { value: nextRestockValue, style: nextRestockStyle },
+    ];
+
+    for (const cell of cells) {
+      const td = document.createElement('td');
+      td.textContent = cell.value;
+      td.style.cssText = `
+        padding: 10px 12px;
+        ${cell.style}
+      `;
+      row.appendChild(td);
+    }
+
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+
+  section.appendChild(table);
+  return section;
+}
+
+/**
+ * Export restock data as HTML (Discord-compatible format)
+ */
+function exportRestockDataAsHtml(): void {
+  const events = getAllRestockEvents();
+  if (events.length === 0) {
+    log('⚠️ No restock data to export');
+    return;
+  }
+
+  // Sort events by timestamp
+  const sortedEvents = [...events].sort((a, b) => a.timestamp - b.timestamp);
+
+  // Generate HTML
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Shop Restock Data Export</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #36393f; color: #dcddde; padding: 20px; }
+    .chatlog__message-group { margin-bottom: 20px; padding: 10px; background: #2f3136; border-radius: 4px; }
+    .chatlog__author { font-weight: 600; color: #7289da; margin-bottom: 8px; }
+    .chatlog__message-container { margin: 4px 0; padding: 4px 0; }
+    .chatlog__timestamp { font-size: 11px; color: #72767d; margin-right: 8px; }
+    .chatlog__short-timestamp { font-size: 11px; color: #72767d; margin-right: 8px; }
+    .chatlog__content { color: #dcddde; }
+  </style>
+</head>
+<body>
+  <h1>Shop Restock Data Export</h1>
+  <p>Total Events: ${events.length} | Exported: ${new Date().toLocaleString()}</p>
+
+  <div class="chatlog__message-group">
+    <div class="chatlog__author">Magic Shopkeeper</div>
+${sortedEvents.map(event => {
+  const date = new Date(event.timestamp);
+  const dateStr = event.dateString || date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).replace(',', '');
+
+  const timeStr = date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  const itemsText = event.items.map(item => {
+    return item.quantity > 0 ? `@${item.name} ${item.quantity}` : `@${item.name}`;
+  }).join(' | ');
+
+  return `    <div class="chatlog__message-container">
+      <span class="chatlog__timestamp"><a>${dateStr}</a></span>
+      <span class="chatlog__short-timestamp">${timeStr}</span>
+      <div class="chatlog__content">${itemsText}</div>
+    </div>`;
+}).join('\n')}
+  </div>
+</body>
+</html>`;
+
+  // Trigger download
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `qpm-shop-restock-export-${Date.now()}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  log(`✅ Exported ${events.length} restock events to HTML`);
+}
+
+/**
+ * Make element draggable
+ */
+function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
+  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+
+  handle.onmousedown = dragMouseDown;
+
+  function dragMouseDown(e: MouseEvent) {
+    e.preventDefault();
+    pos3 = e.clientX;
+    pos4 = e.clientY;
+    document.onmouseup = closeDragElement;
+    document.onmousemove = elementDrag;
+  }
+
+  function elementDrag(e: MouseEvent) {
+    e.preventDefault();
+    pos1 = pos3 - e.clientX;
+    pos2 = pos4 - e.clientY;
+    pos3 = e.clientX;
+    pos4 = e.clientY;
+    element.style.top = element.offsetTop - pos2 + 'px';
+    element.style.left = element.offsetLeft - pos1 + 'px';
+  }
+
+  function closeDragElement() {
+    document.onmouseup = null;
+    document.onmousemove = null;
+  }
+}
+
+/**
+ * Show shop restock window
+ */
+export function showShopRestockWindow(state: ShopRestockWindowState): void {
+  state.root.style.display = 'block';
+}
+
+/**
+ * Hide shop restock window
+ */
+export function hideShopRestockWindow(state: ShopRestockWindowState): void {
+  state.root.style.display = 'none';
+}
+
+/**
+ * Destroy shop restock window
+ */
+export function destroyShopRestockWindow(state: ShopRestockWindowState): void {
+  // Clear countdown interval
+  if (state.countdownInterval !== null) {
+    clearInterval(state.countdownInterval);
+    state.countdownInterval = null;
+  }
+
+  // Stop live tracking
+  stopLiveShopTracking();
+
+  state.root.remove();
+}

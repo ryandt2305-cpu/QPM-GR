@@ -1,0 +1,1 @@
+{"version":3,"file":"petHungerCaps.d.ts","sourceRoot":"","sources":["../../src/data/petHungerCaps.ts"],"names":[],"mappings":"AAoBA,eAAO,MAAM,kBAAkB,OAAO,CAAC;AAMvC,wBAAgB,sBAAsB,CAAC,OAAO,EAAE,MAAM,GAAG,IAAI,GAAG,SAAS,GAAG,MAAM,GAAG,IAAI,CASxF;AAED,wBAAgB,qBAAqB,CAAC,OAAO,EAAE,MAAM,GAAG,IAAI,GAAG,SAAS,GAAG,MAAM,CAEhF;AAED,wBAAgB,kBAAkB,IAAI,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,CAE3D"}

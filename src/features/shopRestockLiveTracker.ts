@@ -1,7 +1,7 @@
 // src/features/shopRestockLiveTracker.ts
 // Live shop monitoring to detect restocks in real-time
 
-import { onShopStock, type ShopStockState } from '../store/shopStock';
+import { onShopStock, startShopStockStore, type ShopStockState } from '../store/shopStock';
 import { addRestockEvent, RestockEvent, RestockItem } from './shopRestockTracker';
 import { log } from '../utils/logger';
 
@@ -149,7 +149,7 @@ function generateRestockId(timestamp: number, items: RestockItem[]): string {
 /**
  * Start live shop tracking using shop stock system
  */
-export function startLiveShopTracking(): void {
+export async function startLiveShopTracking(): Promise<void> {
   if (isTracking) {
     log('⚠️ Shop tracking already active');
     return;
@@ -157,6 +157,11 @@ export function startLiveShopTracking(): void {
 
   try {
     log('📊 Starting live shop restock tracking...');
+
+    // Ensure shop stock store is started
+    await startShopStockStore().catch(error => {
+      log('⚠️ Failed to start shop stock store', error);
+    });
 
     // Subscribe to shop stock updates (same system auto-buy uses)
     const unsub = onShopStock((shopState) => {

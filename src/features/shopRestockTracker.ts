@@ -173,6 +173,9 @@ function loadDefaultRestockData(): void {
         saveRestocks();
 
         log(`✅ Loaded default restock data: ${defaultEvents.length} events`);
+
+        // Notify listeners so UI can update with the loaded data
+        notifyListeners();
       } else {
         log('ℹ️ No default restock data available');
       }

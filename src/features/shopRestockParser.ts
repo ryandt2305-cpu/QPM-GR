@@ -82,8 +82,20 @@ function shouldTrackItem(itemName: string): boolean {
 }
 
 /**
+ * AEST timezone offset in milliseconds
+ * AEST = UTC+10 (no DST) = 10 hours * 60 minutes * 60 seconds * 1000 ms
+ * Note: Australia uses AEDT (UTC+11) during daylight saving (Oct-Apr)
+ * For simplicity, we use UTC+10 as a baseline. For more accuracy, could detect DST.
+ */
+const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
+
+/**
  * Parse a timestamp string to Unix timestamp
  * Format: "22/11/2025 8:00 pm" or "8:05 pm"
+ *
+ * IMPORTANT: Discord exports show timestamps in AEST (Australian Eastern Standard Time).
+ * This function interprets the timestamps as AEST and converts to Unix timestamp,
+ * which will then display correctly in each user's local timezone.
  */
 function parseTimestamp(timestampStr: string, baseDate?: Date): number {
   try {
@@ -114,8 +126,12 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
         hour24 = 0;
       }
 
-      const date = new Date(year, month - 1, day, hour24, minutes, 0, 0);
-      return date.getTime();
+      // Create UTC date then adjust for AEST offset
+      // Discord exports show AEST time, so we parse as UTC and subtract AEST offset
+      const utcDate = Date.UTC(year, month - 1, day, hour24, minutes, 0, 0);
+      const aestTimestamp = utcDate - AEST_OFFSET_MS;
+
+      return aestTimestamp;
     }
 
     // Short timestamp: "8:05 pm" - use base date
@@ -139,9 +155,15 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
         hour24 = 0;
       }
 
-      const date = new Date(baseDate);
-      date.setHours(hour24, minutes, 0, 0);
-      return date.getTime();
+      // Use base date's year/month/day but set new time
+      const baseYear = new Date(baseDate).getUTCFullYear();
+      const baseMonth = new Date(baseDate).getUTCMonth();
+      const baseDay = new Date(baseDate).getUTCDate();
+
+      const utcDate = Date.UTC(baseYear, baseMonth, baseDay, hour24, minutes, 0, 0);
+      const aestTimestamp = utcDate - AEST_OFFSET_MS;
+
+      return aestTimestamp;
     }
 
     return Date.now();

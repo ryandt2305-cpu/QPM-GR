@@ -238,36 +238,12 @@ export function initializeRestockTracker(): void {
 
 /**
  * Load default restock data from pre-parsed Discord history
- * Called automatically on first run when no user data exists
+ * REMOVED: Default data was 11MB and caused severe performance issues
+ * Users should import their own Discord export files instead
  */
 function loadDefaultRestockData(): void {
-  try {
-    // Dynamically import default data to avoid increasing bundle size unnecessarily
-    import('../data/defaultRestockData').then(module => {
-      const defaultEvents = module.DEFAULT_RESTOCK_EVENTS;
-
-      if (defaultEvents && defaultEvents.length > 0) {
-        log(`📥 Loading ${defaultEvents.length} default restock events...`);
-
-        // Add all default events
-        restockEvents = [...defaultEvents];
-
-        // Save to storage
-        saveRestocks();
-
-        log(`✅ Loaded default restock data: ${defaultEvents.length} events`);
-
-        // Notify listeners so UI can update with the loaded data
-        notifyListeners();
-      } else {
-        log('ℹ️ No default restock data available');
-      }
-    }).catch(error => {
-      log('⚠️ Failed to load default restock data', error);
-    });
-  } catch (error) {
-    log('⚠️ Failed to import default restock data', error);
-  }
+  // NO-OP: Default data removed for performance
+  log('ℹ️ No default restock data (removed for performance)');
 }
 
 /**

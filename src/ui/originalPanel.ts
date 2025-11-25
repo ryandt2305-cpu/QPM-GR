@@ -32,6 +32,7 @@ import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
+import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 
 export interface UIState {
   panel: HTMLElement | null;
@@ -1902,6 +1903,59 @@ function ensurePanelStyles(): void {
     color: var(--qpm-text);
   }
 
+  .qpm-version-bubble {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: all 0.2s ease;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .qpm-version-bubble[data-status="up-to-date"] {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+    border: 1px solid rgba(76, 175, 80, 0.4);
+  }
+
+  .qpm-version-bubble[data-status="outdated"] {
+    background: rgba(255, 193, 7, 0.2);
+    color: #FFC107;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+    animation: pulse-warning 2s ease-in-out infinite;
+  }
+
+  .qpm-version-bubble[data-status="checking"] {
+    background: rgba(158, 158, 158, 0.2);
+    color: #9E9E9E;
+    border: 1px solid rgba(158, 158, 158, 0.4);
+  }
+
+  .qpm-version-bubble[data-status="error"] {
+    background: rgba(244, 67, 54, 0.2);
+    color: #F44336;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+  }
+
+  .qpm-version-bubble:hover[data-status="outdated"] {
+    transform: scale(1.05);
+    background: rgba(255, 193, 7, 0.3);
+  }
+
+  @keyframes pulse-warning {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
+  }
+
   .qpm-content {
     display: flex;
     flex-direction: column;
@@ -3428,6 +3482,55 @@ export function createOriginalUI(): HTMLElement {
   const titleText = document.createElement('span');
   titleText.textContent = '🍖 Quinoa Pet Manager';
 
+  // Create version bubble
+  const versionBubble = document.createElement('div');
+  versionBubble.className = 'qpm-version-bubble';
+  versionBubble.dataset.status = 'checking';
+  versionBubble.textContent = `v${getCurrentVersion()}`;
+  versionBubble.title = 'Checking for updates...';
+  versionBubble.style.cssText = 'display: none;'; // Hidden initially
+
+  // Update version bubble based on version status
+  const updateVersionBubble = (info: VersionInfo) => {
+    versionBubble.dataset.status = info.status;
+    versionBubble.textContent = `v${info.current}`;
+    versionBubble.style.display = ''; // Show bubble
+
+    switch (info.status) {
+      case 'up-to-date':
+        versionBubble.title = `✅ Up to date (v${info.current})`;
+        versionBubble.style.cursor = 'default';
+        break;
+      case 'outdated':
+        versionBubble.title = `⚠️ Update available: v${info.latest}\nClick to update`;
+        versionBubble.style.cursor = 'pointer';
+        break;
+      case 'checking':
+        versionBubble.title = 'Checking for updates...';
+        versionBubble.style.cursor = 'default';
+        break;
+      case 'error':
+        versionBubble.title = '❌ Failed to check for updates';
+        versionBubble.style.cursor = 'default';
+        break;
+    }
+  };
+
+  // Register version change callback
+  onVersionChange(updateVersionBubble);
+
+  // Update with current cached info
+  updateVersionBubble(getVersionInfo());
+
+  // Click handler for outdated version
+  versionBubble.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const info = getVersionInfo();
+    if (info.status === 'outdated') {
+      window.open(info.updateUrl, '_blank');
+    }
+  });
+
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';
   collapseButton.dataset.qpmCollapseButton = 'true';
@@ -3438,7 +3541,7 @@ export function createOriginalUI(): HTMLElement {
   collapseIcon.textContent = '▼';
   collapseButton.appendChild(collapseIcon);
 
-  titleBar.append(titleText, collapseButton);
+  titleBar.append(titleText, versionBubble, collapseButton);
 
   const content = document.createElement('div');
   content.className = 'qpm-content';

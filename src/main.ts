@@ -18,6 +18,7 @@ import { startInventoryStore } from './store/inventory';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
+import { startVersionChecker } from './utils/versionChecker';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -809,9 +810,12 @@ async function initialize(): Promise<void> {
   // Set configuration for UI
   setCfg(cfg);
   
-  // Create UI  
+  // Create UI
   createOriginalUI();
-  
+
+  // Start version checker (checks for updates periodically)
+  startVersionChecker();
+
   log('✅ Quinoa Pet Manager initialized successfully');
 }
 

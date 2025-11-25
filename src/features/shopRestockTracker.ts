@@ -211,9 +211,10 @@ export function initializeRestockTracker(): void {
     const migratedCount = migrateRestockData();
 
     // Load default restock data on first run (if no data exists)
-    if (restockEvents.length === 0) {
-      loadDefaultRestockData();
-    }
+    // DISABLED: Don't auto-load default data
+    // if (restockEvents.length === 0) {
+    //   loadDefaultRestockData();
+    // }
 
     isInitialized = true;
 

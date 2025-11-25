@@ -13,6 +13,8 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @match        https://magiccircle.gg/r/*
 // @match        https://magicgarden.gg/r/*
 // @match        https://starweaver.org/r/*
+// @updateURL    https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js
+// @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js
 // @run-at       document-start
 // @inject-into  page
 // @grant        GM_registerMenuCommand

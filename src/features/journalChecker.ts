@@ -58,6 +58,7 @@ const PRODUCE_CATALOG: Record<string, string[]> = {
 
   // Vegetables
   'Pumpkin': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  'Squash': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
 
   // Fruits
   'Strawberry': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],

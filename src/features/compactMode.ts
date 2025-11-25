@@ -41,6 +41,7 @@ let config: CompactModeConfig = { ...DEFAULT_CONFIG };
 let expandedSections: Set<string> = new Set();
 let modeChangeCallback: ((mode: DisplayMode) => void) | null = null;
 let expandedSectionsCallback: ((sections: Set<string>) => void) | null = null;
+let keybindRegistered = false;
 
 // Storage keys
 const CONFIG_KEY = 'qpm:compactMode:config';
@@ -90,12 +91,28 @@ function saveExpandedSections(): void {
  * Register keyboard shortcut
  */
 function registerKeybind(): void {
+  if (keybindRegistered) {
+    log('⚠️ Keybind already registered, skipping');
+    return;
+  }
+
   document.addEventListener('keydown', (event: KeyboardEvent) => {
+    // Ignore if user is typing in an input field
+    const target = event.target as HTMLElement;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return;
+    }
+
     if (isKeybindMatch(event, config.keybind)) {
       event.preventDefault();
+      event.stopPropagation();
       cycleDisplayMode();
+      log(`⌨️ Keybind triggered: ${config.keybind}`);
     }
   });
+
+  keybindRegistered = true;
+  log(`⌨️ Keybind registered: ${config.keybind}`);
 }
 
 /**

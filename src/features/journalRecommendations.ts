@@ -7,6 +7,7 @@ import { getHarvestStrategy } from '../data/cropOptimization';
 import { getVariantTimeEstimate } from '../data/gameData';
 import { readInventoryDirect } from '../store/inventory';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
+import { getActivePetInfos } from '../store/pets';
 
 // ============================================================================
 // Types
@@ -67,22 +68,14 @@ async function detectPlayerResources(): Promise<PlayerResources> {
   };
 
   try {
-    // Check inventory for pets
-    const inventory = await readInventoryDirect();
-    if (!inventory?.items) {
-      log('⚠️ Could not read inventory for resource detection');
-      return resources;
-    }
-
     let granterStrengthSum = 0;
 
-    for (const item of inventory.items) {
-      if (item.itemType !== 'Pet') continue;
+    // Check active pets first (most important - these are actually in use)
+    const activePets = getActivePetInfos();
+    for (const pet of activePets) {
+      const abilities = pet.abilities || [];
+      const strength = pet.strength ?? 100;
 
-      const abilities = item.abilities || [];
-      const strength = item.strength ?? 100;
-
-      // Check for special abilities
       if (abilities.includes('Rainbow Granter')) {
         resources.hasRainbowGranter = true;
         resources.granterCount++;
@@ -96,17 +89,39 @@ async function detectPlayerResources(): Promise<PlayerResources> {
       if (abilities.includes('Crop Mutation Boost I') || abilities.includes('Crop Mutation Boost II')) {
         resources.hasMutationBoost = true;
       }
+    }
 
-      // Check for binder plants
-      if (item.species === 'Dawnbinder') {
-        resources.hasDawnbinder = true;
-      }
-      if (item.species === 'Moonbinder') {
-        resources.hasMoonbinder = true;
+    // Check inventory for pets (note: may include duplicates with active pets, but that's okay for resource availability)
+    const inventory = await readInventoryDirect();
+    if (inventory?.items) {
+      for (const item of inventory.items) {
+        if (item.itemType !== 'Pet') continue;
+
+        const abilities = item.abilities || [];
+        const strength = item.strength ?? 100;
+
+        // Check for special abilities
+        if (abilities.includes('Rainbow Granter')) {
+          resources.hasRainbowGranter = true;
+        }
+        if (abilities.includes('Gold Granter')) {
+          resources.hasGoldGranter = true;
+        }
+        if (abilities.includes('Crop Mutation Boost I') || abilities.includes('Crop Mutation Boost II')) {
+          resources.hasMutationBoost = true;
+        }
+
+        // Check for binder plants (crops in inventory)
+        if (item.species === 'Dawnbinder') {
+          resources.hasDawnbinder = true;
+        }
+        if (item.species === 'Moonbinder') {
+          resources.hasMoonbinder = true;
+        }
       }
     }
 
-    // Check hutch for pets
+    // Check hutch for pets (only check for ability availability, not counting)
     const hutchAtom = getAtomByLabel('myPetHutchAtom');
     if (hutchAtom) {
       const hutch = await readAtomValue<any>(hutchAtom);
@@ -114,17 +129,12 @@ async function detectPlayerResources(): Promise<PlayerResources> {
 
       for (const pet of hutchPets) {
         const abilities = pet.abilities || [];
-        const strength = pet.strength ?? 100;
 
         if (abilities.includes('Rainbow Granter')) {
           resources.hasRainbowGranter = true;
-          resources.granterCount++;
-          granterStrengthSum += strength;
         }
         if (abilities.includes('Gold Granter')) {
           resources.hasGoldGranter = true;
-          resources.granterCount++;
-          granterStrengthSum += strength;
         }
         if (abilities.includes('Crop Mutation Boost I') || abilities.includes('Crop Mutation Boost II')) {
           resources.hasMutationBoost = true;
@@ -490,9 +500,10 @@ function estimateCompletionTime(
   difficulty: VariantDifficulty,
 ): string {
   if (missingVariants.length === 0) return 'Complete';
+  if (difficulty === 'impossible') return 'Impossible without required resources';
 
   // Base time from difficulty
-  const baseTime = getVariantTimeEstimate(difficulty);
+  const baseTime = getVariantTimeEstimate(difficulty as 'easy' | 'medium' | 'hard' | 'very-hard');
 
   // Multiply by number of missing variants (rough estimate)
   if (missingVariants.length === 1) {

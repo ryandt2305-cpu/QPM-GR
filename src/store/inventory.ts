@@ -15,6 +15,11 @@ export interface InventoryItem {
   count?: number;
   amount?: number;
   stackSize?: number;
+  // Pet-specific properties
+  abilities?: any[];
+  mutations?: string[];
+  strength?: number;
+  petSpecies?: string;
   raw: unknown;
 }
 
@@ -48,6 +53,11 @@ function normalizeInventoryItem(raw: any): InventoryItem | null {
     count: raw.count,
     amount: raw.amount,
     stackSize: raw.stackSize,
+    // Pet-specific properties
+    abilities: raw.abilities,
+    mutations: raw.mutations,
+    strength: raw.strength,
+    petSpecies: raw.petSpecies,
     raw,
   };
 }

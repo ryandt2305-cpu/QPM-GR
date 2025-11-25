@@ -9,6 +9,10 @@ export interface InventoryItem {
     count?: number;
     amount?: number;
     stackSize?: number;
+    abilities?: any[];
+    mutations?: string[];
+    strength?: number;
+    petSpecies?: string;
     raw: unknown;
 }
 export interface InventoryData {

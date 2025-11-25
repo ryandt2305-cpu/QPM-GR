@@ -20,6 +20,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // ==/UserScript==
 

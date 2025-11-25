@@ -1908,7 +1908,7 @@ function ensurePanelStyles(): void {
     align-items: center;
     justify-content: center;
     padding: 4px 10px;
-    border-radius: 12px;
+    border-radius: 4px;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.3px;

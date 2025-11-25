@@ -9,6 +9,8 @@ export interface InventoryItem {
     count?: number;
     amount?: number;
     stackSize?: number;
+    abilities?: any[];
+    strength?: number;
     raw: unknown;
 }
 export interface InventoryData {

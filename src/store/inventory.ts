@@ -15,6 +15,8 @@ export interface InventoryItem {
   count?: number;
   amount?: number;
   stackSize?: number;
+  abilities?: any[]; // Pet abilities
+  strength?: number; // Pet strength
   raw: unknown;
 }
 
@@ -48,6 +50,8 @@ function normalizeInventoryItem(raw: any): InventoryItem | null {
     count: raw.count,
     amount: raw.amount,
     stackSize: raw.stackSize,
+    abilities: raw.abilities ?? raw.pet?.abilities,
+    strength: raw.strength ?? raw.pet?.strength,
     raw,
   };
 }

@@ -3623,24 +3623,6 @@ export function createOriginalUI(): HTMLElement {
   const titleText = document.createElement('span');
   titleText.textContent = '🍖 Quinoa Pet Manager';
 
-  // Mode toggle button
-  const modeToggle = document.createElement('button');
-  modeToggle.type = 'button';
-  modeToggle.className = 'qpm-mode-toggle';
-  modeToggle.textContent = getModeLabel(getDisplayMode());
-  modeToggle.title = 'Toggle display mode (Alt+Q)';
-  modeToggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    log('🖱️ Mode toggle button clicked - calling cycleDisplayMode()');
-    try {
-      cycleDisplayMode();
-    } catch (error) {
-      log('❌ Error in cycleDisplayMode:', error);
-    }
-  });
-  log('✅ Mode toggle button event listener attached');
-
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';
   collapseButton.dataset.qpmCollapseButton = 'true';
@@ -3651,7 +3633,7 @@ export function createOriginalUI(): HTMLElement {
   collapseIcon.textContent = '▼';
   collapseButton.appendChild(collapseIcon);
 
-  titleBar.append(titleText, modeToggle, collapseButton);
+  titleBar.append(titleText, collapseButton);
 
   const content = document.createElement('div');
   content.className = 'qpm-content';
@@ -3983,11 +3965,6 @@ export function createOriginalUI(): HTMLElement {
   });
 
   document.body.appendChild(panel);
-
-  // Register mode change callback
-  onModeChange((mode: DisplayMode) => {
-    handleModeChange(mode, panel, modeToggle);
-  });
 
   // Register expanded sections change callback
   onExpandedSectionsChange(() => {

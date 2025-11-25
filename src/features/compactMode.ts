@@ -53,7 +53,8 @@ const EXPANDED_SECTIONS_KEY = 'qpm:compactMode:expandedSections';
 export function initializeCompactMode(): void {
   loadConfig();
   loadExpandedSections();
-  registerKeybind();
+  // Keybind disabled per user request
+  // registerKeybind();
   log('✅ Compact mode initialized:', config.level);
 }
 

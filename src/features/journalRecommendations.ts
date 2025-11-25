@@ -376,7 +376,16 @@ function generateStrategy(
   if (needsRainbow || needsGold) {
     if (type === 'produce') {
       if (resources.hasRainbowGranter || resources.hasGoldGranter) {
-        strategies.push('Use Granter pets');
+        // Show which specific granter type is available
+        const granterTypes: string[] = [];
+        if (needsRainbow && resources.hasRainbowGranter) granterTypes.push('Rainbow');
+        if (needsGold && resources.hasGoldGranter) granterTypes.push('Gold');
+
+        if (granterTypes.length > 0) {
+          strategies.push(`Use ${granterTypes.join(' and/or ')} Pets`);
+        } else {
+          strategies.push('⚠️ Rare without Granters');
+        }
       } else {
         strategies.push('⚠️ Rare without Granters');
       }
@@ -404,7 +413,7 @@ function generateStrategy(
   const needsAmbercharged = missingVariants.includes('Ambercharged');
 
   if (needsDawnlit) {
-    strategies.push(`⚠️ Log before charging! Dawn event (1%)`);
+    strategies.push(`⚠️ Log before charging! Dawn event`);
   }
   if (needsAmberlit) {
     strategies.push(`⚠️ Log before charging! Amber event`);

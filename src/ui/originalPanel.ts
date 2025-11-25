@@ -5407,10 +5407,14 @@ function resetAllStats(): void {
  * Create pet feeding UI section with hunger bars and configuration
  */
 function createPetFeedingSection(): HTMLElement {
+  log('🏗️ ========== createPetFeedingSection CALLED ==========');
+
   const { root, body } = createCard('🍖 Pet Hunger Monitor', {
     subtitle: 'Real-time hunger tracking & alerts',
   });
   root.dataset.qpmSection = 'pet-feeding';
+
+  log('🏗️ Created card with root and body elements');
 
   // Initialize monitor on first creation
   initializeHungerMonitor();
@@ -5855,8 +5859,27 @@ function createPetFeedingSection(): HTMLElement {
   debugSection.append(refreshButton, statusIndicator);
   body.appendChild(debugSection);
 
-  log(`🔧 Appending petsContainer to DOM. Container has ${petsContainer.children.length} children`);
+  log(`🔧 Appending petsContainer to body. Container has ${petsContainer.children.length} children`);
   body.appendChild(petsContainer);
+  log(`🔧 petsContainer appended. body.children.length = ${body.children.length}`);
+  log(`🏗️ ========== createPetFeedingSection RETURNING ROOT ==========`);
+
+  // Debug: Check if container stays in DOM
+  const checkInterval = setInterval(() => {
+    const isInDOM = document.body.contains(petsContainer);
+    const hasParent = petsContainer.parentElement !== null;
+    const childCount = petsContainer.children.length;
+    log(`🔍 DOM Check: inDOM=${isInDOM}, hasParent=${hasParent}, children=${childCount}`);
+
+    if (!isInDOM || !hasParent) {
+      log(`❌ WARNING: petsContainer is DETACHED from DOM!`);
+      log(`   Parent element: ${petsContainer.parentElement?.tagName || 'null'}`);
+    }
+  }, 2000);
+
+  // Clean up after 30 seconds
+  setTimeout(() => clearInterval(checkInterval), 30000);
+
   return root;
 }
 

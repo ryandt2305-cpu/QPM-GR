@@ -133,7 +133,13 @@ type PlantDebugDetail =
   | ({ strategy: 'fallback'; fruitCount: number; frozenCount: number; wetCount: number; chilledCount: number; dawnCount: number; amberCount: number; dawnBoundCount: number; amberBoundCount: number; rainbowCount: number; goldCount: number });
 
 function normalizePlantName(name: string): string {
-  return name.toLowerCase().replace(/\+\d+$/, '').trim();
+  let normalized = name.toLowerCase().replace(/\+\d+$/, '').trim();
+  // Remove " plant" suffix for matching (e.g., "lily plant" -> "lily")
+  // This ensures "Lily" from DOM matches "Lily Plant" from inventory
+  if (normalized.endsWith(' plant')) {
+    normalized = normalized.slice(0, -6).trim();
+  }
+  return normalized;
 }
 
 export function startMutationReminder(): void {

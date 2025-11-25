@@ -1990,6 +1990,8 @@ function evaluatePlantFromInventory(
 
   let wetFinished = 0;
   let wetNeedsSnow = 0;
+  let chilledFinished = 0;
+  let chilledNeedsRain = 0;
   let dawnFinished = 0;
   let amberFinished = 0;
   let totalFruits = Math.max(plant.fruitCount, 1);
@@ -2007,6 +2009,13 @@ function evaluatePlantFromInventory(
     }
     if (slot.hasWet && !slot.hasFrozen) {
       wetNeedsSnow += 1;
+    }
+    const chilledMutated = slot.hasChilled || slot.hasFrozen;
+    if (chilledMutated) {
+      chilledFinished += 1;
+    }
+    if (slot.hasChilled && !slot.hasFrozen) {
+      chilledNeedsRain += 1;
     }
     if (slot.hasDawnlit || slot.hasDawnbound) {
       dawnFinished += 1;
@@ -2031,18 +2040,23 @@ function evaluatePlantFromInventory(
       amberProgressComplete = Math.max(amberProgressComplete, amberProgress.complete);
     }
   }
-  totalFruits = Math.max(totalFruits, wetFinished, dawnFinished, amberFinished);
+  totalFruits = Math.max(totalFruits, wetFinished, chilledFinished, dawnFinished, amberFinished);
 
   const clampDom = (value: number): number => Math.max(0, Math.min(totalFruits, value));
   const domFrozen = clampDom(plant.domMutationCounts.F);
   const domWetOnly = clampDom(plant.domMutationCounts.W);
   const domWetProgress = clampDom(domFrozen + domWetOnly);
   const domWetNeedsSnow = clampDom(Math.max(0, domWetProgress - domFrozen));
+  const domChilledOnly = clampDom(plant.domMutationCounts.C);
+  const domChilledProgress = clampDom(domFrozen + domChilledOnly);
+  const domChilledNeedsRain = clampDom(Math.max(0, domChilledProgress - domFrozen));
   const domDawnComplete = clampDom(plant.domMutationCounts.D + plant.domBoldCounts.D);
   const domAmberComplete = clampDom(plant.domMutationCounts.A + plant.domBoldCounts.A);
 
   wetFinished = Math.max(wetFinished, domWetProgress);
   wetNeedsSnow = Math.max(wetNeedsSnow, domWetNeedsSnow);
+  chilledFinished = Math.max(chilledFinished, domChilledProgress);
+  chilledNeedsRain = Math.max(chilledNeedsRain, domChilledNeedsRain);
   dawnFinished = Math.max(dawnFinished, domDawnComplete);
   amberFinished = Math.max(amberFinished, domAmberComplete);
 
@@ -2060,6 +2074,7 @@ function evaluatePlantFromInventory(
   }
 
   const wetPending = Math.max(0, totalFruits - wetFinished);
+  const chilledPending = Math.max(0, totalFruits - chilledFinished);
   const dawnPending = Math.max(0, totalFruits - dawnFinished);
   const amberPending = Math.max(0, totalFruits - amberFinished);
 
@@ -2097,8 +2112,15 @@ function evaluatePlantFromInventory(
       pendingFruits = wetPending;
       break;
     case 'snow':
-      decision = wetNeedsSnow > 0;
-      pendingFruits = wetNeedsSnow;
+      if (chilledPending > 0) {
+        // Priority 1: Highlight unmutated crops for new "Chilled" mutations
+        decision = true;
+        pendingFruits = chilledPending;
+      } else {
+        // Priority 2: Highlight "Wet" crops to upgrade to "Frozen"
+        decision = wetNeedsSnow > 0;
+        pendingFruits = wetNeedsSnow;
+      }
       break;
     case 'dawn':
       // Allow dawn weather if there are dawn-pending fruits, even if some other fruits have amber
@@ -2214,8 +2236,19 @@ function evaluatePlantFallback(
       break;
     }
     case 'snow': {
-      decision = needsSnow > 0;
-      pendingFruits = needsSnow;
+      const chilledProgress = chilledCount + frozenCount;
+      if (chilledProgress < totalFruits) {
+        // Priority 1: Highlight unmutated crops for new "Chilled" mutations
+        decision = true;
+        pendingFruits = Math.max(0, totalFruits - chilledProgress);
+      } else {
+        // Priority 2: Highlight "Wet" crops to upgrade to "Frozen"
+        const wetDeficit = wetCount - frozenCount;
+        decision = wetDeficit > 0;
+        pendingFruits = Math.max(0, wetDeficit);
+      }
+      // Update needsSnow for tracking (wet crops that need snow to freeze)
+      needsSnow = Math.max(0, wetCount - frozenCount);
       break;
     }
     case 'dawn': {

@@ -3508,51 +3508,10 @@ export function createOriginalUI(): HTMLElement {
   // Create version bubble
   const versionBubble = document.createElement('div');
   versionBubble.className = 'qpm-version-bubble';
-  versionBubble.dataset.status = 'checking';
+  versionBubble.dataset.status = 'current';
   versionBubble.textContent = `v${getCurrentVersion()}`;
-  versionBubble.title = 'Checking for updates...';
-  versionBubble.style.cssText = 'display: none;'; // Hidden initially
-
-  // Update version bubble based on version status
-  const updateVersionBubble = (info: VersionInfo) => {
-    versionBubble.dataset.status = info.status;
-    versionBubble.textContent = `v${info.current}`;
-    versionBubble.style.display = ''; // Show bubble
-
-    switch (info.status) {
-      case 'up-to-date':
-        versionBubble.title = `✅ Up to date (v${info.current})`;
-        versionBubble.style.cursor = 'default';
-        break;
-      case 'outdated':
-        versionBubble.title = `⚠️ Update available: v${info.latest}\nClick to update`;
-        versionBubble.style.cursor = 'pointer';
-        break;
-      case 'checking':
-        versionBubble.title = 'Checking for updates...';
-        versionBubble.style.cursor = 'default';
-        break;
-      case 'error':
-        versionBubble.title = '❌ Failed to check for updates';
-        versionBubble.style.cursor = 'default';
-        break;
-    }
-  };
-
-  // Register version change callback
-  onVersionChange(updateVersionBubble);
-
-  // Update with current cached info
-  updateVersionBubble(getVersionInfo());
-
-  // Click handler for outdated version
-  versionBubble.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const info = getVersionInfo();
-    if (info.status === 'outdated') {
-      window.open(info.updateUrl, '_blank');
-    }
-  });
+  versionBubble.title = `QPM v${getCurrentVersion()}\nUpdates are handled by Tampermonkey`;
+  versionBubble.style.cursor = 'default';
 
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';

@@ -565,14 +565,17 @@ export function predictItemNextAppearance(itemName: string): number | null {
 }
 
 /**
- * Clear all restock data
+ * Clear all restock data and ALL QPM storage
  */
 export function clearAllRestocks(): void {
   restockEvents = [];
   config.importedFiles = [];
-  saveRestocks();
+
+  // Clear ALL QPM storage (localStorage + GM storage)
+  storage.clear();
+
   notifyListeners();
-  log('📊 Cleared all restock data');
+  log('📊 Cleared all QPM data from storage');
 }
 
 /**

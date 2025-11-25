@@ -3,6 +3,16 @@
 
 import { log } from './logger';
 
+// Declare GM functions for TypeScript
+declare function GM_xmlhttpRequest(details: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  onload?: (response: { status: number; responseText: string }) => void;
+  onerror?: (error: any) => void;
+  ontimeout?: () => void;
+}): void;
+
 const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js';
 const CURRENT_VERSION = '1.10.0'; // This should match package.json version
 const CHECK_INTERVAL = 3600000; // Check every hour (in milliseconds)
@@ -51,8 +61,14 @@ function compareVersions(v1: string, v2: string): number {
  */
 async function fetchLatestVersion(): Promise<string | null> {
   try {
+    log('🔍 Attempting to fetch latest version from GitHub...');
+
     // Use GM_xmlhttpRequest if available (to bypass CORS), otherwise fall back to fetch
-    if (typeof GM_xmlhttpRequest !== 'undefined') {
+    const hasGM = typeof GM_xmlhttpRequest !== 'undefined';
+    log(`GM_xmlhttpRequest available: ${hasGM}`);
+
+    if (hasGM) {
+      log('Using GM_xmlhttpRequest to fetch version...');
       return new Promise((resolve) => {
         GM_xmlhttpRequest({
           method: 'GET',
@@ -61,6 +77,7 @@ async function fetchLatestVersion(): Promise<string | null> {
             'Cache-Control': 'no-cache',
           },
           onload: (response) => {
+            log(`✅ GM_xmlhttpRequest response received: ${response.status}`);
             if (response.status !== 200) {
               log(`⚠️ Failed to fetch latest version: ${response.status}`);
               resolve(null);
@@ -68,8 +85,10 @@ async function fetchLatestVersion(): Promise<string | null> {
             }
 
             const text = response.responseText;
+            log(`📄 Response text length: ${text.length}`);
             const versionMatch = text.match(/\/\/\s*@version\s+([\d.]+)/);
             if (versionMatch && versionMatch[1]) {
+              log(`✅ Found version: ${versionMatch[1]}`);
               resolve(versionMatch[1]);
             } else {
               log('⚠️ Could not parse version from GitHub file');
@@ -195,16 +214,20 @@ export function onVersionChange(callback: (info: VersionInfo) => void): void {
  */
 export function startVersionChecker(): void {
   log('🔍 Starting version checker...');
+  log(`Current version: ${CURRENT_VERSION}`);
+  log(`GitHub URL: ${GITHUB_RAW_URL}`);
 
-  // Initial check after 5 seconds
+  // Initial check after 2 seconds (reduced for faster feedback)
   setTimeout(() => {
+    log('⏰ Running initial version check...');
     checkForUpdates().catch(err => {
       log('❌ Initial version check failed:', err);
     });
-  }, 5000);
+  }, 2000);
 
   // Periodic checks
   setInterval(() => {
+    log('⏰ Running periodic version check...');
     checkForUpdates().catch(err => {
       log('❌ Periodic version check failed:', err);
     });

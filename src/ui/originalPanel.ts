@@ -3977,17 +3977,6 @@ export function createOriginalUI(): HTMLElement {
 
   document.body.appendChild(panel);
 
-  // Connect status callbacks to update UI
-  setFeedStatusCallback((status: string) => {
-    updateUIStatus(status);
-    refreshHeaderStats();
-  });
-
-  setWeatherStatusCallback((status: string) => {
-    updateWeatherUI(status);
-    refreshHeaderStats();
-  });
-
   // Register mode change callback
   onModeChange((mode: DisplayMode) => {
     handleModeChange(mode, panel, modeToggle);

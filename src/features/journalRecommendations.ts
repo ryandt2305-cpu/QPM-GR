@@ -146,6 +146,38 @@ async function detectPlayerResources(): Promise<PlayerResources> {
 }
 
 // ============================================================================
+// Time Conversion Helpers
+// ============================================================================
+
+/**
+ * Convert AEST time reference to user's local time
+ * AEST lunar events occur every 4 hours starting from 12 AM AEST (midnight)
+ * Events: 12 AM, 4 AM, 8 AM, 12 PM, 4 PM, 8 PM (AEST)
+ */
+function getLocalLunarTimeReference(): string {
+  // AEST is UTC+10 (or UTC+11 during daylight saving)
+  // For simplicity, we'll use UTC+10
+  // Lunar events start at 12 AM AEST (which is 2 PM previous day UTC)
+
+  // Create a reference time: midnight AEST today
+  const now = new Date();
+  const aestMidnight = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    14, // 12 AM AEST = 2 PM UTC (previous day, but we adjust)
+    0
+  ));
+
+  // Convert to user's local time
+  const localHour = aestMidnight.getHours();
+  const period = localHour >= 12 ? 'PM' : 'AM';
+  const displayHour = localHour % 12 || 12;
+
+  return `every 4 hours from ${displayHour}:00 ${period} (your time)`;
+}
+
+// ============================================================================
 // Difficulty Assessment
 // ============================================================================
 
@@ -161,9 +193,13 @@ function assessVariantDifficulty(
   // Normal variants are trivial
   if (variant === 'Normal') return 'easy';
 
-  // Max Weight requires Crop Size Boost ability
-  if (variant === 'Max Weight') {
-    // For now, mark as hard (requires specific ability)
+  // Max Weight/Size variants
+  if (variant === 'Max Weight' || variant === 'Max') {
+    if (type === 'pet') {
+      // Pets need to be hatched at level/strength 70+ (max 100)
+      return 'very-hard';
+    }
+    // Crops require Crop Size Boost ability
     return 'hard';
   }
 
@@ -206,11 +242,19 @@ function assessVariantDifficulty(
   // Lunar mutations (Dawnlit, Amberlit)
   if (variant === 'Dawnlit' || variant === 'Ambershine') {
     // Lunar every 4 hours, 1% base chance, Dawn is 67% chance
+    // If player has Rainbow Granter, lunar mutations are HARDER than rainbow crops
+    if (resources.hasRainbowGranter) {
+      return 'hard';
+    }
     return 'medium';
   }
 
   if (variant === 'Amberlit') {
     // Lunar every 4 hours, 1% base chance, Amber is 33% chance (less common)
+    // If player has Rainbow Granter, lunar mutations are HARDER than rainbow crops
+    if (resources.hasRainbowGranter) {
+      return 'very-hard';
+    }
     return 'hard';
   }
 
@@ -305,10 +349,12 @@ function generateStrategy(
   const needsAmbercharged = missingVariants.includes('Ambercharged');
 
   if (needsDawnlit) {
-    strategies.push('Plant before Dawn event (every 4hr from 12AM AEST, 1% base chance)');
+    const timeRef = getLocalLunarTimeReference();
+    strategies.push(`⚠️ LOG DAWNLIT FIRST before charging! Plant before Dawn event (${timeRef}, 1% base chance)`);
   }
   if (needsAmberlit) {
-    strategies.push('Plant before Amber event (every 4hr from 12AM AEST, 33% chance vs Dawn 67%)');
+    const timeRef = getLocalLunarTimeReference();
+    strategies.push(`⚠️ LOG AMBERLIT FIRST before charging! Plant before Amber event (${timeRef}, 33% chance vs Dawn 67%)`);
   }
   if (needsDawncharged) {
     if (resources.hasDawnbinder) {
@@ -326,9 +372,22 @@ function generateStrategy(
   }
 
   // Check for Max Weight
-  const needsMaxWeight = missingVariants.includes('Max Weight');
+  const needsMaxWeight = missingVariants.includes('Max Weight') || missingVariants.includes('Max');
   if (needsMaxWeight) {
-    strategies.push('Requires Crop Size Boost I/II ability to reach max size');
+    if (type === 'pet') {
+      strategies.push('⚠️ VERY RARE: Hatch pet at level/strength 70+ (max 100) for max size variant');
+    } else {
+      strategies.push('Requires Crop Size Boost I/II ability to reach max size');
+    }
+  }
+
+  // Special check for celestial seeds (Starweaver, Moonbinder, Dawnbinder)
+  const celestialSeeds = ['Starweaver', 'Moonbinder', 'Dawnbinder'];
+  if (type === 'produce' && celestialSeeds.includes(species)) {
+    const needsNormal = missingVariants.includes('Normal');
+    if (needsNormal) {
+      strategies.unshift('🌟 IMPORTANT: Plant and log NORMAL (non-mutated) version first! Easily forgotten for celestial seeds');
+    }
   }
 
   return strategies.join(' | ') || 'Grow normally';
@@ -373,15 +432,7 @@ function generateReasons(
     reasons.push('Very difficult - requires rare conditions');
   }
 
-  // Harvest strategy advice for crops
-  if (type === 'produce') {
-    const harvestStrat = getHarvestStrategy(species);
-    if (harvestStrat === 'freeze-and-sell') {
-      reasons.push('💎 High-value crop - worth freezing');
-    } else if (harvestStrat === 'sell-when-mature') {
-      reasons.push('Low-value crop - sell when mature');
-    }
-  }
+  // Journal-specific advice (removed crop profit advice - not relevant for collecting variants)
 
   return reasons;
 }

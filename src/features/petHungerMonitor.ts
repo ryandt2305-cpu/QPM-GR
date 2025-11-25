@@ -2,8 +2,13 @@
 // Provides visual hunger bars, countdown timers, and alerts
 
 import { log } from '../utils/logger';
-import { showToast } from '../core/notifications';
+import { notify, type NotificationLevel } from '../core/notifications';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
+
+// Helper function to show toast notifications
+function showToast(message: string, level: NotificationLevel = 'info', _duration?: number): void {
+  notify({ feature: 'petHungerMonitor', message, level });
+}
 
 /**
  * Alert level based on hunger percentage
@@ -209,7 +214,7 @@ function checkAndTriggerAlert(state: PetHungerState): void {
       if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min between alerts
         showToast(
           `${state.name} will be hungry in ~${Math.round(state.estimatedTimeToEmpty)} minutes`,
-          'warning',
+          'warn',
           5000
         );
         petAlerts.set('warning', now);
@@ -225,7 +230,7 @@ function checkAndTriggerAlert(state: PetHungerState): void {
       if (now - lastAlert > 3 * 60 * 1000) { // Don't spam, wait 3 min
         showToast(
           `🔔 ${state.name} needs food soon! (~${Math.round(state.estimatedTimeToEmpty)} min)`,
-          'warning',
+          'warn',
           6000
         );
         petAlerts.set('warning', now);

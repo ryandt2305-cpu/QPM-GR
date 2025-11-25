@@ -7,16 +7,6 @@ import { createJournalCheckerSection as createJournalCheckerSectionNew } from '.
 import { isVisible, getGameHudRoot } from '../utils/dom';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import {
-  initializeCompactMode,
-  cycleDisplayMode,
-  getDisplayMode,
-  onModeChange,
-  onExpandedSectionsChange,
-  toggleSectionExpanded,
-  isSectionExpanded,
-  type DisplayMode,
-} from '../features/compactMode';
 import { getCropLockConfig, setCropLockSyncMode } from '../features/cropTypeLocking';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
@@ -42,6 +32,17 @@ import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
+import {
+  initializeHungerMonitor,
+  onHungerStateChange,
+  getHungerStates,
+  getAlertColor,
+  getAlertEmoji,
+  formatTimeRemaining,
+  formatDecayRate,
+  type PetHungerState,
+  type AlertLevel,
+} from '../features/petHungerMonitor';
 
 export interface UIState {
   panel: HTMLElement | null;
@@ -2308,19 +2309,6 @@ function ensurePanelStyles(): void {
     background: rgba(143, 130, 255, 0.55);
   }
 
-  /* Compact Mode Styles */
-  .qpm-panel--compact .qpm-card > div:last-child {
-    display: none;
-  }
-
-  .qpm-panel--compact .qpm-card.qpm-card--expanded > div:last-child {
-    display: flex;
-  }
-
-  .qpm-panel--compact .qpm-card__header {
-    cursor: pointer;
-  }
-
   /* Minimal Mode Styles */
   .qpm-panel--minimal {
     min-width: auto;
@@ -3515,106 +3503,12 @@ function createGuideSection(): HTMLElement {
   return root;
 }
 
-/**
- * Get display mode label for UI
- */
-function getModeLabel(mode: DisplayMode): string {
-  switch (mode) {
-    case 'full': return '📋 Full';
-    case 'compact': return '📑 Compact';
-    case 'minimal': return '📌 Minimal';
-    case 'hidden': return '👁️ Hidden';
-  }
-}
-
-/**
- * Apply display mode classes to panel
- */
-function applyDisplayMode(panel: HTMLElement, mode: DisplayMode): void {
-  panel.classList.remove('qpm-panel--full', 'qpm-panel--compact', 'qpm-panel--minimal', 'qpm-panel--hidden');
-  panel.classList.add(`qpm-panel--${mode}`);
-}
-
-/**
- * Create or update restore button for hidden mode
- */
-let restoreButton: HTMLElement | null = null;
-
-function ensureRestoreButton(): void {
-  if (restoreButton) return;
-
-  restoreButton = document.createElement('button');
-  restoreButton.className = 'qpm-restore-button';
-  restoreButton.textContent = '🌾';
-  restoreButton.title = 'Show Quinoa Pet Manager (Alt+Q)';
-  restoreButton.addEventListener('click', () => {
-    cycleDisplayMode(); // Will cycle from hidden to full
-  });
-
-  document.body.appendChild(restoreButton);
-}
-
-function removeRestoreButton(): void {
-  if (restoreButton && restoreButton.parentNode) {
-    restoreButton.parentNode.removeChild(restoreButton);
-    restoreButton = null;
-  }
-}
-
-/**
- * Handle mode changes
- */
-function handleModeChange(mode: DisplayMode, panel: HTMLElement, modeToggle: HTMLElement): void {
-  applyDisplayMode(panel, mode);
-  modeToggle.textContent = getModeLabel(mode);
-
-  // Show/hide restore button for hidden mode
-  if (mode === 'hidden') {
-    ensureRestoreButton();
-  } else {
-    removeRestoreButton();
-  }
-
-  log(`🎨 Display mode changed to: ${mode}`);
-}
-
-/**
- * Make cards collapsible in compact mode
- */
-function setupCompactModeCards(cards: HTMLElement[]): void {
-  cards.forEach((card) => {
-    const header = card.querySelector('.qpm-card__header');
-    if (!header) return;
-
-    // Make header clickable
-    header.addEventListener('click', () => {
-      const sectionId = card.dataset.qpmSection;
-      if (!sectionId) return;
-
-      toggleSectionExpanded(sectionId);
-      card.classList.toggle('qpm-card--expanded');
-    });
-
-    // Apply initial expanded state
-    const sectionId = card.dataset.qpmSection;
-    if (sectionId && isSectionExpanded(sectionId)) {
-      card.classList.add('qpm-card--expanded');
-    }
-  });
-}
-
 export function createOriginalUI(): HTMLElement {
   ensurePanelStyles();
   if (uiState.panel) return uiState.panel;
 
-  // Initialize compact mode
-  initializeCompactMode();
-
   const panel = document.createElement('div');
   panel.className = 'qpm-panel';
-
-  // Apply initial display mode
-  applyDisplayMode(panel, getDisplayMode());
 
   const titleBar = document.createElement('div');
   titleBar.className = 'qpm-panel__titlebar';
@@ -3672,6 +3566,7 @@ export function createOriginalUI(): HTMLElement {
   const statsHeader = createStatsHeader();
   const statsSection = createStatsSection();
   const notificationsSection = createNotificationSection();
+  const petFeedingSection = createPetFeedingSection();
   const turtleSection = createTurtleTimerSection();
   const trackerSections = createTrackersSection();
 
@@ -3730,6 +3625,7 @@ export function createOriginalUI(): HTMLElement {
   const guideSection = createGuideSection();
 
   registerTab('dashboard', 'Dashboard', '📊', [statsHeader]);
+  registerTab('pet-feeding', 'Pet Hunger', '🍖', [petFeedingSection]);
   registerTab('turtle', 'Turtle Timer', '🐢', [turtleSection]);
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
@@ -3965,26 +3861,6 @@ export function createOriginalUI(): HTMLElement {
   });
 
   document.body.appendChild(panel);
-
-  // Register expanded sections change callback
-  onExpandedSectionsChange(() => {
-    // Re-apply expanded states to all cards
-    const allCards = panel.querySelectorAll<HTMLElement>('.qpm-card[data-qpm-section]');
-    allCards.forEach((card) => {
-      const sectionId = card.dataset.qpmSection;
-      if (sectionId) {
-        if (isSectionExpanded(sectionId)) {
-          card.classList.add('qpm-card--expanded');
-        } else {
-          card.classList.remove('qpm-card--expanded');
-        }
-      }
-    });
-  });
-
-  // Setup compact mode for all cards with section IDs
-  const allCards = panel.querySelectorAll<HTMLElement>('.qpm-card[data-qpm-section]');
-  setupCompactModeCards(Array.from(allCards));
 
   uiState.panel = panel;
   uiState.content = content;
@@ -5520,6 +5396,165 @@ function resetAllStats(): void {
   shopBuyCount = 0;
   refreshHeaderStats();
   showToast('Stats reset');
+}
+
+/**
+ * Create pet feeding UI section with hunger bars
+ */
+function createPetFeedingSection(): HTMLElement {
+  const { root, body } = createCard('🍖 Pet Hunger', {
+    subtitle: 'Real-time hunger tracking',
+  });
+  root.dataset.qpmSection = 'pet-feeding';
+
+  // Container for pet hunger cards
+  const petsContainer = document.createElement('div');
+  petsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+
+  // Initialize monitor on first creation
+  initializeHungerMonitor();
+
+  // Function to create/update individual pet hunger card
+  const createPetHungerCard = (state: PetHungerState): HTMLElement => {
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      padding: 12px;
+      border: 1px solid ${getAlertColor(state.alertLevel)}33;
+    `;
+    card.dataset.petId = state.petId;
+
+    // Header: pet name and emoji
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+
+    const nameContainer = document.createElement('div');
+    nameContainer.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+    const emoji = document.createElement('span');
+    emoji.textContent = getAlertEmoji(state.alertLevel);
+    emoji.style.fontSize = '16px';
+
+    const name = document.createElement('span');
+    name.textContent = state.name;
+    name.style.cssText = 'font-weight: 600; font-size: 13px;';
+
+    const species = document.createElement('span');
+    species.textContent = state.species;
+    species.style.cssText = 'font-size: 11px; color: #999; margin-left: 4px;';
+
+    nameContainer.append(emoji, name, species);
+
+    const hungerPct = document.createElement('span');
+    hungerPct.textContent = `${Math.round(state.hungerPct)}%`;
+    hungerPct.style.cssText = `font-weight: 700; font-size: 13px; color: ${getAlertColor(state.alertLevel)};`;
+
+    header.append(nameContainer, hungerPct);
+
+    // Hunger bar
+    const barContainer = document.createElement('div');
+    barContainer.style.cssText = `
+      background: rgba(0,0,0,0.3);
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    `;
+
+    const bar = document.createElement('div');
+    bar.style.cssText = `
+      height: 100%;
+      width: ${state.hungerPct}%;
+      background: linear-gradient(90deg, ${getAlertColor(state.alertLevel)}, ${getAlertColor(state.alertLevel)}aa);
+      transition: width 0.3s ease, background 0.3s ease;
+    `;
+
+    barContainer.appendChild(bar);
+
+    // Info row: time remaining and decay rate
+    const infoRow = document.createElement('div');
+    infoRow.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:#aaa;';
+
+    const timeInfo = document.createElement('span');
+    timeInfo.textContent = state.estimatedTimeToEmpty !== null
+      ? `⏱ ${formatTimeRemaining(state.estimatedTimeToEmpty)} remaining`
+      : '⏱ Calculating...';
+
+    const decayInfo = document.createElement('span');
+    decayInfo.textContent = `📉 ${formatDecayRate(state.hungerDecayRate)}`;
+
+    infoRow.append(timeInfo, decayInfo);
+
+    card.append(header, barContainer, infoRow);
+    return card;
+  };
+
+  // Update UI with current hunger states
+  const updatePetCards = (states: PetHungerState[]) => {
+    if (states.length === 0) {
+      petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:20px;">No active pets</div>';
+      return;
+    }
+
+    // Update or create cards for each pet
+    states.forEach(state => {
+      let card = petsContainer.querySelector<HTMLElement>(`[data-pet-id="${state.petId}"]`);
+
+      if (card) {
+        // Update existing card
+        const hungerPct = card.querySelector('span[style*="font-weight: 700"]');
+        if (hungerPct) {
+          hungerPct.textContent = `${Math.round(state.hungerPct)}%`;
+          (hungerPct as HTMLElement).style.color = getAlertColor(state.alertLevel);
+        }
+
+        const bar = card.querySelector('div[style*="height: 100%"]') as HTMLElement;
+        if (bar) {
+          bar.style.width = `${state.hungerPct}%`;
+          bar.style.background = `linear-gradient(90deg, ${getAlertColor(state.alertLevel)}, ${getAlertColor(state.alertLevel)}aa)`;
+        }
+
+        const [timeInfo, decayInfo] = card.querySelectorAll('div[style*="display:flex;justify-content:space-between"] span');
+        if (timeInfo) {
+          timeInfo.textContent = state.estimatedTimeToEmpty !== null
+            ? `⏱ ${formatTimeRemaining(state.estimatedTimeToEmpty)} remaining`
+            : '⏱ Calculating...';
+        }
+        if (decayInfo) {
+          decayInfo.textContent = `📉 ${formatDecayRate(state.hungerDecayRate)}`;
+        }
+
+        const emoji = card.querySelector('span[style*="font-size: 16px"]');
+        if (emoji) emoji.textContent = getAlertEmoji(state.alertLevel);
+
+        // Update border color
+        (card as HTMLElement).style.borderColor = `${getAlertColor(state.alertLevel)}33`;
+      } else {
+        // Create new card
+        card = createPetHungerCard(state);
+        petsContainer.appendChild(card);
+      }
+    });
+
+    // Remove cards for pets that no longer exist
+    const currentPetIds = new Set(states.map(s => s.petId));
+    Array.from(petsContainer.querySelectorAll('[data-pet-id]')).forEach(card => {
+      const petId = (card as HTMLElement).dataset.petId;
+      if (petId && !currentPetIds.has(petId)) {
+        card.remove();
+      }
+    });
+  };
+
+  // Subscribe to hunger state changes
+  onHungerStateChange(updatePetCards);
+
+  // Initial render
+  updatePetCards(getHungerStates());
+
+  body.appendChild(petsContainer);
+  return root;
 }
 
 function createTurtleTimerSection(): HTMLElement {

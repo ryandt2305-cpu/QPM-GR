@@ -52,7 +52,7 @@ export interface UIState {
   dashboardFeedList: HTMLElement | null;
   dashboardFeedMeta: HTMLElement | null;
   dashboardRestockSummary: HTMLElement | null;
-  dashboardRestockValues: Record<ShopCategory, HTMLElement | null>;
+  dashboardRestockValues: Record<ShopCategoryKey, HTMLElement | null>;
   turtleStatus: HTMLElement | null;
   turtleDetail: HTMLElement | null;
   turtleFooter: HTMLElement | null;
@@ -225,7 +225,7 @@ const SHOP_COUNTDOWN_WARNING_THRESHOLD_MS = 10_000;
 
 interface ShopCountdownView {
   summaryEl: HTMLElement;
-  values: Record<ShopCategory, HTMLElement>;
+  values: Record<ShopCategoryKey, HTMLElement>;
 }
 
 interface TurtleTimerUIConfig {
@@ -237,6 +237,29 @@ interface TurtleTimerUIConfig {
   eggFocus: TurtleTimerState['eggFocus'];
   eggFocusTargetTileId: string | null;
   eggFocusTargetSlotIndex: number | null;
+}
+
+// Type definitions for legacy autoShop feature (currently disabled)
+interface RestockInfo {
+  nextRestockAt?: Record<string, number | null>;
+}
+
+interface AutoShopItemConfig {
+  enabled: boolean;
+  category: string;
+  itemName: string;
+  priority?: number;
+  rarityRank?: number;
+}
+
+type CheckboxChangeHandler = (checked: boolean) => void;
+
+interface NumberOptionConfig {
+  min?: number;
+  max?: number;
+  step?: number;
+  suffix?: string;
+  onChange: (value: number) => void;
 }
 
 const shopCountdownViews: ShopCountdownView[] = [];
@@ -285,7 +308,7 @@ let notificationDetailExpanded = storage.get<boolean>(NOTIFICATIONS_DETAIL_EXPAN
 let lastNotificationFilteredCount = 0;
 
 interface ShopCategoryDefinition {
-  key: ShopCategory;
+  key: ShopCategoryKey;
   label: string;
   icon: string;
 }
@@ -3875,15 +3898,16 @@ export function createOriginalUI(): HTMLElement {
   document.body.appendChild(panel);
 
   // Connect status callbacks to update UI
-  setFeedStatusCallback((status: string) => {
-    updateUIStatus(status);
-    refreshHeaderStats();
-  });
-  
-  setWeatherStatusCallback((status: string) => {
-    updateWeatherUI(status);
-    refreshHeaderStats();
-  });
+  // TODO: Re-enable when autoFeed and weatherSwap features are implemented
+  // setFeedStatusCallback((status: string) => {
+  //   updateUIStatus(status);
+  //   refreshHeaderStats();
+  // });
+
+  // setWeatherStatusCallback((status: string) => {
+  //   updateWeatherUI(status);
+  //   refreshHeaderStats();
+  // });
 
   uiState.panel = panel;
   uiState.content = content;
@@ -4265,21 +4289,24 @@ function createDashboardIndicatorsCard(): HTMLElement {
 
   const updateFeedRate = (): void => {
     try {
-      const stats = getSessionStats();
-      const rateValue = Number(stats.feedsPerHour);
+      // TODO: Re-enable when stats feature is implemented
+      // const stats = getSessionStats();
+      // const rateValue = Number(stats.feedsPerHour);
+      const rateValue = 0; // Placeholder
       if (!Number.isFinite(rateValue) || rateValue <= 0) {
         feedRateEl.style.display = 'none';
         return;
       }
 
-      let detail: string;
-      if (stats.feedRateSource === 'events') {
-        detail = `${stats.feedSampleCount} feeds/${stats.feedWindowMinutes}m`;
-      } else if (stats.feedRateSource === 'model') {
-        detail = `est. ×${stats.modelPetSamples}`;
-      } else {
-        detail = 'est.';
-      }
+      // TODO: Re-enable when stats feature is implemented
+      let detail: string = 'est.';
+      // if (stats.feedRateSource === 'events') {
+      //   detail = `${stats.feedSampleCount} feeds/${stats.feedWindowMinutes}m`;
+      // } else if (stats.feedRateSource === 'model') {
+      //   detail = `est. ×${stats.modelPetSamples}`;
+      // } else {
+      //   detail = 'est.';
+      // }
 
       feedRateEl.textContent = `${rateValue.toFixed(1)} feeds/hr • ${detail}`;
       feedRateEl.style.display = 'block';
@@ -4311,7 +4338,7 @@ function createDashboardIndicatorsCard(): HTMLElement {
   restockRows.style.cssText = 'display:flex;flex-direction:column;gap:3px;font-size:11px;color:#f0f0f0;';
   restockBox.appendChild(restockRows);
 
-  const restockValues = {} as Record<ShopCategory, HTMLElement>;
+  const restockValues = {} as Record<ShopCategoryKey, HTMLElement>;
   for (const cat of SHOP_CATEGORY_DEFINITIONS) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;';
@@ -5278,23 +5305,25 @@ function refreshHeaderStats(): void {
   // Auto feed segment
   let autoEnabled = !!cfg.enabled;
   let totalFeeds = feedCount;
-  let sessionInfo: ReturnType<typeof getSessionStats> | null = null;
+  // TODO: Re-enable when autoFeed feature is implemented
+  // let sessionInfo: ReturnType<typeof getSessionStats> | null = null;
+  let sessionInfo: any = null;
 
-  try {
-    const config = getAutoFeedConfig();
-    autoEnabled = !!config.enabled;
-  } catch {}
+  // try {
+  //   const config = getAutoFeedConfig();
+  //   autoEnabled = !!config.enabled;
+  // } catch {}
 
-  try {
-    const state = getAutoFeedState();
-    if (typeof state.feedCount === 'number' && !Number.isNaN(state.feedCount)) {
-      totalFeeds = state.feedCount;
-    }
-  } catch {}
+  // try {
+  //   const state = getAutoFeedState();
+  //   if (typeof state.feedCount === 'number' && !Number.isNaN(state.feedCount)) {
+  //     totalFeeds = state.feedCount;
+  //   }
+  // } catch {}
 
-  try {
-    sessionInfo = getSessionStats();
-  } catch {}
+  // try {
+  //   sessionInfo = getSessionStats();
+  // } catch {}
 
   const feedParts: string[] = [];
   feedParts.push(autoEnabled ? 'On' : 'Off');
@@ -5324,7 +5353,9 @@ function refreshHeaderStats(): void {
   try {
     const snapshot = getWeatherSnapshot();
     weatherLabel = formatWeatherLabel(snapshot.kind);
-    const info = getWeatherSwapInfo();
+    // TODO: Re-enable when weatherSwap feature is implemented
+    // const info = getWeatherSwapInfo();
+    const info: any = { lastSwapAt: null, currentPreset: null, nextWeatherPreset: 'unknown', nextSunnyPreset: 'unknown', cooldownRemainingMs: 0 };
 
     if (info.lastSwapAt) {
       const since = formatSince(info.lastSwapAt);
@@ -5361,7 +5392,9 @@ function refreshHeaderStats(): void {
   let spentTotal = 0;
 
   try {
-    const stats = getShopStats();
+    // TODO: Re-enable when autoShop feature is implemented
+    // const stats = getShopStats();
+    const stats: any = { totalPurchasedCount: 0, totalSpent: 0 };
     if (typeof stats.totalPurchasedCount === 'number') {
       purchasedTotal = stats.totalPurchasedCount;
     }

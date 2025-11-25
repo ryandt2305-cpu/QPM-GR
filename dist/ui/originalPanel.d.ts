@@ -1,3 +1,4 @@
+import { ShopCategoryKey } from '../store/stats';
 import { ActivePetInfo } from '../store/pets';
 import { AbilityDefinition } from '../data/petAbilities';
 export interface UIState {
@@ -18,7 +19,7 @@ export interface UIState {
     dashboardFeedList: HTMLElement | null;
     dashboardFeedMeta: HTMLElement | null;
     dashboardRestockSummary: HTMLElement | null;
-    dashboardRestockValues: Record<ShopCategory, HTMLElement | null>;
+    dashboardRestockValues: Record<ShopCategoryKey, HTMLElement | null>;
     turtleStatus: HTMLElement | null;
     turtleDetail: HTMLElement | null;
     turtleFooter: HTMLElement | null;

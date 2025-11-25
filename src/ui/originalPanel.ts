@@ -3546,7 +3546,7 @@ function ensureRestoreButton(): void {
   restoreButton = document.createElement('button');
   restoreButton.className = 'qpm-restore-button';
   restoreButton.textContent = '🌾';
-  restoreButton.title = 'Show Quinoa Pet Manager (Alt+M)';
+  restoreButton.title = 'Show Quinoa Pet Manager (Alt+Q)';
   restoreButton.addEventListener('click', () => {
     cycleDisplayMode(); // Will cycle from hidden to full
   });
@@ -3628,7 +3628,7 @@ export function createOriginalUI(): HTMLElement {
   modeToggle.type = 'button';
   modeToggle.className = 'qpm-mode-toggle';
   modeToggle.textContent = getModeLabel(getDisplayMode());
-  modeToggle.title = 'Toggle display mode (Alt+M)';
+  modeToggle.title = 'Toggle display mode (Alt+Q)';
   modeToggle.addEventListener('click', (e) => {
     e.stopPropagation();
     cycleDisplayMode();

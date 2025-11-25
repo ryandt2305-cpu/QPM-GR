@@ -30,7 +30,7 @@ export interface CompactModeConfig {
  */
 const DEFAULT_CONFIG: CompactModeConfig = {
   level: 'full',
-  keybind: 'Alt+M',
+  keybind: 'Alt+Q',
   expandOnHover: false,
   autoExpandEvents: ['hunger', 'weather'],
   autoCompactAtOpacity: 20,

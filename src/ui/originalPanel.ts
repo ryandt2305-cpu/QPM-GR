@@ -5603,13 +5603,17 @@ function createPetFeedingSection(): HTMLElement {
 
   // Define updatePetCards early
   const updatePetCards = (states: PetHungerState[]) => {
+    log(`🔧 updatePetCards called with ${states.length} pets`);
     // Update status indicator
     updateStatus();
 
     if (states.length === 0) {
+      log('⚠️ No pets to display, showing placeholder');
       petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game<br/>Click "Refresh Pet Detection" to retry</span></div>';
       return;
     }
+
+    log(`✅ Rendering ${states.length} pet cards...`);
 
     // Clear placeholder message if it exists (when transitioning from 0 to >0 pets)
     const placeholder = petsContainer.querySelector('div:not([data-pet-id])');
@@ -5618,10 +5622,12 @@ function createPetFeedingSection(): HTMLElement {
     }
 
     // Update or create cards for each pet
-    states.forEach(state => {
+    states.forEach((state, index) => {
+      log(`🔧 Processing pet ${index + 1}/${states.length}: ${state.name} (${state.petId})`);
       let card = petsContainer.querySelector<HTMLElement>(`[data-pet-id="${state.petId}"]`);
 
       if (card) {
+        log(`   ↻ Updating existing card for ${state.name}`);
         // Update existing card
         const hungerPct = card.querySelector('[data-qpm-pet-hunger]');
         if (hungerPct) {
@@ -5653,11 +5659,15 @@ function createPetFeedingSection(): HTMLElement {
         // Update border color
         (card as HTMLElement).style.borderColor = `${getAlertColor(state.alertLevel)}33`;
       } else {
+        log(`   ✨ Creating new card for ${state.name}`);
         // Create new card
         card = createPetHungerCard(state);
         petsContainer.appendChild(card);
+        log(`   ✅ Card created and appended. Container now has ${petsContainer.children.length} children`);
       }
     });
+
+    log(`✅ Finished rendering. Container has ${petsContainer.children.length} total children`);
 
     // Remove cards for pets that no longer exist
     const currentPetIds = new Set(states.map(s => s.petId));
@@ -5671,10 +5681,17 @@ function createPetFeedingSection(): HTMLElement {
 
   // Register callback IMMEDIATELY after defining update functions
   // This ensures we don't miss any pet detection events
+  log('🔧 Registering hunger state change callback...');
   onHungerStateChange(updatePetCards);
+  log(`🔧 Callback registered. Current pet count: ${getHungerStates().length}`);
 
   // Initial status update
   updateStatus();
+
+  // Call updatePetCards immediately with current states to ensure UI is populated
+  const currentStates = getHungerStates();
+  log(`🔧 Calling initial updatePetCards with ${currentStates.length} pets`);
+  updatePetCards(currentStates);
 
   // Configuration section
   const configSection = document.createElement('div');
@@ -5830,6 +5847,7 @@ function createPetFeedingSection(): HTMLElement {
   debugSection.append(refreshButton, statusIndicator);
   body.appendChild(debugSection);
 
+  log(`🔧 Appending petsContainer to DOM. Container has ${petsContainer.children.length} children`);
   body.appendChild(petsContainer);
   return root;
 }

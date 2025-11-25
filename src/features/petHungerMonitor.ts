@@ -56,7 +56,9 @@ interface HungerSnapshot {
 export interface HungerMonitorConfig {
   enabled: boolean;
   alertThresholdPct: number; // Alert when hunger drops below this percentage
+  criticalThresholdPct: number; // Critical alert threshold (should be lower than alertThresholdPct)
   flashPetSlots: boolean; // Flash border around pet slots
+  largeNotifications: boolean; // Show large modal notifications for critical hunger
   snapshotIntervalSec: number; // How often to take snapshots
   minSnapshotsForRate: number; // Minimum snapshots needed to calculate rate
 }
@@ -64,7 +66,9 @@ export interface HungerMonitorConfig {
 const DEFAULT_CONFIG: HungerMonitorConfig = {
   enabled: true,
   alertThresholdPct: 50, // Alert at 50% hunger by default
+  criticalThresholdPct: 15, // Critical alert at 15% hunger by default
   flashPetSlots: true,
+  largeNotifications: false, // Disabled by default
   snapshotIntervalSec: 30, // Take snapshot every 30 seconds
   minSnapshotsForRate: 3, // Need 3 snapshots minimum
 };
@@ -99,8 +103,8 @@ let configChangeCallbacks = new Set<(config: HungerMonitorConfig) => void>();
  * Get alert level based on hunger percentage
  */
 function getAlertLevel(hungerPct: number): AlertLevel {
-  if (hungerPct >= 50) return 'safe';
-  if (hungerPct >= 15) return 'warning';
+  if (hungerPct >= config.alertThresholdPct) return 'safe';
+  if (hungerPct >= config.criticalThresholdPct) return 'warning';
   return 'critical';
 }
 
@@ -240,12 +244,112 @@ function checkAndTriggerAlert(state: PetHungerState): void {
         : `${emoji} ${state.name} is getting hungry! (${Math.round(state.hungerPct)}% hunger)`;
 
       const level = state.alertLevel === 'critical' ? 'error' : 'warn';
-      showToast(message, level, 5000);
+
+      // Show large notification for critical hunger if enabled
+      if (config.largeNotifications && state.alertLevel === 'critical') {
+        showLargeHungerAlert(state);
+      } else {
+        showToast(message, level, 5000);
+      }
 
       petAlerts.set(state.alertLevel, now);
       lastAlertTimes.set(state.petId, petAlerts);
     }
   }
+}
+
+/**
+ * Show large modal alert for critical hunger
+ */
+function showLargeHungerAlert(state: PetHungerState): void {
+  // Create a large, attention-grabbing alert overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 999999;
+    background: linear-gradient(135deg, rgba(244, 67, 54, 0.98), rgba(211, 47, 47, 0.98));
+    color: white;
+    padding: 32px 48px;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 4px rgba(255, 255, 255, 0.1);
+    text-align: center;
+    animation: qpm-pulse-alert 1s ease-in-out infinite;
+    max-width: 500px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  `;
+
+  // Add pulse animation if not already defined
+  if (!document.querySelector('#qpm-alert-animation')) {
+    const style = document.createElement('style');
+    style.id = 'qpm-alert-animation';
+    style.textContent = `
+      @keyframes qpm-pulse-alert {
+        0%, 100% { transform: translate(-50%, -50%) scale(1); }
+        50% { transform: translate(-50%, -50%) scale(1.05); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const icon = document.createElement('div');
+  icon.textContent = '🔴';
+  icon.style.cssText = 'font-size: 64px; margin-bottom: 16px; line-height: 1;';
+
+  const title = document.createElement('div');
+  title.textContent = 'CRITICAL HUNGER ALERT!';
+  title.style.cssText = 'font-size: 28px; font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;';
+
+  const petName = document.createElement('div');
+  petName.textContent = state.name || `Pet ${state.petIndex + 1}`;
+  petName.style.cssText = 'font-size: 20px; font-weight: 600; margin-bottom: 8px;';
+
+  const hungerInfo = document.createElement('div');
+  hungerInfo.textContent = `${Math.round(state.hungerPct)}% Hunger Remaining`;
+  hungerInfo.style.cssText = 'font-size: 24px; font-weight: 700; margin-bottom: 8px;';
+
+  const timeInfo = document.createElement('div');
+  timeInfo.textContent = state.estimatedTimeToEmpty !== null
+    ? `Estimated time to empty: ${formatTimeRemaining(state.estimatedTimeToEmpty)}`
+    : 'Feed your pet immediately!';
+  timeInfo.style.cssText = 'font-size: 14px; opacity: 0.9; margin-bottom: 24px;';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Acknowledge';
+  closeBtn.style.cssText = `
+    background: white;
+    color: #d32f2f;
+    border: none;
+    padding: 12px 32px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+  `;
+  closeBtn.onmouseenter = () => {
+    closeBtn.style.background = 'rgba(255, 255, 255, 0.9)';
+    closeBtn.style.transform = 'scale(1.05)';
+  };
+  closeBtn.onmouseleave = () => {
+    closeBtn.style.background = 'white';
+    closeBtn.style.transform = 'scale(1)';
+  };
+  closeBtn.onclick = () => {
+    overlay.remove();
+  };
+
+  overlay.append(icon, title, petName, hungerInfo, timeInfo, closeBtn);
+  document.body.appendChild(overlay);
+
+  // Auto-dismiss after 10 seconds
+  setTimeout(() => {
+    if (overlay.parentElement) {
+      overlay.remove();
+    }
+  }, 10000);
 }
 
 /**
@@ -367,7 +471,10 @@ function flashPetSlotBorder(slotIndex: number, alertLevel: AlertLevel): void {
  * Initialize hunger monitoring
  */
 export async function initializeHungerMonitor(): Promise<void> {
-  if (unsubscribe) return;
+  if (unsubscribe) {
+    log('⚠️ Hunger monitor already initialized');
+    return;
+  }
 
   log('✅ Initializing hunger monitor');
 
@@ -379,6 +486,12 @@ export async function initializeHungerMonitor(): Promise<void> {
 
   // Subscribe to pet infos
   unsubscribe = onActivePetInfos((infos) => {
+    log(`📊 Hunger monitor received ${infos.length} active pets`);
+    if (infos.length === 0) {
+      log('⚠️ No active pets found. Make sure pets are summoned in the game.');
+    } else {
+      log('Active pets:', infos.map(p => `${p.name} (${p.hungerPct}%)`).join(', '));
+    }
     updateHungerStates(infos);
   });
 
@@ -386,6 +499,8 @@ export async function initializeHungerMonitor(): Promise<void> {
   snapshotTimer = window.setInterval(() => {
     // Timer just triggers periodic checks, actual snapshots controlled by shouldTakeSnapshot
   }, 1000);
+
+  log('✅ Hunger monitor initialized successfully');
 }
 
 /**

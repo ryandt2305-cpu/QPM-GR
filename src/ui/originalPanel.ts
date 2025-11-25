@@ -5447,10 +5447,14 @@ function createPetFeedingSection(): HTMLElement {
 
   thresholdInput.addEventListener('change', () => {
     const value = parseInt(thresholdInput.value, 10);
-    if (!isNaN(value) && value >= 1 && value <= 100) {
+    const criticalValue = parseInt(criticalInput.value, 10);
+    if (!isNaN(value) && value >= 1 && value <= 100 && value > criticalValue) {
       updateHungerMonitorConfig({ alertThresholdPct: value });
     } else {
       thresholdInput.value = String(getHungerMonitorConfig().alertThresholdPct);
+      if (value <= criticalValue) {
+        showToast('⚠️ Alert percentage must be higher than critical percentage');
+      }
     }
   });
 
@@ -5459,6 +5463,45 @@ function createPetFeedingSection(): HTMLElement {
   thresholdUnit.style.cssText = 'font-size: 11px; color: #999;';
 
   thresholdRow.append(thresholdLabel, thresholdInput, thresholdUnit);
+
+  // Critical Percentage input
+  const criticalRow = document.createElement('div');
+  criticalRow.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+  const criticalLabel = document.createElement('label');
+  criticalLabel.textContent = 'Hunger Critical Percentage';
+  criticalLabel.style.cssText = 'font-size: 11px; color: #ccc; flex: 1;';
+
+  const criticalInput = document.createElement('input');
+  criticalInput.type = 'number';
+  criticalInput.min = '1';
+  criticalInput.max = '100';
+  criticalInput.value = String(getHungerMonitorConfig().criticalThresholdPct);
+  criticalInput.style.cssText = 'width: 60px; padding: 4px 8px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 11px; text-align: center;';
+
+  // Prevent game hotkeys from interfering with number input
+  criticalInput.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+  });
+
+  criticalInput.addEventListener('change', () => {
+    const value = parseInt(criticalInput.value, 10);
+    const alertValue = parseInt(thresholdInput.value, 10);
+    if (!isNaN(value) && value >= 1 && value <= 100 && value < alertValue) {
+      updateHungerMonitorConfig({ criticalThresholdPct: value });
+    } else {
+      criticalInput.value = String(getHungerMonitorConfig().criticalThresholdPct);
+      if (value >= alertValue) {
+        showToast('⚠️ Critical percentage must be lower than alert percentage');
+      }
+    }
+  });
+
+  const criticalUnit = document.createElement('span');
+  criticalUnit.textContent = '%';
+  criticalUnit.style.cssText = 'font-size: 11px; color: #999;';
+
+  criticalRow.append(criticalLabel, criticalInput, criticalUnit);
 
   // Flash Pet Border checkbox
   const flashToggle = document.createElement('label');
@@ -5478,7 +5521,25 @@ function createPetFeedingSection(): HTMLElement {
 
   flashToggle.append(flashCheckbox, flashText);
 
-  configContent.append(thresholdRow, flashToggle);
+  // Large Notifications checkbox
+  const largeNotificationsToggle = document.createElement('label');
+  largeNotificationsToggle.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: #ccc; cursor: pointer;';
+
+  const largeNotificationsCheckbox = document.createElement('input');
+  largeNotificationsCheckbox.type = 'checkbox';
+  largeNotificationsCheckbox.className = 'qpm-checkbox';
+  largeNotificationsCheckbox.checked = getHungerMonitorConfig().largeNotifications;
+
+  largeNotificationsCheckbox.addEventListener('change', () => {
+    updateHungerMonitorConfig({ largeNotifications: largeNotificationsCheckbox.checked });
+  });
+
+  const largeNotificationsText = document.createElement('span');
+  largeNotificationsText.textContent = 'Large Critical Notifications';
+
+  largeNotificationsToggle.append(largeNotificationsCheckbox, largeNotificationsText);
+
+  configContent.append(thresholdRow, criticalRow, flashToggle, largeNotificationsToggle);
   configSection.append(configTitle, configContent);
   body.appendChild(configSection);
 

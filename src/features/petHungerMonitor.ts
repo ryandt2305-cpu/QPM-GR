@@ -481,8 +481,14 @@ export async function initializeHungerMonitor(): Promise<void> {
   // Load config from storage
   config = loadConfig();
 
-  // Start pet info store to get hunger data
-  await startPetInfoStore();
+  try {
+    // Start pet info store to get hunger data
+    await startPetInfoStore();
+    log('✅ Pet info store started');
+  } catch (error) {
+    log('❌ Failed to start pet info store:', error);
+    // Don't return - still set up the subscription for when it becomes available
+  }
 
   // Subscribe to pet infos
   unsubscribe = onActivePetInfos((infos) => {
@@ -490,7 +496,7 @@ export async function initializeHungerMonitor(): Promise<void> {
     if (infos.length === 0) {
       log('⚠️ No active pets found. Make sure pets are summoned in the game.');
     } else {
-      log('Active pets:', infos.map(p => `${p.name} (${p.hungerPct}%)`).join(', '));
+      log('✅ Active pets:', infos.map(p => `${p.name || 'Unknown'} (${p.hungerPct?.toFixed(1) || '?'}%)`).join(', '));
     }
     updateHungerStates(infos);
   });
@@ -501,6 +507,39 @@ export async function initializeHungerMonitor(): Promise<void> {
   }, 1000);
 
   log('✅ Hunger monitor initialized successfully');
+}
+
+/**
+ * Manually refresh pet detection (useful for debugging)
+ */
+export async function refreshPetDetection(): Promise<void> {
+  log('🔄 Manually refreshing pet detection...');
+
+  // Stop existing subscription
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
+  }
+
+  try {
+    // Restart pet info store
+    await startPetInfoStore();
+
+    // Resubscribe
+    unsubscribe = onActivePetInfos((infos) => {
+      log(`📊 Refresh: Found ${infos.length} active pets`);
+      if (infos.length > 0) {
+        log('✅ Pets detected:', infos.map(p => `${p.name || 'Unknown'} (${p.hungerPct?.toFixed(1) || '?'}%)`).join(', '));
+      }
+      updateHungerStates(infos);
+      notifyStateChange();
+    });
+
+    showToast(`✅ Refreshed: ${getHungerStates().length} pets found`, 'success', 3000);
+  } catch (error) {
+    log('❌ Refresh failed:', error);
+    showToast('❌ Failed to refresh pet detection', 'error', 3000);
+  }
 }
 
 /**

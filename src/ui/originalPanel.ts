@@ -40,6 +40,7 @@ import {
   getAlertEmoji,
   formatTimeRemaining,
   formatDecayRate,
+  refreshPetDetection,
   getConfig as getHungerMonitorConfig,
   updateConfig as updateHungerMonitorConfig,
   onConfigChange as onHungerConfigChange,
@@ -5543,6 +5544,44 @@ function createPetFeedingSection(): HTMLElement {
   configSection.append(configTitle, configContent);
   body.appendChild(configSection);
 
+  // Debug/Refresh section
+  const debugSection = document.createElement('div');
+  debugSection.style.cssText = 'margin-bottom: 16px; display: flex; align-items: center; gap: 8px;';
+
+  const refreshButton = document.createElement('button');
+  refreshButton.type = 'button';
+  refreshButton.className = 'qpm-chip';
+  refreshButton.textContent = '🔄 Refresh Pet Detection';
+  refreshButton.style.cssText = 'cursor: pointer; flex: 1; text-align: center; font-size: 11px; padding: 8px 12px;';
+  refreshButton.addEventListener('click', async () => {
+    refreshButton.textContent = '⏳ Refreshing...';
+    refreshButton.disabled = true;
+    try {
+      await refreshPetDetection();
+    } finally {
+      setTimeout(() => {
+        refreshButton.textContent = '🔄 Refresh Pet Detection';
+        refreshButton.disabled = false;
+      }, 1000);
+    }
+  });
+
+  const statusIndicator = document.createElement('div');
+  statusIndicator.style.cssText = 'font-size: 10px; color: #999; flex: 1; text-align: right;';
+  statusIndicator.dataset.qpmPetStatus = 'true';
+
+  const updateStatus = () => {
+    const count = getHungerStates().length;
+    statusIndicator.textContent = count > 0 ? `✅ ${count} pet${count === 1 ? '' : 's'} detected` : '⚠️ No pets detected';
+    statusIndicator.style.color = count > 0 ? '#4CAF50' : '#FF9800';
+  };
+
+  // Initial status update
+  updateStatus();
+
+  debugSection.append(refreshButton, statusIndicator);
+  body.appendChild(debugSection);
+
   // Container for pet hunger cards
   const petsContainer = document.createElement('div');
   petsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
@@ -5720,8 +5759,11 @@ function createPetFeedingSection(): HTMLElement {
 
   // Update UI with current hunger states
   const updatePetCards = (states: PetHungerState[]) => {
+    // Update status indicator
+    updateStatus();
+
     if (states.length === 0) {
-      petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game</span></div>';
+      petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game<br/>Click "Refresh Pet Detection" to retry</span></div>';
       return;
     }
 

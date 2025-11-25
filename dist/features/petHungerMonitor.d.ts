@@ -53,6 +53,10 @@ export declare function getAlertEmoji(level: AlertLevel): string;
  */
 export declare function initializeHungerMonitor(): Promise<void>;
 /**
+ * Manually refresh pet detection (useful for debugging)
+ */
+export declare function refreshPetDetection(): Promise<void>;
+/**
  * Stop hunger monitoring
  */
 export declare function stopHungerMonitor(): void;

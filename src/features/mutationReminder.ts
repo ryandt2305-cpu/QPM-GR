@@ -1869,23 +1869,31 @@ function parseIndex(value: string | null | undefined): number | null {
  */
 function isPlantCrop(name: string): boolean {
   const lowerName = name.toLowerCase().trim();
-  
+
   // Remove fruit count suffix for checking (e.g., "Pepper Plant+9" -> "Pepper Plant")
+  const hasFruitCount = /\+\d+$/.test(name);
   const baseNameMatch = name.match(/^(.+?)(?:\+\d+)?$/);
   const baseName = (baseNameMatch?.[1] || name).toLowerCase().trim();
-  
-  // MUST contain "plant" to be a plant item (not a harvested crop)
-  if (!baseName.includes('plant')) {
-    return false;
-  }
-  
-  // Exclude non-plant items
+
+  // Exclude non-plant items first
   const exclusions = ['seed', 'spore', 'cutting', 'pod', 'kernel', 'pit', 'shovel', 'pot', 'watering can', 'tool', 'fertilizer', 'egg', 'decor', 'furniture', 'planter'];
   for (const exclusion of exclusions) {
     if (baseName.includes(exclusion)) return false;
   }
-  
-  return true;
+
+  // Accept if it contains "plant" (e.g., "Lily Plant", "Pepper Plant+9")
+  if (baseName.includes('plant')) {
+    return true;
+  }
+
+  // Also accept if it has a fruit count suffix (e.g., "Lily+1")
+  // This handles cases where the game shows species name with count but no "Plant" word
+  if (hasFruitCount) {
+    return true;
+  }
+
+  // Otherwise, reject (harvested crops like "Lily", "Pepper", etc.)
+  return false;
 }
 
 /**

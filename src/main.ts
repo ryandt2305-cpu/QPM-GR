@@ -595,6 +595,54 @@ const QPM_DEBUG_API = {
     console.log(available ? '✅ Instant feed is available' : '❌ Instant feed is NOT available (RoomConnection missing)');
     return available;
   },
+
+  debugInventory: async () => {
+    try {
+      const { getAtomByLabel, readAtomValue } = await import('./core/jotaiBridge');
+
+      console.log('=== Inventory Debug ===\n');
+
+      // Try userSlotsAtom first
+      const userSlotsAtom = getAtomByLabel('userSlotsAtom');
+      if (userSlotsAtom) {
+        const inventory = await readAtomValue(userSlotsAtom);
+        console.log('userSlotsAtom inventory:', inventory);
+
+        const plantItems = Array.isArray(inventory) ? inventory.filter((item: any) =>
+          item.itemType === 'Plant' ||
+          (item.slots && item.slots.length > 0)
+        ) : [];
+        console.log(`\nFound ${plantItems?.length || 0} plant items:`);
+        console.table(plantItems?.map((item: any, i: number) => ({
+          Index: i,
+          Species: item.species || 'N/A',
+          Name: item.name || 'N/A',
+          ItemType: item.itemType,
+          HasSlots: !!(item.slots && item.slots.length > 0),
+          NumSlots: item.slots?.length || 0,
+          Keys: Object.keys(item).join(', ')
+        })));
+
+        // Show first plant in detail
+        if (plantItems && plantItems.length > 0) {
+          console.log('\n=== First Plant Item (Full Structure) ===');
+          console.log(plantItems[0]);
+          if (plantItems[0].slots) {
+            console.log('\n=== Slots Detail ===');
+            console.log(plantItems[0].slots);
+          }
+        }
+
+        return { userSlots: inventory, plantItems };
+      }
+
+      console.error('❌ userSlotsAtom not found');
+      return null;
+    } catch (error) {
+      console.error('Failed to debug inventory:', error);
+      return null;
+    }
+  },
 };
 
 shareGlobal('QPM', QPM_DEBUG_API);

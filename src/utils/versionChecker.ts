@@ -1,23 +1,12 @@
 // src/utils/versionChecker.ts
-// Version checker: Compares current version with latest GitHub release
+// Version information (simplified - no network checks to avoid Tampermonkey prompts)
+// Tampermonkey's built-in update mechanism (@updateURL in header) handles version checking
 
-import { log } from './logger';
-
-// Declare GM functions for TypeScript
-declare function GM_xmlhttpRequest(details: {
-  method: string;
-  url: string;
-  headers?: Record<string, string>;
-  onload?: (response: { status: number; responseText: string }) => void;
-  onerror?: (error: any) => void;
-  ontimeout?: () => void;
-}): void;
-
-const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js';
 const CURRENT_VERSION = '1.10.0'; // This should match package.json version
-const CHECK_INTERVAL = 3600000; // Check every hour (in milliseconds)
+const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
+const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js';
 
-export type VersionStatus = 'up-to-date' | 'outdated' | 'error' | 'checking';
+export type VersionStatus = 'current' | 'unknown';
 
 export interface VersionInfo {
   current: string;
@@ -26,212 +15,32 @@ export interface VersionInfo {
   updateUrl: string;
 }
 
-let cachedVersionInfo: VersionInfo | null = null;
-let lastCheckTime = 0;
-let onVersionChangeCallback: ((info: VersionInfo) => void) | null = null;
-
 /**
- * Parse version string to comparable array [major, minor, patch]
- */
-function parseVersion(version: string): number[] {
-  return version.split('.').map(v => parseInt(v, 10) || 0);
-}
-
-/**
- * Compare two version strings
- * Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
- */
-function compareVersions(v1: string, v2: string): number {
-  const parts1 = parseVersion(v1);
-  const parts2 = parseVersion(v2);
-
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const p1 = parts1[i] || 0;
-    const p2 = parts2[i] || 0;
-
-    if (p1 > p2) return 1;
-    if (p1 < p2) return -1;
-  }
-
-  return 0;
-}
-
-/**
- * Fetch latest version from GitHub raw file
- */
-async function fetchLatestVersion(): Promise<string | null> {
-  try {
-    log('🔍 Attempting to fetch latest version from GitHub...');
-
-    // Use GM_xmlhttpRequest if available (to bypass CORS), otherwise fall back to fetch
-    const hasGM = typeof GM_xmlhttpRequest !== 'undefined';
-    log(`GM_xmlhttpRequest available: ${hasGM}`);
-
-    if (hasGM) {
-      log('Using GM_xmlhttpRequest to fetch version...');
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: GITHUB_RAW_URL,
-          headers: {
-            'Cache-Control': 'no-cache',
-          },
-          onload: (response) => {
-            log(`✅ GM_xmlhttpRequest response received: ${response.status}`);
-            if (response.status !== 200) {
-              log(`⚠️ Failed to fetch latest version: ${response.status}`);
-              resolve(null);
-              return;
-            }
-
-            const text = response.responseText;
-            log(`📄 Response text length: ${text.length}`);
-            const versionMatch = text.match(/\/\/\s*@version\s+([\d.]+)/);
-            if (versionMatch && versionMatch[1]) {
-              log(`✅ Found version: ${versionMatch[1]}`);
-              resolve(versionMatch[1]);
-            } else {
-              log('⚠️ Could not parse version from GitHub file');
-              resolve(null);
-            }
-          },
-          onerror: (error) => {
-            log('❌ Error fetching latest version via GM_xmlhttpRequest:', error);
-            resolve(null);
-          },
-          ontimeout: () => {
-            log('❌ Timeout fetching latest version');
-            resolve(null);
-          },
-        });
-      });
-    }
-
-    // Fallback to fetch (will likely fail due to CORS in userscript context)
-    const response = await fetch(GITHUB_RAW_URL, {
-      cache: 'no-cache',
-      headers: {
-        'Cache-Control': 'no-cache',
-      },
-    });
-
-    if (!response.ok) {
-      log(`⚠️ Failed to fetch latest version: ${response.status}`);
-      return null;
-    }
-
-    const text = await response.text();
-
-    // Extract version from userscript header: // @version      X.Y.Z
-    const versionMatch = text.match(/\/\/\s*@version\s+([\d.]+)/);
-    if (versionMatch && versionMatch[1]) {
-      return versionMatch[1];
-    }
-
-    log('⚠️ Could not parse version from GitHub file');
-    return null;
-  } catch (error) {
-    log('❌ Error fetching latest version:', error);
-    return null;
-  }
-}
-
-/**
- * Check for updates and return version info
- */
-export async function checkForUpdates(force = false): Promise<VersionInfo> {
-  const now = Date.now();
-
-  // Return cached result if recent (unless forced)
-  if (!force && cachedVersionInfo && (now - lastCheckTime) < CHECK_INTERVAL) {
-    return cachedVersionInfo;
-  }
-
-  // Set status to checking
-  const checkingInfo: VersionInfo = {
-    current: CURRENT_VERSION,
-    latest: null,
-    status: 'checking',
-    updateUrl: GITHUB_RAW_URL,
-  };
-
-  if (onVersionChangeCallback) {
-    onVersionChangeCallback(checkingInfo);
-  }
-
-  lastCheckTime = now;
-
-  // Fetch latest version
-  const latestVersion = await fetchLatestVersion();
-
-  let status: VersionStatus = 'error';
-  if (latestVersion) {
-    const comparison = compareVersions(CURRENT_VERSION, latestVersion);
-    if (comparison < 0) {
-      status = 'outdated';
-      log(`📦 New version available: ${latestVersion} (current: ${CURRENT_VERSION})`);
-    } else {
-      status = 'up-to-date';
-      log(`✅ QPM is up to date (${CURRENT_VERSION})`);
-    }
-  }
-
-  cachedVersionInfo = {
-    current: CURRENT_VERSION,
-    latest: latestVersion,
-    status,
-    updateUrl: GITHUB_RAW_URL,
-  };
-
-  if (onVersionChangeCallback) {
-    onVersionChangeCallback(cachedVersionInfo);
-  }
-
-  return cachedVersionInfo;
-}
-
-/**
- * Get cached version info (or return default)
+ * Get current version info (no network checks)
  */
 export function getVersionInfo(): VersionInfo {
-  return cachedVersionInfo || {
+  return {
     current: CURRENT_VERSION,
     latest: null,
-    status: 'checking',
-    updateUrl: GITHUB_RAW_URL,
+    status: 'current',
+    updateUrl: UPDATE_URL,
   };
 }
 
 /**
- * Register callback for version changes
+ * Register callback for version changes (no-op in simplified version)
  */
-export function onVersionChange(callback: (info: VersionInfo) => void): void {
-  onVersionChangeCallback = callback;
+export function onVersionChange(_callback: (info: VersionInfo) => void): void {
+  // No-op: We don't do network-based version checking anymore
+  // Tampermonkey handles updates via @updateURL
 }
 
 /**
- * Start periodic version checking
+ * Start version checker (no-op in simplified version)
  */
 export function startVersionChecker(): void {
-  log('🔍 Starting version checker...');
-  log(`Current version: ${CURRENT_VERSION}`);
-  log(`GitHub URL: ${GITHUB_RAW_URL}`);
-
-  // Initial check after 2 seconds (reduced for faster feedback)
-  setTimeout(() => {
-    log('⏰ Running initial version check...');
-    checkForUpdates().catch(err => {
-      log('❌ Initial version check failed:', err);
-    });
-  }, 2000);
-
-  // Periodic checks
-  setInterval(() => {
-    log('⏰ Running periodic version check...');
-    checkForUpdates().catch(err => {
-      log('❌ Periodic version check failed:', err);
-    });
-  }, CHECK_INTERVAL);
+  // No-op: Tampermonkey handles updates via @updateURL in userscript header
+  console.log(`[QPM] Version ${CURRENT_VERSION} - Updates handled by Tampermonkey`);
 }
 
 /**
@@ -239,4 +48,11 @@ export function startVersionChecker(): void {
  */
 export function getCurrentVersion(): string {
   return CURRENT_VERSION;
+}
+
+/**
+ * Check for updates (no-op - returns current version only)
+ */
+export async function checkForUpdates(_force = false): Promise<VersionInfo> {
+  return getVersionInfo();
 }

@@ -346,7 +346,6 @@ interface PetHungerState {
 - Store historical snapshots to compute rate
 
 **Questions:**
-- How does Arie's mod get hunger? (Need to check their source if available)
 - Is hunger available in `myPetSlotInfosAtom` directly?
 - What's the typical hunger decay rate in the game?
 
@@ -652,7 +651,7 @@ const roi = (netProfit / feedingCostPerHour) * 100;
 **Priority:** 🟡 MEDIUM
 
 #### Overview
-Customizable visual theme system with preset themes and texture overlays (different from MGTools styles).
+Customizable visual theme system with preset themes and texture overlays 
 
 #### Features
 
@@ -761,7 +760,7 @@ interface TextureOverlay {
 - [ ] Blend modes work correctly
 - [ ] Sliders update in real-time
 - [ ] Themes persist across sessions
-- [ ] Different styles from MGTools
+
 
 ---
 

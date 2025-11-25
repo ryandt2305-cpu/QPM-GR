@@ -94,7 +94,7 @@ export declare function getTopLikelyItems(limit?: number): Array<{
  */
 export declare function predictItemNextAppearance(itemName: string): number | null;
 /**
- * Clear all restock data
+ * Clear all restock data and ALL QPM storage
  */
 export declare function clearAllRestocks(): void;
 /**

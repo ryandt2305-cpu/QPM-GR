@@ -100,6 +100,7 @@ export function createJournalCheckerSection(): HTMLElement {
   const categories = [
     { key: 'produce', label: 'Produce', icon: '🌾', color: '#8BC34A' },
     { key: 'pets', label: 'Pets', icon: '🐾', color: '#42A5F5' },
+    { key: 'recommendations', label: 'Smart Tips', icon: '💡', color: '#9C27B0' },
     { key: 'missing', label: 'Missing', icon: '📋', color: '#FF9800' },
   ];
 
@@ -365,6 +366,319 @@ export function createJournalCheckerSection(): HTMLElement {
 
         speciesCard.innerHTML = html;
         resultsContainer.appendChild(speciesCard);
+      }
+    } else if (selectedCategory === 'recommendations') {
+      // Load recommendations
+      const { generateJournalStrategy, getDifficultyEmoji, getPriorityEmoji, getDifficultyDescription } = await import('../features/journalRecommendations');
+      const strategy = await generateJournalStrategy();
+
+      if (!strategy) {
+        resultsContainer.innerHTML = '<div style="color: #999; text-align: center; padding: 40px; font-size: 14px;">⚠️ Unable to generate recommendations<br><span style="font-size: 12px; color: #666;">Try refreshing or check console for errors</span></div>';
+        return;
+      }
+
+      // Recommended Focus Section
+      if (strategy.recommendedFocus.length > 0) {
+        const focusSection = document.createElement('div');
+        focusSection.style.cssText = `
+          margin-bottom: 24px;
+        `;
+        focusSection.innerHTML = `
+          <div style="
+            font-size: 16px;
+            font-weight: bold;
+            color: #9C27B0;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #9C27B033;
+          ">
+            🎯 Recommended Focus (Top ${Math.min(5, strategy.recommendedFocus.length)})
+          </div>
+        `;
+
+        strategy.recommendedFocus.slice(0, 5).forEach(rec => {
+          const recCard = document.createElement('div');
+          recCard.style.cssText = `
+            background: linear-gradient(135deg, #1f1f1f, #1a1a1a);
+            border-left: 4px solid ${rec.priority === 'high' ? '#f44336' : rec.priority === 'medium' ? '#ff9800' : '#666'};
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 10px;
+            transition: all 0.2s;
+          `;
+
+          recCard.addEventListener('mouseenter', () => {
+            recCard.style.transform = 'translateX(4px)';
+            recCard.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+          });
+          recCard.addEventListener('mouseleave', () => {
+            recCard.style.transform = 'translateX(0)';
+            recCard.style.boxShadow = 'none';
+          });
+
+          const priorityBadge = rec.priority === 'high' ? 'HIGH' : rec.priority === 'medium' ? 'MED' : 'LOW';
+          const priorityColor = rec.priority === 'high' ? '#f44336' : rec.priority === 'medium' ? '#ff9800' : '#666';
+
+          recCard.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 18px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>
+                <strong style="color: #fff; font-size: 14px;">${rec.species}</strong>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <span style="
+                  background: ${priorityColor}33;
+                  color: ${priorityColor};
+                  padding: 2px 8px;
+                  border-radius: 4px;
+                  font-size: 10px;
+                  font-weight: bold;
+                ">${priorityBadge}</span>
+                <span style="
+                  background: #555;
+                  color: #fff;
+                  padding: 2px 8px;
+                  border-radius: 4px;
+                  font-size: 10px;
+                  font-weight: bold;
+                ">${getDifficultyEmoji(rec.difficulty)} ${getDifficultyDescription(rec.difficulty)}</span>
+              </div>
+            </div>
+            <div style="
+              background: #111;
+              border-radius: 8px;
+              height: 4px;
+              margin-bottom: 8px;
+              overflow: hidden;
+            ">
+              <div style="
+                background: linear-gradient(90deg, #9C27B0, #BA68C8);
+                height: 100%;
+                width: ${rec.completionPct}%;
+                box-shadow: 0 0 8px #9C27B077;
+              "></div>
+            </div>
+            <div style="color: #aaa; font-size: 11px; margin-bottom: 6px;">
+              <strong style="color: #9C27B0;">${rec.completionPct.toFixed(0)}% complete</strong> • ${rec.missingVariants.length} variant${rec.missingVariants.length !== 1 ? 's' : ''} remaining • Est. ${rec.estimatedTime}
+            </div>
+            <div style="color: #ccc; font-size: 12px; margin-bottom: 8px; line-height: 1.4;">
+              ${rec.strategy}
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+              ${rec.missingVariants.map(v => `
+                <span style="
+                  padding: 4px 8px;
+                  border-radius: 4px;
+                  font-size: 10px;
+                  background: #333;
+                  color: #999;
+                ">${v}</span>
+              `).join('')}
+            </div>
+          `;
+
+          focusSection.appendChild(recCard);
+        });
+
+        resultsContainer.appendChild(focusSection);
+      }
+
+      // Low-Hanging Fruit Section
+      if (strategy.lowHangingFruit.length > 0) {
+        const fruitSection = document.createElement('div');
+        fruitSection.style.cssText = `
+          margin-bottom: 24px;
+        `;
+        fruitSection.innerHTML = `
+          <div style="
+            font-size: 16px;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #4CAF5033;
+          ">
+            🍒 Quick Wins (Easy Completions)
+          </div>
+        `;
+
+        strategy.lowHangingFruit.slice(0, 5).forEach(rec => {
+          const fruitCard = document.createElement('div');
+          fruitCard.style.cssText = `
+            background: #1a1a1a;
+            border: 1px solid #4CAF5033;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s;
+          `;
+
+          fruitCard.addEventListener('mouseenter', () => {
+            fruitCard.style.background = '#1f1f1f';
+            fruitCard.style.borderColor = '#4CAF5055';
+          });
+          fruitCard.addEventListener('mouseleave', () => {
+            fruitCard.style.background = '#1a1a1a';
+            fruitCard.style.borderColor = '#4CAF5033';
+          });
+
+          fruitCard.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 16px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>
+              <div>
+                <div style="font-size: 13px; font-weight: 600; color: #fff;">${rec.species}</div>
+                <div style="font-size: 10px; color: #999;">${rec.missingVariants.join(', ')}</div>
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 11px; color: #4CAF50; font-weight: bold;">${rec.estimatedTime}</div>
+              <div style="font-size: 10px; color: #666;">${getDifficultyEmoji(rec.difficulty)} ${getDifficultyDescription(rec.difficulty)}</div>
+            </div>
+          `;
+
+          fruitSection.appendChild(fruitCard);
+        });
+
+        resultsContainer.appendChild(fruitSection);
+      }
+
+      // Fastest Path Section
+      if (strategy.fastestPath.steps.length > 0) {
+        const pathSection = document.createElement('div');
+        pathSection.style.cssText = `
+          margin-bottom: 24px;
+        `;
+        pathSection.innerHTML = `
+          <div style="
+            font-size: 16px;
+            font-weight: bold;
+            color: #FF9800;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #FF980033;
+          ">
+            🚀 Fastest Path to ${strategy.fastestPath.expectedCompletion} More Variants
+          </div>
+          <div style="
+            background: #FF980022;
+            border-left: 3px solid #FF9800;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+          ">
+            <div style="font-size: 12px; color: #FF9800; font-weight: 600; margin-bottom: 4px;">
+              ⏱️ Estimated Time: ${strategy.fastestPath.estimatedTime}
+            </div>
+            <div style="font-size: 11px; color: #aaa;">
+              Complete these ${strategy.fastestPath.steps.length} species for maximum journal progress
+            </div>
+          </div>
+        `;
+
+        strategy.fastestPath.steps.slice(0, 8).forEach((rec, index) => {
+          const stepCard = document.createElement('div');
+          stepCard.style.cssText = `
+            background: #1a1a1a;
+            border-left: 3px solid #FF9800;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          `;
+
+          stepCard.innerHTML = `
+            <div style="
+              background: #FF9800;
+              color: #000;
+              width: 24px;
+              height: 24px;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 11px;
+              font-weight: bold;
+              flex-shrink: 0;
+            ">${index + 1}</div>
+            <div style="flex: 1;">
+              <div style="font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px;">
+                ${rec.type === 'produce' ? '🌿' : '🐾'} ${rec.species} (${rec.missingVariants.join(', ')})
+              </div>
+              <div style="font-size: 10px; color: #999;">${rec.estimatedTime} • ${getDifficultyEmoji(rec.difficulty)} ${getDifficultyDescription(rec.difficulty)}</div>
+            </div>
+          `;
+
+          pathSection.appendChild(stepCard);
+        });
+
+        resultsContainer.appendChild(pathSection);
+      }
+
+      // Long-Term Goals Section
+      if (strategy.longTermGoals.length > 0) {
+        const goalsSection = document.createElement('div');
+        goalsSection.style.cssText = `
+          margin-bottom: 24px;
+        `;
+        goalsSection.innerHTML = `
+          <div style="
+            font-size: 16px;
+            font-weight: bold;
+            color: #f44336;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f4433633;
+          ">
+            🎖️ Long-Term Challenges
+          </div>
+          <div style="
+            background: #f4433622;
+            border-left: 3px solid #f44336;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 12px;
+            font-size: 11px;
+            color: #f44336;
+          ">
+            ⚠️ These variants are very difficult or require rare conditions
+          </div>
+        `;
+
+        strategy.longTermGoals.slice(0, 5).forEach(rec => {
+          const goalCard = document.createElement('div');
+          goalCard.style.cssText = `
+            background: #1a1a1a;
+            border: 1px solid #f4433633;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+          `;
+
+          goalCard.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 16px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>
+                <strong style="color: #fff; font-size: 13px;">${rec.species}</strong>
+              </div>
+              <span style="font-size: 20px;">${getDifficultyEmoji(rec.difficulty)}</span>
+            </div>
+            <div style="font-size: 11px; color: #aaa; margin-bottom: 6px;">
+              ${rec.missingVariants.join(', ')}
+            </div>
+            <div style="font-size: 10px; color: #999; line-height: 1.4;">
+              ${rec.strategy}
+            </div>
+          `;
+
+          goalsSection.appendChild(goalCard);
+        });
+
+        resultsContainer.appendChild(goalsSection);
       }
     }
   };

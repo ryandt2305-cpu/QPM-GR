@@ -32,6 +32,7 @@ import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
+import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 
 export interface UIState {
   panel: HTMLElement | null;
@@ -51,7 +52,7 @@ export interface UIState {
   dashboardFeedList: HTMLElement | null;
   dashboardFeedMeta: HTMLElement | null;
   dashboardRestockSummary: HTMLElement | null;
-  dashboardRestockValues: Record<ShopCategory, HTMLElement | null>;
+  dashboardRestockValues: Record<ShopCategoryKey, HTMLElement | null>;
   turtleStatus: HTMLElement | null;
   turtleDetail: HTMLElement | null;
   turtleFooter: HTMLElement | null;
@@ -224,7 +225,7 @@ const SHOP_COUNTDOWN_WARNING_THRESHOLD_MS = 10_000;
 
 interface ShopCountdownView {
   summaryEl: HTMLElement;
-  values: Record<ShopCategory, HTMLElement>;
+  values: Record<ShopCategoryKey, HTMLElement>;
 }
 
 interface TurtleTimerUIConfig {
@@ -236,6 +237,29 @@ interface TurtleTimerUIConfig {
   eggFocus: TurtleTimerState['eggFocus'];
   eggFocusTargetTileId: string | null;
   eggFocusTargetSlotIndex: number | null;
+}
+
+// Type definitions for legacy autoShop feature (currently disabled)
+interface RestockInfo {
+  nextRestockAt?: Record<string, number | null>;
+}
+
+interface AutoShopItemConfig {
+  enabled: boolean;
+  category: string;
+  itemName: string;
+  priority?: number;
+  rarityRank?: number;
+}
+
+type CheckboxChangeHandler = (checked: boolean) => void;
+
+interface NumberOptionConfig {
+  min?: number;
+  max?: number;
+  step?: number;
+  suffix?: string;
+  onChange: (value: number) => void;
 }
 
 const shopCountdownViews: ShopCountdownView[] = [];
@@ -284,7 +308,7 @@ let notificationDetailExpanded = storage.get<boolean>(NOTIFICATIONS_DETAIL_EXPAN
 let lastNotificationFilteredCount = 0;
 
 interface ShopCategoryDefinition {
-  key: ShopCategory;
+  key: ShopCategoryKey;
   label: string;
   icon: string;
 }
@@ -1902,6 +1926,59 @@ function ensurePanelStyles(): void {
     color: var(--qpm-text);
   }
 
+  .qpm-version-bubble {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: all 0.2s ease;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .qpm-version-bubble[data-status="up-to-date"] {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+    border: 1px solid rgba(76, 175, 80, 0.4);
+  }
+
+  .qpm-version-bubble[data-status="outdated"] {
+    background: rgba(255, 193, 7, 0.2);
+    color: #FFC107;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+    animation: pulse-warning 2s ease-in-out infinite;
+  }
+
+  .qpm-version-bubble[data-status="checking"] {
+    background: rgba(158, 158, 158, 0.2);
+    color: #9E9E9E;
+    border: 1px solid rgba(158, 158, 158, 0.4);
+  }
+
+  .qpm-version-bubble[data-status="error"] {
+    background: rgba(244, 67, 54, 0.2);
+    color: #F44336;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+  }
+
+  .qpm-version-bubble:hover[data-status="outdated"] {
+    transform: scale(1.05);
+    background: rgba(255, 193, 7, 0.3);
+  }
+
+  @keyframes pulse-warning {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
+  }
+
   .qpm-content {
     display: flex;
     flex-direction: column;
@@ -3428,6 +3505,14 @@ export function createOriginalUI(): HTMLElement {
   const titleText = document.createElement('span');
   titleText.textContent = '🍖 Quinoa Pet Manager';
 
+  // Create version bubble
+  const versionBubble = document.createElement('div');
+  versionBubble.className = 'qpm-version-bubble';
+  versionBubble.dataset.status = 'current';
+  versionBubble.textContent = `v${getCurrentVersion()}`;
+  versionBubble.title = `QPM v${getCurrentVersion()}\nUpdates are handled by Tampermonkey`;
+  versionBubble.style.cursor = 'default';
+
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';
   collapseButton.dataset.qpmCollapseButton = 'true';
@@ -3438,7 +3523,7 @@ export function createOriginalUI(): HTMLElement {
   collapseIcon.textContent = '▼';
   collapseButton.appendChild(collapseIcon);
 
-  titleBar.append(titleText, collapseButton);
+  titleBar.append(titleText, versionBubble, collapseButton);
 
   const content = document.createElement('div');
   content.className = 'qpm-content';
@@ -3772,15 +3857,16 @@ export function createOriginalUI(): HTMLElement {
   document.body.appendChild(panel);
 
   // Connect status callbacks to update UI
-  setFeedStatusCallback((status: string) => {
-    updateUIStatus(status);
-    refreshHeaderStats();
-  });
-  
-  setWeatherStatusCallback((status: string) => {
-    updateWeatherUI(status);
-    refreshHeaderStats();
-  });
+  // TODO: Re-enable when autoFeed and weatherSwap features are implemented
+  // setFeedStatusCallback((status: string) => {
+  //   updateUIStatus(status);
+  //   refreshHeaderStats();
+  // });
+
+  // setWeatherStatusCallback((status: string) => {
+  //   updateWeatherUI(status);
+  //   refreshHeaderStats();
+  // });
 
   uiState.panel = panel;
   uiState.content = content;
@@ -4162,21 +4248,24 @@ function createDashboardIndicatorsCard(): HTMLElement {
 
   const updateFeedRate = (): void => {
     try {
-      const stats = getSessionStats();
-      const rateValue = Number(stats.feedsPerHour);
+      // TODO: Re-enable when stats feature is implemented
+      // const stats = getSessionStats();
+      // const rateValue = Number(stats.feedsPerHour);
+      const rateValue = 0; // Placeholder
       if (!Number.isFinite(rateValue) || rateValue <= 0) {
         feedRateEl.style.display = 'none';
         return;
       }
 
-      let detail: string;
-      if (stats.feedRateSource === 'events') {
-        detail = `${stats.feedSampleCount} feeds/${stats.feedWindowMinutes}m`;
-      } else if (stats.feedRateSource === 'model') {
-        detail = `est. ×${stats.modelPetSamples}`;
-      } else {
-        detail = 'est.';
-      }
+      // TODO: Re-enable when stats feature is implemented
+      let detail: string = 'est.';
+      // if (stats.feedRateSource === 'events') {
+      //   detail = `${stats.feedSampleCount} feeds/${stats.feedWindowMinutes}m`;
+      // } else if (stats.feedRateSource === 'model') {
+      //   detail = `est. ×${stats.modelPetSamples}`;
+      // } else {
+      //   detail = 'est.';
+      // }
 
       feedRateEl.textContent = `${rateValue.toFixed(1)} feeds/hr • ${detail}`;
       feedRateEl.style.display = 'block';
@@ -4208,7 +4297,7 @@ function createDashboardIndicatorsCard(): HTMLElement {
   restockRows.style.cssText = 'display:flex;flex-direction:column;gap:3px;font-size:11px;color:#f0f0f0;';
   restockBox.appendChild(restockRows);
 
-  const restockValues = {} as Record<ShopCategory, HTMLElement>;
+  const restockValues = {} as Record<ShopCategoryKey, HTMLElement>;
   for (const cat of SHOP_CATEGORY_DEFINITIONS) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;';
@@ -5175,23 +5264,25 @@ function refreshHeaderStats(): void {
   // Auto feed segment
   let autoEnabled = !!cfg.enabled;
   let totalFeeds = feedCount;
-  let sessionInfo: ReturnType<typeof getSessionStats> | null = null;
+  // TODO: Re-enable when autoFeed feature is implemented
+  // let sessionInfo: ReturnType<typeof getSessionStats> | null = null;
+  let sessionInfo: any = null;
 
-  try {
-    const config = getAutoFeedConfig();
-    autoEnabled = !!config.enabled;
-  } catch {}
+  // try {
+  //   const config = getAutoFeedConfig();
+  //   autoEnabled = !!config.enabled;
+  // } catch {}
 
-  try {
-    const state = getAutoFeedState();
-    if (typeof state.feedCount === 'number' && !Number.isNaN(state.feedCount)) {
-      totalFeeds = state.feedCount;
-    }
-  } catch {}
+  // try {
+  //   const state = getAutoFeedState();
+  //   if (typeof state.feedCount === 'number' && !Number.isNaN(state.feedCount)) {
+  //     totalFeeds = state.feedCount;
+  //   }
+  // } catch {}
 
-  try {
-    sessionInfo = getSessionStats();
-  } catch {}
+  // try {
+  //   sessionInfo = getSessionStats();
+  // } catch {}
 
   const feedParts: string[] = [];
   feedParts.push(autoEnabled ? 'On' : 'Off');
@@ -5221,7 +5312,9 @@ function refreshHeaderStats(): void {
   try {
     const snapshot = getWeatherSnapshot();
     weatherLabel = formatWeatherLabel(snapshot.kind);
-    const info = getWeatherSwapInfo();
+    // TODO: Re-enable when weatherSwap feature is implemented
+    // const info = getWeatherSwapInfo();
+    const info: any = { lastSwapAt: null, currentPreset: null, nextWeatherPreset: 'unknown', nextSunnyPreset: 'unknown', cooldownRemainingMs: 0 };
 
     if (info.lastSwapAt) {
       const since = formatSince(info.lastSwapAt);
@@ -5258,7 +5351,9 @@ function refreshHeaderStats(): void {
   let spentTotal = 0;
 
   try {
-    const stats = getShopStats();
+    // TODO: Re-enable when autoShop feature is implemented
+    // const stats = getShopStats();
+    const stats: any = { totalPurchasedCount: 0, totalSpent: 0 };
     if (typeof stats.totalPurchasedCount === 'number') {
       purchasedTotal = stats.totalPurchasedCount;
     }

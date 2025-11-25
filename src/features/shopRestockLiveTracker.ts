@@ -8,6 +8,7 @@ import { log } from '../utils/logger';
 let unsubscribeShop: (() => void) | null = null;
 let previousShopState: Map<string, number> | null = null;
 let isTracking = false;
+let isEnabled = true; // Default to enabled for backwards compatibility
 
 /**
  * Item categories - only track seeds and eggs (comprehensive list)
@@ -150,6 +151,11 @@ function generateRestockId(timestamp: number, items: RestockItem[]): string {
  * Start live shop tracking using shop stock system
  */
 export async function startLiveShopTracking(): Promise<void> {
+  if (!isEnabled) {
+    log('⚠️ Live tracking is disabled');
+    return;
+  }
+
   if (isTracking) {
     log('⚠️ Shop tracking already active');
     return;
@@ -218,4 +224,31 @@ export function stopLiveShopTracking(): void {
  */
 export function isLiveTrackingActive(): boolean {
   return isTracking;
+}
+
+/**
+ * Enable live tracking
+ */
+export function enableLiveTracking(): void {
+  isEnabled = true;
+  if (!isTracking) {
+    startLiveShopTracking();
+  }
+}
+
+/**
+ * Disable live tracking
+ */
+export function disableLiveTracking(): void {
+  isEnabled = false;
+  if (isTracking) {
+    stopLiveShopTracking();
+  }
+}
+
+/**
+ * Check if live tracking is enabled
+ */
+export function isLiveTrackingEnabled(): boolean {
+  return isEnabled;
 }

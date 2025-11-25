@@ -5632,17 +5632,13 @@ function createPetFeedingSection(): HTMLElement {
 
   // Define updatePetCards early
   const updatePetCards = (states: PetHungerState[]) => {
-    log(`🔧 updatePetCards called with ${states.length} pets`);
     // Update status indicator
     updateStatus();
 
     if (states.length === 0) {
-      log('⚠️ No pets to display, showing placeholder');
       petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game<br/>Click "Refresh Pet Detection" to retry</span></div>';
       return;
     }
-
-    log(`✅ Rendering ${states.length} pet cards...`);
 
     // Clear placeholder message if it exists (when transitioning from 0 to >0 pets)
     const placeholder = petsContainer.querySelector('div:not([data-pet-id])');
@@ -5652,11 +5648,9 @@ function createPetFeedingSection(): HTMLElement {
 
     // Update or create cards for each pet
     states.forEach((state, index) => {
-      log(`🔧 Processing pet ${index + 1}/${states.length}: ${state.name} (${state.petId})`);
       let card = petsContainer.querySelector<HTMLElement>(`[data-pet-id="${state.petId}"]`);
 
       if (card) {
-        log(`   ↻ Updating existing card for ${state.name}`);
         // Update existing card
         const hungerPct = card.querySelector('[data-qpm-pet-hunger]');
         if (hungerPct) {
@@ -5688,29 +5682,21 @@ function createPetFeedingSection(): HTMLElement {
         // Update border color
         (card as HTMLElement).style.borderColor = `${getAlertColor(state.alertLevel)}33`;
       } else {
-        log(`   ✨ Creating new card for ${state.name}`);
         // Create new card
         card = createPetHungerCard(state);
         petsContainer.appendChild(card);
-        log(`   ✅ Card created and appended. Container now has ${petsContainer.children.length} children`);
+        log(`✨ Created new card for ${state.name}. Total: ${petsContainer.children.length}`);
       }
     });
 
-    log(`✅ Finished rendering. Container has ${petsContainer.children.length} total children`);
-
     // Remove cards for pets that no longer exist
     const currentPetIds = new Set(states.map(s => s.petId));
-    log(`🔧 Current pet IDs in state: ${Array.from(currentPetIds).join(', ')}`);
-
     const cardsInContainer = Array.from(petsContainer.querySelectorAll('[data-pet-id]'));
-    log(`🔧 Found ${cardsInContainer.length} cards in container to check for removal`);
 
     cardsInContainer.forEach(card => {
       const petId = (card as HTMLElement).dataset.petId;
-      const existsInState = petId ? currentPetIds.has(petId) : false;
-      log(`🔧   Card petId="${petId}" exists in state: ${existsInState}`);
       if (petId && !currentPetIds.has(petId)) {
-        log(`   ❌ REMOVING card for pet ${petId} - not in current state!`);
+        log(`❌ REMOVING card for pet ${petId} - not in current state!`);
         card.remove();
       }
     });
@@ -5895,18 +5881,38 @@ function createPetFeedingSection(): HTMLElement {
   log(`🔧 petsContainer appended. body.children.length = ${body.children.length}`);
   log(`🏗️ ========== createPetFeedingSection RETURNING ROOT ==========`);
 
-  // Debug: Check if container stays in DOM
+  // Debug: Check if container and its cards are visible
   const checkInterval = setInterval(() => {
     const isInDOM = document.body.contains(petsContainer);
     const hasParent = petsContainer.parentElement !== null;
     const childCount = petsContainer.children.length;
+    const containerDisplay = getComputedStyle(petsContainer).display;
+    const containerVisibility = getComputedStyle(petsContainer).visibility;
+    const parentDisplay = petsContainer.parentElement ? getComputedStyle(petsContainer.parentElement).display : 'unknown';
+
     log(`🔍 DOM Check: inDOM=${isInDOM}, hasParent=${hasParent}, children=${childCount}`);
+    log(`   Container: display=${containerDisplay}, visibility=${containerVisibility}`);
+    log(`   Parent (body): display=${parentDisplay}`);
 
     if (!isInDOM || !hasParent) {
       log(`❌ WARNING: petsContainer is DETACHED from DOM!`);
       log(`   Parent element: ${petsContainer.parentElement?.tagName || 'null'}`);
     }
-  }, 2000);
+
+    if (containerDisplay === 'none' || containerVisibility === 'hidden') {
+      log(`❌ WARNING: petsContainer is HIDDEN! display=${containerDisplay}, visibility=${containerVisibility}`);
+    }
+
+    // Check individual cards
+    const cards = Array.from(petsContainer.children);
+    cards.forEach((card, i) => {
+      const cardDisplay = getComputedStyle(card as HTMLElement).display;
+      const cardVisibility = getComputedStyle(card as HTMLElement).visibility;
+      if (cardDisplay === 'none' || cardVisibility === 'hidden') {
+        log(`   ⚠️ Card ${i} is hidden: display=${cardDisplay}, visibility=${cardVisibility}`);
+      }
+    });
+  }, 3000);
 
   // Clean up after 30 seconds
   setTimeout(() => clearInterval(checkInterval), 30000);

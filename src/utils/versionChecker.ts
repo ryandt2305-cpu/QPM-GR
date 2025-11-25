@@ -51,6 +51,44 @@ function compareVersions(v1: string, v2: string): number {
  */
 async function fetchLatestVersion(): Promise<string | null> {
   try {
+    // Use GM_xmlhttpRequest if available (to bypass CORS), otherwise fall back to fetch
+    if (typeof GM_xmlhttpRequest !== 'undefined') {
+      return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: GITHUB_RAW_URL,
+          headers: {
+            'Cache-Control': 'no-cache',
+          },
+          onload: (response) => {
+            if (response.status !== 200) {
+              log(`⚠️ Failed to fetch latest version: ${response.status}`);
+              resolve(null);
+              return;
+            }
+
+            const text = response.responseText;
+            const versionMatch = text.match(/\/\/\s*@version\s+([\d.]+)/);
+            if (versionMatch && versionMatch[1]) {
+              resolve(versionMatch[1]);
+            } else {
+              log('⚠️ Could not parse version from GitHub file');
+              resolve(null);
+            }
+          },
+          onerror: (error) => {
+            log('❌ Error fetching latest version via GM_xmlhttpRequest:', error);
+            resolve(null);
+          },
+          ontimeout: () => {
+            log('❌ Timeout fetching latest version');
+            resolve(null);
+          },
+        });
+      });
+    }
+
+    // Fallback to fetch (will likely fail due to CORS in userscript context)
     const response = await fetch(GITHUB_RAW_URL, {
       cache: 'no-cache',
       headers: {

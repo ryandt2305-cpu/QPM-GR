@@ -5422,37 +5422,64 @@ function createPetFeedingSection(): HTMLElement {
   configTitle.style.cssText = 'font-weight: 600; font-size: 12px; margin-bottom: 10px; color: #8F82FF;';
   configTitle.textContent = '⚙️ Alert Settings';
 
-  const configGrid = document.createElement('div');
-  configGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px;';
+  const configContent = document.createElement('div');
+  configContent.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
 
-  const createToggle = (label: string, configKey: keyof HungerMonitorConfig): HTMLElement => {
-    const toggle = document.createElement('label');
-    toggle.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: #ccc; cursor: pointer;';
+  // Hunger Alert Percentage input
+  const thresholdRow = document.createElement('div');
+  thresholdRow.style.cssText = 'display: flex; align-items: center; gap: 8px;';
 
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.className = 'qpm-checkbox';
-    checkbox.checked = getHungerMonitorConfig()[configKey] as boolean;
+  const thresholdLabel = document.createElement('label');
+  thresholdLabel.textContent = 'Hunger Alert Percentage';
+  thresholdLabel.style.cssText = 'font-size: 11px; color: #ccc; flex: 1;';
 
-    checkbox.addEventListener('change', () => {
-      updateHungerMonitorConfig({ [configKey]: checkbox.checked });
-    });
+  const thresholdInput = document.createElement('input');
+  thresholdInput.type = 'number';
+  thresholdInput.min = '1';
+  thresholdInput.max = '100';
+  thresholdInput.value = String(getHungerMonitorConfig().alertThresholdPct);
+  thresholdInput.style.cssText = 'width: 60px; padding: 4px 8px; background: rgba(0,0,0,0.3); border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 11px; text-align: center;';
 
-    const text = document.createElement('span');
-    text.textContent = label;
+  // Prevent game hotkeys from interfering with number input
+  thresholdInput.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+  });
 
-    toggle.append(checkbox, text);
-    return toggle;
-  };
+  thresholdInput.addEventListener('change', () => {
+    const value = parseInt(thresholdInput.value, 10);
+    if (!isNaN(value) && value >= 1 && value <= 100) {
+      updateHungerMonitorConfig({ alertThresholdPct: value });
+    } else {
+      thresholdInput.value = String(getHungerMonitorConfig().alertThresholdPct);
+    }
+  });
 
-  configGrid.appendChild(createToggle('Alert at <50% hunger', 'alertAtWarning'));
-  configGrid.appendChild(createToggle('Alert at 15 min remaining', 'alertAt15Min'));
-  configGrid.appendChild(createToggle('Alert at 5 min remaining', 'alertAt5Min'));
-  configGrid.appendChild(createToggle('Alert at critical (<15%)', 'alertAtCritical'));
-  configGrid.appendChild(createToggle('Big on-screen notifications', 'bigNotifications'));
-  configGrid.appendChild(createToggle('Flash pet slot borders', 'flashPetSlots'));
+  const thresholdUnit = document.createElement('span');
+  thresholdUnit.textContent = '%';
+  thresholdUnit.style.cssText = 'font-size: 11px; color: #999;';
 
-  configSection.append(configTitle, configGrid);
+  thresholdRow.append(thresholdLabel, thresholdInput, thresholdUnit);
+
+  // Flash Pet Border checkbox
+  const flashToggle = document.createElement('label');
+  flashToggle.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: #ccc; cursor: pointer;';
+
+  const flashCheckbox = document.createElement('input');
+  flashCheckbox.type = 'checkbox';
+  flashCheckbox.className = 'qpm-checkbox';
+  flashCheckbox.checked = getHungerMonitorConfig().flashPetSlots;
+
+  flashCheckbox.addEventListener('change', () => {
+    updateHungerMonitorConfig({ flashPetSlots: flashCheckbox.checked });
+  });
+
+  const flashText = document.createElement('span');
+  flashText.textContent = 'Flash Pet Border';
+
+  flashToggle.append(flashCheckbox, flashText);
+
+  configContent.append(thresholdRow, flashToggle);
+  configSection.append(configTitle, configContent);
   body.appendChild(configSection);
 
   // Container for pet hunger cards
@@ -5573,8 +5600,7 @@ function createPetFeedingSection(): HTMLElement {
       return stat;
     };
 
-    if (state.level !== null || state.xp !== null || state.strength !== null) {
-      analyticsSection.appendChild(createStat('Level', state.level, '🎯'));
+    if (state.xp !== null || state.strength !== null) {
       analyticsSection.appendChild(createStat('XP', state.xp, '⭐'));
       analyticsSection.appendChild(createStat('Strength', state.strength, '💪'));
     }
@@ -5636,6 +5662,12 @@ function createPetFeedingSection(): HTMLElement {
     if (states.length === 0) {
       petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game</span></div>';
       return;
+    }
+
+    // Clear placeholder message if it exists (when transitioning from 0 to >0 pets)
+    const placeholder = petsContainer.querySelector('div:not([data-pet-id])');
+    if (placeholder) {
+      placeholder.remove();
     }
 
     // Update or create cards for each pet

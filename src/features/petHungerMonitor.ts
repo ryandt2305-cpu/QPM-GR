@@ -55,11 +55,7 @@ interface HungerSnapshot {
  */
 export interface HungerMonitorConfig {
   enabled: boolean;
-  alertAt15Min: boolean;
-  alertAt5Min: boolean;
-  alertAtCritical: boolean;
-  alertAtWarning: boolean; // < 50% hunger
-  bigNotifications: boolean; // Show large on-screen notifications
+  alertThresholdPct: number; // Alert when hunger drops below this percentage
   flashPetSlots: boolean; // Flash border around pet slots
   snapshotIntervalSec: number; // How often to take snapshots
   minSnapshotsForRate: number; // Minimum snapshots needed to calculate rate
@@ -67,11 +63,7 @@ export interface HungerMonitorConfig {
 
 const DEFAULT_CONFIG: HungerMonitorConfig = {
   enabled: true,
-  alertAt15Min: true,
-  alertAt5Min: true,
-  alertAtCritical: true,
-  alertAtWarning: true,
-  bigNotifications: true,
+  alertThresholdPct: 50, // Alert at 50% hunger by default
   flashPetSlots: true,
   snapshotIntervalSec: 30, // Take snapshot every 30 seconds
   minSnapshotsForRate: 3, // Need 3 snapshots minimum
@@ -238,62 +230,19 @@ function checkAndTriggerAlert(state: PetHungerState): void {
   const now = Date.now();
   const petAlerts = lastAlertTimes.get(state.petId) || new Map();
 
-  // Alert at warning level (< 50% hunger)
-  if (config.alertAtWarning && state.alertLevel === 'warning') {
-    const lastAlert = petAlerts.get('warning') || 0;
+  // Alert when hunger drops below configured threshold
+  if (state.hungerPct < config.alertThresholdPct) {
+    const lastAlert = petAlerts.get(state.alertLevel) || 0;
     if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min between alerts
-      const message = `⚠️ ${state.name} is getting hungry!`;
-      showToast(message, 'warn', 5000);
-      if (config.bigNotifications) {
-        showBigNotification(state, message);
-      }
-      petAlerts.set('warning', now);
-      lastAlertTimes.set(state.petId, petAlerts);
-    }
-  }
+      const emoji = state.alertLevel === 'critical' ? '🔴' : '⚠️';
+      const message = state.alertLevel === 'critical'
+        ? `${emoji} ${state.name} IS STARVING! (${Math.round(state.hungerPct)}% hunger)`
+        : `${emoji} ${state.name} is getting hungry! (${Math.round(state.hungerPct)}% hunger)`;
 
-  // Alert at 15 minutes remaining
-  if (config.alertAt15Min && state.estimatedTimeToEmpty !== null) {
-    if (state.estimatedTimeToEmpty <= 15 && state.estimatedTimeToEmpty > 5) {
-      const lastAlert = petAlerts.get('warning') || 0;
-      if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min between alerts
-        const message = `Will be hungry in ~${Math.round(state.estimatedTimeToEmpty)} minutes`;
-        showToast(`${state.name} ${message}`, 'warn', 5000);
-        if (config.bigNotifications) {
-          showBigNotification(state, message);
-        }
-        petAlerts.set('warning', now);
-        lastAlertTimes.set(state.petId, petAlerts);
-      }
-    }
-  }
+      const level = state.alertLevel === 'critical' ? 'error' : 'warn';
+      showToast(message, level, 5000);
 
-  // Alert at 5 minutes remaining
-  if (config.alertAt5Min && state.estimatedTimeToEmpty !== null) {
-    if (state.estimatedTimeToEmpty <= 5 && state.estimatedTimeToEmpty > 0) {
-      const lastAlert = petAlerts.get('warning') || 0;
-      if (now - lastAlert > 3 * 60 * 1000) { // Don't spam, wait 3 min
-        const message = `🔔 Needs food soon! (~${Math.round(state.estimatedTimeToEmpty)} min)`;
-        showToast(`${state.name} ${message}`, 'warn', 6000);
-        if (config.bigNotifications) {
-          showBigNotification(state, message);
-        }
-        petAlerts.set('warning', now);
-        lastAlertTimes.set(state.petId, petAlerts);
-      }
-    }
-  }
-
-  // Alert at critical (< 15% hunger)
-  if (config.alertAtCritical && state.alertLevel === 'critical') {
-    const lastAlert = petAlerts.get('critical') || 0;
-    if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min
-      const message = '🔴 IS STARVING!';
-      showToast(`${state.name} ${message} (${Math.round(state.hungerPct)}% hunger)`, 'error', 8000);
-      if (config.bigNotifications) {
-        showBigNotification(state, message);
-      }
-      petAlerts.set('critical', now);
+      petAlerts.set(state.alertLevel, now);
       lastAlertTimes.set(state.petId, petAlerts);
     }
   }
@@ -411,76 +360,6 @@ function flashPetSlotBorder(slotIndex: number, alertLevel: AlertLevel): void {
     }
   } catch (error) {
     // Silently fail if DOM manipulation fails
-  }
-}
-
-/**
- * Show big on-screen notification
- */
-function showBigNotification(state: PetHungerState, message: string): void {
-  if (!config.bigNotifications) return;
-
-  try {
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: linear-gradient(135deg, ${getAlertColor(state.alertLevel)}22, ${getAlertColor(state.alertLevel)}44);
-      border: 3px solid ${getAlertColor(state.alertLevel)};
-      border-radius: 16px;
-      padding: 32px 48px;
-      z-index: 999999;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.8), 0 0 60px ${getAlertColor(state.alertLevel)}66;
-      backdrop-filter: blur(10px);
-      animation: qpm-pulse 0.5s ease-in-out;
-      min-width: 400px;
-      text-align: center;
-    `;
-
-    // Add CSS animation if not already present
-    if (!document.getElementById('qpm-notification-styles')) {
-      const style = document.createElement('style');
-      style.id = 'qpm-notification-styles';
-      style.textContent = `
-        @keyframes qpm-pulse {
-          0%, 100% { transform: translate(-50%, -50%) scale(1); }
-          50% { transform: translate(-50%, -50%) scale(1.05); }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-
-    // Notification content
-    const icon = document.createElement('div');
-    icon.style.cssText = 'font-size: 64px; margin-bottom: 16px;';
-    icon.textContent = getAlertEmoji(state.alertLevel);
-
-    const title = document.createElement('div');
-    title.style.cssText = `font-size: 28px; font-weight: 700; color: ${getAlertColor(state.alertLevel)}; margin-bottom: 12px;`;
-    title.textContent = state.name;
-
-    const msg = document.createElement('div');
-    msg.style.cssText = 'font-size: 20px; color: #fff; margin-bottom: 8px;';
-    msg.textContent = message;
-
-    const details = document.createElement('div');
-    details.style.cssText = 'font-size: 16px; color: #aaa;';
-    details.textContent = `${Math.round(state.hungerPct)}% hunger remaining`;
-
-    notification.append(icon, title, msg, details);
-    document.body.appendChild(notification);
-
-    // Auto-remove after 4 seconds
-    setTimeout(() => {
-      notification.style.transition = 'opacity 0.5s ease-out';
-      notification.style.opacity = '0';
-      setTimeout(() => notification.remove(), 500);
-    }, 4000);
-  } catch (error) {
-    log('⚠️ Failed to show big notification:', error);
   }
 }
 

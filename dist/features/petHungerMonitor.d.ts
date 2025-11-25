@@ -33,11 +33,7 @@ export interface PetHungerState {
  */
 export interface HungerMonitorConfig {
     enabled: boolean;
-    alertAt15Min: boolean;
-    alertAt5Min: boolean;
-    alertAtCritical: boolean;
-    alertAtWarning: boolean;
-    bigNotifications: boolean;
+    alertThresholdPct: number;
     flashPetSlots: boolean;
     snapshotIntervalSec: number;
     minSnapshotsForRate: number;

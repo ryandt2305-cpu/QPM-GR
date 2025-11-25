@@ -7,6 +7,16 @@ import { createJournalCheckerSection as createJournalCheckerSectionNew } from '.
 import { isVisible, getGameHudRoot } from '../utils/dom';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
+import {
+  initializeCompactMode,
+  cycleDisplayMode,
+  getDisplayMode,
+  onModeChange,
+  onExpandedSectionsChange,
+  toggleSectionExpanded,
+  isSectionExpanded,
+  type DisplayMode,
+} from '../features/compactMode';
 import { getCropLockConfig, setCropLockSyncMode } from '../features/cropTypeLocking';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
@@ -2297,6 +2307,97 @@ function ensurePanelStyles(): void {
   .qpm-content::-webkit-scrollbar-thumb:hover {
     background: rgba(143, 130, 255, 0.55);
   }
+
+  /* Compact Mode Styles */
+  .qpm-panel--compact .qpm-card > div:last-child {
+    display: none;
+  }
+
+  .qpm-panel--compact .qpm-card.qpm-card--expanded > div:last-child {
+    display: flex;
+  }
+
+  .qpm-panel--compact .qpm-card__header {
+    cursor: pointer;
+  }
+
+  /* Minimal Mode Styles */
+  .qpm-panel--minimal {
+    min-width: auto;
+    max-width: none;
+    width: auto;
+  }
+
+  .qpm-panel--minimal .qpm-panel__titlebar {
+    padding: 8px 12px;
+  }
+
+  .qpm-panel--minimal .qpm-content {
+    display: none;
+  }
+
+  .qpm-panel--minimal .qpm-panel__status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+
+  .qpm-panel--minimal .qpm-status-icon {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: help;
+  }
+
+  /* Hidden Mode Styles */
+  .qpm-panel--hidden {
+    display: none;
+  }
+
+  .qpm-restore-button {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    z-index: 2147483647;
+    background: rgba(143, 130, 255, 0.95);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    font-size: 20px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(143, 130, 255, 0.4);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .qpm-restore-button:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(143, 130, 255, 0.6);
+  }
+
+  /* Mode Toggle Button */
+  .qpm-mode-toggle {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: var(--qpm-text-muted);
+    border-radius: 18px;
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    margin-left: 8px;
+  }
+
+  .qpm-mode-toggle:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--qpm-text);
+  }
   `;
   document.head.appendChild(style);
   qpmPanelStylesInjected = true;
@@ -3414,12 +3515,106 @@ function createGuideSection(): HTMLElement {
   return root;
 }
 
+/**
+ * Get display mode label for UI
+ */
+function getModeLabel(mode: DisplayMode): string {
+  switch (mode) {
+    case 'full': return '📋 Full';
+    case 'compact': return '📑 Compact';
+    case 'minimal': return '📌 Minimal';
+    case 'hidden': return '👁️ Hidden';
+  }
+}
+
+/**
+ * Apply display mode classes to panel
+ */
+function applyDisplayMode(panel: HTMLElement, mode: DisplayMode): void {
+  panel.classList.remove('qpm-panel--full', 'qpm-panel--compact', 'qpm-panel--minimal', 'qpm-panel--hidden');
+  panel.classList.add(`qpm-panel--${mode}`);
+}
+
+/**
+ * Create or update restore button for hidden mode
+ */
+let restoreButton: HTMLElement | null = null;
+
+function ensureRestoreButton(): void {
+  if (restoreButton) return;
+
+  restoreButton = document.createElement('button');
+  restoreButton.className = 'qpm-restore-button';
+  restoreButton.textContent = '🌾';
+  restoreButton.title = 'Show Quinoa Pet Manager (Alt+M)';
+  restoreButton.addEventListener('click', () => {
+    cycleDisplayMode(); // Will cycle from hidden to full
+  });
+
+  document.body.appendChild(restoreButton);
+}
+
+function removeRestoreButton(): void {
+  if (restoreButton && restoreButton.parentNode) {
+    restoreButton.parentNode.removeChild(restoreButton);
+    restoreButton = null;
+  }
+}
+
+/**
+ * Handle mode changes
+ */
+function handleModeChange(mode: DisplayMode, panel: HTMLElement, modeToggle: HTMLElement): void {
+  applyDisplayMode(panel, mode);
+  modeToggle.textContent = getModeLabel(mode);
+
+  // Show/hide restore button for hidden mode
+  if (mode === 'hidden') {
+    ensureRestoreButton();
+  } else {
+    removeRestoreButton();
+  }
+
+  log(`🎨 Display mode changed to: ${mode}`);
+}
+
+/**
+ * Make cards collapsible in compact mode
+ */
+function setupCompactModeCards(cards: HTMLElement[]): void {
+  cards.forEach((card) => {
+    const header = card.querySelector('.qpm-card__header');
+    if (!header) return;
+
+    // Make header clickable
+    header.addEventListener('click', () => {
+      const sectionId = card.dataset.qpmSection;
+      if (!sectionId) return;
+
+      toggleSectionExpanded(sectionId);
+      card.classList.toggle('qpm-card--expanded');
+    });
+
+    // Apply initial expanded state
+    const sectionId = card.dataset.qpmSection;
+    if (sectionId && isSectionExpanded(sectionId)) {
+      card.classList.add('qpm-card--expanded');
+    }
+  });
+}
+
 export function createOriginalUI(): HTMLElement {
   ensurePanelStyles();
   if (uiState.panel) return uiState.panel;
 
+  // Initialize compact mode
+  initializeCompactMode();
+
   const panel = document.createElement('div');
   panel.className = 'qpm-panel';
+
+  // Apply initial display mode
+  applyDisplayMode(panel, getDisplayMode());
 
   const titleBar = document.createElement('div');
   titleBar.className = 'qpm-panel__titlebar';
@@ -3427,6 +3622,17 @@ export function createOriginalUI(): HTMLElement {
 
   const titleText = document.createElement('span');
   titleText.textContent = '🍖 Quinoa Pet Manager';
+
+  // Mode toggle button
+  const modeToggle = document.createElement('button');
+  modeToggle.type = 'button';
+  modeToggle.className = 'qpm-mode-toggle';
+  modeToggle.textContent = getModeLabel(getDisplayMode());
+  modeToggle.title = 'Toggle display mode (Alt+M)';
+  modeToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cycleDisplayMode();
+  });
 
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';
@@ -3438,7 +3644,7 @@ export function createOriginalUI(): HTMLElement {
   collapseIcon.textContent = '▼';
   collapseButton.appendChild(collapseIcon);
 
-  titleBar.append(titleText, collapseButton);
+  titleBar.append(titleText, modeToggle, collapseButton);
 
   const content = document.createElement('div');
   content.className = 'qpm-content';
@@ -3776,11 +3982,36 @@ export function createOriginalUI(): HTMLElement {
     updateUIStatus(status);
     refreshHeaderStats();
   });
-  
+
   setWeatherStatusCallback((status: string) => {
     updateWeatherUI(status);
     refreshHeaderStats();
   });
+
+  // Register mode change callback
+  onModeChange((mode: DisplayMode) => {
+    handleModeChange(mode, panel, modeToggle);
+  });
+
+  // Register expanded sections change callback
+  onExpandedSectionsChange(() => {
+    // Re-apply expanded states to all cards
+    const allCards = panel.querySelectorAll<HTMLElement>('.qpm-card[data-qpm-section]');
+    allCards.forEach((card) => {
+      const sectionId = card.dataset.qpmSection;
+      if (sectionId) {
+        if (isSectionExpanded(sectionId)) {
+          card.classList.add('qpm-card--expanded');
+        } else {
+          card.classList.remove('qpm-card--expanded');
+        }
+      }
+    });
+  });
+
+  // Setup compact mode for all cards with section IDs
+  const allCards = panel.querySelectorAll<HTMLElement>('.qpm-card[data-qpm-section]');
+  setupCompactModeCards(Array.from(allCards));
 
   uiState.panel = panel;
   uiState.content = content;

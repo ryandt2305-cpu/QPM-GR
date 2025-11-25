@@ -133,7 +133,13 @@ type PlantDebugDetail =
   | ({ strategy: 'fallback'; fruitCount: number; frozenCount: number; wetCount: number; chilledCount: number; dawnCount: number; amberCount: number; dawnBoundCount: number; amberBoundCount: number; rainbowCount: number; goldCount: number });
 
 function normalizePlantName(name: string): string {
-  return name.toLowerCase().replace(/\+\d+$/, '').trim();
+  let normalized = name.toLowerCase().replace(/\+\d+$/, '').trim();
+  // Remove " plant" suffix for matching (e.g., "lily plant" -> "lily")
+  // This ensures "Lily" from DOM matches "Lily Plant" from inventory
+  if (normalized.endsWith(' plant')) {
+    normalized = normalized.slice(0, -6).trim();
+  }
+  return normalized;
 }
 
 export function startMutationReminder(): void {
@@ -1863,23 +1869,31 @@ function parseIndex(value: string | null | undefined): number | null {
  */
 function isPlantCrop(name: string): boolean {
   const lowerName = name.toLowerCase().trim();
-  
+
   // Remove fruit count suffix for checking (e.g., "Pepper Plant+9" -> "Pepper Plant")
+  const hasFruitCount = /\+\d+$/.test(name);
   const baseNameMatch = name.match(/^(.+?)(?:\+\d+)?$/);
   const baseName = (baseNameMatch?.[1] || name).toLowerCase().trim();
-  
-  // MUST contain "plant" to be a plant item (not a harvested crop)
-  if (!baseName.includes('plant')) {
-    return false;
-  }
-  
-  // Exclude non-plant items
+
+  // Exclude non-plant items first
   const exclusions = ['seed', 'spore', 'cutting', 'pod', 'kernel', 'pit', 'shovel', 'pot', 'watering can', 'tool', 'fertilizer', 'egg', 'decor', 'furniture', 'planter'];
   for (const exclusion of exclusions) {
     if (baseName.includes(exclusion)) return false;
   }
-  
-  return true;
+
+  // Accept if it contains "plant" (e.g., "Lily Plant", "Pepper Plant+9")
+  if (baseName.includes('plant')) {
+    return true;
+  }
+
+  // Also accept if it has a fruit count suffix (e.g., "Lily+1")
+  // This handles cases where the game shows species name with count but no "Plant" word
+  if (hasFruitCount) {
+    return true;
+  }
+
+  // Otherwise, reject (harvested crops like "Lily", "Pepper", etc.)
+  return false;
 }
 
 /**
@@ -1990,6 +2004,8 @@ function evaluatePlantFromInventory(
 
   let wetFinished = 0;
   let wetNeedsSnow = 0;
+  let chilledFinished = 0;
+  let chilledNeedsRain = 0;
   let dawnFinished = 0;
   let amberFinished = 0;
   let totalFruits = Math.max(plant.fruitCount, 1);
@@ -2007,6 +2023,13 @@ function evaluatePlantFromInventory(
     }
     if (slot.hasWet && !slot.hasFrozen) {
       wetNeedsSnow += 1;
+    }
+    const chilledMutated = slot.hasChilled || slot.hasFrozen;
+    if (chilledMutated) {
+      chilledFinished += 1;
+    }
+    if (slot.hasChilled && !slot.hasFrozen) {
+      chilledNeedsRain += 1;
     }
     if (slot.hasDawnlit || slot.hasDawnbound) {
       dawnFinished += 1;
@@ -2031,18 +2054,23 @@ function evaluatePlantFromInventory(
       amberProgressComplete = Math.max(amberProgressComplete, amberProgress.complete);
     }
   }
-  totalFruits = Math.max(totalFruits, wetFinished, dawnFinished, amberFinished);
+  totalFruits = Math.max(totalFruits, wetFinished, chilledFinished, dawnFinished, amberFinished);
 
   const clampDom = (value: number): number => Math.max(0, Math.min(totalFruits, value));
   const domFrozen = clampDom(plant.domMutationCounts.F);
   const domWetOnly = clampDom(plant.domMutationCounts.W);
   const domWetProgress = clampDom(domFrozen + domWetOnly);
   const domWetNeedsSnow = clampDom(Math.max(0, domWetProgress - domFrozen));
+  const domChilledOnly = clampDom(plant.domMutationCounts.C);
+  const domChilledProgress = clampDom(domFrozen + domChilledOnly);
+  const domChilledNeedsRain = clampDom(Math.max(0, domChilledProgress - domFrozen));
   const domDawnComplete = clampDom(plant.domMutationCounts.D + plant.domBoldCounts.D);
   const domAmberComplete = clampDom(plant.domMutationCounts.A + plant.domBoldCounts.A);
 
   wetFinished = Math.max(wetFinished, domWetProgress);
   wetNeedsSnow = Math.max(wetNeedsSnow, domWetNeedsSnow);
+  chilledFinished = Math.max(chilledFinished, domChilledProgress);
+  chilledNeedsRain = Math.max(chilledNeedsRain, domChilledNeedsRain);
   dawnFinished = Math.max(dawnFinished, domDawnComplete);
   amberFinished = Math.max(amberFinished, domAmberComplete);
 
@@ -2060,6 +2088,7 @@ function evaluatePlantFromInventory(
   }
 
   const wetPending = Math.max(0, totalFruits - wetFinished);
+  const chilledPending = Math.max(0, totalFruits - chilledFinished);
   const dawnPending = Math.max(0, totalFruits - dawnFinished);
   const amberPending = Math.max(0, totalFruits - amberFinished);
 
@@ -2097,8 +2126,15 @@ function evaluatePlantFromInventory(
       pendingFruits = wetPending;
       break;
     case 'snow':
-      decision = wetNeedsSnow > 0;
-      pendingFruits = wetNeedsSnow;
+      if (chilledPending > 0) {
+        // Priority 1: Highlight unmutated crops for new "Chilled" mutations
+        decision = true;
+        pendingFruits = chilledPending;
+      } else {
+        // Priority 2: Highlight "Wet" crops to upgrade to "Frozen"
+        decision = wetNeedsSnow > 0;
+        pendingFruits = wetNeedsSnow;
+      }
       break;
     case 'dawn':
       // Allow dawn weather if there are dawn-pending fruits, even if some other fruits have amber
@@ -2214,8 +2250,19 @@ function evaluatePlantFallback(
       break;
     }
     case 'snow': {
-      decision = needsSnow > 0;
-      pendingFruits = needsSnow;
+      const chilledProgress = chilledCount + frozenCount;
+      if (chilledProgress < totalFruits) {
+        // Priority 1: Highlight unmutated crops for new "Chilled" mutations
+        decision = true;
+        pendingFruits = Math.max(0, totalFruits - chilledProgress);
+      } else {
+        // Priority 2: Highlight "Wet" crops to upgrade to "Frozen"
+        const wetDeficit = wetCount - frozenCount;
+        decision = wetDeficit > 0;
+        pendingFruits = Math.max(0, wetDeficit);
+      }
+      // Update needsSnow for tracking (wet crops that need snow to freeze)
+      needsSnow = Math.max(0, wetCount - frozenCount);
       break;
     }
     case 'dawn': {

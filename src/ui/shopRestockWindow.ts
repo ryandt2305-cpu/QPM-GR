@@ -17,6 +17,9 @@ import {
   startLiveShopTracking,
   stopLiveShopTracking,
   isLiveTrackingActive,
+  enableLiveTracking,
+  disableLiveTracking,
+  isLiveTrackingEnabled,
 } from '../features/shopRestockLiveTracker';
 import { parseDiscordHtmlFile } from '../features/shopRestockParser';
 import { log } from '../utils/logger';
@@ -126,8 +129,10 @@ export function createShopRestockWindow(): ShopRestockWindowState {
   // Initialize
   initializeRestockTracker();
 
-  // Start live tracking automatically
-  startLiveShopTracking();
+  // Start live tracking automatically (only if enabled)
+  if (isLiveTrackingEnabled()) {
+    startLiveShopTracking();
+  }
 
   // Initial render
   renderContent(state);
@@ -212,6 +217,7 @@ function createLiveTrackingSection(): HTMLElement {
 
   const status = document.createElement('div');
   const isTracking = isLiveTrackingActive();
+  const isEnabled = isLiveTrackingEnabled();
   status.style.cssText = `
     margin-bottom: 12px;
     font-size: 12px;
@@ -233,6 +239,34 @@ function createLiveTrackingSection(): HTMLElement {
   `;
   description.textContent = 'Automatically detects and records shop restocks while you play.';
   section.appendChild(description);
+
+  // Toggle button
+  const toggleBtn = document.createElement('button');
+  toggleBtn.textContent = isEnabled ? '🛑 Disable Live Tracking' : '▶️ Enable Live Tracking';
+  toggleBtn.style.cssText = `
+    padding: 8px 16px;
+    background: ${isEnabled ? 'rgba(244, 67, 54, 0.2)' : 'rgba(76, 175, 80, 0.2)'};
+    color: ${isEnabled ? '#f44336' : '#4CAF50'};
+    border: 1px solid ${isEnabled ? '#f44336' : '#4CAF50'};
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+  `;
+  toggleBtn.onclick = () => {
+    if (isEnabled) {
+      disableLiveTracking();
+    } else {
+      enableLiveTracking();
+    }
+    // Re-render to update status
+    const parent = section.parentElement;
+    if (parent) {
+      const newSection = createLiveTrackingSection();
+      parent.replaceChild(newSection, section);
+    }
+  };
+  section.appendChild(toggleBtn);
 
   return section;
 }
@@ -456,7 +490,7 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
 
     // Clear data button
     const clearBtn = document.createElement('button');
-    clearBtn.textContent = '🗑️ Clear All Data';
+    clearBtn.textContent = '🗑️ Clear All QPM Data';
     clearBtn.style.cssText = `
       padding: 8px 16px;
       background: rgba(244, 67, 54, 0.2);
@@ -468,8 +502,11 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
       font-weight: 600;
     `;
     clearBtn.onclick = () => {
-      if (confirm('Are you sure you want to clear all restock data? This cannot be undone.')) {
+      if (confirm('⚠️ This will clear ALL QPM data (settings, restock history, XP tracking, etc.) from both localStorage and Tampermonkey storage.\n\nThis cannot be undone. Are you sure?')) {
         clearAllRestocks();
+        // Reload the UI to reflect cleared state
+        renderContent(state);
+        alert('✅ All QPM data has been cleared. Refresh the page to fully reset.');
       }
     };
     buttonContainer.appendChild(clearBtn);

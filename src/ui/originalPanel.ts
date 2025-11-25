@@ -5404,6 +5404,17 @@ function resetAllStats(): void {
 }
 
 /**
+ * Singleton state for pet hunger monitor UI
+ * This prevents creating duplicate containers when the section is recreated
+ */
+let petHungerUIState: {
+  petsContainer: HTMLElement;
+  statusIndicator: HTMLElement;
+  updateStatus: () => void;
+  initialized: boolean;
+} | null = null;
+
+/**
  * Create pet feeding UI section with hunger bars and configuration
  */
 function createPetFeedingSection(): HTMLElement {
@@ -5416,23 +5427,37 @@ function createPetFeedingSection(): HTMLElement {
 
   log('🏗️ Created card with root and body elements');
 
-  // Initialize monitor on first creation
-  initializeHungerMonitor();
+  // Initialize monitor only once
+  if (!petHungerUIState) {
+    log('🏗️ First call - initializing monitor and creating UI state');
+    initializeHungerMonitor();
 
-  // Create container for pet hunger cards early (needed for callbacks)
-  const petsContainer = document.createElement('div');
-  petsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+    // Create container for pet hunger cards (singleton)
+    const petsContainer = document.createElement('div');
+    petsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
 
-  // Create status indicator early (needed for callbacks)
-  const statusIndicator = document.createElement('div');
-  statusIndicator.style.cssText = 'font-size: 10px; color: #999; flex: 1; text-align: right;';
-  statusIndicator.dataset.qpmPetStatus = 'true';
+    // Create status indicator (singleton)
+    const statusIndicator = document.createElement('div');
+    statusIndicator.style.cssText = 'font-size: 10px; color: #999; flex: 1; text-align: right;';
+    statusIndicator.dataset.qpmPetStatus = 'true';
 
-  const updateStatus = () => {
-    const count = getHungerStates().length;
-    statusIndicator.textContent = count > 0 ? `✅ ${count} pet${count === 1 ? '' : 's'} detected` : '⚠️ No pets detected';
-    statusIndicator.style.color = count > 0 ? '#4CAF50' : '#FF9800';
-  };
+    const updateStatus = () => {
+      const count = getHungerStates().length;
+      statusIndicator.textContent = count > 0 ? `✅ ${count} pet${count === 1 ? '' : 's'} detected` : '⚠️ No pets detected';
+      statusIndicator.style.color = count > 0 ? '#4CAF50' : '#FF9800';
+    };
+
+    petHungerUIState = {
+      petsContainer,
+      statusIndicator,
+      updateStatus,
+      initialized: false
+    };
+  } else {
+    log('🏗️ Subsequent call - reusing existing UI state');
+  }
+
+  const { petsContainer, statusIndicator, updateStatus } = petHungerUIState;
 
   // Define createPetHungerCard early
   const createPetHungerCard = (state: PetHungerState): HTMLElement => {
@@ -5691,19 +5716,25 @@ function createPetFeedingSection(): HTMLElement {
     });
   };
 
-  // Register callback IMMEDIATELY after defining update functions
-  // This ensures we don't miss any pet detection events
-  log('🔧 Registering hunger state change callback...');
-  onHungerStateChange(updatePetCards);
-  log(`🔧 Callback registered. Current pet count: ${getHungerStates().length}`);
+  // Register callback only on first call
+  if (!petHungerUIState.initialized) {
+    log('🔧 First call - registering hunger state change callback...');
+    onHungerStateChange(updatePetCards);
+    log(`🔧 Callback registered. Current pet count: ${getHungerStates().length}`);
 
-  // Initial status update
-  updateStatus();
+    // Initial status update
+    updateStatus();
 
-  // Call updatePetCards immediately with current states to ensure UI is populated
-  const currentStates = getHungerStates();
-  log(`🔧 Calling initial updatePetCards with ${currentStates.length} pets`);
-  updatePetCards(currentStates);
+    // Call updatePetCards immediately with current states to ensure UI is populated
+    const currentStates = getHungerStates();
+    log(`🔧 Calling initial updatePetCards with ${currentStates.length} pets`);
+    updatePetCards(currentStates);
+
+    petHungerUIState.initialized = true;
+    log('🔧 Marked UI state as initialized');
+  } else {
+    log('🔧 Subsequent call - skipping callback registration (already initialized)');
+  }
 
   // Configuration section
   const configSection = document.createElement('div');

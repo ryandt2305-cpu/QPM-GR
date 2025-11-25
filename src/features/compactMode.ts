@@ -104,10 +104,10 @@ function registerKeybind(): void {
     }
 
     if (isKeybindMatch(event, config.keybind)) {
+      log(`⌨️ Keybind matched: ${config.keybind} - triggering cycleDisplayMode`);
       event.preventDefault();
       event.stopPropagation();
       cycleDisplayMode();
-      log(`⌨️ Keybind triggered: ${config.keybind}`);
     }
   });
 
@@ -142,8 +142,11 @@ export function cycleDisplayMode(): void {
   const currentIndex = modes.indexOf(config.level);
   const nextIndex = (currentIndex + 1) % modes.length;
   const nextMode = modes[nextIndex];
+  log(`🔄 Cycling display mode: ${config.level} (index ${currentIndex}) -> ${nextMode} (index ${nextIndex})`);
   if (nextMode) {
     setDisplayMode(nextMode);
+  } else {
+    log(`⚠️ Next mode is undefined! currentIndex=${currentIndex}, nextIndex=${nextIndex}`);
   }
 }
 

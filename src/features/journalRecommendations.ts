@@ -72,16 +72,19 @@ async function detectPlayerResources(): Promise<PlayerResources> {
 
     // Check active pets first (most important - these are actually in use)
     const activePets = getActivePetInfos();
+    log(`[JOURNAL-GRANTER] Checking ${activePets.length} active pets`);
     for (const pet of activePets) {
       const abilities = pet.abilities || [];
       const strength = pet.strength ?? 100;
 
       if (abilities.includes('Rainbow Granter')) {
+        log(`[JOURNAL-GRANTER] Found Rainbow Granter in active pets: ${pet.species || 'unknown'}`);
         resources.hasRainbowGranter = true;
         resources.granterCount++;
         granterStrengthSum += strength;
       }
       if (abilities.includes('Gold Granter')) {
+        log(`[JOURNAL-GRANTER] Found Gold Granter in active pets: ${pet.species || 'unknown'}`);
         resources.hasGoldGranter = true;
         resources.granterCount++;
         granterStrengthSum += strength;
@@ -94,7 +97,9 @@ async function detectPlayerResources(): Promise<PlayerResources> {
     // Check inventory for pets (note: may include duplicates with active pets, but that's okay for resource availability)
     const inventory = await readInventoryDirect();
     if (inventory?.items) {
-      for (const item of inventory.items) {
+      const petItems = inventory.items.filter(i => i.itemType === 'Pet');
+      log(`[JOURNAL-GRANTER] Checking ${petItems.length} pets in inventory`);
+      for (const item of petItems) {
         if (item.itemType !== 'Pet') continue;
 
         const abilities = item.abilities || [];
@@ -102,9 +107,11 @@ async function detectPlayerResources(): Promise<PlayerResources> {
 
         // Check for special abilities
         if (abilities.includes('Rainbow Granter')) {
+          log(`[JOURNAL-GRANTER] Found Rainbow Granter in inventory: ${item.species || 'unknown'}`);
           resources.hasRainbowGranter = true;
         }
         if (abilities.includes('Gold Granter')) {
+          log(`[JOURNAL-GRANTER] Found Gold Granter in inventory: ${item.species || 'unknown'}`);
           resources.hasGoldGranter = true;
         }
         if (abilities.includes('Crop Mutation Boost I') || abilities.includes('Crop Mutation Boost II')) {
@@ -126,14 +133,17 @@ async function detectPlayerResources(): Promise<PlayerResources> {
     if (hutchAtom) {
       const hutch = await readAtomValue<any>(hutchAtom);
       const hutchPets = hutch?.pets || [];
+      log(`[JOURNAL-GRANTER] Checking ${hutchPets.length} pets in hutch`);
 
       for (const pet of hutchPets) {
         const abilities = pet.abilities || [];
 
         if (abilities.includes('Rainbow Granter')) {
+          log(`[JOURNAL-GRANTER] Found Rainbow Granter in hutch: ${pet.species || 'unknown'}`);
           resources.hasRainbowGranter = true;
         }
         if (abilities.includes('Gold Granter')) {
+          log(`[JOURNAL-GRANTER] Found Gold Granter in hutch: ${pet.species || 'unknown'}`);
           resources.hasGoldGranter = true;
         }
         if (abilities.includes('Crop Mutation Boost I') || abilities.includes('Crop Mutation Boost II')) {
@@ -147,7 +157,7 @@ async function detectPlayerResources(): Promise<PlayerResources> {
       resources.granterStrengthAvg = granterStrengthSum / resources.granterCount;
     }
 
-    log(`[JOURNAL] Player resources: Rainbow=${resources.hasRainbowGranter}, Gold=${resources.hasGoldGranter}, Granters=${resources.granterCount}`);
+    log(`[JOURNAL-GRANTER] Final detection results: Rainbow=${resources.hasRainbowGranter}, Gold=${resources.hasGoldGranter}, Granters=${resources.granterCount}, MutationBoost=${resources.hasMutationBoost}`);
   } catch (error) {
     log('❌ Error detecting player resources:', error);
   }
@@ -563,19 +573,8 @@ function createRecommendation(
     reasons,
   };
 
-  // Add harvest advice for crops
-  if (type === 'produce') {
-    const harvestStrat = getHarvestStrategy(species);
-    if (harvestStrat) {
-      if (harvestStrat === 'freeze-and-sell') {
-        recommendation.harvestAdvice = 'Freeze before selling (high value gain)';
-      } else if (harvestStrat === 'freeze-if-gold') {
-        recommendation.harvestAdvice = 'Freeze only if Gold mutation';
-      } else {
-        recommendation.harvestAdvice = 'Sell when mature (low frozen value)';
-      }
-    }
-  }
+  // NOTE: Harvest advice (freeze/sell) is for crop profits, not journal collection
+  // Journal recommendations focus on how to obtain variants, not how to sell them
 
   return recommendation;
 }

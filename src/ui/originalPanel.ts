@@ -3631,6 +3631,7 @@ export function createOriginalUI(): HTMLElement {
   modeToggle.title = 'Toggle display mode (Alt+Q)';
   modeToggle.addEventListener('click', (e) => {
     e.stopPropagation();
+    log('🖱️ Mode toggle button clicked - calling cycleDisplayMode()');
     cycleDisplayMode();
   });
 

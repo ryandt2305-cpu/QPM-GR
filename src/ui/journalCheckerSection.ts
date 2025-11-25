@@ -464,19 +464,6 @@ export function createJournalCheckerSection(): HTMLElement {
             <div style="color: #ccc; font-size: 12px; margin-bottom: 8px; line-height: 1.4;">
               ${rec.strategy}
             </div>
-            ${rec.harvestAdvice ? `
-              <div style="
-                background: #8BC34A22;
-                border-left: 2px solid #8BC34A;
-                padding: 6px 8px;
-                border-radius: 4px;
-                font-size: 11px;
-                color: #8BC34A;
-                margin-bottom: 6px;
-              ">
-                💡 ${rec.harvestAdvice}
-              </div>
-            ` : ''}
             <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
               ${rec.missingVariants.map(v => `
                 <span style="

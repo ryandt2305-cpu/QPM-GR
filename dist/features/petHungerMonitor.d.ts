@@ -18,15 +18,27 @@ export interface PetHungerState {
     lastUpdateTime: number;
     alertLevel: AlertLevel;
     lastFedTime: number | null;
+    level: number | null;
+    xp: number | null;
+    strength: number | null;
+    abilities: string[];
+    mutations: string[];
+    position: {
+        x: number | null;
+        y: number | null;
+    } | null;
 }
 /**
  * Configuration for hunger monitoring
  */
-interface HungerMonitorConfig {
+export interface HungerMonitorConfig {
     enabled: boolean;
     alertAt15Min: boolean;
     alertAt5Min: boolean;
     alertAtCritical: boolean;
+    alertAtWarning: boolean;
+    bigNotifications: boolean;
+    flashPetSlots: boolean;
     snapshotIntervalSec: number;
     minSnapshotsForRate: number;
 }
@@ -41,7 +53,7 @@ export declare function getAlertEmoji(level: AlertLevel): string;
 /**
  * Initialize hunger monitoring
  */
-export declare function initializeHungerMonitor(): void;
+export declare function initializeHungerMonitor(): Promise<void>;
 /**
  * Stop hunger monitoring
  */
@@ -67,6 +79,10 @@ export declare function updateConfig(updates: Partial<HungerMonitorConfig>): voi
  */
 export declare function getConfig(): HungerMonitorConfig;
 /**
+ * Register callback for configuration changes
+ */
+export declare function onConfigChange(callback: (config: HungerMonitorConfig) => void): () => void;
+/**
  * Format time remaining as human-readable string
  */
 export declare function formatTimeRemaining(minutes: number | null): string;
@@ -78,5 +94,4 @@ export declare function formatDecayRate(rate: number | null): string;
  * Format last fed time
  */
 export declare function formatLastFed(timestamp: number | null): string;
-export {};
 //# sourceMappingURL=petHungerMonitor.d.ts.map

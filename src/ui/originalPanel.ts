@@ -5671,9 +5671,17 @@ function createPetFeedingSection(): HTMLElement {
 
     // Remove cards for pets that no longer exist
     const currentPetIds = new Set(states.map(s => s.petId));
-    Array.from(petsContainer.querySelectorAll('[data-pet-id]')).forEach(card => {
+    log(`🔧 Current pet IDs in state: ${Array.from(currentPetIds).join(', ')}`);
+
+    const cardsInContainer = Array.from(petsContainer.querySelectorAll('[data-pet-id]'));
+    log(`🔧 Found ${cardsInContainer.length} cards in container to check for removal`);
+
+    cardsInContainer.forEach(card => {
       const petId = (card as HTMLElement).dataset.petId;
+      const existsInState = petId ? currentPetIds.has(petId) : false;
+      log(`🔧   Card petId="${petId}" exists in state: ${existsInState}`);
       if (petId && !currentPetIds.has(petId)) {
+        log(`   ❌ REMOVING card for pet ${petId} - not in current state!`);
         card.remove();
       }
     });

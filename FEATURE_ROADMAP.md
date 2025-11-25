@@ -20,19 +20,21 @@ This document tracks planned feature implementations for Quinoa Pet Manager (QPM
 
 ## Priority Overview
 
-### 🔴 HIGH PRIORITY (Implement First)
+### 🔴 HIGH PRIORITY (Implement First - Week 1-2)
 1. **Compact/Minimal Mode** - UI/UX improvement for space efficiency
-2. **Game Journal Insights** - Smart recommendations for collection completion
+2. **Game Journal Insights** - Smart recommendations for collection completion ✅ Strategy defined
 3. **Enhanced Pet Feeding UI** - Real-time hunger tracking with visual indicators
 
-### 🟡 MEDIUM PRIORITY (Implement Second)
+### 🟡 MEDIUM PRIORITY (Implement Second - Week 3-4)
 4. **AI-Powered Recommendations** - Rule-based smart suggestions
 5. **Pet Performance Metrics + ROI Calculator** - Analyze pet value and efficiency
 6. **Premium Theme System** - Customizable visual themes
+7. **Coin/Credit Income Tracker** - Economic analytics ✅ UNBLOCKED
 
-### 🟢 LOW PRIORITY (Implement Later)
-7. **Coin/Credit Income Tracker** - Economic analytics (blocked: need sale detection method)
-8. **Predictive Analytics Dashboard** - Forecasting and predictions (blocked: weather mutation tracking issues)
+### 🟢 LOW PRIORITY (Implement Later - Week 5+)
+8. **Predictive Analytics Dashboard** - Forecasting and predictions ✅ UNBLOCKED
+
+**STATUS:** All features are now unblocked and ready for implementation! 🎉
 
 ---
 
@@ -179,33 +181,66 @@ interface JournalStrategy {
 
 #### Strategy Generation Logic
 
-**QUESTIONS FOR USER:**
+**ANSWERED - Ready to Implement:**
 
-1. **Weather Mutation Strategy:**
-   - Wet/Chilled: What's the typical wait time for rain/frost weather?
-   - Frozen: How long does it take to get Wet → Frozen mutation chain?
-   - Should we recommend waiting for weather or using specific abilities?
+**1. Weather Mutation Timing:**
+- Rain/Snow: Can be at most every 5 minutes, but random (could be 20-30+ minutes)
+- Lunar events (Amber/Dawn): Every 4 hours from 12AM AEST, last 10 minutes
+  - **IMPORTANT:** Need to convert to user's system timezone
+- Wet→Frozen or Chilled→Frozen: ~30-45 minutes (rough estimate, RNG-based)
+- Weather changes at most every 5 minutes on the hour (but very unlikely)
+- **Recommendation approach:** Suggest waiting for weather AND/OR using pet abilities
 
-2. **Lunar Event Strategy:**
-   - Dawnlit/Amberlit: How reliably can players catch lunar events?
-   - Dawncharged/Ambercharged: What's the success rate for these mutations?
-   - Should we factor in difficulty of timing plants to lunar windows?
+**2. Lunar Event Reliability:**
+- Pretty reliable: Every 4 hours on the hour
+- Base chance for Dawnlit/Amberlit: 1% per crop
+- Can be boosted by Crop Mutation Boost I & II abilities
+- Dawncharged/Ambercharged process:
+  - Place lit crop next to Moonbinder/Dawnbinder during respective weather
+  - 25% chance per minute to turn charged
+- Difficulty is RNG-based
+- Getting lit is the longest part; getting charged is easier (25%/min with binder)
+- **Note:** User has spreadsheet showing which crops worth waiting for vs harvesting frozen
 
-3. **Color Mutation Strategy:**
-   - Rainbow/Gold: Should we assume players have Granter abilities?
-   - If no Granter pets, should we mark these as "hard" or "impossible"?
+**3. Color Mutation Strategy:**
+- **DO NOT assume** players have Granter pets - must check inventory + hutch
+- Players have different amounts and strength pets
+- Mark as **"Very Hard"** difficulty
+- Rainbow/Gold CAN happen randomly but:
+  - Rainbow: Abysmally small chance (0.1% base on pets)
+  - Gold: Slightly better but still quite small (1% base on pets)
+  - Random procs when multi-harvest harvested or plant first placed
+- Getting Rainbow Granter pet can take 2000+ eggs
+- Higher tier eggs stock less frequently = longer acquisition time
 
-4. **Time Estimates:**
-   - Normal growth to max size: How many hours typical?
-   - Mutation chains (Wet→Frozen, Dawnlit→Dawncharged): How long?
-   - Hatching pets to get specific abilities: Average eggs needed?
+**4. Time Estimates:**
+- **Crops don't grow to max size** - max size comes from Crop Size Boost I & II ability
+- "Grow" time = maturing time (until ready to harvest)
+- User can provide all crop growth times if needed
+- Wet+Chilled→Frozen: No fixed time, RNG-based
+- Hatching eggs for specific abilities: Very time consuming
+  - User has data for: pet species chance per egg, ability chances, etc.
+  - Rainbow Granter: Can take 2000+ eggs
+  - Gold Granter: More common but still rare
 
-5. **Difficulty Rating Criteria:**
-   - Easy: Just grow normally? Or just weather required?
-   - Medium: Requires abilities + weather?
-   - Hard: Requires lunar events + specific timing?
+**5. Difficulty Rating Examples:**
 
-**Please answer these questions so I can create accurate strategy logic!**
+**Easy (~20-30 minutes):**
+- Wet Carrot: Low tier seed (high quantity/appearance in shop), rain fairly common
+- **Note:** Higher tier seeds = harder due to lower quantity/appearance
+
+**Medium (~30-45 minutes):**
+- Frozen Carrot: Requires 2 weather events (Rain + Snow)
+- Rainbow Carrot (with Granter): Low tier seed easier, bigger sample size, depends on # and strength of Granter pets
+- **Note:** Higher tier seeds take longer
+
+**Hard (Multiple hours to days):**
+- Dawncharged Carrot: Low tier seed easier, lunar every 4 hours, 2 different lunar events possible
+  - Dawn more common than Amber
+  - **Impossible** without right binder pod (Dawnbinder/Moonbinder)
+
+**Very Hard (Days to weeks):**
+- Rainbow/Gold without Granter pets: Extremely rare random procs
 
 #### UI Mockup
 ```
@@ -734,72 +769,97 @@ interface TextureOverlay {
 
 ### 7. Coin/Credit Income Tracker 💰
 
-**Status:** 🚧 BLOCKED - Need sale detection method
+**Status:** ✅ UNBLOCKED - Solution identified
 **Estimated Time:** 3-4 days
-**Priority:** 🟢 LOW
+**Priority:** 🟡 MEDIUM (upgraded from LOW)
 
 #### Overview
 Track income from crop/pet sales and compare against expenses for profit/loss analysis.
 
-#### Blocking Issue
-**Problem:** No reliable way to detect when player sells items to shop.
+#### Solution Identified
 
-**Potential Solutions:**
-1. Monitor `myPlayerAtom` for coin balance increases
-   - Challenge: Can't distinguish sale vs other sources
+**Income Sources:**
+- Players only earn coins from selling produce and pets to shop (no gifts/rewards)
 
-2. Monitor `myInventoryAtom` for item disappearances
-   - Challenge: Items can disappear for other reasons (feeding, planting)
+**Detection Methods:**
 
-3. WebSocket message monitoring
-   - Challenge: Unknown if sell message exists/format
+1. **Monitor Player Coin Balance** (`myPlayerAtom` or onscreen balance)
+   - Track balance increases
+   - Challenge: Can't distinguish sale vs ability procs
+   - Solution: Cross-reference with ability proc events
 
-4. Shop atom monitoring
-   - Challenge: Shop atom tracks shop inventory, not player sales
+2. **Monitor Inventory Disappearances** (`myInventoryAtom`)
+   - Track produce disappearances = sales
+   - Track pet disappearances with caution (might be moving to hutch)
+   - Calculate value from `valueCalculator.ts`
 
-**Next Steps:**
-- Research WebSocket message format for sales
-- Test inventory atom monitoring reliability
-- Consider implementing partial tracking (ability income only)
+3. **WebSocket Message Monitoring** (CONFIRMED)
+   - "Sell All" action sends:
+     ```javascript
+     {
+       scopePath: ['Room', 'Quinoa'],
+       type: 'SellAllCrops'
+     }
+     ```
+   - Can listen for this message to detect bulk sales
+   - Need to determine if individual sales have similar message
 
-#### Implementation Plan (Once Unblocked)
-See detailed spec in Medium Priority section #4 from planning document.
+**Implementation Plan:**
+1. Subscribe to `myPlayerAtom` for balance tracking
+2. Subscribe to `myInventoryAtom` for item disappearances
+3. Hook into WebSocket messages to listen for `SellAllCrops` events
+4. Cross-reference data to calculate accurate income
+5. Build income dashboard (see Medium Priority section #4)
 
 ---
 
 ### 8. Predictive Analytics Dashboard 🔮
 
-**Status:** 🚧 BLOCKED - Weather mutation tracking issues
+**Status:** ✅ UNBLOCKED - Solution confirmed
 **Estimated Time:** 5-7 days
-**Priority:** 🟢 LOW
+**Priority:** 🟢 LOW (implementation complexity)
 
 #### Overview
 Forecast earnings, predict mutations, and simulate "what-if" scenarios.
 
-#### Blocking Issue
-**Problem:** Difficulty tracking when weather mutations occur in real-time.
+#### Solution Confirmed
 
-**User Note:** "Previously had issues trying to track weather mutations when they happen"
+**Weather Mutation Tracking:**
+- User confirmed: Garden snapshot diffing approach will work
+- **Optimization:** Only run snapshot detection during weather events
+- No need to run continuously - saves performance
 
-**Proposed Solution:**
-- Track garden snapshots at intervals
-- Compare snapshots to detect new mutations
-- Record mutation events when detected
-- Build historical dataset for predictions
+**Implementation Approach:**
 
-**Challenges:**
-- Snapshot frequency vs performance
-- Distinguishing mutation source (weather vs ability)
-- Handling missed mutations between snapshots
+1. **Event-Triggered Snapshots:**
+   - Start snapshot monitoring when weather event begins
+   - Take snapshots every 10 seconds during weather
+   - Stop when weather event ends
+   - Compare snapshots to detect new mutations
 
-**Next Steps:**
-- Implement robust garden snapshot diffing
-- Test snapshot interval timing (every 5s? 10s? 30s?)
-- Build mutation event detection logic
-- Validate detection accuracy
+2. **Mutation Detection:**
+   - Diff garden snapshots to find new Wet/Chilled/Frozen/Dawnlit/Amberlit crops
+   - Record timestamp, mutation type, weather type
+   - Build historical dataset for pattern analysis
 
-#### Implementation Plan (Once Unblocked)
-See detailed spec in Medium Priority section #7 from planning document.
+3. **Performance Optimization:**
+   - Only active during weather events (not 24/7)
+   - Reduces CPU/memory usage significantly
+   - Weather events are: Rain, Snow, Dawn, Amber (trackable via `weatherHub.ts`)
+
+**Data to Track:**
+- Mutation counts per weather event
+- Success rates (mutations per planted crop)
+- Time to mutation (plant → mutated)
+- Weather duration impact
+- Ability boost effects (Mutation Boost I/II)
+
+**Implementation Plan:**
+See detailed spec in previous planning section for full predictive analytics features:
+- Earnings forecast
+- Mutation predictions
+- Rare item forecast
+- What-if scenarios
 
 ---
 

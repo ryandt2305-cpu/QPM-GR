@@ -40,8 +40,12 @@ import {
   getAlertEmoji,
   formatTimeRemaining,
   formatDecayRate,
+  getConfig as getHungerMonitorConfig,
+  updateConfig as updateHungerMonitorConfig,
+  onConfigChange as onHungerConfigChange,
   type PetHungerState,
   type AlertLevel,
+  type HungerMonitorConfig,
 } from '../features/petHungerMonitor';
 
 export interface UIState {
@@ -5399,20 +5403,61 @@ function resetAllStats(): void {
 }
 
 /**
- * Create pet feeding UI section with hunger bars
+ * Create pet feeding UI section with hunger bars and configuration
  */
 function createPetFeedingSection(): HTMLElement {
-  const { root, body } = createCard('🍖 Pet Hunger', {
-    subtitle: 'Real-time hunger tracking',
+  const { root, body } = createCard('🍖 Pet Hunger Monitor', {
+    subtitle: 'Real-time hunger tracking & alerts',
   });
   root.dataset.qpmSection = 'pet-feeding';
+
+  // Initialize monitor on first creation
+  initializeHungerMonitor();
+
+  // Configuration section
+  const configSection = document.createElement('div');
+  configSection.style.cssText = 'margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px;';
+
+  const configTitle = document.createElement('div');
+  configTitle.style.cssText = 'font-weight: 600; font-size: 12px; margin-bottom: 10px; color: #8F82FF;';
+  configTitle.textContent = '⚙️ Alert Settings';
+
+  const configGrid = document.createElement('div');
+  configGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px;';
+
+  const createToggle = (label: string, configKey: keyof HungerMonitorConfig): HTMLElement => {
+    const toggle = document.createElement('label');
+    toggle.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: #ccc; cursor: pointer;';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'qpm-checkbox';
+    checkbox.checked = getHungerMonitorConfig()[configKey] as boolean;
+
+    checkbox.addEventListener('change', () => {
+      updateHungerMonitorConfig({ [configKey]: checkbox.checked });
+    });
+
+    const text = document.createElement('span');
+    text.textContent = label;
+
+    toggle.append(checkbox, text);
+    return toggle;
+  };
+
+  configGrid.appendChild(createToggle('Alert at <50% hunger', 'alertAtWarning'));
+  configGrid.appendChild(createToggle('Alert at 15 min remaining', 'alertAt15Min'));
+  configGrid.appendChild(createToggle('Alert at 5 min remaining', 'alertAt5Min'));
+  configGrid.appendChild(createToggle('Alert at critical (<15%)', 'alertAtCritical'));
+  configGrid.appendChild(createToggle('Big on-screen notifications', 'bigNotifications'));
+  configGrid.appendChild(createToggle('Flash pet slot borders', 'flashPetSlots'));
+
+  configSection.append(configTitle, configGrid);
+  body.appendChild(configSection);
 
   // Container for pet hunger cards
   const petsContainer = document.createElement('div');
   petsContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
-
-  // Initialize monitor on first creation
-  initializeHungerMonitor();
 
   // Function to create/update individual pet hunger card
   const createPetHungerCard = (state: PetHungerState): HTMLElement => {
@@ -5420,35 +5465,42 @@ function createPetFeedingSection(): HTMLElement {
     card.style.cssText = `
       background: rgba(255,255,255,0.03);
       border-radius: 8px;
-      padding: 12px;
+      padding: 14px;
       border: 1px solid ${getAlertColor(state.alertLevel)}33;
+      transition: all 0.3s ease;
     `;
     card.dataset.petId = state.petId;
 
     // Header: pet name and emoji
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
 
     const nameContainer = document.createElement('div');
     nameContainer.style.cssText = 'display:flex;align-items:center;gap:8px;';
 
     const emoji = document.createElement('span');
     emoji.textContent = getAlertEmoji(state.alertLevel);
-    emoji.style.fontSize = '16px';
+    emoji.style.fontSize = '18px';
+    emoji.dataset.qpmPetEmoji = 'true';
+
+    const nameText = document.createElement('div');
+    nameText.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
 
     const name = document.createElement('span');
     name.textContent = state.name;
-    name.style.cssText = 'font-weight: 600; font-size: 13px;';
+    name.style.cssText = 'font-weight: 600; font-size: 14px;';
 
     const species = document.createElement('span');
     species.textContent = state.species;
-    species.style.cssText = 'font-size: 11px; color: #999; margin-left: 4px;';
+    species.style.cssText = 'font-size: 10px; color: #999;';
 
-    nameContainer.append(emoji, name, species);
+    nameText.append(name, species);
+    nameContainer.append(emoji, nameText);
 
     const hungerPct = document.createElement('span');
     hungerPct.textContent = `${Math.round(state.hungerPct)}%`;
-    hungerPct.style.cssText = `font-weight: 700; font-size: 13px; color: ${getAlertColor(state.alertLevel)};`;
+    hungerPct.style.cssText = `font-weight: 700; font-size: 16px; color: ${getAlertColor(state.alertLevel)};`;
+    hungerPct.dataset.qpmPetHunger = 'true';
 
     header.append(nameContainer, hungerPct);
 
@@ -5457,9 +5509,10 @@ function createPetFeedingSection(): HTMLElement {
     barContainer.style.cssText = `
       background: rgba(0,0,0,0.3);
       border-radius: 4px;
-      height: 8px;
+      height: 10px;
       overflow: hidden;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
+      position: relative;
     `;
 
     const bar = document.createElement('div');
@@ -5467,33 +5520,121 @@ function createPetFeedingSection(): HTMLElement {
       height: 100%;
       width: ${state.hungerPct}%;
       background: linear-gradient(90deg, ${getAlertColor(state.alertLevel)}, ${getAlertColor(state.alertLevel)}aa);
-      transition: width 0.3s ease, background 0.3s ease;
+      transition: width 0.5s ease, background 0.3s ease;
+      border-radius: 4px;
     `;
+    bar.dataset.qpmPetBar = 'true';
 
     barContainer.appendChild(bar);
 
-    // Info row: time remaining and decay rate
-    const infoRow = document.createElement('div');
-    infoRow.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:#aaa;';
+    // Main stats row
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;color:#aaa;margin-bottom:8px;';
 
-    const timeInfo = document.createElement('span');
-    timeInfo.textContent = state.estimatedTimeToEmpty !== null
-      ? `⏱ ${formatTimeRemaining(state.estimatedTimeToEmpty)} remaining`
-      : '⏱ Calculating...';
+    const timeInfo = document.createElement('div');
+    timeInfo.style.cssText = 'display:flex;align-items:center;gap:4px;';
+    const timeIcon = document.createElement('span');
+    timeIcon.textContent = '⏱';
+    const timeText = document.createElement('span');
+    timeText.textContent = state.estimatedTimeToEmpty !== null
+      ? `${formatTimeRemaining(state.estimatedTimeToEmpty)} left`
+      : 'Calculating...';
+    timeText.dataset.qpmPetTime = 'true';
+    timeInfo.append(timeIcon, timeText);
 
-    const decayInfo = document.createElement('span');
-    decayInfo.textContent = `📉 ${formatDecayRate(state.hungerDecayRate)}`;
+    const decayInfo = document.createElement('div');
+    decayInfo.style.cssText = 'display:flex;align-items:center;gap:4px;';
+    const decayIcon = document.createElement('span');
+    decayIcon.textContent = '📉';
+    const decayText = document.createElement('span');
+    decayText.textContent = formatDecayRate(state.hungerDecayRate);
+    decayText.dataset.qpmPetDecay = 'true';
+    decayInfo.append(decayIcon, decayText);
 
-    infoRow.append(timeInfo, decayInfo);
+    statsRow.append(timeInfo, decayInfo);
 
-    card.append(header, barContainer, infoRow);
+    // Additional analytics section
+    const analyticsSection = document.createElement('div');
+    analyticsSection.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.1);font-size:10px;';
+
+    const createStat = (label: string, value: string | number | null, icon: string = '') => {
+      const stat = document.createElement('div');
+      stat.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+
+      const statLabel = document.createElement('span');
+      statLabel.textContent = icon ? `${icon} ${label}` : label;
+      statLabel.style.cssText = 'color:#666;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;';
+
+      const statValue = document.createElement('span');
+      statValue.textContent = value !== null ? String(value) : '—';
+      statValue.style.cssText = 'color:#fff;font-weight:600;font-size:11px;';
+
+      stat.append(statLabel, statValue);
+      return stat;
+    };
+
+    if (state.level !== null || state.xp !== null || state.strength !== null) {
+      analyticsSection.appendChild(createStat('Level', state.level, '🎯'));
+      analyticsSection.appendChild(createStat('XP', state.xp, '⭐'));
+      analyticsSection.appendChild(createStat('Strength', state.strength, '💪'));
+    }
+
+    if (state.abilities.length > 0) {
+      const abilities = document.createElement('div');
+      abilities.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;gap:4px;margin-top:4px;';
+
+      const abilitiesLabel = document.createElement('span');
+      abilitiesLabel.textContent = '🔮 Abilities';
+      abilitiesLabel.style.cssText = 'color:#666;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;';
+
+      const abilitiesList = document.createElement('div');
+      abilitiesList.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
+
+      state.abilities.forEach(ability => {
+        const tag = document.createElement('span');
+        tag.textContent = ability;
+        tag.style.cssText = 'background:rgba(143,130,255,0.2);color:#8F82FF;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:600;';
+        abilitiesList.appendChild(tag);
+      });
+
+      abilities.append(abilitiesLabel, abilitiesList);
+      analyticsSection.appendChild(abilities);
+    }
+
+    if (state.mutations.length > 0) {
+      const mutations = document.createElement('div');
+      mutations.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;gap:4px;margin-top:4px;';
+
+      const mutationsLabel = document.createElement('span');
+      mutationsLabel.textContent = '✨ Mutations';
+      mutationsLabel.style.cssText = 'color:#666;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;';
+
+      const mutationsList = document.createElement('div');
+      mutationsList.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
+
+      state.mutations.forEach(mutation => {
+        const tag = document.createElement('span');
+        tag.textContent = mutation;
+        tag.style.cssText = 'background:rgba(255,215,0,0.2);color:#FFD700;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:600;';
+        mutationsList.appendChild(tag);
+      });
+
+      mutations.append(mutationsLabel, mutationsList);
+      analyticsSection.appendChild(mutations);
+    }
+
+    card.append(header, barContainer, statsRow);
+    if (analyticsSection.hasChildNodes()) {
+      card.appendChild(analyticsSection);
+    }
+
     return card;
   };
 
   // Update UI with current hunger states
   const updatePetCards = (states: PetHungerState[]) => {
     if (states.length === 0) {
-      petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:20px;">No active pets</div>';
+      petsContainer.innerHTML = '<div style="text-align:center;color:#666;font-size:12px;padding:24px;">No active pets detected<br/><span style="font-size:10px;color:#555;margin-top:8px;display:block;">Make sure you have pets summoned in the game</span></div>';
       return;
     }
 
@@ -5503,29 +5644,31 @@ function createPetFeedingSection(): HTMLElement {
 
       if (card) {
         // Update existing card
-        const hungerPct = card.querySelector('span[style*="font-weight: 700"]');
+        const hungerPct = card.querySelector('[data-qpm-pet-hunger]');
         if (hungerPct) {
           hungerPct.textContent = `${Math.round(state.hungerPct)}%`;
           (hungerPct as HTMLElement).style.color = getAlertColor(state.alertLevel);
         }
 
-        const bar = card.querySelector('div[style*="height: 100%"]') as HTMLElement;
+        const bar = card.querySelector('[data-qpm-pet-bar]') as HTMLElement;
         if (bar) {
           bar.style.width = `${state.hungerPct}%`;
           bar.style.background = `linear-gradient(90deg, ${getAlertColor(state.alertLevel)}, ${getAlertColor(state.alertLevel)}aa)`;
         }
 
-        const [timeInfo, decayInfo] = card.querySelectorAll('div[style*="display:flex;justify-content:space-between"] span');
-        if (timeInfo) {
-          timeInfo.textContent = state.estimatedTimeToEmpty !== null
-            ? `⏱ ${formatTimeRemaining(state.estimatedTimeToEmpty)} remaining`
-            : '⏱ Calculating...';
-        }
-        if (decayInfo) {
-          decayInfo.textContent = `📉 ${formatDecayRate(state.hungerDecayRate)}`;
+        const timeText = card.querySelector('[data-qpm-pet-time]');
+        if (timeText) {
+          timeText.textContent = state.estimatedTimeToEmpty !== null
+            ? `${formatTimeRemaining(state.estimatedTimeToEmpty)} left`
+            : 'Calculating...';
         }
 
-        const emoji = card.querySelector('span[style*="font-size: 16px"]');
+        const decayText = card.querySelector('[data-qpm-pet-decay]');
+        if (decayText) {
+          decayText.textContent = formatDecayRate(state.hungerDecayRate);
+        }
+
+        const emoji = card.querySelector('[data-qpm-pet-emoji]');
         if (emoji) emoji.textContent = getAlertEmoji(state.alertLevel);
 
         // Update border color

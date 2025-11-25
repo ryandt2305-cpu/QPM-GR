@@ -3,7 +3,8 @@
 
 import { log } from '../utils/logger';
 import { notify, type NotificationLevel } from '../core/notifications';
-import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
+import { onActivePetInfos, startPetInfoStore, type ActivePetInfo } from '../store/pets';
+import { storage } from '../utils/storage';
 
 // Helper function to show toast notifications
 function showToast(message: string, level: NotificationLevel = 'info', _duration?: number): void {
@@ -31,6 +32,13 @@ export interface PetHungerState {
   lastUpdateTime: number;
   alertLevel: AlertLevel;
   lastFedTime: number | null; // timestamp when last fed (hunger went from low to high)
+  // Additional analytics
+  level: number | null;
+  xp: number | null;
+  strength: number | null;
+  abilities: string[];
+  mutations: string[];
+  position: { x: number | null; y: number | null } | null;
 }
 
 /**
@@ -45,11 +53,14 @@ interface HungerSnapshot {
 /**
  * Configuration for hunger monitoring
  */
-interface HungerMonitorConfig {
+export interface HungerMonitorConfig {
   enabled: boolean;
   alertAt15Min: boolean;
   alertAt5Min: boolean;
   alertAtCritical: boolean;
+  alertAtWarning: boolean; // < 50% hunger
+  bigNotifications: boolean; // Show large on-screen notifications
+  flashPetSlots: boolean; // Flash border around pet slots
   snapshotIntervalSec: number; // How often to take snapshots
   minSnapshotsForRate: number; // Minimum snapshots needed to calculate rate
 }
@@ -59,18 +70,38 @@ const DEFAULT_CONFIG: HungerMonitorConfig = {
   alertAt15Min: true,
   alertAt5Min: true,
   alertAtCritical: true,
+  alertAtWarning: true,
+  bigNotifications: true,
+  flashPetSlots: true,
   snapshotIntervalSec: 30, // Take snapshot every 30 seconds
   minSnapshotsForRate: 3, // Need 3 snapshots minimum
 };
 
+const CONFIG_STORAGE_KEY = 'qpm:hungerMonitor:config';
+
+/**
+ * Load configuration from storage
+ */
+function loadConfig(): HungerMonitorConfig {
+  return storage.get(CONFIG_STORAGE_KEY, DEFAULT_CONFIG);
+}
+
+/**
+ * Save configuration to storage
+ */
+function saveConfig(cfg: HungerMonitorConfig): void {
+  storage.set(CONFIG_STORAGE_KEY, cfg);
+}
+
 // Private state
-let config: HungerMonitorConfig = { ...DEFAULT_CONFIG };
+let config: HungerMonitorConfig = loadConfig();
 let hungerStates: Map<string, PetHungerState> = new Map();
 let hungerHistory: Map<string, HungerSnapshot[]> = new Map();
 let lastAlertTimes: Map<string, Map<AlertLevel, number>> = new Map();
 let stateChangeCallback: ((states: PetHungerState[]) => void) | null = null;
 let unsubscribe: (() => void) | null = null;
 let snapshotTimer: number | null = null;
+let configChangeCallbacks = new Set<(config: HungerMonitorConfig) => void>();
 
 /**
  * Get alert level based on hunger percentage
@@ -207,16 +238,30 @@ function checkAndTriggerAlert(state: PetHungerState): void {
   const now = Date.now();
   const petAlerts = lastAlertTimes.get(state.petId) || new Map();
 
+  // Alert at warning level (< 50% hunger)
+  if (config.alertAtWarning && state.alertLevel === 'warning') {
+    const lastAlert = petAlerts.get('warning') || 0;
+    if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min between alerts
+      const message = `⚠️ ${state.name} is getting hungry!`;
+      showToast(message, 'warn', 5000);
+      if (config.bigNotifications) {
+        showBigNotification(state, message);
+      }
+      petAlerts.set('warning', now);
+      lastAlertTimes.set(state.petId, petAlerts);
+    }
+  }
+
   // Alert at 15 minutes remaining
   if (config.alertAt15Min && state.estimatedTimeToEmpty !== null) {
     if (state.estimatedTimeToEmpty <= 15 && state.estimatedTimeToEmpty > 5) {
       const lastAlert = petAlerts.get('warning') || 0;
       if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min between alerts
-        showToast(
-          `${state.name} will be hungry in ~${Math.round(state.estimatedTimeToEmpty)} minutes`,
-          'warn',
-          5000
-        );
+        const message = `Will be hungry in ~${Math.round(state.estimatedTimeToEmpty)} minutes`;
+        showToast(`${state.name} ${message}`, 'warn', 5000);
+        if (config.bigNotifications) {
+          showBigNotification(state, message);
+        }
         petAlerts.set('warning', now);
         lastAlertTimes.set(state.petId, petAlerts);
       }
@@ -228,11 +273,11 @@ function checkAndTriggerAlert(state: PetHungerState): void {
     if (state.estimatedTimeToEmpty <= 5 && state.estimatedTimeToEmpty > 0) {
       const lastAlert = petAlerts.get('warning') || 0;
       if (now - lastAlert > 3 * 60 * 1000) { // Don't spam, wait 3 min
-        showToast(
-          `🔔 ${state.name} needs food soon! (~${Math.round(state.estimatedTimeToEmpty)} min)`,
-          'warn',
-          6000
-        );
+        const message = `🔔 Needs food soon! (~${Math.round(state.estimatedTimeToEmpty)} min)`;
+        showToast(`${state.name} ${message}`, 'warn', 6000);
+        if (config.bigNotifications) {
+          showBigNotification(state, message);
+        }
         petAlerts.set('warning', now);
         lastAlertTimes.set(state.petId, petAlerts);
       }
@@ -243,11 +288,11 @@ function checkAndTriggerAlert(state: PetHungerState): void {
   if (config.alertAtCritical && state.alertLevel === 'critical') {
     const lastAlert = petAlerts.get('critical') || 0;
     if (now - lastAlert > 5 * 60 * 1000) { // Don't spam, wait 5 min
-      showToast(
-        `🔴 ${state.name} is starving! (${Math.round(state.hungerPct)}% hunger)`,
-        'error',
-        8000
-      );
+      const message = '🔴 IS STARVING!';
+      showToast(`${state.name} ${message} (${Math.round(state.hungerPct)}% hunger)`, 'error', 8000);
+      if (config.bigNotifications) {
+        showBigNotification(state, message);
+      }
       petAlerts.set('critical', now);
       lastAlertTimes.set(state.petId, petAlerts);
     }
@@ -299,12 +344,24 @@ function updateHungerStates(infos: ActivePetInfo[]): void {
       lastUpdateTime: now,
       alertLevel,
       lastFedTime,
+      // Additional analytics
+      level: info.level,
+      xp: info.xp,
+      strength: info.strength,
+      abilities: info.abilities || [],
+      mutations: info.mutations || [],
+      position: info.position,
     };
 
     hungerStates.set(petId, state);
 
     // Check for alerts
     checkAndTriggerAlert(state);
+
+    // Flash pet slot border if enabled and at warning/critical
+    if (config.flashPetSlots && (alertLevel === 'warning' || alertLevel === 'critical')) {
+      flashPetSlotBorder(info.slotIndex, alertLevel);
+    }
   }
 
   // Notify listeners
@@ -326,12 +383,120 @@ function notifyStateChange(): void {
 }
 
 /**
+ * Flash border around pet slot on screen
+ */
+function flashPetSlotBorder(slotIndex: number, alertLevel: AlertLevel): void {
+  try {
+    // Find pet card elements (they have data-slot-index or similar attributes)
+    const petCards = document.querySelectorAll('[class*="PetCard"], [class*="pet-card"], [class*="petslot"]');
+
+    if (slotIndex < petCards.length) {
+      const card = petCards[slotIndex] as HTMLElement;
+      const color = getAlertColor(alertLevel);
+
+      // Add flashing animation
+      const originalBoxShadow = card.style.boxShadow;
+      const originalTransition = card.style.transition;
+
+      card.style.transition = 'box-shadow 0.5s ease-in-out';
+      card.style.boxShadow = `0 0 20px 4px ${color}, inset 0 0 20px 2px ${color}44`;
+
+      // Remove flash after animation
+      setTimeout(() => {
+        card.style.boxShadow = originalBoxShadow;
+        setTimeout(() => {
+          card.style.transition = originalTransition;
+        }, 500);
+      }, 1500);
+    }
+  } catch (error) {
+    // Silently fail if DOM manipulation fails
+  }
+}
+
+/**
+ * Show big on-screen notification
+ */
+function showBigNotification(state: PetHungerState, message: string): void {
+  if (!config.bigNotifications) return;
+
+  try {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: linear-gradient(135deg, ${getAlertColor(state.alertLevel)}22, ${getAlertColor(state.alertLevel)}44);
+      border: 3px solid ${getAlertColor(state.alertLevel)};
+      border-radius: 16px;
+      padding: 32px 48px;
+      z-index: 999999;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.8), 0 0 60px ${getAlertColor(state.alertLevel)}66;
+      backdrop-filter: blur(10px);
+      animation: qpm-pulse 0.5s ease-in-out;
+      min-width: 400px;
+      text-align: center;
+    `;
+
+    // Add CSS animation if not already present
+    if (!document.getElementById('qpm-notification-styles')) {
+      const style = document.createElement('style');
+      style.id = 'qpm-notification-styles';
+      style.textContent = `
+        @keyframes qpm-pulse {
+          0%, 100% { transform: translate(-50%, -50%) scale(1); }
+          50% { transform: translate(-50%, -50%) scale(1.05); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // Notification content
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size: 64px; margin-bottom: 16px;';
+    icon.textContent = getAlertEmoji(state.alertLevel);
+
+    const title = document.createElement('div');
+    title.style.cssText = `font-size: 28px; font-weight: 700; color: ${getAlertColor(state.alertLevel)}; margin-bottom: 12px;`;
+    title.textContent = state.name;
+
+    const msg = document.createElement('div');
+    msg.style.cssText = 'font-size: 20px; color: #fff; margin-bottom: 8px;';
+    msg.textContent = message;
+
+    const details = document.createElement('div');
+    details.style.cssText = 'font-size: 16px; color: #aaa;';
+    details.textContent = `${Math.round(state.hungerPct)}% hunger remaining`;
+
+    notification.append(icon, title, msg, details);
+    document.body.appendChild(notification);
+
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+      notification.style.transition = 'opacity 0.5s ease-out';
+      notification.style.opacity = '0';
+      setTimeout(() => notification.remove(), 500);
+    }, 4000);
+  } catch (error) {
+    log('⚠️ Failed to show big notification:', error);
+  }
+}
+
+/**
  * Initialize hunger monitoring
  */
-export function initializeHungerMonitor(): void {
+export async function initializeHungerMonitor(): Promise<void> {
   if (unsubscribe) return;
 
   log('✅ Initializing hunger monitor');
+
+  // Load config from storage
+  config = loadConfig();
+
+  // Start pet info store to get hunger data
+  await startPetInfoStore();
 
   // Subscribe to pet infos
   unsubscribe = onActivePetInfos((infos) => {
@@ -400,6 +565,17 @@ export function getHungerState(petId: string): PetHungerState | null {
  */
 export function updateConfig(updates: Partial<HungerMonitorConfig>): void {
   config = { ...config, ...updates };
+  saveConfig(config);
+
+  // Notify config change listeners
+  for (const callback of configChangeCallbacks) {
+    try {
+      callback(config);
+    } catch (error) {
+      log('⚠️ Config change callback error:', error);
+    }
+  }
+
   log('⚙️ Hunger monitor config updated:', config);
 }
 
@@ -408,6 +584,22 @@ export function updateConfig(updates: Partial<HungerMonitorConfig>): void {
  */
 export function getConfig(): HungerMonitorConfig {
   return { ...config };
+}
+
+/**
+ * Register callback for configuration changes
+ */
+export function onConfigChange(callback: (config: HungerMonitorConfig) => void): () => void {
+  configChangeCallbacks.add(callback);
+  // Fire immediately with current config
+  try {
+    callback(config);
+  } catch (error) {
+    log('⚠️ Config change immediate callback error:', error);
+  }
+  return () => {
+    configChangeCallbacks.delete(callback);
+  };
 }
 
 /**

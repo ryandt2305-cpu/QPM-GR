@@ -3631,9 +3631,15 @@ export function createOriginalUI(): HTMLElement {
   modeToggle.title = 'Toggle display mode (Alt+Q)';
   modeToggle.addEventListener('click', (e) => {
     e.stopPropagation();
+    e.preventDefault();
     log('🖱️ Mode toggle button clicked - calling cycleDisplayMode()');
-    cycleDisplayMode();
+    try {
+      cycleDisplayMode();
+    } catch (error) {
+      log('❌ Error in cycleDisplayMode:', error);
+    }
   });
+  log('✅ Mode toggle button event listener attached');
 
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';

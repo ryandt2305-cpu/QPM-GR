@@ -77,13 +77,25 @@ async function detectPlayerResources(): Promise<PlayerResources> {
       const abilities = pet.abilities || [];
       const strength = pet.strength ?? 100;
 
-      if (abilities.includes('Rainbow Granter')) {
+      // Check for Rainbow Granter (handle both string and object formats)
+      const hasRainbowGranter = abilities.some((a: any) => {
+        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+        return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
+      });
+
+      // Check for Gold Granter (handle both string and object formats)
+      const hasGoldGranter = abilities.some((a: any) => {
+        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+        return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
+      });
+
+      if (hasRainbowGranter) {
         log(`[JOURNAL-GRANTER] Found Rainbow Granter in active pets: ${pet.species || 'unknown'}`);
         resources.hasRainbowGranter = true;
         resources.granterCount++;
         granterStrengthSum += strength;
       }
-      if (abilities.includes('Gold Granter')) {
+      if (hasGoldGranter) {
         log(`[JOURNAL-GRANTER] Found Gold Granter in active pets: ${pet.species || 'unknown'}`);
         resources.hasGoldGranter = true;
         resources.granterCount++;
@@ -105,12 +117,23 @@ async function detectPlayerResources(): Promise<PlayerResources> {
         const abilities = item.abilities || [];
         const strength = item.strength ?? 100;
 
-        // Check for special abilities
-        if (abilities.includes('Rainbow Granter')) {
+        // Check for Rainbow Granter (handle both string and object formats)
+        const hasRainbowGranter = abilities.some((a: any) => {
+          const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+          return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
+        });
+
+        // Check for Gold Granter (handle both string and object formats)
+        const hasGoldGranter = abilities.some((a: any) => {
+          const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+          return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
+        });
+
+        if (hasRainbowGranter) {
           log(`[JOURNAL-GRANTER] Found Rainbow Granter in inventory: ${item.species || 'unknown'}`);
           resources.hasRainbowGranter = true;
         }
-        if (abilities.includes('Gold Granter')) {
+        if (hasGoldGranter) {
           log(`[JOURNAL-GRANTER] Found Gold Granter in inventory: ${item.species || 'unknown'}`);
           resources.hasGoldGranter = true;
         }
@@ -138,11 +161,23 @@ async function detectPlayerResources(): Promise<PlayerResources> {
       for (const pet of hutchPets) {
         const abilities = pet.abilities || [];
 
-        if (abilities.includes('Rainbow Granter')) {
+        // Check for Rainbow Granter (handle both string and object formats)
+        const hasRainbowGranter = abilities.some((a: any) => {
+          const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+          return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
+        });
+
+        // Check for Gold Granter (handle both string and object formats)
+        const hasGoldGranter = abilities.some((a: any) => {
+          const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+          return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
+        });
+
+        if (hasRainbowGranter) {
           log(`[JOURNAL-GRANTER] Found Rainbow Granter in hutch: ${pet.species || 'unknown'}`);
           resources.hasRainbowGranter = true;
         }
-        if (abilities.includes('Gold Granter')) {
+        if (hasGoldGranter) {
           log(`[JOURNAL-GRANTER] Found Gold Granter in hutch: ${pet.species || 'unknown'}`);
           resources.hasGoldGranter = true;
         }
@@ -341,13 +376,13 @@ function generateStrategy(
   if (needsRainbow || needsGold) {
     if (type === 'produce') {
       if (resources.hasRainbowGranter || resources.hasGoldGranter) {
-        strategies.push('Plant with Rainbow/Gold Granter pets active');
+        strategies.push('Use Granter pets');
       } else {
-        strategies.push('⚠️ Very rare without Granter pets - consider hatching for Granter abilities');
+        strategies.push('⚠️ Rare without Granters');
       }
     } else {
       // Pet color variants from hatching
-      strategies.push('Hatch eggs (Rainbow 0.1%, Gold 1% chance)');
+      strategies.push('Hatch eggs (0.1-1%)');
     }
   }
 
@@ -356,10 +391,10 @@ function generateStrategy(
   const needsChilled = missingVariants.includes('Chilled');
   const needsFrozen = missingVariants.includes('Frozen');
 
-  if (needsWet) strategies.push('Wait for rain weather (~20-35min avg)');
-  if (needsChilled) strategies.push('Wait for snow weather (~20-35min avg)');
+  if (needsWet) strategies.push('Rain (~20-35min)');
+  if (needsChilled) strategies.push('Snow (~20-35min)');
   if (needsFrozen) {
-    strategies.push('Get Wet/Chilled first, then wait for opposite weather (~30-45min total)');
+    strategies.push('Wet+Chilled (~30-45min)');
   }
 
   // Check for lunar mutations
@@ -369,25 +404,23 @@ function generateStrategy(
   const needsAmbercharged = missingVariants.includes('Ambercharged');
 
   if (needsDawnlit) {
-    const timeRef = getLocalLunarTimeReference();
-    strategies.push(`⚠️ LOG DAWNLIT FIRST before charging! Plant before Dawn event (${timeRef}, 1% base chance)`);
+    strategies.push(`⚠️ Log before charging! Dawn event (1%)`);
   }
   if (needsAmberlit) {
-    const timeRef = getLocalLunarTimeReference();
-    strategies.push(`⚠️ LOG AMBERLIT FIRST before charging! Plant before Amber event (${timeRef}, 33% chance vs Dawn 67%)`);
+    strategies.push(`⚠️ Log before charging! Amber event`);
   }
   if (needsDawncharged) {
     if (resources.hasDawnbinder) {
-      strategies.push('Place Dawnlit crop next to Dawnbinder during Dawn (25%/min)');
+      strategies.push('Dawnlit + Dawnbinder (25%/min)');
     } else {
-      strategies.push('⚠️ IMPOSSIBLE - Need Dawnbinder plant in garden');
+      strategies.push('⚠️ Need Dawnbinder');
     }
   }
   if (needsAmbercharged) {
     if (resources.hasMoonbinder) {
-      strategies.push('Place Amberlit crop next to Moonbinder during Amber (25%/min)');
+      strategies.push('Amberlit + Moonbinder (25%/min)');
     } else {
-      strategies.push('⚠️ IMPOSSIBLE - Need Moonbinder plant in garden');
+      strategies.push('⚠️ Need Moonbinder');
     }
   }
 
@@ -395,9 +428,9 @@ function generateStrategy(
   const needsMaxWeight = missingVariants.includes('Max Weight') || missingVariants.includes('Max');
   if (needsMaxWeight) {
     if (type === 'pet') {
-      strategies.push('⚠️ VERY RARE: Hatch pet at level/strength 70+ (max 100) for max size variant');
+      strategies.push('⚠️ Hatch at lvl 70+ (rare)');
     } else {
-      strategies.push('Requires Crop Size Boost I/II ability to reach max size');
+      strategies.push('Needs Size Boost ability');
     }
   }
 
@@ -406,7 +439,7 @@ function generateStrategy(
   if (type === 'produce' && celestialSeeds.includes(species)) {
     const needsNormal = missingVariants.includes('Normal');
     if (needsNormal) {
-      strategies.unshift('🌟 IMPORTANT: Plant and log NORMAL (non-mutated) version first! Easily forgotten for celestial seeds');
+      strategies.unshift('🌟 Log NORMAL first!');
     }
   }
 

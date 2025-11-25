@@ -607,7 +607,7 @@ export function createJournalCheckerSection(): HTMLElement {
             ">${index + 1}</div>
             <div style="flex: 1;">
               <div style="font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px;">
-                ${rec.type === 'produce' ? '🌿' : '🐾'} ${rec.species} (${rec.missingVariants.length} variant${rec.missingVariants.length !== 1 ? 's' : ''})
+                ${rec.type === 'produce' ? '🌿' : '🐾'} ${rec.species} (${rec.missingVariants.join(', ')})
               </div>
               <div style="font-size: 10px; color: #999;">${rec.estimatedTime} • ${getDifficultyEmoji(rec.difficulty)} ${getDifficultyDescription(rec.difficulty)}</div>
             </div>

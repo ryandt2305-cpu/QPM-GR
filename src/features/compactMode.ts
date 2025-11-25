@@ -103,11 +103,16 @@ function registerKeybind(): void {
       return;
     }
 
-    if (isKeybindMatch(event, config.keybind)) {
+    const matched = isKeybindMatch(event, config.keybind);
+    if (matched) {
       log(`⌨️ Keybind matched: ${config.keybind} - triggering cycleDisplayMode`);
       event.preventDefault();
       event.stopPropagation();
-      cycleDisplayMode();
+      try {
+        cycleDisplayMode();
+      } catch (error) {
+        log('❌ Error in cycleDisplayMode from keybind:', error);
+      }
     }
   });
 

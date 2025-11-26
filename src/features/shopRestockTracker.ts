@@ -118,7 +118,8 @@ export interface PredictionRecord {
   predictedTime: number; // When we predicted it would appear
   predictionMadeAt: number; // When we made the prediction
   actualTime: number | null; // When it actually appeared (null if not yet)
-  differenceMinutes: number | null; // How far off (+ = late, - = early)
+  differenceMinutes: number | null; // How far off in minutes (+ = late, - = early)
+  differenceMs: number | null; // How far off in milliseconds (+ = late, - = early)
 }
 
 /**
@@ -647,6 +648,7 @@ export function checkPredictionAccuracy(event: RestockEvent): void {
       predictionMadeAt: Date.now(), // Approximate
       actualTime: event.timestamp,
       differenceMinutes,
+      differenceMs,
     };
 
     // Add to history (keep max 3)

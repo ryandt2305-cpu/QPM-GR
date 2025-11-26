@@ -39,6 +39,7 @@ export interface PredictionRecord {
     predictionMadeAt: number;
     actualTime: number | null;
     differenceMinutes: number | null;
+    differenceMs: number | null;
 }
 /**
  * Initialize restock tracker from storage

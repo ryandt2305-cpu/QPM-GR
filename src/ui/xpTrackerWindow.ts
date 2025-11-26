@@ -32,6 +32,7 @@ export interface XpTrackerWindowState {
   lastKnownSpecies: Set<string>; // Track species to detect when config table needs updating
   unsubscribePets: (() => void) | null;
   unsubscribeXpTracker: (() => void) | null;
+  resizeListener: (() => void) | null;
 }
 
 // XP ability IDs we're tracking (continuous only, excludes hatch XP)
@@ -438,7 +439,17 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     lastKnownSpecies: new Set(),
     unsubscribePets: null,
     unsubscribeXpTracker: null,
+    resizeListener: null,
   };
+
+  // Add resize listener to keep window visible when viewport changes
+  const resizeListener = () => {
+    if (root.style.display !== 'none') {
+      clampWindowPosition(root);
+    }
+  };
+  window.addEventListener('resize', resizeListener);
+  state.resizeListener = resizeListener;
 
   // Subscribe to pet updates
   state.unsubscribePets = onActivePetInfos((pets) => {
@@ -1288,6 +1299,36 @@ function updateLiveCountdowns(state: XpTrackerWindowState): void {
 }
 
 /**
+ * Clamp window position to ensure it stays visible within viewport
+ */
+function clampWindowPosition(element: HTMLElement): void {
+  const rect = element.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 8; // Minimum margin from viewport edges
+
+  let top = parseFloat(element.style.top) || rect.top;
+  let left = parseFloat(element.style.left) || rect.left;
+  let right = parseFloat(element.style.right);
+
+  // If using right positioning, convert to left
+  if (!isNaN(right) && element.style.right !== '') {
+    left = vw - rect.right;
+    element.style.right = '';
+  }
+
+  // Clamp position to keep window visible
+  const maxLeft = Math.max(margin, vw - rect.width - margin);
+  const maxTop = Math.max(margin, vh - rect.height - margin);
+
+  left = Math.min(Math.max(left, margin), maxLeft);
+  top = Math.min(Math.max(top, margin), maxTop);
+
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+}
+
+/**
  * Make window draggable
  */
 function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
@@ -1319,6 +1360,8 @@ function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
   function closeDragElement() {
     document.onmouseup = null;
     document.onmousemove = null;
+    // Clamp position after dragging to ensure window stays visible
+    clampWindowPosition(element);
   }
 }
 
@@ -1343,6 +1386,10 @@ export function hideXpTrackerWindow(state: XpTrackerWindowState): void {
 export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
   if (state.updateInterval) {
     clearInterval(state.updateInterval);
+  }
+  if (state.resizeListener) {
+    window.removeEventListener('resize', state.resizeListener);
+    state.resizeListener = null;
   }
   state.unsubscribePets?.();
   state.unsubscribeXpTracker?.();

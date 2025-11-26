@@ -2,6 +2,7 @@ export interface ShopRestockWindowState {
     root: HTMLElement;
     contentContainer: HTMLElement;
     countdownInterval: number | null;
+    resizeListener: (() => void) | null;
 }
 /**
  * Create Shop Restock Tracker window

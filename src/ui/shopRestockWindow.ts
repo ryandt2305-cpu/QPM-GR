@@ -12,6 +12,8 @@ import {
   predictNextRestock,
   getTopLikelyItems,
   predictItemNextAppearance,
+  getPredictionHistory,
+  type PredictionRecord,
 } from '../features/shopRestockTracker';
 import {
   startLiveShopTracking,
@@ -28,6 +30,7 @@ export interface ShopRestockWindowState {
   root: HTMLElement;
   contentContainer: HTMLElement;
   countdownInterval: number | null;
+  resizeListener: (() => void) | null;
 }
 
 /**
@@ -120,11 +123,22 @@ export function createShopRestockWindow(): ShopRestockWindowState {
   // Add to DOM
   document.body.appendChild(root);
 
+  // Create state object
   const state: ShopRestockWindowState = {
     root,
     contentContainer,
     countdownInterval: null,
+    resizeListener: null,
   };
+
+  // Add resize listener to keep window visible when viewport changes
+  const resizeListener = () => {
+    if (root.style.display !== 'none') {
+      clampWindowPosition(root);
+    }
+  };
+  window.addEventListener('resize', resizeListener);
+  state.resizeListener = resizeListener;
 
   // Initialize
   initializeRestockTracker();
@@ -285,7 +299,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
 
   const heading = document.createElement('h4');
-  heading.textContent = '🔮 Next Rare Restock Prediction';
+  heading.textContent = '🔮 Next Rare Restock Estimation';
   heading.style.cssText = `
     margin: 0 0 12px 0;
     color: #42A5F5;
@@ -311,17 +325,37 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
   for (const rareItem of rareItems) {
     const nextAppearance = predictItemNextAppearance(rareItem.name);
+    const history = getPredictionHistory(rareItem.name);
 
+    // Container for item + history
+    const itemContainer = document.createElement('div');
+    itemContainer.style.cssText = `
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 6px;
+      border-left: 3px solid ${rareItem.color};
+      overflow: hidden;
+    `;
+
+    // Main row (current prediction) - Always clickable to show history or "no data" message
     const itemRow = document.createElement('div');
     itemRow.style.cssText = `
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 10px 12px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 6px;
-      border-left: 3px solid ${rareItem.color};
+      cursor: pointer;
+      transition: background 0.2s;
     `;
+
+    itemRow.addEventListener('mouseenter', () => {
+      itemRow.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    itemRow.addEventListener('mouseleave', () => {
+      itemRow.style.background = '';
+    });
+
+    const leftSide = document.createElement('div');
+    leftSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';
 
     const itemName = document.createElement('span');
     itemName.textContent = rareItem.name;
@@ -330,6 +364,18 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       font-weight: 600;
       font-size: 12px;
     `;
+
+    // Expand indicator (always show to indicate clickability)
+    const expandIndicator = document.createElement('span');
+    expandIndicator.textContent = '▼';
+    expandIndicator.style.cssText = `
+      color: #aaa;
+      font-size: 10px;
+      transition: transform 0.2s;
+    `;
+
+    leftSide.appendChild(itemName);
+    leftSide.appendChild(expandIndicator);
 
     const predictionText = document.createElement('span');
     predictionText.style.cssText = `
@@ -371,9 +417,90 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       predictionText.textContent = 'Insufficient data';
     }
 
-    itemRow.appendChild(itemName);
+    itemRow.appendChild(leftSide);
     itemRow.appendChild(predictionText);
-    itemsList.appendChild(itemRow);
+    itemContainer.appendChild(itemRow);
+
+    // History section (always create, show "No history" if empty)
+    const historySection = document.createElement('div');
+    historySection.style.cssText = `
+      display: none;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 10px;
+    `;
+
+    if (history.length > 0) {
+      for (let i = 0; i < Math.min(3, history.length); i++) {
+        const record = history[i]!;
+        const predDate = new Date(record.predictedTime);
+        const actualDate = record.actualTime ? new Date(record.actualTime) : null;
+
+        const recordRow = document.createElement('div');
+        recordRow.style.cssText = `
+          margin-bottom: ${i < Math.min(3, history.length) - 1 ? '8px' : '0'};
+          padding-bottom: ${i < Math.min(3, history.length) - 1 ? '8px' : '0'};
+          border-bottom: ${i < Math.min(3, history.length) - 1 ? '1px solid rgba(255, 255, 255, 0.05)' : 'none'};
+        `;
+
+        const estimatedRow = document.createElement('div');
+        estimatedRow.style.cssText = 'color: #aaa; margin-bottom: 2px;';
+        estimatedRow.innerHTML = `
+          <span style="color: #42A5F5;">QPM Estimated:</span> ${predDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
+        `;
+
+        const actualRow = document.createElement('div');
+        if (actualDate) {
+          // Format difference as hh:mm:ss
+          const diffMs = Math.abs(record.differenceMs || 0);
+          const hours = Math.floor(diffMs / (1000 * 60 * 60));
+          const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+          const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+          const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+          const isLate = (record.differenceMs || 0) > 0;
+          const isEarly = (record.differenceMs || 0) < 0;
+          const diffText = isLate ? `(${timeStr} late)` : isEarly ? `(${timeStr} early)` : '(on time)';
+          const diffColor = diffMs <= 15 * 60 * 1000
+            ? '#4CAF50'  // ≤15 min
+            : diffMs <= 30 * 60 * 1000
+              ? '#FFEB3B'  // ≤30 min
+              : '#f44336';  // >30 min
+
+          actualRow.style.cssText = 'color: #aaa;';
+          actualRow.innerHTML = `
+            <span style="color: #4CAF50;">Actual Restock:</span> ${actualDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
+            <span style="color: ${diffColor}; font-weight: 600;">${diffText}</span>
+          `;
+        } else {
+          actualRow.style.cssText = 'color: #666;';
+          actualRow.textContent = 'Actual Restock: Pending...';
+        }
+
+        recordRow.appendChild(estimatedRow);
+        recordRow.appendChild(actualRow);
+        historySection.appendChild(recordRow);
+      }
+    } else {
+      // No history yet
+      const noHistoryMsg = document.createElement('div');
+      noHistoryMsg.style.cssText = 'color: #666; font-style: italic; text-align: center;';
+      noHistoryMsg.textContent = 'No prediction history yet. Wait for a restock to occur!';
+      historySection.appendChild(noHistoryMsg);
+    }
+
+    itemContainer.appendChild(historySection);
+
+    // Toggle expand/collapse
+    let isExpanded = false;
+    itemRow.addEventListener('click', () => {
+      isExpanded = !isExpanded;
+      historySection.style.display = isExpanded ? 'block' : 'none';
+      expandIndicator.style.transform = isExpanded ? 'rotate(180deg)' : '';
+    });
+
+    itemsList.appendChild(itemContainer);
   }
 
   section.appendChild(itemsList);
@@ -797,6 +924,36 @@ ${sortedEvents.map(event => {
 }
 
 /**
+ * Clamp window position to ensure it stays visible within viewport
+ */
+function clampWindowPosition(element: HTMLElement): void {
+  const rect = element.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 8; // Minimum margin from viewport edges
+
+  let top = parseFloat(element.style.top) || rect.top;
+  let left = parseFloat(element.style.left) || rect.left;
+  let right = parseFloat(element.style.right);
+
+  // If using right positioning, convert to left
+  if (!isNaN(right) && element.style.right !== '') {
+    left = vw - rect.right;
+    element.style.right = '';
+  }
+
+  // Clamp position to keep window visible
+  const maxLeft = Math.max(margin, vw - rect.width - margin);
+  const maxTop = Math.max(margin, vh - rect.height - margin);
+
+  left = Math.min(Math.max(left, margin), maxLeft);
+  top = Math.min(Math.max(top, margin), maxTop);
+
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+}
+
+/**
  * Make element draggable
  */
 function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
@@ -825,6 +982,8 @@ function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
   function closeDragElement() {
     document.onmouseup = null;
     document.onmousemove = null;
+    // Clamp position after dragging to ensure window stays visible
+    clampWindowPosition(element);
   }
 }
 
@@ -850,6 +1009,12 @@ export function destroyShopRestockWindow(state: ShopRestockWindowState): void {
   if (state.countdownInterval !== null) {
     clearInterval(state.countdownInterval);
     state.countdownInterval = null;
+  }
+
+  // Remove resize listener
+  if (state.resizeListener !== null) {
+    window.removeEventListener('resize', state.resizeListener);
+    state.resizeListener = null;
   }
 
   // Stop live tracking

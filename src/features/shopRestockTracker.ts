@@ -8,7 +8,11 @@ import { notify } from '../core/notifications';
 const STORAGE_KEY_RESTOCKS = 'qpm.shopRestocks.v1';
 const STORAGE_KEY_CONFIG = 'qpm.shopRestockConfig.v1';
 const STORAGE_KEY_MIGRATION = 'qpm.shopRestocks.migration';
+const STORAGE_KEY_PREDICTIONS = 'qpm.shopRestocks.predictions.v1';
 const CURRENT_MIGRATION_VERSION = 1;
+
+// Items to track predictions for
+const TRACKED_PREDICTION_ITEMS = ['Mythical Eggs', 'Sunflower', 'Starweaver', 'Dawnbinder', 'Moonbinder'];
 
 /**
  * Restock event data structure
@@ -107,6 +111,18 @@ function getItemRarity(itemName: string): ItemStats['rarity'] {
 }
 
 /**
+ * Prediction accuracy record
+ */
+export interface PredictionRecord {
+  itemName: string;
+  predictedTime: number; // When we predicted it would appear
+  predictionMadeAt: number; // When we made the prediction
+  actualTime: number | null; // When it actually appeared (null if not yet)
+  differenceMinutes: number | null; // How far off in minutes (+ = late, - = early)
+  differenceMs: number | null; // How far off in milliseconds (+ = late, - = early)
+}
+
+/**
  * Restock tracker configuration
  */
 interface RestockConfig {
@@ -120,6 +136,8 @@ let config: RestockConfig = {
   importedFiles: [],
   watchedItems: [],
 };
+let predictionHistory: Map<string, PredictionRecord[]> = new Map(); // itemName -> history (max 3)
+let activePredictions: Map<string, number> = new Map(); // itemName -> predicted time
 
 let updateCallbacks: Array<() => void> = [];
 let isInitialized = false;
@@ -207,6 +225,10 @@ export function initializeRestockTracker(): void {
     });
     config = savedConfig;
 
+    // Load prediction history
+    const savedPredictions = storage.get<Record<string, PredictionRecord[]>>(STORAGE_KEY_PREDICTIONS, {});
+    predictionHistory = new Map(Object.entries(savedPredictions));
+
     // Migrate old data if needed
     const migratedCount = migrateRestockData();
 
@@ -217,6 +239,9 @@ export function initializeRestockTracker(): void {
     // }
 
     isInitialized = true;
+
+    // Generate initial predictions
+    generatePredictions();
 
     if (migratedCount > 0) {
       log(`📊 Loaded ${restockEvents.length} restock events from storage (${migratedCount} migrated to correct timezone)`);
@@ -297,6 +322,9 @@ export function addRestockEvent(event: RestockEvent): void {
   restockEvents.sort((a, b) => a.timestamp - b.timestamp);
 
   log(`✅ Saved restock event (${event.source}): Total ${restockEvents.length} events`);
+
+  // Check prediction accuracy
+  checkPredictionAccuracy(event);
 
   // Save to storage so live events persist
   saveRestocks();
@@ -565,11 +593,107 @@ export function predictItemNextAppearance(itemName: string): number | null {
 }
 
 /**
+ * Save prediction history to storage
+ */
+function savePredictions(): void {
+  try {
+    const predictions: Record<string, PredictionRecord[]> = {};
+    predictionHistory.forEach((history, itemName) => {
+      predictions[itemName] = history;
+    });
+    storage.set(STORAGE_KEY_PREDICTIONS, predictions);
+  } catch (error) {
+    log('⚠️ Failed to save prediction history', error);
+  }
+}
+
+/**
+ * Generate and store predictions for tracked items
+ */
+export function generatePredictions(): void {
+  const now = Date.now();
+
+  for (const itemName of TRACKED_PREDICTION_ITEMS) {
+    const predictedTime = predictItemNextAppearance(itemName);
+    if (predictedTime && predictedTime > now) {
+      activePredictions.set(itemName, predictedTime);
+      log(`📊 Generated prediction for ${itemName}: ${new Date(predictedTime).toLocaleString()}`);
+    }
+  }
+}
+
+/**
+ * Check if a restock matches any active predictions and record accuracy
+ */
+export function checkPredictionAccuracy(event: RestockEvent): void {
+  for (const item of event.items) {
+    // Only track specific items
+    if (!TRACKED_PREDICTION_ITEMS.includes(item.name)) {
+      continue;
+    }
+
+    const predictedTime = activePredictions.get(item.name);
+    if (!predictedTime) {
+      continue;
+    }
+
+    // Calculate difference (positive = late, negative = early)
+    const differenceMs = event.timestamp - predictedTime;
+    const differenceMinutes = Math.round(differenceMs / (1000 * 60));
+
+    // Create prediction record
+    const record: PredictionRecord = {
+      itemName: item.name,
+      predictedTime,
+      predictionMadeAt: Date.now(), // Approximate
+      actualTime: event.timestamp,
+      differenceMinutes,
+      differenceMs,
+    };
+
+    // Add to history (keep max 3)
+    let history = predictionHistory.get(item.name) || [];
+    history.unshift(record); // Add to front
+    if (history.length > 3) {
+      history = history.slice(0, 3);
+    }
+    predictionHistory.set(item.name, history);
+
+    // Clear active prediction
+    activePredictions.delete(item.name);
+
+    log(`📊 Prediction accuracy for ${item.name}: ${differenceMinutes > 0 ? `${differenceMinutes} min late` : `${Math.abs(differenceMinutes)} min early`}`);
+  }
+
+  // Save to storage
+  savePredictions();
+
+  // Generate new predictions
+  generatePredictions();
+}
+
+/**
+ * Get prediction history for an item (up to 3 most recent)
+ */
+export function getPredictionHistory(itemName: string): PredictionRecord[] {
+  return predictionHistory.get(itemName) || [];
+}
+
+/**
+ * Get all prediction histories
+ */
+export function getAllPredictionHistories(): Map<string, PredictionRecord[]> {
+  return new Map(predictionHistory);
+}
+
+/**
  * Clear all restock data and ALL QPM storage
  */
 export function clearAllRestocks(): void {
   restockEvents = [];
   config.importedFiles = [];
+  predictionHistory.clear();
+  activePredictions.clear();
 
   // Clear ALL QPM storage (localStorage + GM storage)
   storage.clear();

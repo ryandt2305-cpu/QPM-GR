@@ -301,11 +301,22 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   const heading = document.createElement('h4');
   heading.textContent = '🔮 Next Rare Restock Estimation';
   heading.style.cssText = `
-    margin: 0 0 12px 0;
+    margin: 0 0 4px 0;
     color: #42A5F5;
     font-size: 14px;
   `;
   section.appendChild(heading);
+
+  // Add disclaimer
+  const disclaimer = document.createElement('p');
+  disclaimer.textContent = '(This will never be 100%, only estimates based of patterns and timings)';
+  disclaimer.style.cssText = `
+    margin: 0 0 12px 0;
+    font-size: 10px;
+    color: #888;
+    font-style: italic;
+  `;
+  section.appendChild(disclaimer);
 
   // Specific rare items to track
   const rareItems = [
@@ -459,14 +470,14 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
           const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
           const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-          const isLate = (record.differenceMs || 0) > 0;
-          const isEarly = (record.differenceMs || 0) < 0;
-          const diffText = isLate ? `(${timeStr} late)` : isEarly ? `(${timeStr} early)` : '(on time)';
-          const diffColor = diffMs <= 15 * 60 * 1000
-            ? '#4CAF50'  // ≤15 min
-            : diffMs <= 30 * 60 * 1000
-              ? '#FFEB3B'  // ≤30 min
-              : '#f44336';  // >30 min
+          const diffText = `(${timeStr} range)`;
+          const diffColor = diffMs <= 45 * 60 * 1000
+            ? '#4CAF50'  // ≤45 min - Green
+            : diffMs <= 120 * 60 * 1000
+              ? '#FFEB3B'  // ≤2 hours - Yellow
+              : diffMs <= 240 * 60 * 1000
+                ? '#FF9800'  // ≤4 hours - Orange
+                : '#f44336';  // >4 hours - Red
 
           actualRow.style.cssText = 'color: #aaa;';
           actualRow.innerHTML = `

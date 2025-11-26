@@ -14,6 +14,7 @@ export interface XpTrackerWindowState {
     lastKnownSpecies: Set<string>;
     unsubscribePets: (() => void) | null;
     unsubscribeXpTracker: (() => void) | null;
+    resizeListener: (() => void) | null;
 }
 /**
  * Create XP tracker window

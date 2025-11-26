@@ -31,6 +31,16 @@ export interface ItemStats {
     rarity: 'common' | 'uncommon' | 'rare' | 'mythic' | 'divine' | 'celestial';
 }
 /**
+ * Prediction accuracy record
+ */
+export interface PredictionRecord {
+    itemName: string;
+    predictedTime: number;
+    predictionMadeAt: number;
+    actualTime: number | null;
+    differenceMinutes: number | null;
+}
+/**
  * Initialize restock tracker from storage
  * Only loads once - subsequent calls are ignored to prevent data loss
  */
@@ -93,6 +103,22 @@ export declare function getTopLikelyItems(limit?: number): Array<{
  * Based on item's last appearance, restock interval, and appearance rate
  */
 export declare function predictItemNextAppearance(itemName: string): number | null;
+/**
+ * Generate and store predictions for tracked items
+ */
+export declare function generatePredictions(): void;
+/**
+ * Check if a restock matches any active predictions and record accuracy
+ */
+export declare function checkPredictionAccuracy(event: RestockEvent): void;
+/**
+ * Get prediction history for an item (up to 3 most recent)
+ */
+export declare function getPredictionHistory(itemName: string): PredictionRecord[];
+/**
+ * Get all prediction histories
+ */
+export declare function getAllPredictionHistories(): Map<string, PredictionRecord[]>;
 /**
  * Clear all restock data and ALL QPM storage
  */

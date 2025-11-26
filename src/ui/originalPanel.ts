@@ -3769,6 +3769,24 @@ export function createOriginalUI(): HTMLElement {
 
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+  // Clamp panel position to keep it visible within viewport
+  const clampPanelPosition = () => {
+    const rect = panel.getBoundingClientRect();
+    const panelWidth = panel.offsetWidth;
+    const panelHeight = panel.offsetHeight;
+    const maxLeft = Math.max(8, window.innerWidth - panelWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - panelHeight - 8);
+
+    const newLeft = clamp(rect.left, 8, maxLeft);
+    const newTop = clamp(rect.top, 8, maxTop);
+
+    // Only update if position changed
+    if (Math.abs(newLeft - rect.left) > 1 || Math.abs(newTop - rect.top) > 1) {
+      applyPosition(newLeft, newTop);
+      storage.set(PANEL_POSITION_KEY, { left: Math.round(newLeft), top: Math.round(newTop) });
+    }
+  };
+
   const onPointerMove = (event: PointerEvent) => {
     if (!isDragging || pointerId !== event.pointerId) return;
 
@@ -3853,6 +3871,9 @@ export function createOriginalUI(): HTMLElement {
     const collapsed = content.style.display === 'none';
     applyCollapsed(!collapsed);
   });
+
+  // Add resize listener to keep panel visible when viewport changes
+  window.addEventListener('resize', clampPanelPosition);
 
   document.body.appendChild(panel);
 

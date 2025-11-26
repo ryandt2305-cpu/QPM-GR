@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         QPM (ALPHA)
 // @namespace    Quinoa
-// @version      1.10.1
+// @version      1.10.2
 // @description  Quality-of-life enhancements for Magic Garden: crop type locking, mutation tracking, value calculator, harvest reminders, journal species checker, and persistent feed statistics.
 // @author       TOKYO.#6464
 // @match        https://1227719606223765687.discordsays.com/*

@@ -336,25 +336,23 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       overflow: hidden;
     `;
 
-    // Main row (current prediction)
+    // Main row (current prediction) - Always clickable to show history or "no data" message
     const itemRow = document.createElement('div');
     itemRow.style.cssText = `
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 10px 12px;
-      cursor: ${history.length > 0 ? 'pointer' : 'default'};
+      cursor: pointer;
       transition: background 0.2s;
     `;
 
-    if (history.length > 0) {
-      itemRow.addEventListener('mouseenter', () => {
-        itemRow.style.background = 'rgba(255, 255, 255, 0.05)';
-      });
-      itemRow.addEventListener('mouseleave', () => {
-        itemRow.style.background = '';
-      });
-    }
+    itemRow.addEventListener('mouseenter', () => {
+      itemRow.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    itemRow.addEventListener('mouseleave', () => {
+      itemRow.style.background = '';
+    });
 
     const leftSide = document.createElement('div');
     leftSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';
@@ -367,21 +365,17 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       font-size: 12px;
     `;
 
-    // Expand indicator (only if there's history)
+    // Expand indicator (always show to indicate clickability)
     const expandIndicator = document.createElement('span');
-    if (history.length > 0) {
-      expandIndicator.textContent = '▼';
-      expandIndicator.style.cssText = `
-        color: #aaa;
-        font-size: 10px;
-        transition: transform 0.2s;
-      `;
-    }
+    expandIndicator.textContent = '▼';
+    expandIndicator.style.cssText = `
+      color: #aaa;
+      font-size: 10px;
+      transition: transform 0.2s;
+    `;
 
     leftSide.appendChild(itemName);
-    if (history.length > 0) {
-      leftSide.appendChild(expandIndicator);
-    }
+    leftSide.appendChild(expandIndicator);
 
     const predictionText = document.createElement('span');
     predictionText.style.cssText = `
@@ -427,17 +421,17 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
     itemRow.appendChild(predictionText);
     itemContainer.appendChild(itemRow);
 
-    // History section (expandable)
-    if (history.length > 0) {
-      const historySection = document.createElement('div');
-      historySection.style.cssText = `
-        display: none;
-        padding: 12px;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        font-size: 10px;
-      `;
+    // History section (always create, show "No history" if empty)
+    const historySection = document.createElement('div');
+    historySection.style.cssText = `
+      display: none;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 10px;
+    `;
 
+    if (history.length > 0) {
       for (let i = 0; i < Math.min(3, history.length); i++) {
         const record = history[i]!;
         const predDate = new Date(record.predictedTime);
@@ -458,16 +452,21 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
         const actualRow = document.createElement('div');
         if (actualDate) {
-          const diffText = record.differenceMinutes! > 0
-            ? `(${record.differenceMinutes} min late)`
-            : record.differenceMinutes! < 0
-              ? `(${Math.abs(record.differenceMinutes!)} min early)`
-              : '(on time)';
-          const diffColor = Math.abs(record.differenceMinutes!) <= 15
-            ? '#4CAF50'
-            : Math.abs(record.differenceMinutes!) <= 30
-              ? '#FFEB3B'
-              : '#f44336';
+          // Format difference as hh:mm:ss
+          const diffMs = Math.abs(record.differenceMs || 0);
+          const hours = Math.floor(diffMs / (1000 * 60 * 60));
+          const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+          const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+          const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+          const isLate = (record.differenceMs || 0) > 0;
+          const isEarly = (record.differenceMs || 0) < 0;
+          const diffText = isLate ? `(${timeStr} late)` : isEarly ? `(${timeStr} early)` : '(on time)';
+          const diffColor = diffMs <= 15 * 60 * 1000
+            ? '#4CAF50'  // ≤15 min
+            : diffMs <= 30 * 60 * 1000
+              ? '#FFEB3B'  // ≤30 min
+              : '#f44336';  // >30 min
 
           actualRow.style.cssText = 'color: #aaa;';
           actualRow.innerHTML = `
@@ -483,17 +482,23 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
         recordRow.appendChild(actualRow);
         historySection.appendChild(recordRow);
       }
-
-      itemContainer.appendChild(historySection);
-
-      // Toggle expand/collapse
-      let isExpanded = false;
-      itemRow.addEventListener('click', () => {
-        isExpanded = !isExpanded;
-        historySection.style.display = isExpanded ? 'block' : 'none';
-        expandIndicator.style.transform = isExpanded ? 'rotate(180deg)' : '';
-      });
+    } else {
+      // No history yet
+      const noHistoryMsg = document.createElement('div');
+      noHistoryMsg.style.cssText = 'color: #666; font-style: italic; text-align: center;';
+      noHistoryMsg.textContent = 'No prediction history yet. Wait for a restock to occur!';
+      historySection.appendChild(noHistoryMsg);
     }
+
+    itemContainer.appendChild(historySection);
+
+    // Toggle expand/collapse
+    let isExpanded = false;
+    itemRow.addEventListener('click', () => {
+      isExpanded = !isExpanded;
+      historySection.style.display = isExpanded ? 'block' : 'none';
+      expandIndicator.style.transform = isExpanded ? 'rotate(180deg)' : '';
+    });
 
     itemsList.appendChild(itemContainer);
   }

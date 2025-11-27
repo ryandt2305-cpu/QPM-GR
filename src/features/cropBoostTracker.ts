@@ -14,13 +14,11 @@ import { lookupMaxScale } from '../utils/plantScales';
 // Types
 // ============================================================================
 
-export type EstimateMode = 'conservative' | 'average' | 'optimistic';
-
 export interface CropBoostConfig {
   enabled: boolean;
-  estimateMode: EstimateMode;
   autoRefresh: boolean;
   refreshInterval: number; // seconds
+  selectedSpecies: string | null; // null = all crops
 }
 
 export interface BoostPetInfo {
@@ -52,8 +50,9 @@ export interface CropSizeInfo {
 
 export interface BoostEstimate {
   boostsNeeded: number;
-  timeEstimate: number; // minutes
-  confidenceLevel: 'high' | 'medium' | 'low';
+  timeEstimateMin: number; // minutes (best case - fastest pet)
+  timeEstimateMax: number; // minutes (worst case - slowest pet)
+  timeEstimateAvg: number; // minutes (average)
 }
 
 export interface TrackerAnalysis {
@@ -90,9 +89,9 @@ export interface TrackerAnalysis {
 
 const DEFAULT_CONFIG: CropBoostConfig = {
   enabled: true,
-  estimateMode: 'conservative',
   autoRefresh: true,
   refreshInterval: 30, // 30 seconds
+  selectedSpecies: null, // Show all crops by default
 };
 
 let config: CropBoostConfig = { ...DEFAULT_CONFIG };
@@ -120,8 +119,8 @@ export function setConfig(updates: Partial<CropBoostConfig>): void {
   }
 }
 
-export function setEstimateMode(mode: EstimateMode): void {
-  config.estimateMode = mode;
+export function setSelectedSpecies(species: string | null): void {
+  config.selectedSpecies = species;
   saveConfig();
   recalculate();
 }
@@ -221,6 +220,7 @@ function scanGardenCrops(): CropSizeInfo[] {
         const currentSizePercent = 50 + ratio * 50;
         const sizeRemaining = Math.max(0, 100 - currentSizePercent);
 
+        // Include ALL crops (growing and mature) - Crop Size Boost works on all crops!
         crops.push({
           species,
           currentScale,
@@ -258,43 +258,32 @@ function calculateBoostsNeeded(
 }
 
 /**
- * Calculate time estimate based on estimate mode
+ * Calculate time estimate range (min, max, avg)
+ * Accounts for multiple pets proc-ing independently
  */
-function calculateTimeEstimate(
+function calculateTimeEstimateRange(
   boostsNeeded: number,
-  boostPets: BoostPetInfo[],
-  mode: EstimateMode
-): { minutes: number; confidenceLevel: 'high' | 'medium' | 'low' } {
+  boostPets: BoostPetInfo[]
+): { min: number; max: number; avg: number } {
   if (boostPets.length === 0) {
-    return { minutes: Infinity, confidenceLevel: 'low' };
-  }
-
-  let minutesPerProc: number;
-  let confidence: 'high' | 'medium' | 'low';
-
-  if (mode === 'conservative') {
-    // Use slowest pet (most minutes per proc)
-    minutesPerProc = Math.max(...boostPets.map(p => p.expectedMinutesPerProc));
-    confidence = 'high';
-  } else if (mode === 'optimistic') {
-    // Use fastest pet (least minutes per proc)
-    minutesPerProc = Math.min(...boostPets.map(p => p.expectedMinutesPerProc));
-    confidence = 'low';
-  } else {
-    // Use average
-    const sum = boostPets.reduce((acc, p) => acc + p.expectedMinutesPerProc, 0);
-    minutesPerProc = sum / boostPets.length;
-    confidence = 'medium';
+    return { min: Infinity, max: Infinity, avg: Infinity };
   }
 
   // Account for multiple pets: they can proc independently
-  // So effective rate is sum of individual rates
+  // Effective rate is sum of individual rates
   const combinedRate = boostPets.reduce((acc, p) => acc + (1 / p.expectedMinutesPerProc), 0);
   const effectiveMinutesPerProc = 1 / combinedRate;
 
+  // Best case: fastest individual pet (minimum minutes per proc)
+  const fastestMinutesPerProc = Math.min(...boostPets.map(p => p.expectedMinutesPerProc));
+
+  // Worst case: slowest individual pet (maximum minutes per proc)
+  const slowestMinutesPerProc = Math.max(...boostPets.map(p => p.expectedMinutesPerProc));
+
   return {
-    minutes: boostsNeeded * effectiveMinutesPerProc,
-    confidenceLevel: confidence,
+    min: boostsNeeded * effectiveMinutesPerProc, // Combined rate (most realistic)
+    max: boostsNeeded * slowestMinutesPerProc,  // Worst case
+    avg: boostsNeeded * effectiveMinutesPerProc, // Same as min with combined pets
   };
 }
 
@@ -303,17 +292,16 @@ function calculateTimeEstimate(
  */
 function analyzeBoostTracker(): TrackerAnalysis | null {
   const boostPets = getBoostPets();
-  const crops = scanGardenCrops();
+  const allCrops = scanGardenCrops();
 
   if (boostPets.length === 0) {
     log('ℹ️ Crop Boost Tracker: No active boost pets');
     return null;
   }
 
-  // Filter for mature crops only
-  const matureCrops = crops.filter(c => c.isMature);
-  const cropsAtMax = matureCrops.filter(c => c.sizeRemaining <= 0);
-  const cropsNeedingBoost = matureCrops.filter(c => c.sizeRemaining > 0);
+  // Include ALL crops (growing and mature)
+  const cropsAtMax = allCrops.filter(c => c.sizeRemaining <= 0);
+  const cropsNeedingBoost = allCrops.filter(c => c.sizeRemaining > 0);
 
   // Calculate aggregate stats
   const boostPercents = boostPets.map(p => p.effectiveBoostPercent);
@@ -326,15 +314,8 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
   const slowestMinutesPerProc = Math.max(...minutesList);
   const fastestMinutesPerProc = Math.min(...minutesList);
 
-  // Determine boost percent to use for calculations
-  let boostPercentForCalc: number;
-  if (config.estimateMode === 'conservative') {
-    boostPercentForCalc = weakestBoostPercent;
-  } else if (config.estimateMode === 'optimistic') {
-    boostPercentForCalc = strongestBoostPercent;
-  } else {
-    boostPercentForCalc = averageBoostPercent;
-  }
+  // Use average boost percent for calculations
+  const boostPercentForCalc = averageBoostPercent;
 
   // Calculate per-crop estimates
   const cropEstimates = new Map<string, BoostEstimate>();
@@ -342,12 +323,13 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
 
   for (const crop of cropsNeedingBoost) {
     const boostsNeeded = calculateBoostsNeeded(crop, boostPercentForCalc);
-    const timeResult = calculateTimeEstimate(boostsNeeded, boostPets, config.estimateMode);
+    const timeRange = calculateTimeEstimateRange(boostsNeeded, boostPets);
 
     const estimate: BoostEstimate = {
       boostsNeeded,
-      timeEstimate: timeResult.minutes,
-      confidenceLevel: timeResult.confidenceLevel,
+      timeEstimateMin: timeRange.min,
+      timeEstimateMax: timeRange.max,
+      timeEstimateAvg: timeRange.avg,
     };
 
     const key = `${crop.tileKey}-${crop.slotIndex}`;
@@ -358,14 +340,14 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
   }
 
   // Overall estimate: time until ALL crops are maxed
-  const overallTimeResult = calculateTimeEstimate(totalBoostsNeeded, boostPets, config.estimateMode);
+  const overallTimeRange = calculateTimeEstimateRange(totalBoostsNeeded, boostPets);
 
   const analysis: TrackerAnalysis = {
     boostPets,
-    crops: matureCrops,
+    crops: allCrops,
 
     totalBoostPets: boostPets.length,
-    totalMatureCrops: matureCrops.length,
+    totalMatureCrops: allCrops.length, // All crops now, not just mature
     totalCropsAtMax: cropsAtMax.length,
     totalCropsNeedingBoost: cropsNeedingBoost.length,
 
@@ -379,8 +361,9 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
 
     overallEstimate: {
       boostsNeeded: totalBoostsNeeded,
-      timeEstimate: overallTimeResult.minutes,
-      confidenceLevel: overallTimeResult.confidenceLevel,
+      timeEstimateMin: overallTimeRange.min,
+      timeEstimateMax: overallTimeRange.max,
+      timeEstimateAvg: overallTimeRange.avg,
     },
 
     cropEstimates,
@@ -488,4 +471,33 @@ export function formatTimeEstimate(minutes: number): string {
   } else {
     return `${mins}m`;
   }
+}
+
+/**
+ * Format time range for display
+ */
+export function formatTimeRange(minMinutes: number, maxMinutes: number): string {
+  const minStr = formatTimeEstimate(minMinutes);
+  const maxStr = formatTimeEstimate(maxMinutes);
+
+  if (minStr === maxStr) {
+    return minStr;
+  }
+
+  return `${minStr} - ${maxStr}`;
+}
+
+/**
+ * Get list of available crop species in garden
+ */
+export function getAvailableSpecies(): string[] {
+  const analysis = getCurrentAnalysis();
+  if (!analysis) return [];
+
+  const speciesSet = new Set<string>();
+  for (const crop of analysis.crops) {
+    speciesSet.add(crop.species);
+  }
+
+  return Array.from(speciesSet).sort();
 }

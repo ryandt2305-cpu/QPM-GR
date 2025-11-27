@@ -12,6 +12,7 @@ import {
   onAnalysisChange,
   formatTimeEstimate,
   formatTimeRange,
+  formatCountdown,
   getAvailableSpecies,
   type TrackerAnalysis,
   type CropSizeInfo,
@@ -93,6 +94,43 @@ function renderCropBoostSection(root: HTMLElement): void {
 
   root.appendChild(header);
 
+  // Detail Toggle Button
+  const toggleCard = document.createElement('div');
+  toggleCard.style.cssText = `
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  `;
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.style.cssText = `
+    padding: 6px 12px;
+    background: rgba(100, 181, 246, 0.2);
+    border: 1px solid #64B5F6;
+    border-radius: 4px;
+    color: #64B5F6;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  `;
+  toggleBtn.textContent = showDetailedView ? '📊 Simple View' : '📈 Detailed View';
+  toggleBtn.addEventListener('click', () => {
+    showDetailedView = !showDetailedView;
+    if (windowRoot) {
+      renderCropBoostSection(windowRoot);
+    }
+  });
+  toggleBtn.addEventListener('mouseenter', () => {
+    toggleBtn.style.background = 'rgba(100, 181, 246, 0.3)';
+  });
+  toggleBtn.addEventListener('mouseleave', () => {
+    toggleBtn.style.background = 'rgba(100, 181, 246, 0.2)';
+  });
+
+  toggleCard.appendChild(toggleBtn);
+  root.appendChild(toggleCard);
+
   // Overall Stats Card
   const statsCard = document.createElement('div');
   statsCard.style.cssText = `
@@ -142,6 +180,7 @@ function renderCropBoostSection(root: HTMLElement): void {
       border: 2px solid rgba(255, 193, 7, 0.4);
       border-radius: 8px;
     `;
+    allCropsCard.setAttribute('data-countdown-section', 'overall');
 
     const allCropsTitle = document.createElement('div');
     allCropsTitle.style.cssText = 'font-size: 14px; font-weight: 600; color: #FFC107; margin-bottom: 12px;';
@@ -153,16 +192,40 @@ function renderCropBoostSection(root: HTMLElement): void {
     boostsRow.innerHTML = `<strong>Boosts Needed:</strong> ${analysis.overallEstimate.boostsNeeded}`;
     allCropsCard.appendChild(boostsRow);
 
-    const timeRow = document.createElement('div');
-    timeRow.style.cssText = 'font-size: 16px; font-weight: 600; color: #FFC107;';
-    const timeRangeStr = formatTimeRange(analysis.overallEstimate.timeEstimateMin, analysis.overallEstimate.timeEstimateMax);
-    timeRow.innerHTML = `⏰ ${timeRangeStr}`;
-    allCropsCard.appendChild(timeRow);
+    // Simple view: Just show next boost countdown
+    if (!showDetailedView) {
+      const nextBoostRow = document.createElement('div');
+      nextBoostRow.style.cssText = 'font-size: 16px; font-weight: 600; color: #FFC107;';
+      nextBoostRow.setAttribute('data-countdown-display', 'overall-next');
 
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; font-style: italic;';
-    note.textContent = '* Time range: best case (fastest pet) to worst case (slowest pet)';
-    allCropsCard.appendChild(note);
+      // Get the soonest next boost from any crop
+      let soonestNextBoost = Infinity;
+      for (const estimate of analysis.cropEstimates.values()) {
+        if (estimate.expectedNextBoostAt < soonestNextBoost) {
+          soonestNextBoost = estimate.expectedNextBoostAt;
+        }
+      }
+
+      const countdown = formatCountdown(soonestNextBoost);
+      nextBoostRow.innerHTML = `⏰ Next boost: <span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
+      allCropsCard.appendChild(nextBoostRow);
+    } else {
+      // Detailed view: Show full time range with percentiles
+      const timeRow = document.createElement('div');
+      timeRow.style.cssText = 'font-size: 16px; font-weight: 600; color: #FFC107; margin-bottom: 8px;';
+      const timeRangeStr = formatTimeRange(
+        analysis.overallEstimate.timeEstimateP10,
+        analysis.overallEstimate.timeEstimateP50,
+        analysis.overallEstimate.timeEstimateP90
+      );
+      timeRow.innerHTML = `⏰ ${timeRangeStr}`;
+      allCropsCard.appendChild(timeRow);
+
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 4px; font-style: italic;';
+      note.textContent = '* Based on 1000 Monte Carlo simulations (P10-P90 range, median)';
+      allCropsCard.appendChild(note);
+    }
 
     root.appendChild(allCropsCard);
   }
@@ -215,38 +278,14 @@ function renderCropBoostSection(root: HTMLElement): void {
   speciesSelect.addEventListener('change', () => {
     const selected = speciesSelect.value || null;
     setSelectedSpecies(selected);
+
+    // Auto-refresh view immediately when dropdown changes
+    if (windowRoot) {
+      renderCropBoostSection(windowRoot);
+    }
   });
 
   selectRow.appendChild(speciesSelect);
-
-  const refreshBtn = document.createElement('button');
-  refreshBtn.style.cssText = `
-    padding: 8px 16px;
-    background: rgba(76, 175, 80, 0.2);
-    border: 1px solid #4CAF50;
-    border-radius: 4px;
-    color: #4CAF50;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-  `;
-  refreshBtn.textContent = '🔄 Refresh';
-  refreshBtn.addEventListener('click', () => {
-    manualRefresh();
-    refreshBtn.textContent = '✓ Refreshed';
-    setTimeout(() => {
-      refreshBtn.textContent = '🔄 Refresh';
-    }, 1000);
-  });
-  refreshBtn.addEventListener('mouseenter', () => {
-    refreshBtn.style.background = 'rgba(76, 175, 80, 0.3)';
-  });
-  refreshBtn.addEventListener('mouseleave', () => {
-    refreshBtn.style.background = 'rgba(76, 175, 80, 0.2)';
-  });
-
-  selectRow.appendChild(refreshBtn);
   selectionCard.appendChild(selectRow);
   root.appendChild(selectionCard);
 
@@ -287,7 +326,7 @@ function renderCropBoostSection(root: HTMLElement): void {
         <th style="text-align: left; padding: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); font-weight: 600; text-transform: uppercase; font-size: 11px;">Crop</th>
         <th style="text-align: right; padding: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); font-weight: 600; text-transform: uppercase; font-size: 11px;">Size</th>
         <th style="text-align: right; padding: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); font-weight: 600; text-transform: uppercase; font-size: 11px;">Boosts</th>
-        <th style="text-align: right; padding: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); font-weight: 600; text-transform: uppercase; font-size: 11px;">Time Range</th>
+        <th style="text-align: right; padding: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); font-weight: 600; text-transform: uppercase; font-size: 11px;">${showDetailedView ? 'Time Estimate' : 'Next Boost'}</th>
       </tr>
     `;
     table.appendChild(thead);
@@ -323,15 +362,30 @@ function renderCropBoostSection(root: HTMLElement): void {
       row.appendChild(sizeCell);
 
       const boostsCell = document.createElement('td');
-      boostsCell.style.cssText = 'padding: 12px 10px; text-align: right; font-weight: 600; color: #64B5F6;';
-      boostsCell.textContent = estimate ? estimate.boostsNeeded.toString() : 'N/A';
+      boostsCell.style.cssText = 'padding: 12px 10px; text-align: right;';
+      if (estimate && showDetailedView) {
+        boostsCell.innerHTML = `<span style="color: #64B5F6; font-weight: 600;">${estimate.boostsReceived}/${estimate.boostsNeeded}</span>`;
+      } else if (estimate) {
+        boostsCell.innerHTML = `<span style="color: #64B5F6; font-weight: 600;">${estimate.boostsNeeded}</span>`;
+      } else {
+        boostsCell.textContent = 'N/A';
+      }
       row.appendChild(boostsCell);
 
       const timeCell = document.createElement('td');
       timeCell.style.cssText = 'padding: 12px 10px; text-align: right; color: #FFC107; font-weight: 500;';
+      timeCell.setAttribute('data-countdown-display', key);
+
       if (estimate) {
-        const timeRangeStr = formatTimeRange(estimate.timeEstimateMin, estimate.timeEstimateMax);
-        timeCell.textContent = timeRangeStr;
+        if (!showDetailedView) {
+          // Simple view: Show live countdown to next boost
+          const countdown = formatCountdown(estimate.expectedNextBoostAt);
+          timeCell.innerHTML = `<span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
+        } else {
+          // Detailed view: Show full percentile range
+          const timeRangeStr = formatTimeRange(estimate.timeEstimateP10, estimate.timeEstimateP50, estimate.timeEstimateP90);
+          timeCell.textContent = timeRangeStr;
+        }
       } else {
         timeCell.textContent = 'N/A';
       }
@@ -369,6 +423,8 @@ function renderCropBoostSection(root: HTMLElement): void {
 let windowRoot: HTMLElement | null = null;
 let callbackRegistered = false;
 let renderTimeout: number | null = null;
+let countdownInterval: number | null = null;
+let showDetailedView = false; // Toggle for simple/detailed view
 
 export function openCropBoostTrackerWindow(): void {
   toggleWindow(
@@ -403,8 +459,50 @@ export function openCropBoostTrackerWindow(): void {
       }
 
       renderCropBoostSection(root);
+
+      // Set up live countdown updates (only in simple mode)
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+      }
+
+      countdownInterval = window.setInterval(() => {
+        if (!showDetailedView && windowRoot) {
+          updateCountdownDisplays();
+        }
+      }, 1000); // Update every second
     },
     '650px',
     '75vh'
   );
+}
+
+/**
+ * Update countdown displays without full re-render
+ */
+function updateCountdownDisplays(): void {
+  const analysis = getCurrentAnalysis();
+  if (!analysis || !windowRoot) return;
+
+  // Update overall next boost countdown
+  const overallDisplay = windowRoot.querySelector('[data-countdown-display="overall-next"]');
+  if (overallDisplay) {
+    let soonestNextBoost = Infinity;
+    for (const estimate of analysis.cropEstimates.values()) {
+      if (estimate.expectedNextBoostAt < soonestNextBoost) {
+        soonestNextBoost = estimate.expectedNextBoostAt;
+      }
+    }
+
+    const countdown = formatCountdown(soonestNextBoost);
+    overallDisplay.innerHTML = `⏰ Next boost: <span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
+  }
+
+  // Update per-crop countdown displays
+  for (const [key, estimate] of analysis.cropEstimates) {
+    const display = windowRoot.querySelector(`[data-countdown-display="${key}"]`);
+    if (display) {
+      const countdown = formatCountdown(estimate.expectedNextBoostAt);
+      display.innerHTML = `<span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
+    }
+  }
 }

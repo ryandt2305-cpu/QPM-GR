@@ -36,9 +36,12 @@ export interface CropSizeInfo {
 }
 export interface BoostEstimate {
     boostsNeeded: number;
-    timeEstimateMin: number;
-    timeEstimateMax: number;
-    timeEstimateAvg: number;
+    timeEstimateP10: number;
+    timeEstimateP50: number;
+    timeEstimateP90: number;
+    boostsReceived: number;
+    lastBoostAt: number | null;
+    expectedNextBoostAt: number;
 }
 export interface TrackerAnalysis {
     boostPets: BoostPetInfo[];
@@ -70,9 +73,16 @@ export declare function stopCropBoostTracker(): void;
  */
 export declare function formatTimeEstimate(minutes: number): string;
 /**
- * Format time range for display
+ * Format time range for display (showing percentiles)
  */
-export declare function formatTimeRange(minMinutes: number, maxMinutes: number): string;
+export declare function formatTimeRange(p10: number, p50: number, p90: number): string;
+/**
+ * Format countdown for live timer display
+ */
+export declare function formatCountdown(targetTimestamp: number): {
+    text: string;
+    isOverdue: boolean;
+};
 /**
  * Get list of available crop species in garden
  */

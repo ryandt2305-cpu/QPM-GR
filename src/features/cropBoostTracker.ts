@@ -50,9 +50,12 @@ export interface CropSizeInfo {
 
 export interface BoostEstimate {
   boostsNeeded: number;
-  timeEstimateMin: number; // minutes (best case - fastest pet)
-  timeEstimateMax: number; // minutes (worst case - slowest pet)
-  timeEstimateAvg: number; // minutes (average)
+  timeEstimateP10: number; // minutes (10th percentile - optimistic)
+  timeEstimateP50: number; // minutes (50th percentile - median/expected)
+  timeEstimateP90: number; // minutes (90th percentile - pessimistic)
+  boostsReceived: number;  // boosts received so far
+  lastBoostAt: number | null; // timestamp of last boost
+  expectedNextBoostAt: number; // expected timestamp of next boost
 }
 
 export interface TrackerAnalysis {
@@ -99,6 +102,15 @@ let currentAnalysis: TrackerAnalysis | null = null;
 let gardenUnsubscribe: (() => void) | null = null;
 let refreshInterval: number | null = null;
 let changeCallback: ((analysis: TrackerAnalysis | null) => void) | null = null;
+
+// Per-crop boost tracking
+interface CropBoostHistory {
+  initialSize: number;
+  boostTimestamps: number[];
+  lastSize: number;
+}
+
+const cropBoostHistory = new Map<string, CropBoostHistory>();
 
 // ============================================================================
 // Configuration
@@ -258,31 +270,95 @@ function calculateBoostsNeeded(
 }
 
 /**
- * Calculate time estimate range (min, max, avg)
- * Each pet rolls independently per second - DO NOT combine proc rates
+ * Monte Carlo simulation to get realistic time estimates
+ * Runs 1000 simulations where each pet rolls independently per second
+ * Returns P10 (optimistic), P50 (median), P90 (pessimistic) percentiles
  */
-function calculateTimeEstimateRange(
+function runMonteCarloSimulation(
   boostsNeeded: number,
-  boostPets: BoostPetInfo[]
-): { min: number; max: number; avg: number } {
-  if (boostPets.length === 0) {
-    return { min: Infinity, max: Infinity, avg: Infinity };
+  boostPets: BoostPetInfo[],
+  numSimulations: number = 1000
+): { p10: number; p50: number; p90: number } {
+  if (boostPets.length === 0 || boostsNeeded <= 0) {
+    return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Best case: fastest individual pet does all the work
-  const fastestMinutesPerProc = Math.min(...boostPets.map(p => p.expectedMinutesPerProc));
+  const results: number[] = [];
 
-  // Worst case: slowest individual pet does all the work
-  const slowestMinutesPerProc = Math.max(...boostPets.map(p => p.expectedMinutesPerProc));
+  // Convert proc rates to per-second probabilities
+  const petProcChances = boostPets.map(pet => pet.effectiveProcChance / 60); // per second
 
-  // Average: average time per proc across all pets
-  const avgMinutesPerProc = boostPets.reduce((sum, p) => sum + p.expectedMinutesPerProc, 0) / boostPets.length;
+  // Run simulations
+  for (let sim = 0; sim < numSimulations; sim++) {
+    let boostsReceived = 0;
+    let secondsElapsed = 0;
+    const maxSeconds = 100000; // Safety limit (27+ hours)
+
+    // Simulate until we get the required boosts
+    while (boostsReceived < boostsNeeded && secondsElapsed < maxSeconds) {
+      secondsElapsed++;
+
+      // Each pet rolls independently
+      for (const procChance of petProcChances) {
+        if (Math.random() < procChance) {
+          boostsReceived++;
+          if (boostsReceived >= boostsNeeded) break;
+        }
+      }
+    }
+
+    results.push(secondsElapsed / 60); // Convert to minutes
+  }
+
+  // Sort and calculate percentiles
+  results.sort((a, b) => a - b);
+
+  const p10Index = Math.floor(numSimulations * 0.10);
+  const p50Index = Math.floor(numSimulations * 0.50);
+  const p90Index = Math.floor(numSimulations * 0.90);
 
   return {
-    min: boostsNeeded * fastestMinutesPerProc, // Best case
-    max: boostsNeeded * slowestMinutesPerProc, // Worst case
-    avg: boostsNeeded * avgMinutesPerProc,     // Average case
+    p10: results[p10Index] ?? 0,
+    p50: results[p50Index] ?? 0,
+    p90: results[p90Index] ?? 0,
   };
+}
+
+/**
+ * Update boost history for crops (detect new boosts based on size changes)
+ */
+function updateBoostHistory(crops: CropSizeInfo[]): void {
+  const now = Date.now();
+
+  for (const crop of crops) {
+    const key = `${crop.tileKey}-${crop.slotIndex}`;
+    const history = cropBoostHistory.get(key);
+
+    if (!history) {
+      // Initialize tracking for new crop
+      cropBoostHistory.set(key, {
+        initialSize: crop.currentSizePercent,
+        boostTimestamps: [],
+        lastSize: crop.currentSizePercent,
+      });
+    } else {
+      // Check if size increased (potential boost)
+      const sizeDiff = crop.currentSizePercent - history.lastSize;
+      if (sizeDiff > 0.5) {
+        // Size increased significantly - likely a boost!
+        history.boostTimestamps.push(now);
+        history.lastSize = crop.currentSizePercent;
+      }
+    }
+  }
+
+  // Clean up history for crops that no longer exist
+  const currentKeys = new Set(crops.map(c => `${c.tileKey}-${c.slotIndex}`));
+  for (const key of cropBoostHistory.keys()) {
+    if (!currentKeys.has(key)) {
+      cropBoostHistory.delete(key);
+    }
+  }
 }
 
 /**
@@ -296,6 +372,9 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
     log('ℹ️ Crop Boost Tracker: No active boost pets');
     return null;
   }
+
+  // Update boost history based on size changes
+  updateBoostHistory(allCrops);
 
   // Include ALL crops (growing and mature)
   const cropsAtMax = allCrops.filter(c => c.sizeRemaining <= 0);
@@ -315,22 +394,37 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
   // Use average boost percent for calculations
   const boostPercentForCalc = averageBoostPercent;
 
-  // Calculate per-crop estimates
+  // Calculate per-crop estimates using Monte Carlo
   const cropEstimates = new Map<string, BoostEstimate>();
   let totalBoostsNeeded = 0;
+  const now = Date.now();
 
   for (const crop of cropsNeedingBoost) {
+    const key = `${crop.tileKey}-${crop.slotIndex}`;
+    const history = cropBoostHistory.get(key);
+    const boostsReceived = history?.boostTimestamps.length ?? 0;
+    const lastBoostAt = history?.boostTimestamps[history.boostTimestamps.length - 1] ?? null;
+
     const boostsNeeded = calculateBoostsNeeded(crop, boostPercentForCalc);
-    const timeRange = calculateTimeEstimateRange(boostsNeeded, boostPets);
+    const remainingBoosts = Math.max(0, boostsNeeded - boostsReceived);
+
+    // Run Monte Carlo simulation for remaining boosts
+    const simulation = runMonteCarloSimulation(remainingBoosts, boostPets);
+
+    // Calculate expected next boost time
+    const singleBoostSim = runMonteCarloSimulation(1, boostPets);
+    const expectedNextBoostAt = now + (singleBoostSim.p50 * 60 * 1000); // Convert to ms
 
     const estimate: BoostEstimate = {
       boostsNeeded,
-      timeEstimateMin: timeRange.min,
-      timeEstimateMax: timeRange.max,
-      timeEstimateAvg: timeRange.avg,
+      timeEstimateP10: simulation.p10,
+      timeEstimateP50: simulation.p50,
+      timeEstimateP90: simulation.p90,
+      boostsReceived,
+      lastBoostAt,
+      expectedNextBoostAt,
     };
 
-    const key = `${crop.tileKey}-${crop.slotIndex}`;
     cropEstimates.set(key, estimate);
 
     // For overall: use the crop that needs the most boosts
@@ -338,7 +432,7 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
   }
 
   // Overall estimate: time until ALL crops are maxed
-  const overallTimeRange = calculateTimeEstimateRange(totalBoostsNeeded, boostPets);
+  const overallSimulation = runMonteCarloSimulation(totalBoostsNeeded, boostPets);
 
   const analysis: TrackerAnalysis = {
     boostPets,
@@ -359,9 +453,12 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
 
     overallEstimate: {
       boostsNeeded: totalBoostsNeeded,
-      timeEstimateMin: overallTimeRange.min,
-      timeEstimateMax: overallTimeRange.max,
-      timeEstimateAvg: overallTimeRange.avg,
+      timeEstimateP10: overallSimulation.p10,
+      timeEstimateP50: overallSimulation.p50,
+      timeEstimateP90: overallSimulation.p90,
+      boostsReceived: 0, // Overall doesn't track boosts
+      lastBoostAt: null,
+      expectedNextBoostAt: 0,
     },
 
     cropEstimates,
@@ -472,17 +569,53 @@ export function formatTimeEstimate(minutes: number): string {
 }
 
 /**
- * Format time range for display
+ * Format time range for display (showing percentiles)
  */
-export function formatTimeRange(minMinutes: number, maxMinutes: number): string {
-  const minStr = formatTimeEstimate(minMinutes);
-  const maxStr = formatTimeEstimate(maxMinutes);
+export function formatTimeRange(p10: number, p50: number, p90: number): string {
+  const p10Str = formatTimeEstimate(p10);
+  const p50Str = formatTimeEstimate(p50);
+  const p90Str = formatTimeEstimate(p90);
 
-  if (minStr === maxStr) {
-    return minStr;
+  // If all similar, just show one value
+  if (p10Str === p50Str && p50Str === p90Str) {
+    return p50Str;
   }
 
-  return `${minStr} - ${maxStr}`;
+  // Show range with median
+  return `${p10Str} - ${p90Str} (median: ${p50Str})`;
+}
+
+/**
+ * Format countdown for live timer display
+ */
+export function formatCountdown(targetTimestamp: number): { text: string; isOverdue: boolean } {
+  const now = Date.now();
+  const msRemaining = targetTimestamp - now;
+
+  if (msRemaining <= 0) {
+    const msOverdue = Math.abs(msRemaining);
+    const minutesOverdue = Math.floor(msOverdue / 60000);
+    const secondsOverdue = Math.floor((msOverdue % 60000) / 1000);
+
+    if (minutesOverdue > 0) {
+      return { text: `+${minutesOverdue}m ${secondsOverdue}s overdue`, isOverdue: true };
+    } else {
+      return { text: `+${secondsOverdue}s overdue`, isOverdue: true };
+    }
+  }
+
+  const totalSeconds = Math.floor(msRemaining / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return { text: `${hours}h ${minutes}m ${seconds}s`, isOverdue: false };
+  } else if (minutes > 0) {
+    return { text: `${minutes}m ${seconds}s`, isOverdue: false };
+  } else {
+    return { text: `${seconds}s`, isOverdue: false };
+  }
 }
 
 /**

@@ -19,6 +19,7 @@ import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
 import { startVersionChecker } from './utils/versionChecker';
+import { startCropBoostTracker } from './features/cropBoostTracker';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -806,10 +807,13 @@ async function initialize(): Promise<void> {
     selectedMutations: cfg.harvestReminder.selectedMutations,
   });
   configureTurtleTimer(cfg.turtleTimer);
-  
+
+  // Start crop boost tracker
+  startCropBoostTracker();
+
   // Set configuration for UI
   setCfg(cfg);
-  
+
   // Create UI
   createOriginalUI();
 

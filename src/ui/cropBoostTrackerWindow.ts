@@ -161,7 +161,7 @@ function renderCropBoostSection(root: HTMLElement): void {
 
     const note = document.createElement('div');
     note.style.cssText = 'font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; font-style: italic;';
-    note.textContent = '* Time range accounts for multiple pets proc-ing independently';
+    note.textContent = '* Time range: best case (fastest pet) to worst case (slowest pet)';
     allCropsCard.appendChild(note);
 
     root.appendChild(allCropsCard);
@@ -368,6 +368,7 @@ function renderCropBoostSection(root: HTMLElement): void {
 
 let windowRoot: HTMLElement | null = null;
 let callbackRegistered = false;
+let renderTimeout: number | null = null;
 
 export function openCropBoostTrackerWindow(): void {
   toggleWindow(
@@ -379,10 +380,24 @@ export function openCropBoostTrackerWindow(): void {
       // Register callback once
       if (!callbackRegistered) {
         onAnalysisChange(() => {
-          // Re-render if window is open
-          if (windowRoot) {
-            renderCropBoostSection(windowRoot);
+          // Debounce re-renders to prevent flashing
+          if (renderTimeout) {
+            clearTimeout(renderTimeout);
           }
+
+          renderTimeout = window.setTimeout(() => {
+            // Don't re-render if user is interacting with dropdown
+            const activeElement = document.activeElement;
+            if (activeElement && activeElement.tagName === 'SELECT') {
+              // User is using dropdown, skip this render
+              return;
+            }
+
+            // Re-render if window is open
+            if (windowRoot) {
+              renderCropBoostSection(windowRoot);
+            }
+          }, 100); // 100ms debounce
         });
         callbackRegistered = true;
       }

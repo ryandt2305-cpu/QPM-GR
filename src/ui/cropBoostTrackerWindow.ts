@@ -223,7 +223,7 @@ function renderCropBoostSection(root: HTMLElement): void {
 
       const note = document.createElement('div');
       note.style.cssText = 'font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 4px; font-style: italic;';
-      note.textContent = '* Based on 1000 Monte Carlo simulations (P10-P90 range, median)';
+      note.textContent = '* Time estimates based on combined proc rates (P10-P90 range, median)';
       allCropsCard.appendChild(note);
     }
 

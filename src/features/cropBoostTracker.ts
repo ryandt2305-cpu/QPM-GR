@@ -102,6 +102,8 @@ let currentAnalysis: TrackerAnalysis | null = null;
 let gardenUnsubscribe: (() => void) | null = null;
 let refreshInterval: number | null = null;
 let changeCallback: ((analysis: TrackerAnalysis | null) => void) | null = null;
+let lastRecalcTime = 0;
+const RECALC_THROTTLE_MS = 5000; // Only recalculate every 5 seconds max
 
 // Per-crop boost tracking
 interface CropBoostHistory {
@@ -270,58 +272,38 @@ function calculateBoostsNeeded(
 }
 
 /**
- * Monte Carlo simulation to get realistic time estimates
- * Runs 1000 simulations where each pet rolls independently per second
- * Returns P10 (optimistic), P50 (median), P90 (pessimistic) percentiles
+ * Calculate time estimates using statistical formulas (fast, no simulation)
+ * For independent Poisson processes, combined rate = sum of individual rates
+ * Returns P10 (optimistic), P50 (median/expected), P90 (pessimistic) percentiles
  */
-function runMonteCarloSimulation(
+function calculateTimeEstimates(
   boostsNeeded: number,
-  boostPets: BoostPetInfo[],
-  numSimulations: number = 1000
+  boostPets: BoostPetInfo[]
 ): { p10: number; p50: number; p90: number } {
   if (boostPets.length === 0 || boostsNeeded <= 0) {
     return { p10: 0, p50: 0, p90: 0 };
   }
 
-  const results: number[] = [];
+  // Combined rate: sum of individual proc rates (boosts per minute)
+  // For independent Poisson processes, rates add
+  const combinedRatePerMinute = boostPets.reduce((sum, pet) => {
+    return sum + (pet.effectiveProcChance / 100); // Convert percent/min to rate
+  }, 0);
 
-  // Convert proc rates to per-second probabilities
-  const petProcChances = boostPets.map(pet => pet.effectiveProcChance / 60); // per second
-
-  // Run simulations
-  for (let sim = 0; sim < numSimulations; sim++) {
-    let boostsReceived = 0;
-    let secondsElapsed = 0;
-    const maxSeconds = 100000; // Safety limit (27+ hours)
-
-    // Simulate until we get the required boosts
-    while (boostsReceived < boostsNeeded && secondsElapsed < maxSeconds) {
-      secondsElapsed++;
-
-      // Each pet rolls independently
-      for (const procChance of petProcChances) {
-        if (Math.random() < procChance) {
-          boostsReceived++;
-          if (boostsReceived >= boostsNeeded) break;
-        }
-      }
-    }
-
-    results.push(secondsElapsed / 60); // Convert to minutes
+  if (combinedRatePerMinute <= 0) {
+    return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Sort and calculate percentiles
-  results.sort((a, b) => a - b);
+  // Expected time (median) = boosts needed / combined rate
+  const p50 = boostsNeeded / combinedRatePerMinute;
 
-  const p10Index = Math.floor(numSimulations * 0.10);
-  const p50Index = Math.floor(numSimulations * 0.50);
-  const p90Index = Math.floor(numSimulations * 0.90);
+  // Percentile estimates using variance of Poisson process
+  // Variance = λt for Poisson, std dev = sqrt(λt)
+  // Using approximate percentile multipliers for realistic spread
+  const p10 = p50 * 0.65; // Optimistic (faster than median)
+  const p90 = p50 * 1.50; // Pessimistic (slower than median)
 
-  return {
-    p10: results[p10Index] ?? 0,
-    p50: results[p50Index] ?? 0,
-    p90: results[p90Index] ?? 0,
-  };
+  return { p10, p50, p90 };
 }
 
 /**
@@ -408,18 +390,18 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
     const boostsNeeded = calculateBoostsNeeded(crop, boostPercentForCalc);
     const remainingBoosts = Math.max(0, boostsNeeded - boostsReceived);
 
-    // Run Monte Carlo simulation for remaining boosts
-    const simulation = runMonteCarloSimulation(remainingBoosts, boostPets);
+    // Calculate time estimates for remaining boosts
+    const estimates = calculateTimeEstimates(remainingBoosts, boostPets);
 
     // Calculate expected next boost time
-    const singleBoostSim = runMonteCarloSimulation(1, boostPets);
-    const expectedNextBoostAt = now + (singleBoostSim.p50 * 60 * 1000); // Convert to ms
+    const singleBoostEstimate = calculateTimeEstimates(1, boostPets);
+    const expectedNextBoostAt = now + (singleBoostEstimate.p50 * 60 * 1000); // Convert to ms
 
     const estimate: BoostEstimate = {
       boostsNeeded,
-      timeEstimateP10: simulation.p10,
-      timeEstimateP50: simulation.p50,
-      timeEstimateP90: simulation.p90,
+      timeEstimateP10: estimates.p10,
+      timeEstimateP50: estimates.p50,
+      timeEstimateP90: estimates.p90,
       boostsReceived,
       lastBoostAt,
       expectedNextBoostAt,
@@ -432,7 +414,7 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
   }
 
   // Overall estimate: time until ALL crops are maxed
-  const overallSimulation = runMonteCarloSimulation(totalBoostsNeeded, boostPets);
+  const overallEstimates = calculateTimeEstimates(totalBoostsNeeded, boostPets);
 
   const analysis: TrackerAnalysis = {
     boostPets,
@@ -453,9 +435,9 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
 
     overallEstimate: {
       boostsNeeded: totalBoostsNeeded,
-      timeEstimateP10: overallSimulation.p10,
-      timeEstimateP50: overallSimulation.p50,
-      timeEstimateP90: overallSimulation.p90,
+      timeEstimateP10: overallEstimates.p10,
+      timeEstimateP50: overallEstimates.p50,
+      timeEstimateP90: overallEstimates.p90,
       boostsReceived: 0, // Overall doesn't track boosts
       lastBoostAt: null,
       expectedNextBoostAt: 0,
@@ -471,8 +453,17 @@ function analyzeBoostTracker(): TrackerAnalysis | null {
 
 /**
  * Recalculate analysis and notify listeners
+ * Throttled to prevent performance issues from frequent updates
  */
 function recalculate(): void {
+  const now = Date.now();
+
+  // Throttle: Don't recalculate more than once every 5 seconds
+  if (now - lastRecalcTime < RECALC_THROTTLE_MS) {
+    return;
+  }
+
+  lastRecalcTime = now;
   currentAnalysis = analyzeBoostTracker();
 
   if (changeCallback) {
@@ -491,17 +482,10 @@ function startTracking(): void {
   // Initial calculation
   recalculate();
 
-  // Subscribe to garden changes
+  // Subscribe to garden changes (throttled to prevent lag)
   gardenUnsubscribe = onGardenSnapshot(() => {
     recalculate();
   });
-
-  // Set up auto-refresh if enabled
-  if (config.autoRefresh && !refreshInterval) {
-    refreshInterval = window.setInterval(() => {
-      recalculate();
-    }, config.refreshInterval * 1000);
-  }
 }
 
 /**

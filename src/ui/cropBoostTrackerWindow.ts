@@ -12,7 +12,6 @@ import {
   onAnalysisChange,
   formatTimeEstimate,
   formatTimeRange,
-  formatCountdown,
   getAvailableSpecies,
   type TrackerAnalysis,
   type CropSizeInfo,
@@ -192,22 +191,33 @@ function renderCropBoostSection(root: HTMLElement): void {
     boostsRow.innerHTML = `<strong>Boosts Needed:</strong> ${analysis.overallEstimate.boostsNeeded}`;
     allCropsCard.appendChild(boostsRow);
 
-    // Simple view: Just show next boost countdown
+    // Simple view: Show next boost time range
     if (!showDetailedView) {
       const nextBoostRow = document.createElement('div');
       nextBoostRow.style.cssText = 'font-size: 16px; font-weight: 600; color: #FFC107;';
-      nextBoostRow.setAttribute('data-countdown-display', 'overall-next');
+      nextBoostRow.setAttribute('data-next-boost-range', 'true');
 
-      // Get the soonest next boost from any crop
-      let soonestNextBoost = Infinity;
-      for (const estimate of analysis.cropEstimates.values()) {
-        if (estimate.expectedNextBoostAt < soonestNextBoost) {
-          soonestNextBoost = estimate.expectedNextBoostAt;
+      // Show time range for next expected boost across all crops
+      // We'll calculate a realistic range based on combined pet probabilities
+      if (analysis.boostPets.length > 0) {
+        // Calculate probability per second for combined pets
+        const probPerSecond = analysis.boostPets.map(pet => pet.effectiveProcChance / 60 / 100);
+        const probNoneProc = probPerSecond.reduce((acc, p) => acc * (1 - p), 1);
+        const probAtLeastOne = 1 - probNoneProc;
+
+        if (probAtLeastOne > 0) {
+          const logOneMinusP = Math.log(1 - probAtLeastOne);
+          const secondsP10 = Math.log(0.90) / logOneMinusP;
+          const secondsP90 = Math.log(0.10) / logOneMinusP;
+
+          const minTime = formatTimeEstimate(secondsP10 / 60);
+          const maxTime = formatTimeEstimate(secondsP90 / 60);
+          nextBoostRow.innerHTML = `⏰ Next boost: <span style="color: #FFC107;">${minTime} - ${maxTime}</span>`;
         }
+      } else {
+        nextBoostRow.innerHTML = `⏰ Next boost: <span style="color: #999;">No boost pets</span>`;
       }
 
-      const countdown = formatCountdown(soonestNextBoost);
-      nextBoostRow.innerHTML = `⏰ Next boost: <span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
       allCropsCard.appendChild(nextBoostRow);
     } else {
       // Detailed view: Show full time range with percentiles
@@ -374,15 +384,15 @@ function renderCropBoostSection(root: HTMLElement): void {
 
       const timeCell = document.createElement('td');
       timeCell.style.cssText = 'padding: 12px 10px; text-align: right; color: #FFC107; font-weight: 500;';
-      timeCell.setAttribute('data-countdown-display', key);
 
       if (estimate) {
         if (!showDetailedView) {
-          // Simple view: Show live countdown to next boost
-          const countdown = formatCountdown(estimate.expectedNextBoostAt);
-          timeCell.innerHTML = `<span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
+          // Simple view: Show time range for next boost
+          const minTime = formatTimeEstimate(estimate.timeEstimateP10);
+          const maxTime = formatTimeEstimate(estimate.timeEstimateP90);
+          timeCell.innerHTML = `<span style="color: #FFC107;">${minTime} - ${maxTime}</span>`;
         } else {
-          // Detailed view: Show full percentile range
+          // Detailed view: Show full percentile range with median
           const timeRangeStr = formatTimeRange(estimate.timeEstimateP10, estimate.timeEstimateP50, estimate.timeEstimateP90);
           timeCell.textContent = timeRangeStr;
         }
@@ -423,7 +433,6 @@ function renderCropBoostSection(root: HTMLElement): void {
 let windowRoot: HTMLElement | null = null;
 let callbackRegistered = false;
 let renderTimeout: number | null = null;
-let countdownInterval: number | null = null;
 let showDetailedView = false; // Toggle for simple/detailed view
 
 export function openCropBoostTrackerWindow(): void {
@@ -459,50 +468,8 @@ export function openCropBoostTrackerWindow(): void {
       }
 
       renderCropBoostSection(root);
-
-      // Set up live countdown updates (only in simple mode)
-      if (countdownInterval) {
-        clearInterval(countdownInterval);
-      }
-
-      countdownInterval = window.setInterval(() => {
-        if (!showDetailedView && windowRoot) {
-          updateCountdownDisplays();
-        }
-      }, 1000); // Update every second
     },
     '650px',
     '75vh'
   );
-}
-
-/**
- * Update countdown displays without full re-render
- */
-function updateCountdownDisplays(): void {
-  const analysis = getCurrentAnalysis();
-  if (!analysis || !windowRoot) return;
-
-  // Update overall next boost countdown
-  const overallDisplay = windowRoot.querySelector('[data-countdown-display="overall-next"]');
-  if (overallDisplay) {
-    let soonestNextBoost = Infinity;
-    for (const estimate of analysis.cropEstimates.values()) {
-      if (estimate.expectedNextBoostAt < soonestNextBoost) {
-        soonestNextBoost = estimate.expectedNextBoostAt;
-      }
-    }
-
-    const countdown = formatCountdown(soonestNextBoost);
-    overallDisplay.innerHTML = `⏰ Next boost: <span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
-  }
-
-  // Update per-crop countdown displays
-  for (const [key, estimate] of analysis.cropEstimates) {
-    const display = windowRoot.querySelector(`[data-countdown-display="${key}"]`);
-    if (display) {
-      const countdown = formatCountdown(estimate.expectedNextBoostAt);
-      display.innerHTML = `<span style="color: ${countdown.isOverdue ? '#FF5252' : '#FFC107'}">${countdown.text}</span>`;
-    }
-  }
 }

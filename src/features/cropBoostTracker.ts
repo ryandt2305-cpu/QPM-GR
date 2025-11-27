@@ -297,16 +297,23 @@ function calculateTimeEstimates(
     return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Expected seconds per boost
-  const expectedSecondsPerBoost = 1 / probAtLeastOne;
+  // For geometric distribution (time until success):
+  // CDF: P(T ≤ t) = 1 - (1-p)^t
+  // To find time for percentile α: t = log(1-α) / log(1-p)
 
-  // Expected time for N boosts (in minutes)
-  const p50 = (boostsNeeded * expectedSecondsPerBoost) / 60;
+  // Calculate percentiles using proper geometric distribution
+  // Note: For small p, log(1-p) ≈ -p, but we use exact formula
+  const logOneMinusP = Math.log(1 - probAtLeastOne);
 
-  // Percentile estimates based on variance
-  // For multiple independent trials, variance increases spread
-  const p10 = p50 * 0.65; // Optimistic (faster than median)
-  const p90 = p50 * 1.50; // Pessimistic (slower than median)
+  // For a single boost:
+  const secondsForP10 = Math.log(1 - 0.10) / logOneMinusP; // 10% will be faster
+  const secondsForP50 = Math.log(1 - 0.50) / logOneMinusP; // Median
+  const secondsForP90 = Math.log(1 - 0.90) / logOneMinusP; // 90% will be faster
+
+  // For N boosts, multiply by N (approximation for large N)
+  const p10 = (boostsNeeded * secondsForP10) / 60;
+  const p50 = (boostsNeeded * secondsForP50) / 60;
+  const p90 = (boostsNeeded * secondsForP90) / 60;
 
   return { p10, p50, p90 };
 }

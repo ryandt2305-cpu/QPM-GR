@@ -3624,6 +3624,7 @@ export function createOriginalUI(): HTMLElement {
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   registerTab('shop-restock', 'Shop Restock', '🏪', []);
+  registerTab('crop-boost', 'Crop Boosts', '🌱', []);
   registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
   registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
   registerTab('guide', 'Guide', '📖', [guideSection]);
@@ -3694,6 +3695,21 @@ export function createOriginalUI(): HTMLElement {
     });
     shopRestockButton.replaceWith(newShopRestockButton);
     tabButtons.set('shop-restock', newShopRestockButton);
+  }
+
+  const cropBoostButton = tabButtons.get('crop-boost');
+  if (cropBoostButton) {
+    const newCropBoostButton = cropBoostButton.cloneNode(true) as HTMLButtonElement;
+    newCropBoostButton.addEventListener('click', async () => {
+      try {
+        const { openCropBoostTrackerWindow } = await import('./cropBoostTrackerWindow');
+        openCropBoostTrackerWindow();
+      } catch (error) {
+        log('⚠️ Failed to open Crop Boost Tracker window', error);
+      }
+    });
+    cropBoostButton.replaceWith(newCropBoostButton);
+    tabButtons.set('crop-boost', newCropBoostButton);
   }
 
   const turtleButton = tabButtons.get('turtle');

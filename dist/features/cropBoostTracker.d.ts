@@ -3,12 +3,11 @@
  * Tracks how many Crop Size Boosts are needed to maximize garden crops
  * Based on active ProduceSizeBoost and ProduceSizeBoostII pets
  */
-export type EstimateMode = 'conservative' | 'average' | 'optimistic';
 export interface CropBoostConfig {
     enabled: boolean;
-    estimateMode: EstimateMode;
     autoRefresh: boolean;
     refreshInterval: number;
+    selectedSpecies: string | null;
 }
 export interface BoostPetInfo {
     slotIndex: number;
@@ -37,8 +36,9 @@ export interface CropSizeInfo {
 }
 export interface BoostEstimate {
     boostsNeeded: number;
-    timeEstimate: number;
-    confidenceLevel: 'high' | 'medium' | 'low';
+    timeEstimateMin: number;
+    timeEstimateMax: number;
+    timeEstimateAvg: number;
 }
 export interface TrackerAnalysis {
     boostPets: BoostPetInfo[];
@@ -59,7 +59,7 @@ export interface TrackerAnalysis {
 }
 export declare function getConfig(): CropBoostConfig;
 export declare function setConfig(updates: Partial<CropBoostConfig>): void;
-export declare function setEstimateMode(mode: EstimateMode): void;
+export declare function setSelectedSpecies(species: string | null): void;
 export declare function onAnalysisChange(callback: (analysis: TrackerAnalysis | null) => void): void;
 export declare function getCurrentAnalysis(): TrackerAnalysis | null;
 export declare function manualRefresh(): void;
@@ -69,4 +69,12 @@ export declare function stopCropBoostTracker(): void;
  * Format time estimate for display
  */
 export declare function formatTimeEstimate(minutes: number): string;
+/**
+ * Format time range for display
+ */
+export declare function formatTimeRange(minMinutes: number, maxMinutes: number): string;
+/**
+ * Get list of available crop species in garden
+ */
+export declare function getAvailableSpecies(): string[];
 //# sourceMappingURL=cropBoostTracker.d.ts.map

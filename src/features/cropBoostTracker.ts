@@ -259,7 +259,7 @@ function calculateBoostsNeeded(
 
 /**
  * Calculate time estimate range (min, max, avg)
- * Accounts for multiple pets proc-ing independently
+ * Each pet rolls independently per second - DO NOT combine proc rates
  */
 function calculateTimeEstimateRange(
   boostsNeeded: number,
@@ -269,21 +269,19 @@ function calculateTimeEstimateRange(
     return { min: Infinity, max: Infinity, avg: Infinity };
   }
 
-  // Account for multiple pets: they can proc independently
-  // Effective rate is sum of individual rates
-  const combinedRate = boostPets.reduce((acc, p) => acc + (1 / p.expectedMinutesPerProc), 0);
-  const effectiveMinutesPerProc = 1 / combinedRate;
-
-  // Best case: fastest individual pet (minimum minutes per proc)
+  // Best case: fastest individual pet does all the work
   const fastestMinutesPerProc = Math.min(...boostPets.map(p => p.expectedMinutesPerProc));
 
-  // Worst case: slowest individual pet (maximum minutes per proc)
+  // Worst case: slowest individual pet does all the work
   const slowestMinutesPerProc = Math.max(...boostPets.map(p => p.expectedMinutesPerProc));
 
+  // Average: average time per proc across all pets
+  const avgMinutesPerProc = boostPets.reduce((sum, p) => sum + p.expectedMinutesPerProc, 0) / boostPets.length;
+
   return {
-    min: boostsNeeded * effectiveMinutesPerProc, // Combined rate (most realistic)
-    max: boostsNeeded * slowestMinutesPerProc,  // Worst case
-    avg: boostsNeeded * effectiveMinutesPerProc, // Same as min with combined pets
+    min: boostsNeeded * fastestMinutesPerProc, // Best case
+    max: boostsNeeded * slowestMinutesPerProc, // Worst case
+    avg: boostsNeeded * avgMinutesPerProc,     // Average case
   };
 }
 

@@ -273,7 +273,7 @@ function calculateBoostsNeeded(
 
 /**
  * Calculate time estimates using statistical formulas (fast, no simulation)
- * For independent Poisson processes, combined rate = sum of individual rates
+ * Each pet rolls independently - we calculate the combined probability per time unit
  * Returns P10 (optimistic), P50 (median/expected), P90 (pessimistic) percentiles
  */
 function calculateTimeEstimates(
@@ -284,22 +284,27 @@ function calculateTimeEstimates(
     return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Combined rate: sum of individual proc rates (boosts per minute)
-  // For independent Poisson processes, rates add
-  const combinedRatePerMinute = boostPets.reduce((sum, pet) => {
-    return sum + (pet.effectiveProcChance / 100); // Convert percent/min to rate
-  }, 0);
+  // Calculate combined probability per second
+  // Each pet rolls independently: P(at least 1 procs) = 1 - P(none proc)
+  const probPerSecond = boostPets.map(pet => pet.effectiveProcChance / 60 / 100); // Convert %/min to probability/sec
 
-  if (combinedRatePerMinute <= 0) {
+  // Combined probability that at least one pet procs in a given second
+  // P(at least one) = 1 - P(all fail) = 1 - ∏(1 - p_i)
+  const probNoneProc = probPerSecond.reduce((acc, p) => acc * (1 - p), 1);
+  const probAtLeastOne = 1 - probNoneProc;
+
+  if (probAtLeastOne <= 0) {
     return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Expected time (median) = boosts needed / combined rate
-  const p50 = boostsNeeded / combinedRatePerMinute;
+  // Expected seconds per boost
+  const expectedSecondsPerBoost = 1 / probAtLeastOne;
 
-  // Percentile estimates using variance of Poisson process
-  // Variance = λt for Poisson, std dev = sqrt(λt)
-  // Using approximate percentile multipliers for realistic spread
+  // Expected time for N boosts (in minutes)
+  const p50 = (boostsNeeded * expectedSecondsPerBoost) / 60;
+
+  // Percentile estimates based on variance
+  // For multiple independent trials, variance increases spread
   const p10 = p50 * 0.65; // Optimistic (faster than median)
   const p90 = p50 * 1.50; // Pessimistic (slower than median)
 

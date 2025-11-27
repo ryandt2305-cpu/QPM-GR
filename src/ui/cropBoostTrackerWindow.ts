@@ -366,23 +366,29 @@ function renderCropBoostSection(root: HTMLElement): void {
 // Public API
 // ============================================================================
 
-export function openCropBoostTrackerWindow(): void {
-  // Subscribe to analysis changes
-  onAnalysisChange(() => {
-    // Find the window root and re-render
-    const windowEl = document.querySelector('[data-qpm-window-id="crop-boost-tracker"]');
-    if (windowEl) {
-      const root = windowEl.querySelector('[data-qpm-window-content]') as HTMLElement;
-      if (root) {
-        renderCropBoostSection(root);
-      }
-    }
-  });
+let windowRoot: HTMLElement | null = null;
+let callbackRegistered = false;
 
+export function openCropBoostTrackerWindow(): void {
   toggleWindow(
     'crop-boost-tracker',
     '🌱 Crop Size Boost Tracker',
-    renderCropBoostSection,
+    (root: HTMLElement) => {
+      windowRoot = root;
+
+      // Register callback once
+      if (!callbackRegistered) {
+        onAnalysisChange(() => {
+          // Re-render if window is open
+          if (windowRoot) {
+            renderCropBoostSection(windowRoot);
+          }
+        });
+        callbackRegistered = true;
+      }
+
+      renderCropBoostSection(root);
+    },
     '650px',
     '75vh'
   );

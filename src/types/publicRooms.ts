@@ -85,7 +85,7 @@ export interface PublicRoomsState {
   currentRoomCode: string | null;
   isAuthReady: boolean;
   isFirebaseReady: boolean;
-  connectionStatus: 'connecting' | 'connected' | 'failed';
+  connectionStatus: 'connecting' | 'connected' | 'failed' | 'retrying';
   allRooms: RoomsMap;
   currentSearchTerm: string;
   currentPlayerFilter: 'all' | 'empty' | 'low' | 'medium' | 'high';

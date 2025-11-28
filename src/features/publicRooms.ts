@@ -119,14 +119,17 @@ async function initializeFirebase(): Promise<boolean> {
         }
       }
 
-      if (!window.firebase.apps.length) {
-        app = window.firebase.initializeApp(FIREBASE_CONFIG);
+      // At this point, window.firebase is guaranteed to be defined
+      const firebase = window.firebase!;
+
+      if (!firebase.apps.length) {
+        app = firebase.initializeApp(FIREBASE_CONFIG);
       } else {
-        app = window.firebase.app();
+        app = firebase.app();
       }
 
-      auth = window.firebase.auth();
-      database = window.firebase.database();
+      auth = firebase.auth();
+      database = firebase.database();
 
       state.isFirebaseReady = true;
       state.connectionStatus = 'connected';
@@ -282,16 +285,47 @@ function filterAndSortRooms(rooms: RoomsMap): RoomsMap {
 }
 
 /**
- * Fetch all rooms from Firebase
+ * Fetch all rooms from Firebase with timeout and retry logic
  */
-export async function fetchRooms(): Promise<void> {
+export async function fetchRooms(retryCount = 0): Promise<void> {
   if (!database) {
-    log('⚠️ Database not initialized');
-    return;
+    log('⚠️ Database not initialized, attempting to initialize...');
+    
+    // Try to initialize Firebase if not ready
+    if (!state.isFirebaseReady) {
+      const success = await initializeFirebase();
+      if (!success) {
+        log('❌ Cannot fetch rooms - Firebase initialization failed');
+        if (errorCallback) {
+          errorCallback('Firebase not connected. Click refresh to retry.');
+        }
+        return;
+      }
+    }
+    
+    if (!database) {
+      log('❌ Database still not available after initialization');
+      if (errorCallback) {
+        errorCallback('Database connection failed. Click refresh to retry.');
+      }
+      return;
+    }
   }
 
   try {
-    const snapshot = await database.ref('rooms/').once('value');
+    log(`📡 Fetching rooms... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
+    
+    // Create a timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Fetch timeout')), FETCH_ROOMS_TIMEOUT_MS);
+    });
+
+    // Race between fetch and timeout
+    const snapshot = await Promise.race([
+      database.ref('rooms/').once('value'),
+      timeoutPromise
+    ]);
+    
     state.allRooms = snapshot.val() || {};
 
     const filteredRooms = filterAndSortRooms(state.allRooms);
@@ -302,9 +336,20 @@ export async function fetchRooms(): Promise<void> {
 
     log(`✅ Fetched ${Object.keys(state.allRooms).length} rooms`);
   } catch (error) {
-    log('❌ Error fetching rooms:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    log(`❌ Error fetching rooms (attempt ${retryCount + 1}): ${errorMessage}`);
+    
+    // Retry logic
+    if (retryCount < FETCH_ROOMS_MAX_RETRIES - 1) {
+      log(`⏳ Retrying in ${FETCH_ROOMS_RETRY_DELAY_MS / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, FETCH_ROOMS_RETRY_DELAY_MS));
+      return fetchRooms(retryCount + 1);
+    }
+    
+    // Max retries reached
+    log('❌ Max retries reached for fetching rooms');
     if (errorCallback) {
-      errorCallback('Failed to fetch rooms');
+      errorCallback('Failed to fetch rooms after multiple attempts. Click refresh to retry.');
     }
   }
 }
@@ -650,26 +695,38 @@ function loadConfig(): void {
 }
 
 /**
+ * Set connection status callback
+ */
+export function setConnectionStatusCallback(callback: (status: 'connecting' | 'connected' | 'failed' | 'retrying') => void): void {
+  connectionStatusCallback = callback;
+}
+
+/**
  * Initialize Public Rooms feature
  */
-export function initPublicRooms(): void {
+export async function initPublicRooms(): Promise<void> {
   log('🌐 Initializing Public Rooms...');
 
   // Load config
   loadConfig();
 
-  // Initialize Firebase
-  if (!initializeFirebase()) {
-    log('❌ Failed to initialize Firebase');
-    return;
-  }
-
-  // Extract current room code
+  // Extract current room code early
   state.currentRoomCode = extractRoomCode();
   if (state.currentRoomCode) {
     log(`📍 Current room: ${state.currentRoomCode}`);
+  }
+
+  // Initialize Firebase (async with retry)
+  const success = await initializeFirebase();
+  if (!success) {
+    log('❌ Failed to initialize Firebase after retries');
+    // Don't return - the UI can still show and allow manual retry
+  }
+
+  // Start background player count updater if in a room and Firebase is ready
+  if (state.currentRoomCode && state.isFirebaseReady) {
     startBackgroundPlayerCountUpdater();
   }
 
-  log('✅ Public Rooms initialized');
+  log('✅ Public Rooms initialization complete');
 }

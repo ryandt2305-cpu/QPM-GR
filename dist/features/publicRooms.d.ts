@@ -1,8 +1,12 @@
 import { FirebaseUser, RoomData, PublicRoomsConfig, PublicRoomsState, AuthStateCallback, RoomsUpdateCallback, ErrorCallback, PlayerFilter, SortOption } from '../types/publicRooms';
 /**
- * Fetch all rooms from Firebase
+ * Retry Firebase initialization (can be called manually from UI)
  */
-export declare function fetchRooms(): Promise<void>;
+export declare function retryFirebaseInit(): Promise<boolean>;
+/**
+ * Fetch all rooms from Firebase with timeout and retry logic
+ */
+export declare function fetchRooms(retryCount?: number): Promise<void>;
 /**
  * Apply current filters without refetching from database
  */
@@ -56,7 +60,11 @@ export declare function getConfig(): Readonly<PublicRoomsConfig>;
 export declare function getCurrentUser(): FirebaseUser | null;
 export declare function isAuthenticated(): boolean;
 /**
+ * Set connection status callback
+ */
+export declare function setConnectionStatusCallback(callback: (status: 'connecting' | 'connected' | 'failed' | 'retrying') => void): void;
+/**
  * Initialize Public Rooms feature
  */
-export declare function initPublicRooms(): void;
+export declare function initPublicRooms(): Promise<void>;
 //# sourceMappingURL=publicRooms.d.ts.map

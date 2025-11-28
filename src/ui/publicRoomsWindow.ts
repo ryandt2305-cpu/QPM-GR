@@ -28,6 +28,9 @@ import {
   setSortBy,
   setAuthStateCallback,
   setRoomsUpdateCallback,
+  setConnectionStatusCallback,
+  setErrorCallback,
+  retryFirebaseInit,
   isCurrentRoomPublic,
   getCurrentRoomData
 } from '../features/publicRooms';
@@ -187,7 +190,10 @@ function createAppContainer(): HTMLElement {
           <h3 style="color: #fff; margin: 0 0 4px 0; font-size: 22px; display: flex; align-items: center; gap: 10px;">
             🌐 Public Rooms
           </h3>
-          <p style="margin: 0; font-size: 11px; color: #888;">Powered by <a href="https://roomy.umm12many.net/" target="_blank" style="color: #42A5F5; text-decoration: none;">roomy.umm12many.net</a></p>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <p style="margin: 0; font-size: 11px; color: #888;">Powered by <a href="https://roomy.umm12many.net/" target="_blank" style="color: #42A5F5; text-decoration: none;">roomy.umm12many.net</a></p>
+            <span id="pr-connection-status" style="font-size: 11px; color: #42A5F5;">🔄 Connecting...</span>
+          </div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <span id="pr-user-status" style="font-size: 12px; color: #888;"></span>
@@ -700,6 +706,111 @@ function updateAuthUI(user: FirebaseUser | null): void {
 }
 
 /**
+ * Update connection status UI
+ */
+function updateConnectionStatus(status: 'connecting' | 'connected' | 'failed' | 'retrying'): void {
+  const statusEl = document.getElementById('pr-connection-status');
+  const roomsList = document.getElementById('pr-rooms-list');
+  
+  if (statusEl) {
+    const statusConfig = {
+      connecting: { text: '🔄 Connecting to Firebase...', color: '#42A5F5' },
+      connected: { text: '✅ Connected', color: '#4CAF50' },
+      failed: { text: '❌ Connection Failed', color: '#ff4d4d' },
+      retrying: { text: '🔄 Retrying connection...', color: '#FF9800' }
+    };
+    
+    const config = statusConfig[status];
+    statusEl.textContent = config.text;
+    statusEl.style.color = config.color;
+  }
+  
+  // Update rooms list with appropriate message
+  if (roomsList) {
+    if (status === 'connecting' || status === 'retrying') {
+      roomsList.innerHTML = `
+        <div style="text-align: center; color: #aaa; grid-column: 1/-1; padding: 40px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">🔄</div>
+          <p style="font-size: 14px; margin-bottom: 8px;">${status === 'connecting' ? 'Connecting to Public Rooms...' : 'Retrying connection...'}</p>
+          <p style="font-size: 12px; color: #666;">This may take a few seconds</p>
+        </div>
+      `;
+    } else if (status === 'failed') {
+      roomsList.innerHTML = `
+        <div style="text-align: center; color: #ff4d4d; grid-column: 1/-1; padding: 40px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">❌</div>
+          <p style="font-size: 16px; margin-bottom: 8px;">Unable to connect to Public Rooms</p>
+          <p style="font-size: 12px; color: #aaa; margin-bottom: 16px;">The Firebase service may be temporarily unavailable</p>
+          <button id="pr-retry-connection-btn" style="
+            padding: 10px 20px;
+            background: rgba(66, 165, 245, 0.2);
+            border: 2px solid #42A5F5;
+            border-radius: 6px;
+            color: #42A5F5;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+          ">🔄 Retry Connection</button>
+        </div>
+      `;
+      
+      // Add retry button listener
+      const retryBtn = document.getElementById('pr-retry-connection-btn');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', async () => {
+          retryBtn.textContent = '⏳ Retrying...';
+          retryBtn.setAttribute('disabled', 'true');
+          
+          const success = await retryFirebaseInit();
+          if (success) {
+            showToast('Connected successfully!', 'success');
+            fetchRooms();
+          } else {
+            showToast('Connection failed. Please try again.', 'error');
+          }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Show error message in rooms list
+ */
+function showRoomsError(message: string): void {
+  const roomsList = document.getElementById('pr-rooms-list');
+  if (roomsList) {
+    roomsList.innerHTML = `
+      <div style="text-align: center; color: #ff4d4d; grid-column: 1/-1; padding: 40px;">
+        <div style="font-size: 32px; margin-bottom: 16px;">⚠️</div>
+        <p style="font-size: 14px; margin-bottom: 16px;">${message}</p>
+        <button id="pr-retry-fetch-btn" style="
+          padding: 10px 20px;
+          background: rgba(66, 165, 245, 0.2);
+          border: 2px solid #42A5F5;
+          border-radius: 6px;
+          color: #42A5F5;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        ">🔄 Retry</button>
+      </div>
+    `;
+    
+    // Add retry button listener
+    const retryBtn = document.getElementById('pr-retry-fetch-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', () => {
+        roomsList.innerHTML = '<p style="text-align: center; color: #aaa; grid-column: 1/-1; font-size: 14px;">Loading rooms...</p>';
+        fetchRooms();
+      });
+    }
+  }
+}
+
+/**
  * Render Public Rooms window
  */
 export function renderPublicRoomsWindow(root: HTMLElement): void {
@@ -726,44 +837,50 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
   // Setup callbacks
   setAuthStateCallback(updateAuthUI);
   setRoomsUpdateCallback(renderRooms);
+  setConnectionStatusCallback(updateConnectionStatus);
+  setErrorCallback(showRoomsError);
 
   // Setup event listeners after a short delay to ensure DOM is ready
   setTimeout(() => {
     console.log('[PublicRooms] Setting up event listeners...');
 
-    // Check if Firebase is available
-    if (typeof window.firebase === 'undefined') {
-      console.error('[PublicRooms] Firebase SDK not loaded!');
-      root.innerHTML = `
-        <div style="text-align: center; padding: 40px; color: #ff4d4d;">
-          <p style="font-size: 18px; margin-bottom: 10px;">❌ Firebase SDK Not Loaded</p>
-          <p style="color: #aaa; font-size: 14px;">The Firebase library failed to load. Please refresh the page.</p>
-          <p style="color: #aaa; font-size: 12px; margin-top: 20px;">Make sure Tampermonkey is allowing external scripts.</p>
-        </div>
-      `;
-      return;
-    }
-
-    // Setup app event listeners
-    setupAppEventListeners();
-
-    // Check initial auth state and update UI accordingly
-    const user = getCurrentUser();
     const state = getState();
+    
+    // Update connection status UI based on current state
+    updateConnectionStatus(state.connectionStatus);
 
-    console.log('[PublicRooms] Initial state:', {
-      isAuthReady: state.isAuthReady,
-      hasUser: !!user,
-      isFirebaseReady: state.isFirebaseReady
-    });
+    // Check if Firebase SDK is available - if not, still show UI with retry option
+    if (typeof window.firebase === 'undefined') {
+      console.warn('[PublicRooms] Firebase SDK not loaded yet, showing retry UI');
+      updateConnectionStatus('failed');
+    } else {
+      // Setup app event listeners
+      setupAppEventListeners();
 
-    // Update UI based on auth state (will show login section if not authenticated)
-    updateAuthUI(user);
+      // Check initial auth state and update UI accordingly
+      const user = getCurrentUser();
 
-    // Fetch rooms immediately (no auth required)
-    if (state.isFirebaseReady) {
-      console.log('[PublicRooms] Fetching rooms...');
-      fetchRooms();
+      console.log('[PublicRooms] Initial state:', {
+        isAuthReady: state.isAuthReady,
+        hasUser: !!user,
+        isFirebaseReady: state.isFirebaseReady,
+        connectionStatus: state.connectionStatus
+      });
+
+      // Update UI based on auth state (will show login section if not authenticated)
+      updateAuthUI(user);
+
+      // Fetch rooms if Firebase is ready
+      if (state.isFirebaseReady) {
+        console.log('[PublicRooms] Fetching rooms...');
+        fetchRooms();
+      } else if (state.connectionStatus === 'connecting' || state.connectionStatus === 'retrying') {
+        console.log('[PublicRooms] Firebase still initializing, waiting...');
+        // Connection status callback will handle updates
+      } else {
+        console.log('[PublicRooms] Firebase not ready, showing retry option');
+        updateConnectionStatus('failed');
+      }
     }
   }, 100);
 

@@ -315,16 +315,20 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
   try {
     log(`📡 Fetching rooms... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
     
-    // Create a timeout promise
+    // Create a timeout promise with cleanup
+    let timeoutId: number;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Fetch timeout')), FETCH_ROOMS_TIMEOUT_MS);
+      timeoutId = window.setTimeout(() => reject(new Error('Fetch timeout')), FETCH_ROOMS_TIMEOUT_MS);
     });
 
     // Race between fetch and timeout
     const snapshot = await Promise.race([
       database.ref('rooms/').once('value'),
       timeoutPromise
-    ]);
+    ]).finally(() => {
+      // Clear the timeout to prevent memory leaks
+      clearTimeout(timeoutId);
+    });
     
     state.allRooms = snapshot.val() || {};
 

@@ -768,6 +768,9 @@ function updateConnectionStatus(status: 'connecting' | 'connected' | 'failed' | 
             fetchRooms();
           } else {
             showToast('Connection failed. Please try again.', 'error');
+            // Re-enable button so user can retry again
+            retryBtn.textContent = '🔄 Retry Connection';
+            retryBtn.removeAttribute('disabled');
           }
         });
       }

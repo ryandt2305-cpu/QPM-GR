@@ -27,6 +27,3 @@ yarn-error.log*
 # Temporary files
 *.tmp
 .cache/
-
-# Firebase config (contains sensitive keys)
-src/config/firebase.config.ts

@@ -193,7 +193,8 @@ async function initializeFirebase(): Promise<boolean> {
         if (connected) {
           log('✅ Firebase Realtime Database connected');
           // If we just reconnected and had a failed fetch, retry it
-          if (state.connectionStatus === 'failed' || state.connectionStatus === 'retrying') {
+          // Check isFetchingRooms to avoid concurrent fetches
+          if ((state.connectionStatus === 'failed' || state.connectionStatus === 'retrying') && !isFetchingRooms) {
             state.connectionStatus = 'connected';
             connectionStatusCallback?.('connected');
             // Trigger a fresh fetch when connection is restored
@@ -216,29 +217,37 @@ async function initializeFirebase(): Promise<boolean> {
       // Wait briefly for initial connection
       log('🔄 Waiting for database connection...');
       await new Promise<void>((resolve) => {
+        let checkInterval: number | null = null;
+        
+        const cleanup = () => {
+          if (checkInterval !== null) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+          }
+        };
+        
         const timeout = setTimeout(() => {
           log('⏳ Initial connection wait timed out, proceeding...');
+          cleanup();
           resolve();
         }, 5000);
 
         // Check if already connected
         if (isFirebaseConnected) {
           clearTimeout(timeout);
+          cleanup();
           resolve();
           return;
         }
 
         // Wait for connection event
-        const checkInterval = setInterval(() => {
+        checkInterval = window.setInterval(() => {
           if (isFirebaseConnected) {
             clearTimeout(timeout);
-            clearInterval(checkInterval);
+            cleanup();
             resolve();
           }
         }, 100);
-
-        // Also clear interval on timeout
-        setTimeout(() => clearInterval(checkInterval), 5000);
       });
 
       state.isFirebaseReady = true;
@@ -409,6 +418,13 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
     isFetchingRooms = true;
   }
 
+  // Helper to reset fetching flag only on final exit
+  const resetFetchingFlag = () => {
+    if (retryCount === 0 || retryCount >= FETCH_ROOMS_MAX_RETRIES - 1) {
+      isFetchingRooms = false;
+    }
+  };
+
   try {
     if (!database) {
       log('⚠️ Database not initialized, attempting to initialize...');
@@ -467,7 +483,7 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     log(`❌ Error fetching rooms (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES}): ${errorMessage}`);
     
-    // Retry logic with exponential backoff
+    // Retry logic with exponential backoff - only for network/timeout errors
     if (retryCount < FETCH_ROOMS_MAX_RETRIES - 1) {
       // Calculate delay with exponential backoff: 1.5s, 3s, 6s, 12s, etc.
       const delay = FETCH_ROOMS_BASE_DELAY_MS * Math.pow(2, retryCount);
@@ -476,7 +492,7 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
       return fetchRooms(retryCount + 1);
     }
     
-    // Max retries reached
+    // Max retries reached - ensure flag is reset
     log('❌ Max retries reached for fetching rooms');
     if (errorCallback) {
       errorCallback('Failed to fetch rooms after multiple attempts. Your connection may be slow - click refresh to try again.');

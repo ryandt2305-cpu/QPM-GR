@@ -102,6 +102,18 @@ const FETCH_ROOMS_TIMEOUT_MS = 30000; // Increased to 30s for slower connections
 const FETCH_ROOMS_MAX_RETRIES = 5; // Increased from 3 to 5 retries
 const FETCH_ROOMS_BASE_DELAY_MS = 1500; // Base delay for exponential backoff (1.5s, 3s, 6s, 12s)
 
+// REST API configuration - fallback for slow connections
+const REST_API_TIMEOUT_MS = 60000; // 60s timeout for REST API (more lenient for slow connections)
+const REST_API_URL = `${FIREBASE_CONFIG.databaseURL}/rooms.json`;
+
+// Custom error class for timeout errors (more reliable than string matching)
+class FetchTimeoutError extends Error {
+  constructor(message = 'Fetch timeout') {
+    super(message);
+    this.name = 'FetchTimeoutError';
+  }
+}
+
 let initRetryTimer: number | null = null;
 let sdkCheckRetryCount = 0;
 let initRetryCount = 0;
@@ -404,6 +416,91 @@ function filterAndSortRooms(rooms: RoomsMap): RoomsMap {
 }
 
 /**
+ * Validate that a value looks like a RoomsMap (object with room data)
+ */
+function isValidRoomsMap(data: unknown): data is RoomsMap {
+  if (data === null || data === undefined) return true; // Empty is valid
+  if (typeof data !== 'object') return false;
+  
+  // Check a few entries to verify structure
+  const entries = Object.entries(data as Record<string, unknown>);
+  if (entries.length === 0) return true; // Empty object is valid
+  
+  // Validate first entry has expected room data shape
+  const firstEntry = entries[0];
+  if (!firstEntry) return true; // Should not happen but be safe
+  
+  const firstRoom = firstEntry[1];
+  if (typeof firstRoom !== 'object' || firstRoom === null) return false;
+  
+  const room = firstRoom as Record<string, unknown>;
+  // Room should have at least originalRoomName or creator (flexible validation)
+  return typeof room.originalRoomName === 'string' || typeof room.creator === 'string';
+}
+
+/**
+ * Fetch rooms using Firebase REST API (fallback for slow connections)
+ * This is a simpler HTTP-based approach that doesn't require the Firebase SDK
+ * to be fully initialized or maintain a WebSocket connection.
+ * 
+ * The REST API is the same endpoint that the roomy.umm12many.net website uses,
+ * which is why users with slow connections can access the website but not the SDK-based fetch.
+ */
+async function fetchRoomsViaRestApi(): Promise<RoomsMap | null> {
+  log('📡 Attempting to fetch rooms via REST API fallback...');
+  
+  // Validate URL is properly formed
+  if (!REST_API_URL || !REST_API_URL.startsWith('https://')) {
+    log('❌ REST API URL is not properly configured');
+    return null;
+  }
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REST_API_TIMEOUT_MS);
+    
+    const response = await fetch(REST_API_URL, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      log(`❌ REST API fetch failed with status: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // Validate the response structure
+    if (!isValidRoomsMap(data)) {
+      log('❌ REST API returned unexpected data format');
+      return null;
+    }
+    
+    const rooms = data || {};
+    log(`✅ REST API fetch successful: ${Object.keys(rooms).length} rooms`);
+    return rooms;
+  } catch (error) {
+    if (error instanceof Error) {
+      // Check for abort (timeout) using the error name which is more reliable
+      if (error.name === 'AbortError') {
+        log('⏱️ REST API fetch timed out');
+      } else {
+        log(`❌ REST API fetch error: ${error.message}`);
+      }
+    } else {
+      log('❌ REST API fetch error: Unknown error');
+    }
+    return null;
+  }
+}
+
+/**
  * Fetch all rooms from Firebase with timeout and retry logic
  */
 export async function fetchRooms(retryCount = 0): Promise<void> {
@@ -425,17 +522,44 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
     }
   };
 
+  // Helper to process and display rooms
+  const processRooms = (rooms: RoomsMap) => {
+    state.allRooms = rooms;
+    const filteredRooms = filterAndSortRooms(state.allRooms);
+    if (roomsUpdateCallback) {
+      roomsUpdateCallback(filteredRooms);
+    }
+    log(`✅ Fetched ${Object.keys(state.allRooms).length} rooms`);
+    isFetchingRooms = false;
+  };
+
   try {
+    // If database isn't ready, try REST API first (better for slow connections)
     if (!database) {
-      log('⚠️ Database not initialized, attempting to initialize...');
+      log('⚠️ Database not initialized, trying REST API fallback first...');
       
-      // Try to initialize Firebase if not ready
+      const restRooms = await fetchRoomsViaRestApi();
+      if (restRooms !== null) {
+        // REST API succeeded - use the data
+        processRooms(restRooms);
+        
+        // Try to initialize Firebase in the background for future use
+        if (!state.isFirebaseReady) {
+          initializeFirebase().catch(() => {
+            log('⚠️ Background Firebase initialization failed, will continue using REST API');
+          });
+        }
+        return;
+      }
+      
+      // REST API failed, try to initialize Firebase SDK
+      log('⚠️ REST API fallback failed, attempting Firebase SDK initialization...');
       if (!state.isFirebaseReady) {
         const success = await initializeFirebase();
         if (!success) {
-          log('❌ Cannot fetch rooms - Firebase initialization failed');
+          log('❌ Cannot fetch rooms - both REST API and Firebase initialization failed');
           if (errorCallback) {
-            errorCallback('Firebase not connected. Click refresh to retry.');
+            errorCallback('Unable to connect. Both REST API and Firebase are unavailable. Click refresh to retry.');
           }
           isFetchingRooms = false;
           return;
@@ -452,12 +576,12 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
       }
     }
 
-    log(`📡 Fetching rooms... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
+    log(`📡 Fetching rooms via SDK... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
     
     // Create a timeout promise with cleanup
     let timeoutId: number;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = window.setTimeout(() => reject(new Error('Fetch timeout')), FETCH_ROOMS_TIMEOUT_MS);
+      timeoutId = window.setTimeout(() => reject(new FetchTimeoutError()), FETCH_ROOMS_TIMEOUT_MS);
     });
 
     // Race between fetch and timeout
@@ -469,19 +593,22 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
       clearTimeout(timeoutId);
     });
     
-    state.allRooms = snapshot.val() || {};
-
-    const filteredRooms = filterAndSortRooms(state.allRooms);
-
-    if (roomsUpdateCallback) {
-      roomsUpdateCallback(filteredRooms);
-    }
-
-    log(`✅ Fetched ${Object.keys(state.allRooms).length} rooms`);
-    isFetchingRooms = false;
+    processRooms(snapshot.val() || {});
   } catch (error) {
+    const isTimeout = error instanceof FetchTimeoutError;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    log(`❌ Error fetching rooms (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES}): ${errorMessage}`);
+    log(`❌ Error fetching rooms via SDK (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES}): ${errorMessage}`);
+    
+    // On first failure or timeout, try REST API as fallback before retrying SDK
+    if (retryCount === 0 || isTimeout) {
+      log('🔄 SDK fetch failed, trying REST API fallback...');
+      const restRooms = await fetchRoomsViaRestApi();
+      if (restRooms !== null) {
+        processRooms(restRooms);
+        return;
+      }
+      log('⚠️ REST API fallback also failed');
+    }
     
     // Retry logic with exponential backoff - only for network/timeout errors
     if (retryCount < FETCH_ROOMS_MAX_RETRIES - 1) {
@@ -492,10 +619,18 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
       return fetchRooms(retryCount + 1);
     }
     
-    // Max retries reached - ensure flag is reset
-    log('❌ Max retries reached for fetching rooms');
+    // Max retries reached - try one final REST API attempt
+    log('❌ Max SDK retries reached, attempting final REST API fallback...');
+    const finalRestAttempt = await fetchRoomsViaRestApi();
+    if (finalRestAttempt !== null) {
+      processRooms(finalRestAttempt);
+      return;
+    }
+    
+    // All attempts failed
+    log('❌ All fetch attempts failed (SDK and REST API)');
     if (errorCallback) {
-      errorCallback('Failed to fetch rooms after multiple attempts. Your connection may be slow - click refresh to try again.');
+      errorCallback('Failed to fetch rooms. Please check your connection and click refresh to try again.');
     }
     isFetchingRooms = false;
   }

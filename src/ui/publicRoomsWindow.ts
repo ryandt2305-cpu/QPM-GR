@@ -32,7 +32,8 @@ import {
   setErrorCallback,
   retryFirebaseInit,
   isCurrentRoomPublic,
-  getCurrentRoomData
+  getCurrentRoomData,
+  getFirebaseSDK
 } from '../features/publicRooms';
 import type { FirebaseUser, RoomsMap, RoomData } from '../types/publicRooms';
 
@@ -853,7 +854,8 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
     updateConnectionStatus(state.connectionStatus);
 
     // Check if Firebase SDK is available - if not, still show UI with retry option
-    if (typeof window.firebase === 'undefined') {
+    // Use getFirebaseSDK() which checks both window and unsafeWindow
+    if (!getFirebaseSDK()) {
       console.warn('[PublicRooms] Firebase SDK not loaded yet, showing retry UI');
       updateConnectionStatus('failed');
     } else {

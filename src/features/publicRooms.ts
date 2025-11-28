@@ -29,6 +29,41 @@ import type {
   SortOption
 } from '../types/publicRooms';
 
+// Declare unsafeWindow for userscript environments
+declare const unsafeWindow: Window & typeof globalThis | undefined;
+
+/**
+ * Get the appropriate window object that has Firebase SDK
+ * This handles both sandboxed (Tampermonkey with @grant) and non-sandboxed contexts
+ */
+function getFirebaseWindow(): (Window & typeof globalThis) | null {
+  // Try unsafeWindow first (for sandboxed userscript environments)
+  if (typeof unsafeWindow !== 'undefined' && (unsafeWindow as any).firebase) {
+    log('📦 Found Firebase in unsafeWindow');
+    return unsafeWindow;
+  }
+  
+  // Try regular window (for non-sandboxed or @inject-into page)
+  if (typeof window !== 'undefined' && (window as any).firebase) {
+    log('📦 Found Firebase in window');
+    return window;
+  }
+  
+  // Firebase not found in either context
+  return null;
+}
+
+/**
+ * Get Firebase SDK from the appropriate window context
+ * Exported for use in UI components
+ */
+export function getFirebaseSDK(): typeof window.firebase | null {
+  const firebaseWindow = getFirebaseWindow();
+  if (firebaseWindow) {
+    return (firebaseWindow as any).firebase;
+  }
+  return null;
+}
 
 // Private state
 let app: FirebaseApp | null = null;
@@ -63,13 +98,16 @@ const FIREBASE_SDK_MAX_RETRIES = 5;
 const FIREBASE_SDK_RETRY_DELAY_MS = 2000;
 const FIREBASE_INIT_MAX_RETRIES = 3;
 const FIREBASE_INIT_RETRY_DELAY_MS = 3000;
-const FETCH_ROOMS_TIMEOUT_MS = 15000;
-const FETCH_ROOMS_MAX_RETRIES = 3;
-const FETCH_ROOMS_RETRY_DELAY_MS = 2000;
+const FETCH_ROOMS_TIMEOUT_MS = 30000; // Increased to 30s for slower connections
+const FETCH_ROOMS_MAX_RETRIES = 5; // Increased from 3 to 5 retries
+const FETCH_ROOMS_BASE_DELAY_MS = 1500; // Base delay for exponential backoff (1.5s, 3s, 6s, 12s)
 
 let initRetryTimer: number | null = null;
 let sdkCheckRetryCount = 0;
 let initRetryCount = 0;
+let isFetchingRooms = false; // Flag to prevent concurrent fetches
+let isFirebaseConnected = false; // Track actual Firebase connection status
+let connectionListener: (() => void) | null = null; // Cleanup function for connection listener
 
 // Callbacks
 let authStateCallback: AuthStateCallback | null = null;
@@ -79,18 +117,20 @@ let connectionStatusCallback: ((status: 'connecting' | 'connected' | 'failed' | 
 
 /**
  * Wait for Firebase SDK to be available with retry logic
+ * Checks both window and unsafeWindow for sandboxed environments
  */
 async function waitForFirebaseSDK(): Promise<boolean> {
   sdkCheckRetryCount = 0;
 
   while (sdkCheckRetryCount < FIREBASE_SDK_MAX_RETRIES) {
-    if (typeof window.firebase !== 'undefined') {
+    const firebase = getFirebaseSDK();
+    if (firebase) {
       log('✅ Firebase SDK is available');
       return true;
     }
 
     sdkCheckRetryCount++;
-    log(`⏳ Firebase SDK not available, retry ${sdkCheckRetryCount}/${FIREBASE_SDK_MAX_RETRIES}...`);
+    log(`⏳ Firebase SDK not available in window or unsafeWindow, retry ${sdkCheckRetryCount}/${FIREBASE_SDK_MAX_RETRIES}...`);
     state.connectionStatus = 'retrying';
     connectionStatusCallback?.('retrying');
 
@@ -109,19 +149,23 @@ async function initializeFirebase(): Promise<boolean> {
 
   while (initRetryCount < FIREBASE_INIT_MAX_RETRIES) {
     try {
-      // First ensure SDK is available
-      if (typeof window.firebase === 'undefined') {
+      // First ensure SDK is available (checks both window and unsafeWindow)
+      let firebase = getFirebaseSDK();
+      if (!firebase) {
         const sdkAvailable = await waitForFirebaseSDK();
         if (!sdkAvailable) {
           state.connectionStatus = 'failed';
           connectionStatusCallback?.('failed');
           return false;
         }
+        firebase = getFirebaseSDK();
       }
 
-      // At this point, window.firebase is guaranteed to be defined
-      const firebase = window.firebase!;
+      if (!firebase) {
+        throw new Error('Firebase SDK not available after wait');
+      }
 
+      // Initialize Firebase app
       if (!firebase.apps.length) {
         app = firebase.initializeApp(FIREBASE_CONFIG);
       } else {
@@ -130,6 +174,81 @@ async function initializeFirebase(): Promise<boolean> {
 
       auth = firebase.auth();
       database = firebase.database();
+
+      // Set up persistent connection listener
+      // This monitors the actual connection state to Firebase servers
+      const connectedRef = database.ref('.info/connected');
+      
+      // Remove any existing listener
+      if (connectionListener) {
+        connectionListener();
+        connectionListener = null;
+      }
+
+      // Set up connection state monitoring
+      connectedRef.on('value', (snapshot: any) => {
+        const connected = snapshot.val() === true;
+        isFirebaseConnected = connected;
+        
+        if (connected) {
+          log('✅ Firebase Realtime Database connected');
+          // If we just reconnected and had a failed fetch, retry it
+          // Check isFetchingRooms to avoid concurrent fetches
+          if ((state.connectionStatus === 'failed' || state.connectionStatus === 'retrying') && !isFetchingRooms) {
+            state.connectionStatus = 'connected';
+            connectionStatusCallback?.('connected');
+            // Trigger a fresh fetch when connection is restored
+            fetchRooms();
+          }
+        } else {
+          log('⚠️ Firebase Realtime Database disconnected');
+          // Don't immediately set to failed - Firebase will auto-reconnect
+        }
+      }, (error: Error) => {
+        log('❌ Connection listener error:', error.message);
+        isFirebaseConnected = false;
+      });
+
+      // Store cleanup function
+      connectionListener = () => {
+        connectedRef.off('value');
+      };
+
+      // Wait briefly for initial connection
+      log('🔄 Waiting for database connection...');
+      await new Promise<void>((resolve) => {
+        let checkInterval: number | null = null;
+        
+        const cleanup = () => {
+          if (checkInterval !== null) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+          }
+        };
+        
+        const timeout = setTimeout(() => {
+          log('⏳ Initial connection wait timed out, proceeding...');
+          cleanup();
+          resolve();
+        }, 5000);
+
+        // Check if already connected
+        if (isFirebaseConnected) {
+          clearTimeout(timeout);
+          cleanup();
+          resolve();
+          return;
+        }
+
+        // Wait for connection event
+        checkInterval = window.setInterval(() => {
+          if (isFirebaseConnected) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve();
+          }
+        }, 100);
+      });
 
       state.isFirebaseReady = true;
       state.connectionStatus = 'connected';
@@ -288,31 +407,51 @@ function filterAndSortRooms(rooms: RoomsMap): RoomsMap {
  * Fetch all rooms from Firebase with timeout and retry logic
  */
 export async function fetchRooms(retryCount = 0): Promise<void> {
-  if (!database) {
-    log('⚠️ Database not initialized, attempting to initialize...');
-    
-    // Try to initialize Firebase if not ready
-    if (!state.isFirebaseReady) {
-      const success = await initializeFirebase();
-      if (!success) {
-        log('❌ Cannot fetch rooms - Firebase initialization failed');
-        if (errorCallback) {
-          errorCallback('Firebase not connected. Click refresh to retry.');
+  // Prevent concurrent fetches - if already fetching, skip this call
+  if (isFetchingRooms && retryCount === 0) {
+    log('⏳ Fetch already in progress, skipping duplicate request');
+    return;
+  }
+
+  // Mark fetch as in progress for new fetch requests
+  if (retryCount === 0) {
+    isFetchingRooms = true;
+  }
+
+  // Helper to reset fetching flag only on final exit
+  const resetFetchingFlag = () => {
+    if (retryCount === 0 || retryCount >= FETCH_ROOMS_MAX_RETRIES - 1) {
+      isFetchingRooms = false;
+    }
+  };
+
+  try {
+    if (!database) {
+      log('⚠️ Database not initialized, attempting to initialize...');
+      
+      // Try to initialize Firebase if not ready
+      if (!state.isFirebaseReady) {
+        const success = await initializeFirebase();
+        if (!success) {
+          log('❌ Cannot fetch rooms - Firebase initialization failed');
+          if (errorCallback) {
+            errorCallback('Firebase not connected. Click refresh to retry.');
+          }
+          isFetchingRooms = false;
+          return;
         }
+      }
+      
+      if (!database) {
+        log('❌ Database still not available after initialization');
+        if (errorCallback) {
+          errorCallback('Database connection failed. Click refresh to retry.');
+        }
+        isFetchingRooms = false;
         return;
       }
     }
-    
-    if (!database) {
-      log('❌ Database still not available after initialization');
-      if (errorCallback) {
-        errorCallback('Database connection failed. Click refresh to retry.');
-      }
-      return;
-    }
-  }
 
-  try {
     log(`📡 Fetching rooms... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
     
     // Create a timeout promise with cleanup
@@ -339,22 +478,26 @@ export async function fetchRooms(retryCount = 0): Promise<void> {
     }
 
     log(`✅ Fetched ${Object.keys(state.allRooms).length} rooms`);
+    isFetchingRooms = false;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    log(`❌ Error fetching rooms (attempt ${retryCount + 1}): ${errorMessage}`);
+    log(`❌ Error fetching rooms (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES}): ${errorMessage}`);
     
-    // Retry logic
+    // Retry logic with exponential backoff - only for network/timeout errors
     if (retryCount < FETCH_ROOMS_MAX_RETRIES - 1) {
-      log(`⏳ Retrying in ${FETCH_ROOMS_RETRY_DELAY_MS / 1000}s...`);
-      await new Promise(resolve => setTimeout(resolve, FETCH_ROOMS_RETRY_DELAY_MS));
+      // Calculate delay with exponential backoff: 1.5s, 3s, 6s, 12s, etc.
+      const delay = FETCH_ROOMS_BASE_DELAY_MS * Math.pow(2, retryCount);
+      log(`⏳ Retrying in ${delay / 1000}s... (exponential backoff)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
       return fetchRooms(retryCount + 1);
     }
     
-    // Max retries reached
+    // Max retries reached - ensure flag is reset
     log('❌ Max retries reached for fetching rooms');
     if (errorCallback) {
-      errorCallback('Failed to fetch rooms after multiple attempts. Click refresh to retry.');
+      errorCallback('Failed to fetch rooms after multiple attempts. Your connection may be slow - click refresh to try again.');
     }
+    isFetchingRooms = false;
   }
 }
 
@@ -476,12 +619,13 @@ export async function signIn(email: string, password: string): Promise<void> {
  * Sign in with Google OAuth
  */
 export async function signInWithGoogle(): Promise<void> {
-  if (!auth || typeof window.firebase === 'undefined') {
+  const firebase = getFirebaseSDK();
+  if (!auth || !firebase) {
     throw new Error('Auth not initialized');
   }
 
   try {
-    const provider = new window.firebase.auth.GoogleAuthProvider();
+    const provider = new firebase.auth.GoogleAuthProvider();
     await auth.signInWithPopup(provider);
     log('✅ Signed in with Google successfully');
   } catch (error: any) {
@@ -494,12 +638,13 @@ export async function signInWithGoogle(): Promise<void> {
  * Sign in with GitHub OAuth
  */
 export async function signInWithGitHub(): Promise<void> {
-  if (!auth || typeof window.firebase === 'undefined') {
+  const firebase = getFirebaseSDK();
+  if (!auth || !firebase) {
     throw new Error('Auth not initialized');
   }
 
   try {
-    const provider = new window.firebase.auth.GithubAuthProvider();
+    const provider = new firebase.auth.GithubAuthProvider();
     await auth.signInWithPopup(provider);
     log('✅ Signed in with GitHub successfully');
   } catch (error: any) {

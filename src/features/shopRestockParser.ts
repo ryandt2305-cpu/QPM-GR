@@ -91,7 +91,7 @@ const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
 
 /**
  * Parse a timestamp string to Unix timestamp
- * Format: "22/11/2025 8:00 pm" or "8:05 pm"
+ * Format: "08/20/2025 1:35 AM" (MM/DD/YYYY H:MM AM/PM) or "1:35 AM"
  *
  * IMPORTANT: Discord exports show timestamps in AEST (Australian Eastern Standard Time).
  * This function interprets the timestamps as AEST and converts to Unix timestamp,
@@ -99,7 +99,7 @@ const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
  */
 function parseTimestamp(timestampStr: string, baseDate?: Date): number {
   try {
-    // Full timestamp: "22/11/2025 8:00 pm"
+    // Full timestamp: "08/20/2025 1:35 AM"
     if (timestampStr.includes('/')) {
       const parts = timestampStr.split(' ');
       if (parts.length < 3) return Date.now();
@@ -113,8 +113,9 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
 
       if (dateParts.length !== 3 || timeParts.length !== 2) return Date.now();
 
-      const day = dateParts[0]!;
-      const month = dateParts[1]!;
+      // HTML export uses US date format: MM/DD/YYYY
+      const month = dateParts[0]!;
+      const day = dateParts[1]!;
       const year = dateParts[2]!;
       const hours = timeParts[0]!;
       const minutes = timeParts[1]!;

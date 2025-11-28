@@ -357,6 +357,26 @@ export const CROP_BASE_STATS: Record<string, CropStats> = {
     baseWeight: 2.0,
     maxWeight: 4.0,
   },
+  favabean: {
+    name: 'Fava Bean',
+    seedPrice: 0, // TODO: Update with actual stats from wiki
+    baseSellPrice: 0, // TODO: Update with actual stats from wiki
+    cropGrowTime: 0, // TODO: Update with actual stats from wiki
+    regrow: 'No', // TODO: Update with actual stats from wiki
+    baseWeight: 0, // TODO: Update with actual stats from wiki
+    maxWeight: 0, // TODO: Update with actual stats from wiki
+    rarity: 0, // Common
+  },
+  cacaobean: {
+    name: 'Cacao Bean',
+    seedPrice: 0, // TODO: Update with actual stats from wiki
+    baseSellPrice: 0, // TODO: Update with actual stats from wiki
+    cropGrowTime: 0, // TODO: Update with actual stats from wiki
+    regrow: 'No', // TODO: Update with actual stats from wiki
+    baseWeight: 0, // TODO: Update with actual stats from wiki
+    maxWeight: 0, // TODO: Update with actual stats from wiki
+    exclusive: 'Divine', // Divine rarity
+  },
 };
 
 /**

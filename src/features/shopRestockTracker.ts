@@ -9,6 +9,7 @@ const STORAGE_KEY_RESTOCKS = 'qpm.shopRestocks.v1';
 const STORAGE_KEY_CONFIG = 'qpm.shopRestockConfig.v1';
 const STORAGE_KEY_MIGRATION = 'qpm.shopRestocks.migration';
 const STORAGE_KEY_PREDICTIONS = 'qpm.shopRestocks.predictions.v1';
+const STORAGE_KEY_ACTIVE_PREDICTIONS = 'qpm.shopRestocks.activePredictions.v1';
 const CURRENT_MIGRATION_VERSION = 1;
 
 // Items to track predictions for
@@ -65,6 +66,7 @@ const ITEM_RARITY_MAP: Record<string, ItemStats['rarity']> = {
   'Passion Fruit': 'divine',
   'Lemon': 'divine',
   'Pepper': 'divine',
+  'Cacao Bean': 'divine', // Added Nov 2025
 
   // Mythic (rare seeds and eggs)
   'Mythical Eggs': 'mythic',
@@ -77,7 +79,7 @@ const ITEM_RARITY_MAP: Record<string, ItemStats['rarity']> = {
   // Rare
   'Lily': 'rare',
   "Burro's Tail": 'rare',
-  'Echeveria': 'rare',
+  'Echeveria': 'rare', // Updated from legendary to rare (Nov 2025)
   'Legendary Eggs': 'rare',
   'Rare Eggs': 'rare',
 
@@ -91,16 +93,17 @@ const ITEM_RARITY_MAP: Record<string, ItemStats['rarity']> = {
   'Strawberry': 'common',
   'Aloe': 'common',
   'Delphinium': 'common',
-  'Blueberry': 'common',
+  'Blueberry': 'common', // Spawn rate changed to 75% (Nov 2025)
   'Apple': 'common',
   'Tulip': 'common',
-  'Tomato': 'common',
+  'Tomato': 'common', // Spawn rate changed to 75% (Nov 2025)
   'Daffodil': 'common',
   'Corn': 'common',
   'Coconut': 'common',
   'Banana': 'common',
   'Camellia': 'common',
   'Squash': 'common',
+  'Fava Bean': 'common', // Added Nov 2025
 };
 
 /**
@@ -115,8 +118,8 @@ function getItemRarity(itemName: string): ItemStats['rarity'] {
  */
 export interface PredictionRecord {
   itemName: string;
-  predictedTime: number; // When we predicted it would appear
-  predictionMadeAt: number; // When we made the prediction
+  predictedTime: number | null; // When we predicted it would appear (null if no prediction was active)
+  predictionMadeAt: number | null; // When we made the prediction (null if no prediction was active)
   actualTime: number | null; // When it actually appeared (null if not yet)
   differenceMinutes: number | null; // How far off in minutes (+ = late, - = early)
   differenceMs: number | null; // How far off in milliseconds (+ = late, - = early)
@@ -137,7 +140,7 @@ let config: RestockConfig = {
   watchedItems: [],
 };
 let predictionHistory: Map<string, PredictionRecord[]> = new Map(); // itemName -> history (max 3)
-let activePredictions: Map<string, number> = new Map(); // itemName -> predicted time
+let activePredictions: Map<string, number> = new Map(); // itemName -> predicted time (PERSISTED TO STORAGE)
 
 let updateCallbacks: Array<() => void> = [];
 let isInitialized = false;
@@ -229,8 +232,16 @@ export function initializeRestockTracker(): void {
     const savedPredictions = storage.get<Record<string, PredictionRecord[]>>(STORAGE_KEY_PREDICTIONS, {});
     predictionHistory = new Map(Object.entries(savedPredictions));
 
+    // Load active predictions
+    const savedActivePredictions = storage.get<Record<string, number>>(STORAGE_KEY_ACTIVE_PREDICTIONS, {});
+    activePredictions = new Map(Object.entries(savedActivePredictions));
+    log(`📊 Loaded ${activePredictions.size} active predictions from storage`);
+
     // Migrate old data if needed
     const migratedCount = migrateRestockData();
+
+    // Backfill prediction history from existing restock events (for tracked items that have no history)
+    backfillPredictionHistory();
 
     // Load default restock data on first run (if no data exists)
     // DISABLED: Don't auto-load default data
@@ -258,6 +269,54 @@ export function initializeRestockTracker(): void {
     }
   } catch (error) {
     log('⚠️ Failed to load restock data', error);
+  }
+}
+
+/**
+ * Backfill prediction history from existing restock events
+ * This populates history for tracked items that don't have any history yet
+ */
+function backfillPredictionHistory(): void {
+  if (restockEvents.length === 0) {
+    return; // No events to backfill from
+  }
+
+  let backfilled = 0;
+
+  for (const itemName of TRACKED_PREDICTION_ITEMS) {
+    // Check if this item already has history
+    const existingHistory = predictionHistory.get(itemName);
+    if (existingHistory && existingHistory.length > 0) {
+      continue; // Skip items that already have history
+    }
+
+    // Find all restock events for this item
+    const itemRestocks = restockEvents
+      .filter(event => event.items.some(item => item.name === itemName))
+      .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
+      .slice(0, 3); // Take up to 3 most recent
+
+    if (itemRestocks.length > 0) {
+      // Create history records (without predictions)
+      const history: PredictionRecord[] = itemRestocks.map(event => ({
+        itemName,
+        predictedTime: null,
+        predictionMadeAt: null,
+        actualTime: event.timestamp,
+        differenceMinutes: null,
+        differenceMs: null,
+      }));
+
+      predictionHistory.set(itemName, history);
+      backfilled += itemRestocks.length;
+      log(`📊 Backfilled ${itemRestocks.length} restock(s) for ${itemName}`);
+    }
+  }
+
+  if (backfilled > 0) {
+    // Save backfilled history
+    savePredictions();
+    log(`✅ Backfilled ${backfilled} total restock records into prediction history`);
   }
 }
 
@@ -547,10 +606,158 @@ export function getTopLikelyItems(limit: number = 5): Array<{ name: string; prob
 }
 
 /**
+ * Calculate percentile from sorted array
+ */
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const index = (p / 100) * (sorted.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const weight = index - lower;
+  return sorted[lower]! * (1 - weight) + sorted[upper]! * weight;
+}
+
+/**
+ * Get intervals between appearances of an item (with rapid restock filtering)
+ * Uses item-specific thresholds to filter out clustering behavior
+ */
+function getItemIntervals(itemName: string): number[] {
+  const appearances = restockEvents
+    .filter(event => event.items.some(item => item.name === itemName))
+    .map(event => event.timestamp)
+    .sort((a, b) => a - b);
+
+  if (appearances.length < 2) {
+    return [];
+  }
+
+  // Item-specific rapid restock thresholds to filter clustering
+  let rapidRestockThreshold: number;
+
+  if (itemName === 'Starweaver' || itemName === 'Dawnbinder' || itemName === 'Moonbinder') {
+    // Celestials can appear in clusters over multiple days
+    // Filter out anything within 5 days to only count gaps between clusters
+    rapidRestockThreshold = 5 * 24 * 60 * 60 * 1000; // 5 days
+  } else if (itemName === 'Sunflower' || itemName === 'Mythical Eggs') {
+    // Highly variable items - filter out same-day clusters
+    rapidRestockThreshold = 12 * 60 * 60 * 1000; // 12 hours
+  } else {
+    // Default: filter rapid succession (within 30 minutes)
+    rapidRestockThreshold = 30 * 60 * 1000; // 30 minutes
+  }
+
+  const filteredAppearances: number[] = [appearances[0]!];
+
+  for (let i = 1; i < appearances.length; i++) {
+    const timeSinceLast = appearances[i]! - appearances[i - 1]!;
+    if (timeSinceLast > rapidRestockThreshold) {
+      filteredAppearances.push(appearances[i]!);
+    }
+  }
+
+  // Calculate intervals
+  const intervals: number[] = [];
+  for (let i = 1; i < filteredAppearances.length; i++) {
+    intervals.push(filteredAppearances[i]! - filteredAppearances[i - 1]!);
+  }
+
+  return intervals;
+}
+
+/**
  * Predict when a specific item will appear next
- * Based on item's last appearance, restock interval, and appearance rate
+ * Uses item-specific algorithms based on statistical analysis:
+ * - Highly variable items (CV > 1.0): Use median with confidence intervals
+ * - Moderate variability (CV 0.5-1.0): Use median with tighter intervals
+ * - Consistent items (CV < 0.5): Use simple median prediction
  */
 export function predictItemNextAppearance(itemName: string): number | null {
+  if (restockEvents.length < 2) {
+    return null;
+  }
+
+  const stats = calculateItemStats();
+  const itemStats = stats.get(itemName);
+
+  if (!itemStats || itemStats.appearanceRate === 0) {
+    return null;
+  }
+
+  // Get filtered intervals for this item
+  const intervals = getItemIntervals(itemName);
+
+  if (intervals.length === 0) {
+    // Fall back to old method if not enough data
+    const summary = getSummaryStats();
+    const intervalMs = summary.avgRestockInterval * 60 * 1000;
+    if (intervalMs === 0) return null;
+
+    const probabilityDecimal = itemStats.appearanceRate / 100;
+    const expectedRestocksUntilAppearance = 1 / probabilityDecimal;
+    let nextAppearance = itemStats.lastSeen + (intervalMs * expectedRestocksUntilAppearance);
+
+    const now = Date.now();
+    if (nextAppearance < now) {
+      const timeSincePrediction = now - nextAppearance;
+      const intervalsPassed = Math.ceil(timeSincePrediction / (intervalMs * expectedRestocksUntilAppearance));
+      nextAppearance += (intervalMs * expectedRestocksUntilAppearance * intervalsPassed);
+    }
+
+    return nextAppearance;
+  }
+
+  // Use median for prediction (more robust than mean for variable data)
+  const median = percentile(intervals, 50);
+
+  // Calculate coefficient of variation to determine approach
+  const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+  const variance = intervals.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / intervals.length;
+  const stdDev = Math.sqrt(variance);
+  const cv = stdDev / mean;
+
+  // Item-specific adjustments based on discovered patterns
+  // Always err on the side of caution - better to predict conservatively than disappoint users
+  let predictionInterval = median;
+
+  if (itemName === 'Sunflower') {
+    // Sunflower: Use 55th percentile for more accurate predictions
+    // Previous 75th percentile was too conservative (consistently 20h late)
+    // Adjusted based on user feedback
+    predictionInterval = percentile(intervals, 55);
+  } else if (itemName === 'Mythical Eggs') {
+    // Mythical Eggs: Use 65th percentile for balanced predictions
+    // These can vary wildly (hours to days)
+    predictionInterval = percentile(intervals, 65);
+  } else if (itemName === 'Starweaver' || itemName === 'Dawnbinder' || itemName === 'Moonbinder') {
+    // Celestials: Can go 10-15+ days without appearing
+    // Use 80th percentile to account for long tail distribution
+    // These are rare enough that conservative estimates are critical
+    predictionInterval = percentile(intervals, 80);
+  } else {
+    // Default: use 65th percentile (slightly conservative)
+    predictionInterval = percentile(intervals, 65);
+  }
+
+  // Predict next appearance based on last seen + prediction interval
+  let nextAppearance = itemStats.lastSeen + predictionInterval;
+
+  // If prediction is in the past, project forward
+  const now = Date.now();
+  if (nextAppearance < now) {
+    const timeSinceLast = now - itemStats.lastSeen;
+    const intervalsPassed = Math.ceil(timeSinceLast / predictionInterval);
+    nextAppearance = itemStats.lastSeen + (predictionInterval * intervalsPassed);
+  }
+
+  return nextAppearance;
+}
+
+/**
+ * Predict item next appearance using simpler QPM-GR method (for comparison)
+ * Uses appearance rate without clustering filters - typically more optimistic
+ */
+export function predictItemNextAppearanceSimple(itemName: string): number | null {
   if (restockEvents.length < 2) {
     return null;
   }
@@ -571,7 +778,6 @@ export function predictItemNextAppearance(itemName: string): number | null {
 
   // Calculate expected number of restocks until this item appears
   // If item appears 50% of the time, we expect it in ~2 restocks
-  // If item appears 25% of the time, we expect it in ~4 restocks
   const probabilityDecimal = itemStats.appearanceRate / 100;
   const expectedRestocksUntilAppearance = 1 / probabilityDecimal;
 
@@ -581,15 +787,198 @@ export function predictItemNextAppearance(itemName: string): number | null {
   // If prediction is in the past, project forward to next future occurrence
   const now = Date.now();
   if (nextAppearance < now) {
-    // Calculate how many intervals have passed since the prediction
     const timeSincePrediction = now - nextAppearance;
     const intervalsPassed = Math.ceil(timeSincePrediction / (intervalMs * expectedRestocksUntilAppearance));
-
-    // Add enough intervals to get to the future
     nextAppearance += (intervalMs * expectedRestocksUntilAppearance * intervalsPassed);
   }
 
   return nextAppearance;
+}
+
+/**
+ * Get dual predictions (optimistic QPM-GR and conservative MGQPM)
+ * Returns both predictions for display as a range
+ */
+export interface DualPrediction {
+  optimistic: number | null; // QPM-GR simple method (typically earlier)
+  conservative: number | null; // MGQPM percentile method (typically later)
+}
+
+export function predictItemDual(itemName: string): DualPrediction {
+  const optimistic = predictItemNextAppearanceSimple(itemName);
+  const conservative = predictItemNextAppearance(itemName);
+
+  return {
+    optimistic,
+    conservative,
+  };
+}
+
+/**
+ * Detailed prediction statistics for an item
+ */
+export interface DetailedPredictionStats {
+  itemName: string;
+  predictedTime: number | null; // Simple point estimate
+  confidence: 'high' | 'medium' | 'low' | 'none';
+
+  // Statistical details
+  median: number | null; // Median interval in ms
+  mean: number | null; // Mean interval in ms
+  stdDev: number | null; // Standard deviation in ms
+  coefficientOfVariation: number | null; // CV (stdDev/mean)
+
+  // Confidence intervals
+  interval25th: number | null; // 25th percentile interval
+  interval75th: number | null; // 75th percentile interval
+  interval95th: number | null; // 95th percentile interval
+
+  // Probability windows (likelihood of appearing in next X time)
+  probabilityNext6h: number | null; // % chance in next 6 hours
+  probabilityNext24h: number | null; // % chance in next 24 hours
+  probabilityNext7d: number | null; // % chance in next 7 days
+
+  // Data quality
+  sampleSize: number; // Number of intervals analyzed
+  lastSeen: number | null; // When item was last seen
+
+  // Interpretation
+  variability: 'highly_variable' | 'moderate' | 'consistent';
+  recommendedApproach: string; // Human-readable recommendation
+}
+
+/**
+ * Get detailed prediction statistics for an item
+ * This provides comprehensive data for the "Show Detailed Stats" UI toggle
+ */
+export function getDetailedPredictionStats(itemName: string): DetailedPredictionStats {
+  const defaultStats: DetailedPredictionStats = {
+    itemName,
+    predictedTime: null,
+    confidence: 'none',
+    median: null,
+    mean: null,
+    stdDev: null,
+    coefficientOfVariation: null,
+    interval25th: null,
+    interval75th: null,
+    interval95th: null,
+    probabilityNext6h: null,
+    probabilityNext24h: null,
+    probabilityNext7d: null,
+    sampleSize: 0,
+    lastSeen: null,
+    variability: 'consistent',
+    recommendedApproach: 'Not enough data for prediction',
+  };
+
+  if (restockEvents.length < 2) {
+    return defaultStats;
+  }
+
+  const stats = calculateItemStats();
+  const itemStats = stats.get(itemName);
+
+  if (!itemStats) {
+    return defaultStats;
+  }
+
+  const intervals = getItemIntervals(itemName);
+
+  if (intervals.length === 0) {
+    return {
+      ...defaultStats,
+      lastSeen: itemStats.lastSeen,
+      sampleSize: 0,
+    };
+  }
+
+  // Calculate statistics
+  const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+  const variance = intervals.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / intervals.length;
+  const stdDev = Math.sqrt(variance);
+  const cv = stdDev / mean;
+
+  const median = percentile(intervals, 50);
+  const p25 = percentile(intervals, 25);
+  const p75 = percentile(intervals, 75);
+  const p95 = percentile(intervals, 95);
+
+  // Determine confidence based on sample size and CV
+  let confidence: 'high' | 'medium' | 'low' | 'none' = 'none';
+  if (intervals.length >= 10 && cv < 0.5) {
+    confidence = 'high';
+  } else if (intervals.length >= 5 && cv < 1.0) {
+    confidence = 'medium';
+  } else if (intervals.length >= 3) {
+    confidence = 'low';
+  }
+
+  // Determine variability category
+  let variability: 'highly_variable' | 'moderate' | 'consistent' = 'consistent';
+  let recommendedApproach = '';
+
+  if (cv > 1.0) {
+    variability = 'highly_variable';
+    recommendedApproach = 'Highly unpredictable - use probability ranges instead of point estimates';
+  } else if (cv > 0.5) {
+    variability = 'moderate';
+    recommendedApproach = 'Moderate variability - predictions have wider confidence intervals';
+  } else {
+    variability = 'consistent';
+    recommendedApproach = 'Fairly consistent pattern - predictions are reliable';
+  }
+
+  // Calculate probability windows using empirical CDF
+  // This gives the actual observed probability based on historical intervals
+  const now = Date.now();
+  const timeSinceLastSeen = now - itemStats.lastSeen;
+
+  // Time windows in ms
+  const sixHours = 6 * 60 * 60 * 1000;
+  const twentyFourHours = 24 * 60 * 60 * 1000;
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+  // Empirical probability calculation:
+  // Count what fraction of historical intervals were ≤ (timeSinceLastSeen + window)
+  const calculateProbability = (windowMs: number): number => {
+    const targetTime = timeSinceLastSeen + windowMs;
+
+    // Count how many historical intervals were at or below this time
+    const countAtOrBelow = intervals.filter(interval => interval <= targetTime).length;
+
+    // Probability = fraction of intervals that were this short or shorter
+    const prob = countAtOrBelow / intervals.length;
+
+    return Math.round(prob * 100);
+  };
+
+  const probabilityNext6h = calculateProbability(sixHours);
+  const probabilityNext24h = calculateProbability(twentyFourHours);
+  const probabilityNext7d = calculateProbability(sevenDays);
+
+  // Get predicted time
+  const predictedTime = predictItemNextAppearance(itemName);
+
+  return {
+    itemName,
+    predictedTime,
+    confidence,
+    median,
+    mean,
+    stdDev,
+    coefficientOfVariation: cv,
+    interval25th: p25,
+    interval75th: p75,
+    interval95th: p95,
+    probabilityNext6h,
+    probabilityNext24h,
+    probabilityNext7d,
+    sampleSize: intervals.length,
+    lastSeen: itemStats.lastSeen,
+    variability,
+    recommendedApproach,
+  };
 }
 
 /**
@@ -620,6 +1009,24 @@ export function generatePredictions(): void {
       log(`📊 Generated prediction for ${itemName}: ${new Date(predictedTime).toLocaleString()}`);
     }
   }
+
+  // Save active predictions to storage
+  saveActivePredictions();
+}
+
+/**
+ * Save active predictions to storage
+ */
+function saveActivePredictions(): void {
+  try {
+    const predictions: Record<string, number> = {};
+    activePredictions.forEach((time, itemName) => {
+      predictions[itemName] = time;
+    });
+    storage.set(STORAGE_KEY_ACTIVE_PREDICTIONS, predictions);
+  } catch (error) {
+    log('⚠️ Failed to save active predictions', error);
+  }
 }
 
 /**
@@ -633,22 +1040,15 @@ export function checkPredictionAccuracy(event: RestockEvent): void {
     }
 
     const predictedTime = activePredictions.get(item.name);
-    if (!predictedTime) {
-      continue;
-    }
-
-    // Calculate difference (positive = late, negative = early)
-    const differenceMs = event.timestamp - predictedTime;
-    const differenceMinutes = Math.round(differenceMs / (1000 * 60));
 
     // Create prediction record
     const record: PredictionRecord = {
       itemName: item.name,
-      predictedTime,
-      predictionMadeAt: Date.now(), // Approximate
+      predictedTime: predictedTime || null as any, // null if no prediction was active
+      predictionMadeAt: predictedTime ? Date.now() : null as any, // Approximate
       actualTime: event.timestamp,
-      differenceMinutes,
-      differenceMs,
+      differenceMinutes: predictedTime ? Math.round((event.timestamp - predictedTime) / (1000 * 60)) : null,
+      differenceMs: predictedTime ? (event.timestamp - predictedTime) : null,
     };
 
     // Add to history (keep max 3)
@@ -659,10 +1059,14 @@ export function checkPredictionAccuracy(event: RestockEvent): void {
     }
     predictionHistory.set(item.name, history);
 
-    // Clear active prediction
-    activePredictions.delete(item.name);
-
-    log(`📊 Prediction accuracy for ${item.name}: ${differenceMinutes > 0 ? `${differenceMinutes} min late` : `${Math.abs(differenceMinutes)} min early`}`);
+    // Clear active prediction if it existed
+    if (predictedTime) {
+      activePredictions.delete(item.name);
+      saveActivePredictions(); // Persist the deletion
+      log(`📊 Prediction accuracy for ${item.name}: ${record.differenceMinutes! > 0 ? `${record.differenceMinutes} min late` : `${Math.abs(record.differenceMinutes!)} min early`}`);
+    } else {
+      log(`📊 Recorded restock for ${item.name} (no active prediction)`);
+    }
   }
 
   // Save to storage

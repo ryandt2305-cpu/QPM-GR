@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         QPM (ALPHA)
 // @namespace    Quinoa
-// @version      1.10.3
+// @version      1.11.3
 // @description  Quality-of-life enhancements for Magic Garden: crop type locking, mutation tracking, value calculator, harvest reminders, journal species checker, and persistent feed statistics.
 // @author       TOKYO.#6464
 // @match        https://1227719606223765687.discordsays.com/*
@@ -17,6 +17,9 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js
 // @run-at       document-start
 // @inject-into  page
+// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js
+// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js
+// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_getValue

@@ -58,58 +58,130 @@ let autoRefreshInterval: number | null = null;
 let playerCountUpdateInterval: number | null = null;
 let backgroundPlayerCountInterval: number | null = null;
 
+// Retry configuration
+const FIREBASE_SDK_MAX_RETRIES = 5;
+const FIREBASE_SDK_RETRY_DELAY_MS = 2000;
+const FIREBASE_INIT_MAX_RETRIES = 3;
+const FIREBASE_INIT_RETRY_DELAY_MS = 3000;
+const FETCH_ROOMS_TIMEOUT_MS = 15000;
+const FETCH_ROOMS_MAX_RETRIES = 3;
+const FETCH_ROOMS_RETRY_DELAY_MS = 2000;
+
+let initRetryTimer: number | null = null;
+let sdkCheckRetryCount = 0;
+let initRetryCount = 0;
+
 // Callbacks
 let authStateCallback: AuthStateCallback | null = null;
 let roomsUpdateCallback: RoomsUpdateCallback | null = null;
 let errorCallback: ErrorCallback | null = null;
+let connectionStatusCallback: ((status: 'connecting' | 'connected' | 'failed' | 'retrying') => void) | null = null;
 
 /**
- * Initialize Firebase SDK
+ * Wait for Firebase SDK to be available with retry logic
  */
-function initializeFirebase(): boolean {
-  try {
-    if (typeof window.firebase === 'undefined') {
-      log('❌ Firebase SDK not available');
-      state.connectionStatus = 'failed';
-      return false;
+async function waitForFirebaseSDK(): Promise<boolean> {
+  sdkCheckRetryCount = 0;
+
+  while (sdkCheckRetryCount < FIREBASE_SDK_MAX_RETRIES) {
+    if (typeof window.firebase !== 'undefined') {
+      log('✅ Firebase SDK is available');
+      return true;
     }
 
-    if (!window.firebase.apps.length) {
-      app = window.firebase.initializeApp(FIREBASE_CONFIG);
-    } else {
-      app = window.firebase.app();
-    }
+    sdkCheckRetryCount++;
+    log(`⏳ Firebase SDK not available, retry ${sdkCheckRetryCount}/${FIREBASE_SDK_MAX_RETRIES}...`);
+    state.connectionStatus = 'retrying';
+    connectionStatusCallback?.('retrying');
 
-    auth = window.firebase.auth();
-    database = window.firebase.database();
-
-    state.isFirebaseReady = true;
-    state.connectionStatus = 'connected';
-    log('✅ Firebase initialized for Public Rooms');
-
-    // Setup auth state listener (optional - kept for backwards compatibility)
-    auth.onAuthStateChanged((user: FirebaseUser | null) => {
-      state.isAuthReady = true;
-      state.currentUser = user;
-      state.currentUserId = user?.uid || null;
-
-      log(user ? `✅ User signed in: ${user.email}` : '👤 User signed out (viewing anonymously)');
-
-      if (authStateCallback) {
-        authStateCallback(user);
-      }
-    });
-
-    // Start features immediately - no auth required
-    startAutoRefresh();
-    fetchRooms();
-
-    return true;
-  } catch (error) {
-    log('❌ Firebase initialization failed:', error);
-    state.connectionStatus = 'failed';
-    return false;
+    await new Promise(resolve => setTimeout(resolve, FIREBASE_SDK_RETRY_DELAY_MS));
   }
+
+  log('❌ Firebase SDK not available after max retries');
+  return false;
+}
+
+/**
+ * Initialize Firebase SDK with retry logic
+ */
+async function initializeFirebase(): Promise<boolean> {
+  initRetryCount = 0;
+
+  while (initRetryCount < FIREBASE_INIT_MAX_RETRIES) {
+    try {
+      // First ensure SDK is available
+      if (typeof window.firebase === 'undefined') {
+        const sdkAvailable = await waitForFirebaseSDK();
+        if (!sdkAvailable) {
+          state.connectionStatus = 'failed';
+          connectionStatusCallback?.('failed');
+          return false;
+        }
+      }
+
+      if (!window.firebase.apps.length) {
+        app = window.firebase.initializeApp(FIREBASE_CONFIG);
+      } else {
+        app = window.firebase.app();
+      }
+
+      auth = window.firebase.auth();
+      database = window.firebase.database();
+
+      state.isFirebaseReady = true;
+      state.connectionStatus = 'connected';
+      connectionStatusCallback?.('connected');
+      log('✅ Firebase initialized for Public Rooms');
+
+      // Setup auth state listener (optional - kept for backwards compatibility)
+      auth.onAuthStateChanged((user: FirebaseUser | null) => {
+        state.isAuthReady = true;
+        state.currentUser = user;
+        state.currentUserId = user?.uid || null;
+
+        log(user ? `✅ User signed in: ${user.email}` : '👤 User signed out (viewing anonymously)');
+
+        if (authStateCallback) {
+          authStateCallback(user);
+        }
+      });
+
+      // Start features immediately - no auth required
+      startAutoRefresh();
+      fetchRooms();
+
+      return true;
+    } catch (error) {
+      initRetryCount++;
+      log(`❌ Firebase initialization failed (attempt ${initRetryCount}/${FIREBASE_INIT_MAX_RETRIES}):`, error);
+
+      if (initRetryCount < FIREBASE_INIT_MAX_RETRIES) {
+        state.connectionStatus = 'retrying';
+        connectionStatusCallback?.('retrying');
+        log(`⏳ Retrying Firebase initialization in ${FIREBASE_INIT_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, FIREBASE_INIT_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  state.connectionStatus = 'failed';
+  connectionStatusCallback?.('failed');
+  return false;
+}
+
+/**
+ * Retry Firebase initialization (can be called manually from UI)
+ */
+export async function retryFirebaseInit(): Promise<boolean> {
+  log('🔄 Manual retry of Firebase initialization...');
+  state.connectionStatus = 'connecting';
+  connectionStatusCallback?.('connecting');
+
+  // Reset retry counts for manual retry
+  sdkCheckRetryCount = 0;
+  initRetryCount = 0;
+
+  return initializeFirebase();
 }
 
 /**

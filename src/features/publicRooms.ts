@@ -11,6 +11,7 @@
 
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
+import { FIREBASE_CONFIG } from '../config/firebase.config';
 import type {
   FirebaseConfig,
   FirebaseApp,
@@ -28,17 +29,6 @@ import type {
   SortOption
 } from '../types/publicRooms';
 
-// Firebase configuration
-const FIREBASE_CONFIG: FirebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY_HERE",
-  authDomain: "public-rooms.firebaseapp.com",
-  databaseURL: "https://public-rooms-default-rtdb.firebaseio.com",
-  projectId: "public-rooms",
-  storageBucket: "public-rooms.firebasestorage.app",
-  messagingSenderId: "479424427769",
-  appId: "YOUR_APP_ID_HERE",
-  measurementId: "YOUR_MEASUREMENT_ID_HERE"
-};
 
 // Private state
 let app: FirebaseApp | null = null;

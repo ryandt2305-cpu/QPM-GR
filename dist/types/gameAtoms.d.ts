@@ -13,6 +13,7 @@ export interface ShopInventoryEntry {
     currency?: 'coins' | 'credits';
     stock?: number;
     initialStock?: number;
+    /** @deprecated Removed in game update. Kept for backward compatibility. All items can now spawn. */
     canSpawnHere?: boolean;
     restockAt?: number;
     restockMs?: number;

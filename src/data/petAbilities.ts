@@ -226,7 +226,7 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     trigger: 'continuous',
     baseProbability: 27,
     rollPeriodMinutes: 1,
-    effectValuePerProc: 13,
+    effectValuePerProc: 11,
     effectUnit: 'minutes',
   },
   {
@@ -424,6 +424,27 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     trigger: 'continuous',
     baseProbability: 0.01,
     rollPeriodMinutes: 1,
+  },
+  {
+    id: 'RainDance',
+    name: 'Rain Dance',
+    category: 'misc',
+    trigger: 'continuous',
+    baseProbability: 10,
+    rollPeriodMinutes: 1,
+    effectUnit: 'coins',
+    effectLabel: 'Mutation chance',
+    effectBaseValue: 10,
+    effectSuffix: '%',
+    notes: 'Chance: 10% × STR per minute. Grants Wet mutation to a random crop.',
+  },
+  {
+    id: 'DoubleHatch',
+    name: 'Double Hatch',
+    category: 'misc',
+    trigger: 'hatchEgg',
+    baseProbability: 3.0,
+    notes: 'Chance: 3.0% × STR to hatch an extra pet from the same egg.',
   },
 ];
 

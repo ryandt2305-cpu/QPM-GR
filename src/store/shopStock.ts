@@ -255,6 +255,7 @@ function normalizeEntry(
   const currentStock = toPositiveInteger(entry.stock ?? entry.availableStock ?? entry.remaining);
   const quantityPerPurchase = extractQuantityPerPurchase(entry);
   const { coins: priceCoins, credits: priceCredits } = extractPrice(entry);
+  // canSpawnHere property was removed in game update; defaults to true (all items can spawn)
   const canSpawn = entry.canSpawnHere !== false;
   const purchased = getPurchaseCount(category, String(id), purchases);
   let remaining = computeRemaining(initialStock, purchased, canSpawn);

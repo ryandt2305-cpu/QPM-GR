@@ -55,6 +55,7 @@ const PRODUCE_CATALOG: Record<string, string[]> = {
   'Tomato': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
   'Corn': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
   'Pepper': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  'FavaBean': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
 
   // Vegetables
   'Pumpkin': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
@@ -94,6 +95,7 @@ const PRODUCE_CATALOG: Record<string, string[]> = {
   'Starweaver': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
   'DawnCelestial': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
   'MoonCelestial': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  'CacaoBean': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
 };
 
 // All pet species and their variants
@@ -113,6 +115,7 @@ const PET_CATALOG: Record<string, string[]> = {
   'Pig': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
   'Cow': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
   'Sheep': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
+  'Turkey': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
 
   // Tier 4 - Epic
   'Squirrel': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],

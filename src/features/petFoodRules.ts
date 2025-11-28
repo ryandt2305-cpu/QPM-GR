@@ -55,7 +55,7 @@ const DEFAULT_SAFE_FOODS = ['Carrot', 'Strawberry', 'Blueberry', 'Apple', 'Water
 const RAW_PET_DIETS: Record<string, string[]> = {
   Worm: ['Carrot', 'Strawberry', 'Aloe', 'Tomato', 'Apple'],
   Snail: ['Blueberry', 'Tomato', 'Corn', 'Daffodil'],
-  Bee: ['Strawberry', 'Blueberry', 'Daffodil', 'Lily'],
+  Bee: ['Strawberry', 'Blueberry', 'Daffodil', 'Lily', 'Chrysanthemum'],
   Chicken: ['Aloe', 'Corn', 'Watermelon', 'Pumpkin'],
   Bunny: ['Carrot', 'Strawberry', 'Blueberry', 'OrangeTulip', 'Apple'],
   Dragonfly: ['Apple', 'OrangeTulip', 'Echeveria'],

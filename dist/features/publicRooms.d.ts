@@ -1,5 +1,10 @@
 import { FirebaseUser, RoomData, PublicRoomsConfig, PublicRoomsState, AuthStateCallback, RoomsUpdateCallback, ErrorCallback, PlayerFilter, SortOption } from '../types/publicRooms';
 /**
+ * Get Firebase SDK from the appropriate window context
+ * Exported for use in UI components
+ */
+export declare function getFirebaseSDK(): typeof window.firebase | null;
+/**
  * Retry Firebase initialization (can be called manually from UI)
  */
 export declare function retryFirebaseInit(): Promise<boolean>;

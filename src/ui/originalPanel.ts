@@ -3624,6 +3624,7 @@ export function createOriginalUI(): HTMLElement {
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   registerTab('shop-restock', 'Shop Restock', '🏪', []);
+  registerTab('public-rooms', 'Public Rooms', '🌐', []);
   registerTab('crop-boost', 'Crop Boosts', '🌱', []);
   registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
   registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
@@ -3695,6 +3696,23 @@ export function createOriginalUI(): HTMLElement {
     });
     shopRestockButton.replaceWith(newShopRestockButton);
     tabButtons.set('shop-restock', newShopRestockButton);
+  }
+
+  const publicRoomsButton = tabButtons.get('public-rooms');
+  if (publicRoomsButton) {
+    const newPublicRoomsButton = publicRoomsButton.cloneNode(true) as HTMLButtonElement;
+    newPublicRoomsButton.addEventListener('click', () => {
+      const renderPublicRoomsWindow = (root: HTMLElement) => {
+        import('./publicRoomsWindow').then(({ renderPublicRoomsWindow }) => {
+          renderPublicRoomsWindow(root);
+        }).catch(error => {
+          log('⚠️ Failed to load Public Rooms window', error);
+        });
+      };
+      toggleWindow('public-rooms', '🌐 Public Rooms', renderPublicRoomsWindow, '950px', '85vh');
+    });
+    publicRoomsButton.replaceWith(newPublicRoomsButton);
+    tabButtons.set('public-rooms', newPublicRoomsButton);
   }
 
   const cropBoostButton = tabButtons.get('crop-boost');

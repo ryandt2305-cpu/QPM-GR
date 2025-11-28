@@ -20,6 +20,7 @@ import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
 import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
+import { initPublicRooms } from './features/publicRooms';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -810,6 +811,9 @@ async function initialize(): Promise<void> {
 
   // Start crop boost tracker
   startCropBoostTracker();
+
+  // Initialize public rooms
+  initPublicRooms();
 
   // Set configuration for UI
   setCfg(cfg);

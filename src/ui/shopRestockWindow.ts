@@ -12,8 +12,12 @@ import {
   predictNextRestock,
   getTopLikelyItems,
   predictItemNextAppearance,
+  predictItemDual,
   getPredictionHistory,
+  getDetailedPredictionStats,
   type PredictionRecord,
+  type DetailedPredictionStats,
+  type DualPrediction,
 } from '../features/shopRestockTracker';
 import {
   startLiveShopTracking,
@@ -318,6 +322,36 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
   section.appendChild(disclaimer);
 
+  // Global "Show Detailed Stats" toggle button
+  const globalToggleBtn = document.createElement('button');
+  globalToggleBtn.textContent = '📊 Show Detailed Stats';
+  globalToggleBtn.style.cssText = `
+    width: 100%;
+    padding: 8px;
+    background: rgba(66, 165, 245, 0.15);
+    border: 1px solid rgba(66, 165, 245, 0.3);
+    color: #42A5F5;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    transition: all 0.2s;
+  `;
+
+  let isGlobalStatsExpanded = false;
+  const allDetailedStatsSections: HTMLElement[] = []; // Track all stats sections
+
+  globalToggleBtn.addEventListener('mouseenter', () => {
+    globalToggleBtn.style.background = 'rgba(66, 165, 245, 0.3)';
+  });
+
+  globalToggleBtn.addEventListener('mouseleave', () => {
+    globalToggleBtn.style.background = isGlobalStatsExpanded ? 'rgba(66, 165, 245, 0.25)' : 'rgba(66, 165, 245, 0.15)';
+  });
+
+  section.appendChild(globalToggleBtn);
+
   // Specific rare items to track
   const rareItems = [
     { name: 'Sunflower', color: '#FFD700' },
@@ -335,7 +369,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
 
   for (const rareItem of rareItems) {
-    const nextAppearance = predictItemNextAppearance(rareItem.name);
+    const dualPrediction = predictItemDual(rareItem.name);
     const history = getPredictionHistory(rareItem.name);
 
     // Container for item + history
@@ -394,10 +428,98 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       font-size: 11px;
     `;
 
-    if (nextAppearance) {
-      const nextDate = new Date(nextAppearance);
+    // Show dual prediction range if both available
+    if (dualPrediction.optimistic && dualPrediction.conservative) {
       const now = Date.now();
-      const diffMs = nextAppearance - now;
+
+      // Format time difference helper
+      const formatTimeDiff = (ms: number): string => {
+        const hours = Math.floor(ms / (1000 * 60 * 60));
+        const days = Math.floor(hours / 24);
+        if (days > 0) {
+          return `${days}d ${hours % 24}h`;
+        } else if (hours > 0) {
+          return `${hours}h`;
+        } else {
+          return 'Soon';
+        }
+      };
+
+      // Determine which prediction is earlier and which is later
+      const earliestTime = Math.min(dualPrediction.optimistic, dualPrediction.conservative);
+      const latestTime = Math.max(dualPrediction.optimistic, dualPrediction.conservative);
+
+      const earliestDiff = earliestTime - now;
+      const latestDiff = latestTime - now;
+
+      const earliestText = formatTimeDiff(earliestDiff);
+      const latestText = formatTimeDiff(latestDiff);
+
+      // Format dates
+      const earliestDate = new Date(earliestTime);
+      const latestDate = new Date(latestTime);
+
+      const earliestDateStr = earliestDate.toLocaleDateString([], {
+        month: 'numeric',
+        day: 'numeric',
+        year: 'numeric'
+      });
+      const latestDateStr = latestDate.toLocaleDateString([], {
+        month: 'numeric',
+        day: 'numeric',
+        year: 'numeric'
+      });
+
+      // Check if same day
+      const isSameDay = earliestDate.toDateString() === latestDate.toDateString();
+
+      // Show range only if predictions differ significantly (>6 hours apart)
+      const diffHours = Math.abs(latestDiff - earliestDiff) / (1000 * 60 * 60);
+
+      if (diffHours > 6) {
+        let dateRangeText = '';
+        if (isSameDay) {
+          // Same day - show time difference instead of date range
+          const timeDiffHours = Math.floor(diffHours);
+          const timeDiffMinutes = Math.round((diffHours - timeDiffHours) * 60);
+          dateRangeText = timeDiffHours > 0
+            ? `(~${timeDiffHours}h ${timeDiffMinutes}m range on ${earliestDateStr})`
+            : `(~${timeDiffMinutes}m range on ${earliestDateStr})`;
+        } else {
+          // Different days - show date range
+          dateRangeText = `(~${earliestDateStr} - ~${latestDateStr})`;
+        }
+
+        predictionText.innerHTML = `
+          <span style="color: #4CAF50; font-weight: 600;">${earliestText}</span>
+          <span style="color: #aaa;"> - </span>
+          <span style="color: #FF9800; font-weight: 600;">${latestText}</span>
+          <span style="margin-left: 8px; font-size: 10px; color: #aaa;">Est.</span>
+          <br/>
+          <span style="font-size: 9px; color: #666;">${dateRangeText}</span>
+        `;
+      } else {
+        // Predictions are similar, just show the later estimate (more conservative)
+        const timeString = latestDate.toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        });
+        const dateString = latestDate.toLocaleDateString([], {
+          month: 'short',
+          day: 'numeric'
+        });
+
+        predictionText.innerHTML = `
+          <span style="color: #42A5F5; font-weight: 600;">${latestText}</span>
+          <span style="margin-left: 8px; font-size: 10px;">(${timeString}, ${dateString})</span>
+        `;
+      }
+    } else if (dualPrediction.conservative) {
+      // Only conservative prediction available
+      const nextDate = new Date(dualPrediction.conservative);
+      const now = Date.now();
+      const diffMs = dualPrediction.conservative - now;
       const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
       const diffDays = Math.floor(diffHours / 24);
 
@@ -432,6 +554,309 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
     itemRow.appendChild(predictionText);
     itemContainer.appendChild(itemRow);
 
+    // Detailed Stats Section (collapsible)
+    const detailedStatsSection = document.createElement('div');
+    detailedStatsSection.style.cssText = `
+      display: none;
+      padding: 16px;
+      background: linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(33, 150, 243, 0.1) 100%);
+      border-top: 2px solid rgba(66, 165, 245, 0.4);
+      font-size: 11px;
+      border-radius: 0 0 6px 6px;
+    `;
+
+    // Get detailed stats
+    const detailedStats = getDetailedPredictionStats(rareItem.name);
+
+    if (detailedStats.sampleSize > 0) {
+      // Format helper for durations
+      const formatDuration = (ms: number | null): string => {
+        if (ms === null) return 'N/A';
+        const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+        if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+      };
+
+      // Title for detailed stats
+      const detailedTitle = document.createElement('div');
+      detailedTitle.style.cssText = `
+        color: #42A5F5;
+        font-weight: 700;
+        margin-bottom: 12px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        border-bottom: 1px solid rgba(66, 165, 245, 0.3);
+        padding-bottom: 6px;
+      `;
+      detailedTitle.textContent = '📈 Statistical Analysis';
+      detailedStatsSection.appendChild(detailedTitle);
+
+      // Create stats grid with better styling
+      const statsGrid = document.createElement('div');
+      statsGrid.style.cssText = `
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px 20px;
+        margin-bottom: 14px;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(66, 165, 245, 0.2);
+      `;
+
+      // Statistical measures
+      const statsData = [
+        { label: 'Median Interval', value: formatDuration(detailedStats.median), color: '#42A5F5', icon: '📊' },
+        { label: 'Mean Interval', value: formatDuration(detailedStats.mean), color: '#42A5F5', icon: '📈' },
+        { label: 'Std Deviation', value: formatDuration(detailedStats.stdDev), color: '#FF9800', icon: '📉' },
+        { label: 'Variability (CV)', value: detailedStats.coefficientOfVariation !== null ? detailedStats.coefficientOfVariation.toFixed(2) : 'N/A', color: '#FF9800', icon: '🎲' },
+      ];
+
+      for (const stat of statsData) {
+        const statRow = document.createElement('div');
+        statRow.style.cssText = `
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 6px 8px;
+          background: rgba(255, 255, 255, 0.03);
+          border-radius: 4px;
+          transition: background 0.2s;
+        `;
+        statRow.addEventListener('mouseenter', () => {
+          statRow.style.background = 'rgba(255, 255, 255, 0.08)';
+        });
+        statRow.addEventListener('mouseleave', () => {
+          statRow.style.background = 'rgba(255, 255, 255, 0.03)';
+        });
+        statRow.innerHTML = `
+          <span style="color: #aaa; font-size: 11px;">
+            <span style="margin-right: 4px;">${stat.icon}</span>${stat.label}
+          </span>
+          <span style="color: ${stat.color}; font-weight: 700; font-size: 12px;">${stat.value}</span>
+        `;
+        statsGrid.appendChild(statRow);
+      }
+
+      detailedStatsSection.appendChild(statsGrid);
+
+      // Confidence intervals
+      const confidenceSection = document.createElement('div');
+      confidenceSection.style.cssText = 'margin-bottom: 14px;';
+      const confidenceTitle = document.createElement('div');
+      confidenceTitle.style.cssText = `
+        color: #4CAF50;
+        font-weight: 700;
+        margin-bottom: 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      `;
+      confidenceTitle.textContent = '📐 Confidence Intervals';
+      confidenceSection.appendChild(confidenceTitle);
+
+      const confidenceGrid = document.createElement('div');
+      confidenceGrid.style.cssText = `
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(76, 175, 80, 0.2);
+      `;
+
+      const intervals = [
+        { label: '25th Percentile', value: formatDuration(detailedStats.interval25th), icon: '⬇️' },
+        { label: '50th (Median)', value: formatDuration(detailedStats.median), icon: '➡️' },
+        { label: '75th Percentile', value: formatDuration(detailedStats.interval75th), icon: '⬆️' },
+      ];
+
+      for (const interval of intervals) {
+        const intervalItem = document.createElement('div');
+        intervalItem.style.cssText = `
+          text-align: center;
+          padding: 8px;
+          background: rgba(255, 255, 255, 0.03);
+          border-radius: 4px;
+          transition: all 0.2s;
+        `;
+        intervalItem.addEventListener('mouseenter', () => {
+          intervalItem.style.background = 'rgba(76, 175, 80, 0.15)';
+          intervalItem.style.transform = 'scale(1.05)';
+        });
+        intervalItem.addEventListener('mouseleave', () => {
+          intervalItem.style.background = 'rgba(255, 255, 255, 0.03)';
+          intervalItem.style.transform = '';
+        });
+        intervalItem.innerHTML = `
+          <div style="color: #888; font-size: 9px; margin-bottom: 4px;">
+            <span style="margin-right: 2px;">${interval.icon}</span>${interval.label}
+          </div>
+          <div style="color: #4CAF50; font-weight: 700; font-size: 13px;">${interval.value}</div>
+        `;
+        confidenceGrid.appendChild(intervalItem);
+      }
+
+      confidenceSection.appendChild(confidenceGrid);
+      detailedStatsSection.appendChild(confidenceSection);
+
+      // Probability windows
+      const probabilitySection = document.createElement('div');
+      probabilitySection.style.cssText = 'margin-bottom: 14px;';
+      const probabilityTitle = document.createElement('div');
+      probabilityTitle.style.cssText = `
+        color: #FFEB3B;
+        font-weight: 700;
+        margin-bottom: 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      `;
+      probabilityTitle.textContent = '🎯 Probability of Next Restock';
+      probabilitySection.appendChild(probabilityTitle);
+
+      const probabilityGrid = document.createElement('div');
+      probabilityGrid.style.cssText = `
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 235, 59, 0.2);
+      `;
+
+      // Format probability with proper handling of 0% and 100%
+      const formatProbability = (prob: number | null): string => {
+        if (prob === null) return 'N/A';
+        if (prob === 0) return '<1%';
+        if (prob === 100) return '>99%';
+        return `${prob}%`;
+      };
+
+      const probabilities = [
+        { label: 'Next 6h:', value: formatProbability(detailedStats.probabilityNext6h) },
+        { label: 'Next 24h:', value: formatProbability(detailedStats.probabilityNext24h) },
+        { label: 'Next 7d:', value: formatProbability(detailedStats.probabilityNext7d) },
+      ];
+
+      const probabilityIcons = ['⏰', '📅', '📆'];
+      for (let i = 0; i < probabilities.length; i++) {
+        const prob = probabilities[i]!;
+        const probItem = document.createElement('div');
+        probItem.style.cssText = `
+          text-align: center;
+          padding: 8px;
+          background: rgba(255, 255, 255, 0.03);
+          border-radius: 4px;
+          transition: all 0.2s;
+        `;
+        probItem.addEventListener('mouseenter', () => {
+          probItem.style.background = 'rgba(255, 235, 59, 0.15)';
+          probItem.style.transform = 'scale(1.05)';
+        });
+        probItem.addEventListener('mouseleave', () => {
+          probItem.style.background = 'rgba(255, 255, 255, 0.03)';
+          probItem.style.transform = '';
+        });
+        probItem.innerHTML = `
+          <div style="color: #888; font-size: 9px; margin-bottom: 4px;">
+            <span style="margin-right: 2px;">${probabilityIcons[i]}</span>${prob.label}
+          </div>
+          <div style="color: #FFEB3B; font-weight: 700; font-size: 13px;">${prob.value}</div>
+        `;
+        probabilityGrid.appendChild(probItem);
+      }
+
+      probabilitySection.appendChild(probabilityGrid);
+      detailedStatsSection.appendChild(probabilitySection);
+
+      // Variability and data quality
+      const metaSection = document.createElement('div');
+      metaSection.style.cssText = `
+        padding: 12px;
+        border-top: 2px solid rgba(255, 255, 255, 0.1);
+        margin-top: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 6px;
+      `;
+
+      const metaTitle = document.createElement('div');
+      metaTitle.style.cssText = `
+        color: #CE93D8;
+        font-weight: 700;
+        margin-bottom: 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      `;
+      metaTitle.textContent = '💡 Data Quality';
+      metaSection.appendChild(metaTitle);
+
+      const variabilityBadge = document.createElement('span');
+      const badgeColors = {
+        'highly_variable': '#f44336',
+        'moderate': '#FF9800',
+        'consistent': '#4CAF50',
+      };
+      variabilityBadge.style.cssText = `
+        display: inline-block;
+        padding: 4px 10px;
+        background: ${badgeColors[detailedStats.variability]};
+        color: white;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 700;
+        margin-right: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      `;
+      variabilityBadge.textContent = detailedStats.variability.replace('_', ' ');
+
+      const sampleInfo = document.createElement('span');
+      sampleInfo.style.cssText = `
+        color: #888;
+        font-size: 10px;
+        background: rgba(255, 255, 255, 0.05);
+        padding: 4px 8px;
+        border-radius: 8px;
+      `;
+      sampleInfo.innerHTML = `📊 ${detailedStats.sampleSize} intervals analyzed`;
+
+      metaSection.appendChild(variabilityBadge);
+      metaSection.appendChild(sampleInfo);
+
+      const recommendationText = document.createElement('div');
+      recommendationText.style.cssText = `
+        color: #aaa;
+        font-size: 10px;
+        margin-top: 8px;
+        font-style: italic;
+        padding: 8px;
+        background: rgba(255, 255, 255, 0.03);
+        border-left: 3px solid #CE93D8;
+        border-radius: 0 4px 4px 0;
+      `;
+      recommendationText.innerHTML = `💬 ${detailedStats.recommendedApproach}`;
+      metaSection.appendChild(recommendationText);
+
+      detailedStatsSection.appendChild(metaSection);
+    } else {
+      const noStatsMsg = document.createElement('div');
+      noStatsMsg.style.cssText = 'color: #666; font-style: italic; text-align: center;';
+      noStatsMsg.textContent = 'Not enough data for detailed statistics';
+      detailedStatsSection.appendChild(noStatsMsg);
+    }
+
+    // Add detailed stats section to container and track it for global toggle
+    itemContainer.appendChild(detailedStatsSection);
+    allDetailedStatsSections.push(detailedStatsSection);
+
     // History section (always create, show "No history" if empty)
     const historySection = document.createElement('div');
     historySection.style.cssText = `
@@ -445,7 +870,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
     if (history.length > 0) {
       for (let i = 0; i < Math.min(3, history.length); i++) {
         const record = history[i]!;
-        const predDate = new Date(record.predictedTime);
+        const predDate = record.predictedTime ? new Date(record.predictedTime) : null;
         const actualDate = record.actualTime ? new Date(record.actualTime) : null;
 
         const recordRow = document.createElement('div');
@@ -457,32 +882,43 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
         const estimatedRow = document.createElement('div');
         estimatedRow.style.cssText = 'color: #aaa; margin-bottom: 2px;';
-        estimatedRow.innerHTML = `
-          <span style="color: #42A5F5;">QPM Estimated:</span> ${predDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-        `;
+        if (predDate) {
+          estimatedRow.innerHTML = `
+            <span style="color: #42A5F5;">QPM Estimated:</span> ${predDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
+          `;
+        } else {
+          estimatedRow.innerHTML = `
+            <span style="color: #666;">QPM Estimated:</span> <span style="font-style: italic;">No prediction yet</span>
+          `;
+        }
 
         const actualRow = document.createElement('div');
         if (actualDate) {
-          // Format difference as hh:mm:ss
-          const diffMs = Math.abs(record.differenceMs || 0);
-          const hours = Math.floor(diffMs / (1000 * 60 * 60));
-          const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
-          const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+          let accuracyText = '';
+          if (record.differenceMs !== null && record.differenceMs !== undefined) {
+            // Format difference as hh:mm:ss
+            const diffMs = Math.abs(record.differenceMs);
+            const hours = Math.floor(diffMs / (1000 * 60 * 60));
+            const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-          const diffText = `(${timeStr} range)`;
-          const diffColor = diffMs <= 45 * 60 * 1000
-            ? '#4CAF50'  // ≤45 min - Green
-            : diffMs <= 120 * 60 * 1000
-              ? '#FFEB3B'  // ≤2 hours - Yellow
-              : diffMs <= 240 * 60 * 1000
-                ? '#FF9800'  // ≤4 hours - Orange
-                : '#f44336';  // >4 hours - Red
+            const diffText = `(${timeStr} range)`;
+            const diffColor = diffMs <= 45 * 60 * 1000
+              ? '#4CAF50'  // ≤45 min - Green
+              : diffMs <= 120 * 60 * 1000
+                ? '#FFEB3B'  // ≤2 hours - Yellow
+                : diffMs <= 240 * 60 * 1000
+                  ? '#FF9800'  // ≤4 hours - Orange
+                  : '#f44336';  // >4 hours - Red
+
+            accuracyText = `<span style="color: ${diffColor}; font-weight: 600;">${diffText}</span>`;
+          }
 
           actualRow.style.cssText = 'color: #aaa;';
           actualRow.innerHTML = `
             <span style="color: #4CAF50;">Actual Restock:</span> ${actualDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-            <span style="color: ${diffColor}; font-weight: 600;">${diffText}</span>
+            ${accuracyText}
           `;
         } else {
           actualRow.style.cssText = 'color: #666;';
@@ -515,6 +951,20 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   }
 
   section.appendChild(itemsList);
+
+  // Wire up global toggle button to show/hide all detailed stats sections
+  globalToggleBtn.addEventListener('click', () => {
+    isGlobalStatsExpanded = !isGlobalStatsExpanded;
+
+    // Toggle all detailed stats sections
+    for (const statsSection of allDetailedStatsSections) {
+      statsSection.style.display = isGlobalStatsExpanded ? 'block' : 'none';
+    }
+
+    // Update button appearance
+    globalToggleBtn.textContent = isGlobalStatsExpanded ? '📊 Hide Detailed Stats' : '📊 Show Detailed Stats';
+    globalToggleBtn.style.background = isGlobalStatsExpanded ? 'rgba(66, 165, 245, 0.25)' : 'rgba(66, 165, 245, 0.15)';
+  });
 
   return section;
 }

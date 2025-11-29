@@ -1091,19 +1091,26 @@ export function getAllPredictionHistories(): Map<string, PredictionRecord[]> {
 }
 
 /**
- * Clear all restock data and ALL QPM storage
+ * Clear all shop restock data (restocks, predictions, config)
+ * Only clears shop restock specific keys, not all QPM data
  */
 export function clearAllRestocks(): void {
   restockEvents = [];
   config.importedFiles = [];
+  config.watchedItems = [];
   predictionHistory.clear();
   activePredictions.clear();
 
-  // Clear ALL QPM storage (localStorage + GM storage)
-  storage.clear();
+  // Clear only shop restock specific storage keys
+  // Using storage.set with empty/null values to clear, then remove the keys
+  storage.set(STORAGE_KEY_RESTOCKS, []);
+  storage.set(STORAGE_KEY_CONFIG, { importedFiles: [], watchedItems: [] });
+  storage.set(STORAGE_KEY_MIGRATION, 0);
+  storage.set(STORAGE_KEY_PREDICTIONS, {});
+  storage.set(STORAGE_KEY_ACTIVE_PREDICTIONS, {});
 
   notifyListeners();
-  log('📊 Cleared all QPM data from storage');
+  log('📊 Cleared shop restock history and prediction data');
 }
 
 /**

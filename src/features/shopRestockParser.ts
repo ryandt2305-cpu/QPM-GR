@@ -99,24 +99,44 @@ const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
  */
 function parseTimestamp(timestampStr: string, baseDate?: Date): number {
   try {
-    // Full timestamp: "08/20/2025 1:35 AM"
+    // Full timestamp: "21/08/2025 12:00 am" (DD/MM/YYYY format - Australian)
+    // or "9/07/2025 12:20 AM" (D/MM/YYYY or DD/MM/YYYY)
     if (timestampStr.includes('/')) {
       const parts = timestampStr.split(' ');
       if (parts.length < 3) return Date.now();
 
       const datePart = parts[0]!;
       const timePart = parts[1]!;
-      const period = parts[2]!;
+      const period = parts[2]!.toLowerCase(); // Normalize to lowercase for comparison
 
       const dateParts = datePart.split('/').map(Number);
       const timeParts = timePart.split(':').map(Number);
 
       if (dateParts.length !== 3 || timeParts.length !== 2) return Date.now();
 
-      // HTML export uses US date format: MM/DD/YYYY
-      const month = dateParts[0]!;
-      const day = dateParts[1]!;
+      // Detect date format based on values
+      // DD/MM/YYYY: First value is day (1-31), second is month (1-12)
+      // MM/DD/YYYY: First value is month (1-12), second is day (1-31)
+      // We use DD/MM/YYYY (Australian format) since that's what Discord exports use
+      // The key insight: if first value > 12, it must be a day (DD/MM/YYYY)
+      // If both <= 12, assume DD/MM/YYYY since exports are from Australian users
+      let day: number;
+      let month: number;
       const year = dateParts[2]!;
+
+      // Use DD/MM/YYYY format (Australian format used by Discord exports)
+      // First part is day, second is month
+      day = dateParts[0]!;
+      month = dateParts[1]!;
+
+      // Sanity check: if "day" > 31 or "month" > 12, dates are likely malformed
+      // Try swapping if the format seems wrong
+      if (day > 31 || month > 12) {
+        // Try MM/DD/YYYY instead
+        day = dateParts[1]!;
+        month = dateParts[0]!;
+      }
+
       const hours = timeParts[0]!;
       const minutes = timeParts[1]!;
 
@@ -141,7 +161,7 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
       if (parts.length < 2) return Date.now();
 
       const timePart = parts[0]!;
-      const period = parts[1]!;
+      const period = parts[1]!.toLowerCase(); // Normalize to lowercase
 
       const timeParts = timePart.split(':').map(Number);
       if (timeParts.length !== 2) return Date.now();

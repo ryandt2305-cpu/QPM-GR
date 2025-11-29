@@ -429,6 +429,20 @@ function sendFavoriteToggle(itemId: string): boolean {
   return false;
 }
 
+function sendSellItem(itemId: string): boolean {
+  try {
+    const maybeConnection = (pageWindow as unknown as { MagicCircle_RoomConnection?: { sendMessage?: (payload: unknown) => void } }).MagicCircle_RoomConnection;
+    if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
+      maybeConnection.sendMessage({ scopePath: ['Room', 'Quinoa'], type: 'SellInventoryItem', itemId });
+      return true;
+    }
+  } catch (error) {
+    log('⚠️ Failed to send sell item via MagicCircle_RoomConnection', error);
+  }
+
+  return false;
+}
+
 async function waitForFavoriteState(itemIds: string[], shouldBeFavorited: boolean, timeoutMs = 2200, pollMs = 140): Promise<boolean> {
   if (itemIds.length === 0) {
     return true;
@@ -453,6 +467,57 @@ async function waitForFavoriteState(itemIds: string[], shouldBeFavorited: boolea
   }
 
   return false;
+}
+
+async function sellAllCropType(speciesKey: string, items: CropItem[]): Promise<void> {
+  if (items.length === 0) {
+    showToast('⚠️ No items to sell');
+    return;
+  }
+
+  const speciesLabel = items[0]?.species ?? speciesKey;
+  
+  log(`💰 Selling all ${speciesLabel} items...`);
+
+  const inventoryContext = await captureInventoryContext();
+  if (!inventoryContext) {
+    log('⚠️ Unable to capture inventory context; aborting sell', { speciesKey });
+    showToast(`⚠️ Unable to sell ${speciesLabel}`);
+    return;
+  }
+
+  // Collect item states and IDs
+  const states = collectInventoryStates(items, inventoryContext);
+  if (states.length === 0) {
+    log('⚠️ No inventory entries with ids found for crop type', { speciesKey });
+    showToast(`⚠️ No ${speciesLabel} inventory entries found`);
+    return;
+  }
+
+  // Filter out favorited items - don't sell those
+  const itemsToSell = states.filter((state) => !state.isFavorited);
+  
+  if (itemsToSell.length === 0) {
+    showToast(`⚠️ All ${speciesLabel} items are favorited - none sold`);
+    return;
+  }
+
+  let soldCount = 0;
+  for (const state of itemsToSell) {
+    if (sendSellItem(state.itemId)) {
+      soldCount += 1;
+      await delay(50); // Small delay between sells
+    } else {
+      log('⚠️ Failed to sell item via websocket', { speciesKey, itemId: state.itemId });
+    }
+  }
+
+  if (soldCount > 0) {
+    showToast(`💰 Sold ${soldCount}/${states.length} ${speciesLabel} items`);
+    log(`💰 Sold ${soldCount} ${speciesLabel} items`);
+  } else {
+    showToast(`⚠️ Could not sell ${speciesLabel}`);
+  }
 }
 
 let config: CropTypeLockConfig = {
@@ -1697,13 +1762,13 @@ function createCropLockSidebar(panel: HTMLElement, cropsByType: Map<string, Crop
 }
 
 function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
+  // Main container that holds the favorite button and sell button horizontally
   const container = document.createElement('div');
   container.style.cssText = `
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 4px;
     transition: transform 0.2s ease;
   `;
   
@@ -1714,6 +1779,16 @@ function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
   container.addEventListener('mouseleave', () => {
     container.style.transform = 'scale(1)';
   });
+  
+  // Wrapper for main button and its label
+  const buttonWrapper = document.createElement('div');
+  buttonWrapper.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  `;
   
   const button = document.createElement('button');
   button.className = 'quinoa-crop-type-button';
@@ -1810,8 +1885,9 @@ function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
   let allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
   updateButtonState();
 
-  // Click handler
-  container.addEventListener('click', async () => {
+  // Click handler for favorite button
+  buttonWrapper.addEventListener('click', async (e) => {
+    e.stopPropagation();
     const lockButton = currentLockButtons.get(speciesKey);
     await toggleCropTypeLock(speciesKey, crops, lockButton);
     allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
@@ -1834,8 +1910,51 @@ function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
     }
   }
   
-  container.appendChild(button);
-  container.appendChild(label);
+  buttonWrapper.appendChild(button);
+  buttonWrapper.appendChild(label);
+  
+  // Create small sell button - red filled box with white $
+  const sellButton = document.createElement('button');
+  sellButton.className = 'quinoa-crop-sell-button';
+  sellButton.title = `Sell all ${species} (${crops.length} items) - Favorited items will not be sold`;
+  sellButton.textContent = '$';
+  sellButton.style.cssText = `
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: #d32f2f;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 24px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  `;
+  
+  // Hover effect for sell button
+  sellButton.addEventListener('mouseenter', () => {
+    sellButton.style.background = '#b71c1c';
+    sellButton.style.transform = 'scale(1.1)';
+  });
+  
+  sellButton.addEventListener('mouseleave', () => {
+    sellButton.style.background = '#d32f2f';
+    sellButton.style.transform = 'scale(1)';
+  });
+  
+  // Click handler for sell button
+  sellButton.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await sellAllCropType(speciesKey, crops);
+  });
+  
+  container.appendChild(buttonWrapper);
+  container.appendChild(sellButton);
   
   return container;
 }

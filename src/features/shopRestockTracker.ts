@@ -1101,8 +1101,7 @@ export function clearAllRestocks(): void {
   predictionHistory.clear();
   activePredictions.clear();
 
-  // Clear only shop restock specific storage keys
-  // Using storage.set with empty/null values to clear, then remove the keys
+  // Clear only shop restock specific storage keys by setting empty values
   storage.set(STORAGE_KEY_RESTOCKS, []);
   storage.set(STORAGE_KEY_CONFIG, { importedFiles: [], watchedItems: [] });
   storage.set(STORAGE_KEY_MIGRATION, 0);

@@ -135,6 +135,12 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
         // Try MM/DD/YYYY instead
         day = dateParts[1]!;
         month = dateParts[0]!;
+
+        // If still invalid after swap, return current time (data is corrupted)
+        if (day > 31 || month > 12 || day < 1 || month < 1) {
+          log('⚠️ Invalid date in timestamp:', timestampStr);
+          return Date.now();
+        }
       }
 
       const hours = timeParts[0]!;

@@ -464,7 +464,8 @@ function sendSellItem(itemId: string): boolean {
   try {
     const connection = getRoomConnection();
     if (connection) {
-      connection.sendMessage({ scopePath: getScopePath(), type: 'SellItem', itemId });
+      // Try SellCrop with cropItemId (similar pattern to FeedPet using cropItemId)
+      connection.sendMessage({ scopePath: getScopePath(), type: 'SellCrop', cropItemId: itemId });
       return true;
     }
   } catch (error) {

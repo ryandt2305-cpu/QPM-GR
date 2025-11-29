@@ -415,11 +415,42 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
   return states;
 }
 
-function sendFavoriteToggle(itemId: string): boolean {
+// Default scope path for WebSocket messages
+const DEFAULT_SCOPE_PATH = ['Room', 'Quinoa'];
+
+/**
+ * Get the current scope path for WebSocket messages
+ * Uses dynamic scope path from game if available
+ */
+function getScopePath(): string[] {
+  try {
+    const typedPageWindow = pageWindow as any;
+    return typedPageWindow?.__mga_lastScopePath?.slice() ?? DEFAULT_SCOPE_PATH;
+  } catch {
+    return DEFAULT_SCOPE_PATH;
+  }
+}
+
+/**
+ * Get the room connection for sending WebSocket messages
+ */
+function getRoomConnection(): { sendMessage: (payload: unknown) => void } | null {
   try {
     const maybeConnection = (pageWindow as unknown as { MagicCircle_RoomConnection?: { sendMessage?: (payload: unknown) => void } }).MagicCircle_RoomConnection;
     if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
-      maybeConnection.sendMessage({ scopePath: ['Room', 'Quinoa'], type: 'ToggleFavoriteItem', itemId });
+      return maybeConnection as { sendMessage: (payload: unknown) => void };
+    }
+  } catch {
+    // Silently fail
+  }
+  return null;
+}
+
+function sendFavoriteToggle(itemId: string): boolean {
+  try {
+    const connection = getRoomConnection();
+    if (connection) {
+      connection.sendMessage({ scopePath: getScopePath(), type: 'ToggleFavoriteItem', itemId });
       return true;
     }
   } catch (error) {
@@ -431,9 +462,9 @@ function sendFavoriteToggle(itemId: string): boolean {
 
 function sendSellItem(itemId: string): boolean {
   try {
-    const maybeConnection = (pageWindow as unknown as { MagicCircle_RoomConnection?: { sendMessage?: (payload: unknown) => void } }).MagicCircle_RoomConnection;
-    if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
-      maybeConnection.sendMessage({ scopePath: ['Room', 'Quinoa'], type: 'SellInventoryItem', itemId });
+    const connection = getRoomConnection();
+    if (connection) {
+      connection.sendMessage({ scopePath: getScopePath(), type: 'SellInventoryItem', itemId });
       return true;
     }
   } catch (error) {
@@ -506,7 +537,8 @@ async function sellAllCropType(speciesKey: string, items: CropItem[]): Promise<v
   for (const state of itemsToSell) {
     if (sendSellItem(state.itemId)) {
       soldCount += 1;
-      await delay(50); // Small delay between sells
+      // Small delay between sells to prevent server rate limiting and ensure proper processing
+      await delay(50);
     } else {
       log('⚠️ Failed to sell item via websocket', { speciesKey, itemId: state.itemId });
     }

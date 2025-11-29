@@ -165,7 +165,8 @@ export declare function getPredictionHistory(itemName: string): PredictionRecord
  */
 export declare function getAllPredictionHistories(): Map<string, PredictionRecord[]>;
 /**
- * Clear all restock data and ALL QPM storage
+ * Clear all shop restock data (restocks, predictions, config)
+ * Only clears shop restock specific keys, not all QPM data
  */
 export declare function clearAllRestocks(): void;
 /**

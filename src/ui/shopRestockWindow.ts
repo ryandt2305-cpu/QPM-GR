@@ -1078,7 +1078,7 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
 
     // Clear data button
     const clearBtn = document.createElement('button');
-    clearBtn.textContent = '🗑️ Clear All QPM Data';
+    clearBtn.textContent = '🗑️ Clear Restock Data';
     clearBtn.style.cssText = `
       padding: 8px 16px;
       background: rgba(244, 67, 54, 0.2);
@@ -1090,11 +1090,11 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
       font-weight: 600;
     `;
     clearBtn.onclick = () => {
-      if (confirm('⚠️ This will clear ALL QPM data (settings, restock history, XP tracking, etc.) from both localStorage and Tampermonkey storage.\n\nThis cannot be undone. Are you sure?')) {
+      if (confirm('⚠️ This will clear all Shop Restock history and prediction data.\n\nYour other QPM settings (auto-feed, XP tracking, etc.) will NOT be affected.\n\nThis cannot be undone. Are you sure?')) {
         clearAllRestocks();
         // Reload the UI to reflect cleared state
         renderContent(state);
-        alert('✅ All QPM data has been cleared. Refresh the page to fully reset.');
+        alert('✅ Shop restock history and prediction data has been cleared.');
       }
     };
     buttonContainer.appendChild(clearBtn);

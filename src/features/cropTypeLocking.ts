@@ -464,7 +464,7 @@ function sendSellItem(itemId: string): boolean {
   try {
     const connection = getRoomConnection();
     if (connection) {
-      connection.sendMessage({ scopePath: getScopePath(), type: 'SellInventoryItem', itemId });
+      connection.sendMessage({ scopePath: getScopePath(), type: 'SellItem', itemId });
       return true;
     }
   } catch (error) {

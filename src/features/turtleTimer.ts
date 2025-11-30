@@ -141,7 +141,7 @@ const ABILITY_CONFIGS: readonly AbilityConfig[] = [
   {
     kind: 'egg',
     patterns: ['egggrowthboost'],
-    minutesPerBase: 10,
+    minutesPerBase: 9, // Average of 7, 9, 11 for all three tiers
     procOdds: 0.24,
   },
 ];

@@ -388,6 +388,42 @@ export function getCropStats(cropName: string): CropStats | null {
 }
 
 /**
+ * Get all crop names sorted by shop rarity order (common to rare)
+ */
+export function getAllCropNames(): string[] {
+  // Define shop order based on rarity/unlock progression
+  const shopOrder = [
+    // Common crops (available early)
+    'Carrot', 'Strawberry', 'Aloe', 'Blueberry', 'Apple', 'Tulip', 'Tomato', 'Daffodil',
+    'Corn', 'Watermelon', 'Pumpkin', 'Coconut', 'Banana', 'Lily', 'Chrysanthemum',
+    // Uncommon crops
+    'Echeveria', 'Squash', 'Camellia', 'Grape', 'Pepper', 'Lemon', 'Mushroom',
+    // Rare crops
+    'Cactus', 'Bamboo', 'Passion Fruit', 'Dragon Fruit', 'Lychee', 'Sunflower',
+    // Special/Event crops
+    'Delphinium', 'Starweaver', 'Dawnbinder', 'Moonbinder', 'Fava Bean', 'Cacao Bean'
+  ];
+  
+  const allCrops = Object.values(CROP_BASE_STATS).map(crop => crop.name);
+  
+  // Sort by shop order, then alphabetically for any not in the order list
+  return allCrops.sort((a, b) => {
+    const indexA = shopOrder.indexOf(a);
+    const indexB = shopOrder.indexOf(b);
+    
+    if (indexA !== -1 && indexB !== -1) {
+      return indexA - indexB;
+    } else if (indexA !== -1) {
+      return -1;
+    } else if (indexB !== -1) {
+      return 1;
+    } else {
+      return a.localeCompare(b);
+    }
+  });
+}
+
+/**
  * Calculate crop value with scale
  */
 export function calculateCropValue(cropName: string, scale: number): number {

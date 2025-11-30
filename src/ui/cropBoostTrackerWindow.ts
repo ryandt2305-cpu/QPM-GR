@@ -17,6 +17,7 @@ import {
   type CropSizeInfo,
 } from '../features/cropBoostTracker';
 import { log } from '../utils/logger';
+import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
 
 // ============================================================================
 // Helper Functions
@@ -91,7 +92,48 @@ function renderCropBoostSection(root: HTMLElement): void {
   });
   header.appendChild(petsList);
 
+  // Add disclaimer
+  const disclaimer = document.createElement('div');
+  disclaimer.style.cssText = 'margin-top: 12px; padding: 8px; background: rgba(255, 152, 0, 0.1); border: 1px solid rgba(255, 152, 0, 0.3); border-radius: 4px; font-size: 11px; color: rgba(255, 255, 255, 0.7);';
+  disclaimer.innerHTML = `
+    <div style="font-weight: 600; color: #FF9800; margin-bottom: 4px;">⚠️ Important Notes:</div>
+    <div>• Crop Size Boost abilities do <strong>NOT stack</strong> - only the weakest boost is used in calculations</div>
+    <div>• Time estimates are conservative and include RNG variance</div>
+  `;
+  header.appendChild(disclaimer);
+
   root.appendChild(header);
+
+  // Legend Section
+  const legendCard = document.createElement('div');
+  legendCard.style.cssText = `
+    padding: 14px 18px;
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.15), rgba(76, 175, 80, 0.05));
+    border: 2px solid rgba(76, 175, 80, 0.4);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.1);
+  `;
+
+  const legendTitle = document.createElement('div');
+  legendTitle.style.cssText = 'font-size: 12px; font-weight: 700; color: #4CAF50; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.8px; display: flex; align-items: center; gap: 6px;';
+  legendTitle.innerHTML = '📖 <span>Crop Status Legend</span>';
+  legendCard.appendChild(legendTitle);
+
+  const legendContent = document.createElement('div');
+  legendContent.style.cssText = 'display: flex; gap: 24px; font-size: 13px; color: rgba(255, 255, 255, 0.9);';
+  legendContent.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(255, 255, 255, 0.08); border-radius: 6px;">
+      <span style="font-size: 20px;">🌱</span>
+      <span style="font-weight: 600;">Still Growing</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(255, 255, 255, 0.08); border-radius: 6px;">
+      <span style="font-size: 20px;">🌾</span>
+      <span style="font-weight: 600;">Fully Grown (Mature)</span>
+    </div>
+  `;
+  legendCard.appendChild(legendContent);
+  root.appendChild(legendCard);
 
   // Detail Toggle Button
   const toggleCard = document.createElement('div');
@@ -307,6 +349,17 @@ function renderCropBoostSection(root: HTMLElement): void {
 
   const cropsNeedingBoost = filteredCrops.filter(c => c.sizeRemaining > 0);
 
+  // Sort by boosts needed (descending) - most boosts needed first
+  cropsNeedingBoost.sort((a, b) => {
+    const cropKeyA = `${a.tileKey}-${a.slotIndex}`;
+    const cropKeyB = `${b.tileKey}-${b.slotIndex}`;
+    const estimateA = analysis.cropEstimates.get(cropKeyA);
+    const estimateB = analysis.cropEstimates.get(cropKeyB);
+    const boostsA = estimateA?.boostsNeeded ?? 0;
+    const boostsB = estimateB?.boostsNeeded ?? 0;
+    return boostsB - boostsA; // Descending order
+  });
+
   if (cropsNeedingBoost.length > 0) {
     const tableCard = document.createElement('div');
     tableCard.style.cssText = `
@@ -359,10 +412,55 @@ function renderCropBoostSection(root: HTMLElement): void {
       });
 
       const nameCell = document.createElement('td');
-      nameCell.style.cssText = 'padding: 12px 10px;';
-      const status = crop.isMature ? '🌾' : '🌱';
+      nameCell.style.cssText = 'padding: 12px 10px; display: flex; align-items: center; gap: 8px;';
+      
+      // Status emoji
+      const statusEmoji = document.createElement('span');
+      statusEmoji.textContent = crop.isMature ? '🌾' : '🌱';
+      statusEmoji.style.cssText = 'font-size: 16px; flex-shrink: 0;';
+      
+      // Crop image sprite (if available from game)
+      const cropImage = document.createElement('div');
+      cropImage.style.cssText = `
+        width: 24px;
+        height: 24px;
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+        flex-shrink: 0;
+        image-rendering: pixelated;
+      `;
+      
+      // Get BASE species by removing mutation prefixes (Rainbow, Gold, Frozen, etc.)
+      // E.g., "Rainbow Sunflower" -> "sunflower"
+      let baseSpecies = crop.species;
+      const mutationPrefixes = ['Rainbow', 'Gold', 'Golden', 'Frozen', 'Amber', 'Wet', 'Chilled', 'Dawnlit'];
+      for (const prefix of mutationPrefixes) {
+        if (baseSpecies.startsWith(prefix + ' ')) {
+          baseSpecies = baseSpecies.substring(prefix.length + 1);
+          break;
+        }
+      }
+      const speciesKey = baseSpecies.toLowerCase().trim();
+      
+      // Try to get sprite from extractor first, fallback to CDN
+      const spriteDataUrl = getCropSpriteDataUrl(speciesKey);
+      if (spriteDataUrl) {
+        cropImage.style.backgroundImage = `url(${spriteDataUrl})`;
+      } else {
+        // Fallback to CDN URLs if sprite extraction not ready
+        // Fallback: try to use a simple colored square as placeholder
+        cropImage.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
+      }
+      
+      // Text content
+      const textSpan = document.createElement('span');
       const mutations = crop.mutations.length > 0 ? ` <span style="color: #FFD700;">(${crop.mutations.join(', ')})</span>` : '';
-      nameCell.innerHTML = `${status} ${capitalize(crop.species)}${mutations}`;
+      textSpan.innerHTML = `${capitalize(crop.species)}${mutations}`;
+      
+      nameCell.appendChild(statusEmoji);
+      nameCell.appendChild(cropImage);
+      nameCell.appendChild(textSpan);
       row.appendChild(nameCell);
 
       const sizeCell = document.createElement('td');

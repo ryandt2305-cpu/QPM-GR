@@ -17,6 +17,8 @@ import {
 } from '../store/xpTracker';
 import { calculateLiveETA } from './trackerWindow';
 import { getAbilityDefinition, type AbilityDefinition } from '../data/petAbilities';
+import { getHungerCapOrDefault } from '../data/petHungerCaps';
+import { calculateFeedsPerLevel, calculateFeedsForLevels } from '../data/petHungerDepletion';
 
 export interface XpTrackerWindowState {
   root: HTMLElement;
@@ -1151,6 +1153,7 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
 
   if (pet.species && pet.xp !== null && pet.strength !== null) {
     const xpPerLevel = getSpeciesXpPerLevel(pet.species);
+    const hungerCap = getHungerCapOrDefault(pet.species);
 
     if (xpPerLevel) {
       // Calculate MAX STR: hatch level + 30, capped at 100
@@ -1169,12 +1172,18 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
         // Calculate XP towards next level (modulo)
         const xpTowardsNext = pet.xp % xpPerLevel;
         const timeToLevel = calculateTimeToLevel(xpTowardsNext, xpPerLevel, teamXpPerHour);
+        
+        // Calculate feeds per level
+        const feedsPerLevel = calculateFeedsPerLevel(pet.species, hungerCap, xpPerLevel, teamXpPerHour);
+        const feedsDisplay = feedsPerLevel && feedsPerLevel > 0 ? `🍖 ${feedsPerLevel}` : '';
+        
         if (timeToLevel) {
           timeCell.innerHTML = `
             <div style="color: var(--qpm-positive, #4CAF50);">${timeToLevel.hours}h ${timeToLevel.minutes}m</div>
             <div style="font-size: 10px; color: var(--qpm-text-muted, #aaa); margin-top: 2px;">${formatCoins(teamXpPerHour)} XP/hr</div>
+            ${feedsDisplay ? `<div style="font-size: 10px; color: var(--qpm-warning, #FF9800); margin-top: 2px;">${feedsDisplay}</div>` : ''}
           `;
-          timeCell.title = `This pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus shared by all pets)`;
+          timeCell.title = `This pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus shared by all pets)${feedsDisplay ? `\n~${feedsPerLevel} feeds per level` : ''}`;
         } else if (xpTowardsNext >= xpPerLevel) {
           timeCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">Ready!</span>`;
         } else {
@@ -1240,11 +1249,17 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
           timeText = `${minutes}m`;
         }
 
+        // Calculate feeds to max
+        const hungerCap = getHungerCapOrDefault(pet.species);
+        const feedsToMax = hungerCap ? calculateFeedsForLevels(pet.species, hungerCap, xpPerLevel, teamXpPerHour, levelsRemaining) : null;
+        const feedsDisplay = feedsToMax && feedsToMax > 0 ? `🍖 ${feedsToMax}` : '';
+
         timeToMaxCell.innerHTML = `
           <div style="color: var(--qpm-warning, #FF9800); font-weight: 600;">${timeText}</div>
           <div style="font-size: 10px; color: var(--qpm-text-muted, #aaa); margin-top: 2px;">${levelsRemaining} STR left</div>
+          ${feedsDisplay ? `<div style="font-size: 10px; color: var(--qpm-warning, #FF9800); margin-top: 2px;">${feedsDisplay}</div>` : ''}
         `;
-        timeToMaxCell.title = `${levelsRemaining} STR levels remaining\n${formatCoins(totalXpNeeded)} XP needed\nThis pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus)`;
+        timeToMaxCell.title = `${levelsRemaining} STR levels remaining\n${formatCoins(totalXpNeeded)} XP needed\nThis pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus)${feedsDisplay ? `\n~${feedsToMax} total feeds to max` : ''}`;
       } else if (teamXpPerHour === 0) {
         timeToMaxCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">No XP boost</span>`;
       } else {

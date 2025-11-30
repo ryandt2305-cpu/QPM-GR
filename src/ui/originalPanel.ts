@@ -57,7 +57,6 @@ export interface UIState {
   turtleDetail: HTMLElement | null;
   turtleFooter: HTMLElement | null;
   turtleEnableButtons: HTMLButtonElement[];
-  turtleBoardwalkToggles: HTMLInputElement[];
   turtleFocusSelects: HTMLSelectElement[];
   turtleFocusTargetSelects: HTMLSelectElement[];
   turtleFocusTargetContainers: HTMLElement[];
@@ -153,7 +152,6 @@ let uiState: UIState = {
   turtleDetail: null,
   turtleFooter: null,
   turtleEnableButtons: [],
-  turtleBoardwalkToggles: [],
   turtleFocusSelects: [],
   turtleFocusTargetSelects: [],
   turtleFocusTargetContainers: [],
@@ -1080,10 +1078,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
     }
   }
 
-  for (const checkbox of uiState.turtleBoardwalkToggles) {
-    if (!checkbox) continue;
-    checkbox.checked = snapshot.includeBoardwalk;
-  }
+  // Boardwalk toggles removed
 
   for (const select of uiState.turtleFocusSelects) {
     if (!select) continue;
@@ -1286,17 +1281,17 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
   const plantSummary = uiState.turtlePlantSummary;
   if (plantSummary) {
     if (!snapshot.enabled) {
-      plantSummary.textContent = 'Timer disabled';
+      plantSummary.innerHTML = '<div style="font-size:11px;color:#ef5350;">⏸️ Timer disabled</div>';
     } else if (plant.status === 'no-data') {
-      plantSummary.textContent = plantFocusEnabled && !snapshot.focusTargetAvailable && hasPlantTargets
-        ? 'Select a target plant with Focus to start tracking.'
-        : 'Waiting for garden snapshot…';
+      plantSummary.innerHTML = plantFocusEnabled && !snapshot.focusTargetAvailable && hasPlantTargets
+        ? '<div style="font-size:11px;color:#FFB74D;">🎯 Select target plant</div>'
+        : '<div style="font-size:11px;color:#9E9E9E;">⏳ Waiting...</div>';
     } else if (plant.status === 'no-crops') {
-      plantSummary.textContent = 'No growing crops.';
+      plantSummary.innerHTML = '<div style="font-size:11px;color:#9E9E9E;">🌾 No crops</div>';
     } else {
-      const cropName = plant.focusSlot?.species || 'Unknown crop';
+      const cropName = plant.focusSlot?.species || 'Unknown';
       const boosterCount = plant.contributions.length;
-      plantSummary.textContent = `${cropName} • ${boosterCount} plant booster${boosterCount === 1 ? '' : 's'}`;
+      plantSummary.innerHTML = `<div style="font-size:11px;font-weight:600;color:#4CAF50;">🌱 ${cropName}</div><div style="font-size:10px;color:#81C784;">⚡ ${boosterCount} booster${boosterCount === 1 ? '' : 's'}</div>`;
     }
   }
 
@@ -1306,11 +1301,11 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
       plantEta.textContent = '—';
     } else if (plant.status === 'estimating') {
       const completionTime = formatCompletionTime(plant.adjustedMsRemaining);
-      plantEta.textContent = `${formatDurationPretty(plant.adjustedMsRemaining)} (${formatRatePretty(plant.effectiveRate)})${completionTime}`;
+      plantEta.innerHTML = `⏱️ ${formatDurationPretty(plant.adjustedMsRemaining)}<span style="font-size:10px;color:#81C784;margin-left:6px;">${completionTime}</span>`;
     } else if (plant.status === 'no-turtles') {
       if (plant.naturalMsRemaining != null) {
         const completionTime = formatCompletionTime(plant.naturalMsRemaining);
-        plantEta.textContent = `${formatDurationPretty(plant.naturalMsRemaining)} (no turtle boost)${completionTime}`;
+        plantEta.innerHTML = `⏱️ ${formatDurationPretty(plant.naturalMsRemaining)}<span style="font-size:10px;color:#9E9E9E;margin-left:6px;">(no boost)</span>`;
       } else {
         plantEta.textContent = '—';
       }
@@ -1322,44 +1317,42 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
   const plantTotals = uiState.turtlePlantTotals;
   if (plantTotals) {
     if (!snapshot.enabled) {
-      plantTotals.textContent = 'Totals paused while the temple is disabled.';
+      plantTotals.innerHTML = '<div style="font-size:10px;color:#9E9E9E;">⏸️ Paused</div>';
     } else if (plantFocusEnabled && !snapshot.focusTargetAvailable) {
-      plantTotals.textContent = hasPlantTargets
-        ? 'Total Growth Boost will appear once a target plant is selected.'
-        : 'Waiting for a fresh garden snapshot...';
+      plantTotals.innerHTML = hasPlantTargets
+        ? '<div style="font-size:10px;color:#9E9E9E;">🎯 Select focus plant</div>'
+        : '<div style="font-size:10px;color:#9E9E9E;">⏳ Loading...</div>';
     } else if (plant.status === 'no-data') {
-      plantTotals.textContent = 'Waiting for a fresh garden snapshot...';
+      plantTotals.innerHTML = '<div style="font-size:10px;color:#9E9E9E;">⏳ Loading...</div>';
     } else if (plant.status === 'no-crops') {
-      plantTotals.textContent = 'No growing crops yet - plant something to see totals.';
+      plantTotals.innerHTML = '<div style="font-size:10px;color:#9E9E9E;">🌾 No crops</div>';
     } else if (plant.status === 'no-turtles') {
       const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
-      plantTotals.textContent = `No growth turtles boosting yet. Normal ETA: ${naturalText}. Feed or assign turtles to cut this down.`;
+      plantTotals.innerHTML = `<div style="font-size:10px;font-weight:600;color:#FFB74D;">⚠️ No boost</div><div style="font-size:9px;color:#BDBDBD;">Normal: ${naturalText}</div>`;
     } else {
-      plantTotals.textContent = `Total Growth Boost: ${formatMinutesPerHour(plantPerHourReduction)} • Normal ETA: ${
-        plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—'
-      } • Estimated Time Cut: ${plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—'}`;
+      const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
+      const savedText = plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—';
+      plantTotals.innerHTML = `<div style="font-size:10px;font-weight:600;color:#4CAF50;">⚡ Boost: ${formatMinutesPerHour(plantPerHourReduction)}</div><div style="font-size:9px;color:#81C784;">✂️ Cut: ${savedText}</div><div style="font-size:9px;color:#BDBDBD;">📅 Normal: ${naturalText}</div>`;
     }
   }
 
   const plantSimple = uiState.turtlePlantSimple;
   if (plantSimple) {
     if (!snapshot.enabled) {
-      plantSimple.textContent = "Enable Bella's temple to project crop finish times with turtle boosts.";
+      plantSimple.innerHTML = '<span style="font-size:16px;">⏸️</span><span>Enable temple to track</span>';
     } else if (plantFocusEnabled && !snapshot.focusTargetAvailable) {
-      plantSimple.textContent = hasPlantTargets
-        ? 'Pick a target plant with Focus to show its Normal ETA and estimated cut.'
-        : 'Waiting for an active garden snapshot - move the camera or harvest to refresh.';
+      plantSimple.innerHTML = hasPlantTargets
+        ? '<span style="font-size:16px;">🎯</span><span>Select a focus plant</span>'
+        : '<span style="font-size:16px;">⏳</span><span>Loading garden data...</span>';
     } else if (plant.status === 'no-data') {
-      plantSimple.textContent = 'Waiting for an active garden snapshot - move the camera or harvest to refresh.';
+      plantSimple.innerHTML = '<span style="font-size:16px;">⏳</span><span>Loading garden data...</span>';
     } else if (plant.status === 'no-crops') {
-      plantSimple.textContent = 'No crops are growing. Plant seeds to start the turtle timer.';
+      plantSimple.innerHTML = '<span style="font-size:16px;">🌾</span><span>No crops growing</span>';
     } else if (plant.status === 'no-turtles') {
-      const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
-      plantSimple.textContent = `Focused crop matures in ${formatDurationPretty(plant.naturalMsRemaining)} (no turtle boost active). Normal ETA: ${naturalText}.`;
+      plantSimple.innerHTML = `<span style="font-size:16px;">⏱️</span><span>Matures in ${formatDurationPretty(plant.naturalMsRemaining)} <span style="color:#9E9E9E;">(no boost)</span></span>`;
     } else {
-      const naturalText = plantNaturalMinutes != null ? formatMinutesWithUnit(plantNaturalMinutes) : '—';
       const savedText = plantMinutesSaved != null ? formatMinutesWithUnit(plantMinutesSaved) : '—';
-      plantSimple.textContent = `Focused crop matures in ${formatDurationPretty(plant.adjustedMsRemaining)} (Normal ETA: ${naturalText}); Estimated Time Cut: ${savedText}.`;
+      plantSimple.innerHTML = `<span style="font-size:16px;">✨</span><span>Matures in <strong>${formatDurationPretty(plant.adjustedMsRemaining)}</strong> • <span style="color:#4CAF50;font-weight:600;">✂️ ${savedText} saved</span></span>`;
     }
   }
 
@@ -1371,7 +1364,7 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
       const luckyText = plantTiming.luckyMs != null ? formatDurationPretty(plantTiming.luckyMs) : '—';
       const unluckyText = plantTiming.unluckyMs != null ? formatDurationPretty(plantTiming.unluckyMs) : '—';
       const stdText = plantTiming.stdMinutes != null ? formatMinutesWithUnit(plantTiming.stdMinutes) : '—';
-      plantLuck.textContent = `Lucky ≈ ${luckyText} • Unlucky ≈ ${unluckyText} (±${stdText})`;
+      plantLuck.innerHTML = `<span style="font-size:14px;">🎲</span><span>🍀 ${luckyText} • 😐 ${unluckyText} <span style="color:#80CBC4;">(±${stdText})</span></span>`;
     }
   }
 
@@ -1635,7 +1628,8 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
         row.style.cssText = 'display:grid;grid-template-columns:1.4fr 0.7fr 0.6fr 0.8fr;gap:6px;font-size:10px;padding:2px 0;';
 
         const nameCell = document.createElement('div');
-        nameCell.textContent = entry.name ?? `Slot ${entry.slotIndex + 1}`;
+        // Prioritize actual pet NAME (user's custom name), fallback to species, then slot number
+        nameCell.textContent = (entry.name && entry.name.trim()) || entry.species || `Slot ${entry.slotIndex + 1}`;
         nameCell.style.color = entry.missingStats ? '#ffcc80' : '#e0f2f1';
 
         const hungerCell = document.createElement('div');
@@ -1675,7 +1669,8 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
         row.style.cssText = 'display:grid;grid-template-columns:1.4fr 0.7fr 0.6fr 0.8fr;gap:6px;font-size:10px;padding:2px 0;';
 
         const nameCell = document.createElement('div');
-        nameCell.textContent = entry.name ?? `Slot ${entry.slotIndex + 1}`;
+        // Prioritize actual pet NAME (user's custom name), fallback to species, then slot number
+        nameCell.textContent = (entry.name && entry.name.trim()) || entry.species || `Slot ${entry.slotIndex + 1}`;
         nameCell.style.color = entry.missingStats ? '#ffcc80' : '#e0f2f1';
 
         const hungerCell = document.createElement('div');
@@ -2019,10 +2014,9 @@ function ensurePanelStyles(): void {
   }
 
   .qpm-nav__button--active {
-    background: rgba(143, 130, 255, 0.22);
     border-color: var(--qpm-accent);
     color: var(--qpm-text);
-    box-shadow: 0 6px 18px rgba(143, 130, 255, 0.24);
+    /* Background and box-shadow set by JavaScript based on tab color */
   }
 
   .qpm-tabs {
@@ -2944,7 +2938,7 @@ function createStatsOverviewSection(): HTMLElement {
   return root;
 }
 
-function createAutoFavoriteSection(): HTMLElement {
+async function createAutoFavoriteSection(): Promise<HTMLElement> {
   const { root, body } = createCard('⭐ Auto-Favorite', {
     subtitle: 'Automatically favorite crops and pets',
   });
@@ -3164,9 +3158,271 @@ function createAutoFavoriteSection(): HTMLElement {
 
   body.appendChild(mutationsSection);
 
+  // Advanced Filters section
+  const advancedSection = document.createElement('div');
+  advancedSection.style.cssText = `
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  `;
+
+  const advancedTitle = document.createElement('h4');
+  advancedTitle.textContent = '⚙️ Advanced Filters';
+  advancedTitle.style.cssText = `
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qpm-accent, #4CAF50);
+  `;
+  advancedSection.appendChild(advancedTitle);
+
+  const advancedNote = document.createElement('div');
+  advancedNote.style.cssText = `
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 12px;
+    padding: 8px;
+    background: rgba(255, 152, 0, 0.1);
+    border-left: 2px solid #FF9800;
+    border-radius: 4px;
+  `;
+  advancedNote.textContent = '💡 Select multiple options to filter which items get auto-favorited.';
+  advancedSection.appendChild(advancedNote);
+
+  // Filter by Abilities (multi-select checkboxes) - DYNAMIC from petAbilities.ts
+  const abilityFilterSection = document.createElement('div');
+  abilityFilterSection.style.cssText = 'margin-bottom: 16px;';
+
+  const abilityFilterTitle = document.createElement('h5');
+  abilityFilterTitle.textContent = 'Filter by Abilities:';
+  abilityFilterTitle.style.cssText = 'margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.8);';
+  abilityFilterSection.appendChild(abilityFilterTitle);
+
+  const abilityCheckboxContainer = document.createElement('div');
+  abilityCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-height: 300px; overflow-y: auto;';
+
+  // Dynamically import all abilities from petAbilities.ts
+  const { getAllAbilityDefinitions } = await import('../data/petAbilities');
+  const allAbilityDefinitions = getAllAbilityDefinitions();
+  
+  // Group abilities by base name (remove tier numbers for cleaner display)
+  const abilityGroups = new Map<string, { id: string; name: string }[]>();
+  
+  allAbilityDefinitions.forEach(def => {
+    // Extract base name (e.g., "Crop Size Boost" from "Crop Size Boost I")
+    const baseName = def.name.replace(/\s+(I{1,4}|\d+)$/, '');
+    if (!abilityGroups.has(baseName)) {
+      abilityGroups.set(baseName, []);
+    }
+    abilityGroups.get(baseName)!.push({ id: def.id, name: def.name });
+  });
+  
+  // Create options with single checkbox per base ability (groups all tiers)
+  const abilityOptions: Array<{ value: string[]; label: string }> = [];
+  
+  Array.from(abilityGroups.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([baseName, abilities]) => {
+      // Group all tier IDs together for matching
+      const abilityIds = abilities.map(a => a.id);
+      abilityOptions.push({ value: abilityIds, label: baseName });
+    });
+
+  abilityOptions.forEach(option => {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-radius: 4px; transition: background 0.2s; font-size: 12px;';
+    checkbox.addEventListener('mouseenter', () => checkbox.style.background = 'rgba(255, 255, 255, 0.05)');
+    checkbox.addEventListener('mouseleave', () => checkbox.style.background = 'transparent');
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    // Check if ANY tier of this ability is selected
+    const currentFilters = config.filterByAbilities || [];
+    input.checked = option.value.some(id => currentFilters.includes(id));
+    input.style.cssText = 'width: 14px; height: 14px; cursor: pointer; flex-shrink: 0;';
+
+    input.addEventListener('change', () => {
+      const current = getAutoFavoriteConfig().filterByAbilities || [];
+      if (input.checked) {
+        // Add all tiers of this ability
+        const newIds = option.value.filter(id => !current.includes(id));
+        updateAutoFavoriteConfig({ filterByAbilities: [...current, ...newIds] });
+      } else {
+        // Remove all tiers of this ability
+        const updated = current.filter(id => !option.value.includes(id));
+        updateAutoFavoriteConfig({ filterByAbilities: updated });
+      }
+    });
+
+    const label = document.createElement('span');
+    label.textContent = option.label;
+    label.style.cssText = 'color: var(--qpm-text, #fff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+    label.title = option.label;
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(label);
+    abilityCheckboxContainer.appendChild(checkbox);
+  });
+
+  abilityFilterSection.appendChild(abilityCheckboxContainer);
+  advancedSection.appendChild(abilityFilterSection);
+
+  // Filter by Ability Count dropdown
+  const abilityCountRow = document.createElement('div');
+  abilityCountRow.style.cssText = 'margin-bottom: 12px;';
+
+  const abilityCountLabel = document.createElement('label');
+  abilityCountLabel.textContent = 'Filter by Ability Count:';
+  abilityCountLabel.style.cssText = 'display: block; font-size: 12px; color: rgba(255, 255, 255, 0.7); margin-bottom: 4px;';
+  abilityCountRow.appendChild(abilityCountLabel);
+
+  const abilityCountSelect = document.createElement('select');
+  abilityCountSelect.style.cssText = `
+    width: 100%;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+  `;
+
+  [
+    { value: '', label: 'Any Count' },
+    { value: '1', label: '1 Ability' },
+    { value: '2', label: '2 Abilities' },
+    { value: '3', label: '3 Abilities' },
+    { value: '4', label: '4 Abilities' },
+  ].forEach(option => {
+    const opt = document.createElement('option');
+    opt.value = option.value;
+    opt.textContent = option.label;
+    abilityCountSelect.appendChild(opt);
+  });
+
+  abilityCountSelect.value = config.filterByAbilityCount != null ? String(config.filterByAbilityCount) : '';
+  abilityCountSelect.addEventListener('change', () => {
+    const value = abilityCountSelect.value ? parseInt(abilityCountSelect.value) : null;
+    updateAutoFavoriteConfig({ filterByAbilityCount: value });
+  });
+
+  abilityCountRow.appendChild(abilityCountSelect);
+  advancedSection.appendChild(abilityCountRow);
+
+  // Filter by Species (multi-select checkboxes)
+  const speciesFilterSection = document.createElement('div');
+  speciesFilterSection.style.cssText = 'margin-bottom: 16px;';
+
+  const speciesFilterTitle = document.createElement('h5');
+  speciesFilterTitle.textContent = 'Filter by Pet Species:';
+  speciesFilterTitle.style.cssText = 'margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.8);';
+  speciesFilterSection.appendChild(speciesFilterTitle);
+
+  const speciesCheckboxContainer = document.createElement('div');
+  speciesCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;';
+
+  const speciesOptions = [
+    'Worm', 'Snail', 'Bee', 'Chicken', 'Bunny', 'Dragonfly',
+    'Pig', 'Cow', 'Turkey', 'Squirrel', 'Turtle', 'Goat',
+    'Butterfly', 'Peacock', 'Capybara'
+  ];
+
+  speciesOptions.forEach(species => {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 6px; cursor: pointer; border-radius: 4px; transition: background 0.2s; font-size: 12px;';
+    checkbox.addEventListener('mouseenter', () => checkbox.style.background = 'rgba(255, 255, 255, 0.05)');
+    checkbox.addEventListener('mouseleave', () => checkbox.style.background = 'transparent');
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = (config.filterBySpecies || []).includes(species);
+    input.style.cssText = 'width: 14px; height: 14px; cursor: pointer;';
+
+    input.addEventListener('change', () => {
+      const current = getAutoFavoriteConfig().filterBySpecies || [];
+      const updated = input.checked ? [...current, species] : current.filter(s => s !== species);
+      updateAutoFavoriteConfig({ filterBySpecies: updated });
+    });
+
+    const label = document.createElement('span');
+    label.textContent = species;
+    label.style.cssText = 'color: var(--qpm-text, #fff);';
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(label);
+    speciesCheckboxContainer.appendChild(checkbox);
+  });
+
+  speciesFilterSection.appendChild(speciesCheckboxContainer);
+  advancedSection.appendChild(speciesFilterSection);
+
+  // Filter by Crop Type (multi-select checkboxes) - DYNAMIC from cropBaseStats.ts
+  const cropTypeSection = document.createElement('div');
+  cropTypeSection.style.cssText = 'margin-bottom: 16px;';
+
+  const cropTypeTitle = document.createElement('h5');
+  cropTypeTitle.textContent = 'Filter by Crop Name:';
+  cropTypeTitle.style.cssText = 'margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.8);';
+  cropTypeSection.appendChild(cropTypeTitle);
+
+  const cropTypeCheckboxContainer = document.createElement('div');
+  cropTypeCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-height: 300px; overflow-y: auto;';
+
+  // Dynamically import all crop names from cropBaseStats.ts
+  const { getAllCropNames } = await import('../data/cropBaseStats');
+  const cropTypeOptions = getAllCropNames();
+
+  cropTypeOptions.forEach(cropName => {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-radius: 4px; transition: background 0.2s; font-size: 12px;';
+    checkbox.addEventListener('mouseenter', () => checkbox.style.background = 'rgba(255, 255, 255, 0.05)');
+    checkbox.addEventListener('mouseleave', () => checkbox.style.background = 'transparent');
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = (config.filterByCropTypes || []).includes(cropName);
+    input.style.cssText = 'width: 14px; height: 14px; cursor: pointer; flex-shrink: 0;';
+
+    input.addEventListener('change', () => {
+      const current = getAutoFavoriteConfig().filterByCropTypes || [];
+      const updated = input.checked ? [...current, cropName] : current.filter(ct => ct !== cropName);
+      updateAutoFavoriteConfig({ filterByCropTypes: updated });
+    });
+
+    const label = document.createElement('span');
+    label.textContent = cropName;
+    label.style.cssText = 'color: var(--qpm-text, #fff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+    label.title = cropName;
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(label);
+    cropTypeCheckboxContainer.appendChild(checkbox);
+  });
+
+  cropTypeSection.appendChild(cropTypeCheckboxContainer);
+  advancedSection.appendChild(cropTypeSection);
+
+  body.appendChild(advancedSection);
+
   // Subscribe to config changes to update UI
   subscribeToAutoFavoriteConfig((newConfig) => {
     enableCheckbox.checked = newConfig.enabled;
+    abilityCountSelect.value = newConfig.filterByAbilityCount != null ? String(newConfig.filterByAbilityCount) : '';
+    // Update checkboxes based on config
+    abilityCheckboxContainer.querySelectorAll('input[type="checkbox"]').forEach((input: any, index) => {
+      const option = abilityOptions[index];
+      if (option) {
+        // Check if ANY tier of this ability is selected
+        input.checked = option.value.some(id => (newConfig.filterByAbilities || []).includes(id));
+      }
+    });
+    speciesCheckboxContainer.querySelectorAll('input[type="checkbox"]').forEach((input: any, index) => {
+      input.checked = (newConfig.filterBySpecies || []).includes(speciesOptions[index] || '');
+    });
+    cropTypeCheckboxContainer.querySelectorAll('input[type="checkbox"]').forEach((input: any, index) => {
+      input.checked = (newConfig.filterByCropTypes || []).includes(cropTypeOptions[index] || '');
+    });
   });
 
   return root;
@@ -3491,7 +3747,7 @@ function createGuideSection(): HTMLElement {
   return root;
 }
 
-export function createOriginalUI(): HTMLElement {
+export async function createOriginalUI(): Promise<HTMLElement> {
   ensurePanelStyles();
   if (uiState.panel) return uiState.panel;
 
@@ -3588,7 +3844,25 @@ export function createOriginalUI(): HTMLElement {
       tabContent.classList.toggle('qpm-tab--active', tabKey === key);
     }
     for (const [tabKey, button] of tabButtons) {
-      button.classList.toggle('qpm-nav__button--active', tabKey === key);
+      const isActive = tabKey === key;
+      button.classList.toggle('qpm-nav__button--active', isActive);
+      
+      // Apply color coding - always show the color, brighter when active OR when window is open
+      if (button.dataset.tabColor) {
+        const baseColor = button.dataset.tabColor;
+        // Check if this tab has an associated window that's open
+        const windowId = button.dataset.windowId;
+        const isWindowActive = windowId && isWindowOpen(windowId);
+        
+        if (isActive || isWindowActive) {
+          button.style.background = baseColor;
+          button.style.boxShadow = `0 6px 18px ${baseColor}`;
+        } else {
+          // Make inactive tabs show a dimmer version of their color
+          button.style.background = baseColor.replace('0.28', '0.14');
+          button.style.boxShadow = '';
+        }
+      }
     }
   };
 
@@ -3597,7 +3871,31 @@ export function createOriginalUI(): HTMLElement {
     button.type = 'button';
     button.className = 'qpm-nav__button';
     button.innerHTML = `${icon}<span>${label}</span>`;
-    button.addEventListener('click', () => activateTab(key));
+    // Only activate tab if it has content (not a window-opening tab)
+    if (elements.length > 0) {
+      button.addEventListener('click', () => activateTab(key));
+    }
+    
+    // Add color coding for visual distinction
+    const tabColors: Record<string, string> = {
+      'dashboard': 'rgba(76, 175, 80, 0.28)',      // Green
+      'turtle': 'rgba(33, 150, 243, 0.28)',        // Blue
+      'trackers': 'rgba(156, 39, 176, 0.28)',      // Purple
+      'xp-tracker': 'rgba(255, 152, 0, 0.28)',     // Orange
+      'shop-restock': 'rgba(0, 188, 212, 0.28)',   // Cyan
+      'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
+      'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
+      'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
+      'journal-checker': 'rgba(121, 85, 72, 0.28)', // Brown
+      'guide': 'rgba(96, 125, 139, 0.28)',         // Blue Grey
+    };
+    
+    if (tabColors[key]) {
+      button.dataset.tabColor = tabColors[key];
+      // Set initial background to dimmed color
+      button.style.background = tabColors[key].replace('0.28', '0.14');
+    }
+    
     nav.appendChild(button);
     tabButtons.set(key, button);
 
@@ -3611,7 +3909,7 @@ export function createOriginalUI(): HTMLElement {
   };
 
   // Auto-Favorite section
-  const autoFavoriteSection = createAutoFavoriteSection();
+  const autoFavoriteSection = await createAutoFavoriteSection();
 
   // Journal Checker section
   const journalCheckerSection = createJournalCheckerSection();
@@ -3620,7 +3918,8 @@ export function createOriginalUI(): HTMLElement {
   const guideSection = createGuideSection();
 
   registerTab('dashboard', 'Dashboard', '📊', [statsHeader]);
-  registerTab('turtle', 'Turtle Timer', '🐢', [turtleSection]);
+  // Tabs that open windows should have no content (empty array prevents tab content area)
+  registerTab('turtle', 'Turtle Timer', '🐢', []);
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   registerTab('shop-restock', 'Shop Restock', '🏪', []);
@@ -3636,6 +3935,7 @@ export function createOriginalUI(): HTMLElement {
   const trackersButton = tabButtons.get('trackers');
   if (trackersButton) {
     const newTrackersButton = trackersButton.cloneNode(true) as HTMLButtonElement;
+    newTrackersButton.dataset.windowId = 'trackers-detail';
     newTrackersButton.addEventListener('click', () => {
       toggleWindow('trackers-detail', '📊 Ability & Mutation Trackers', renderTrackersWindow);
     });
@@ -3701,6 +4001,7 @@ export function createOriginalUI(): HTMLElement {
   const publicRoomsButton = tabButtons.get('public-rooms');
   if (publicRoomsButton) {
     const newPublicRoomsButton = publicRoomsButton.cloneNode(true) as HTMLButtonElement;
+    newPublicRoomsButton.dataset.windowId = 'public-rooms';
     newPublicRoomsButton.addEventListener('click', () => {
       const renderPublicRoomsWindow = (root: HTMLElement) => {
         import('./publicRoomsWindow').then(({ renderPublicRoomsWindow }) => {
@@ -3733,6 +4034,7 @@ export function createOriginalUI(): HTMLElement {
   const turtleButton = tabButtons.get('turtle');
   if (turtleButton) {
     const newTurtleButton = turtleButton.cloneNode(true) as HTMLButtonElement;
+    newTurtleButton.dataset.windowId = 'turtle-timer';
     newTurtleButton.addEventListener('click', () => {
       toggleWindow('turtle-timer', '🐢 Bella\'s Turtle Temple', renderTurtleTimerWindow);
     });
@@ -4060,17 +4362,7 @@ function createStatsHeader(): HTMLElement {
   turtleFooter.style.cssText = 'font-size:9px;color:#80cbc4;margin-top:4px;';
   turtleCard.appendChild(turtleFooter);
 
-  // Boardwalk checkbox
-  const turtleOptionsRow = document.createElement('label');
-  turtleOptionsRow.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:9px;color:#80cbc4;cursor:pointer;margin-top:6px;';
-  const turtleIncludeBoardwalk = document.createElement('input');
-  turtleIncludeBoardwalk.type = 'checkbox';
-  turtleIncludeBoardwalk.className = 'qpm-checkbox';
-  turtleIncludeBoardwalk.checked = turtleCfg.includeBoardwalk;
-  const turtleIncludeLabel = document.createElement('span');
-  turtleIncludeLabel.textContent = 'Include boardwalk tiles';
-  turtleOptionsRow.append(turtleIncludeBoardwalk, turtleIncludeLabel);
-  turtleCard.appendChild(turtleOptionsRow);
+  // Boardwalk checkbox removed (no longer needed)
 
   turtleToggle.addEventListener('click', () => {
     const nextEnabled = !(cfg.turtleTimer?.enabled ?? true);
@@ -4079,18 +4371,10 @@ function createStatsHeader(): HTMLElement {
     setTurtleTimerEnabled(nextEnabled);
   });
 
-  turtleIncludeBoardwalk.addEventListener('change', () => {
-    const next = turtleIncludeBoardwalk.checked;
-    cfg.turtleTimer = { ...ensureTurtleTimerConfig(), includeBoardwalk: next };
-    saveCfg();
-    configureTurtleTimer({ includeBoardwalk: next });
-  });
-
   uiState.turtleStatus = turtleStatus;
   uiState.turtleDetail = turtleDetail;
   uiState.turtleFooter = turtleFooter;
   uiState.turtleEnableButtons.push(turtleToggle);
-  uiState.turtleBoardwalkToggles.push(turtleIncludeBoardwalk);
 
   (uiState as any).turtlePlantNameText = plantNameText;
 
@@ -4415,20 +4699,7 @@ function createDashboardIndicatorsCard(): HTMLElement {
   turtleFooter.style.cssText = 'font-size:10px;color:#9acccc;line-height:1.5;';
   turtleBox.appendChild(turtleFooter);
 
-  const turtleOptionsRow = document.createElement('label');
-  turtleOptionsRow.style.cssText = 'display:none;align-items:center;gap:6px;font-size:10px;color:#a5d6d4;cursor:pointer;';
-
-  const turtleIncludeBoardwalk = document.createElement('input');
-  turtleIncludeBoardwalk.type = 'checkbox';
-  turtleIncludeBoardwalk.className = 'qpm-checkbox';
-  turtleIncludeBoardwalk.checked = turtleCfg.includeBoardwalk;
-  turtleOptionsRow.appendChild(turtleIncludeBoardwalk);
-
-  const turtleIncludeLabel = document.createElement('span');
-  turtleIncludeLabel.textContent = 'Include boardwalk tiles';
-  turtleOptionsRow.appendChild(turtleIncludeLabel);
-
-  turtleBox.appendChild(turtleOptionsRow);
+  // Boardwalk checkbox removed (no longer needed)
 
   turtleToggle.addEventListener('click', () => {
     const nextEnabled = !(cfg.turtleTimer?.enabled ?? true);
@@ -4440,21 +4711,10 @@ function createDashboardIndicatorsCard(): HTMLElement {
     setTurtleTimerEnabled(nextEnabled);
   });
 
-  turtleIncludeBoardwalk.addEventListener('change', () => {
-    const next = turtleIncludeBoardwalk.checked;
-    cfg.turtleTimer = {
-      ...ensureTurtleTimerConfig(),
-      includeBoardwalk: next,
-    };
-    saveCfg();
-    configureTurtleTimer({ includeBoardwalk: next });
-  });
-
   uiState.turtleStatus = turtleStatus;
   uiState.turtleDetail = turtleDetail;
   uiState.turtleFooter = turtleFooter;
   uiState.turtleEnableButtons.push(turtleToggle);
-  uiState.turtleBoardwalkToggles.push(turtleIncludeBoardwalk);
 
   if (uiState.turtleUnsubscribe) {
     uiState.turtleUnsubscribe();
@@ -5495,27 +5755,7 @@ function createTurtleTimerSection(): HTMLElement {
   controls.appendChild(enableButton);
   uiState.turtleEnableButtons.push(enableButton);
 
-  const boardwalkLabel = document.createElement('label');
-  boardwalkLabel.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#b2dfdb;';
-
-  const boardwalkToggle = document.createElement('input');
-  boardwalkToggle.type = 'checkbox';
-  boardwalkToggle.className = 'qpm-checkbox';
-  boardwalkToggle.checked = turtleCfg.includeBoardwalk;
-  boardwalkToggle.addEventListener('change', () => {
-    const includeBoardwalk = boardwalkToggle.checked;
-    cfg.turtleTimer = {
-      ...ensureTurtleTimerConfig(),
-      includeBoardwalk,
-    } satisfies TurtleTimerUIConfig;
-    saveCfg();
-    configureTurtleTimer({ includeBoardwalk });
-  });
-  const boardwalkText = document.createElement('span');
-  boardwalkText.textContent = 'Include boardwalk tiles';
-  boardwalkLabel.append(boardwalkToggle, boardwalkText);
-  controls.appendChild(boardwalkLabel);
-  uiState.turtleBoardwalkToggles.push(boardwalkToggle);
+  // Boardwalk checkbox removed (no longer needed)
 
   const focusLabel = document.createElement('label');
   focusLabel.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#b2dfdb;';
@@ -5681,49 +5921,70 @@ function createTurtleTimerSection(): HTMLElement {
   hint.textContent = "Change your target plant's with Focus to display the estimated time to mature. The Egg Hatching section displays info on egg maturing. The Food Turtles section displays food drain and restore info.";
   body.appendChild(hint);
 
-  const createSectionCard = (title: string, accentColor: string) => {
+  const createSectionCard = (title: string, accentColor: string, icon: string) => {
     const card = document.createElement('div');
-    card.style.cssText = `padding:10px;border-radius:10px;border:1px solid ${accentColor};background:rgba(10,20,20,0.35);display:flex;flex-direction:column;gap:6px;`;
+    card.style.cssText = `padding:14px;border-radius:12px;border:2px solid ${accentColor};background:linear-gradient(135deg, rgba(10,20,20,0.6), rgba(10,20,20,0.3));display:flex;flex-direction:column;gap:10px;box-shadow: 0 4px 12px rgba(0,0,0,0.3);`;
 
+    // Visual header with progress indicator
     const headerRow = document.createElement('div');
-    headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;';
+    headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;';
+    
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    
+    const iconEl = document.createElement('span');
+    iconEl.style.cssText = 'font-size:24px;';
+    iconEl.textContent = icon;
+    
     const header = document.createElement('div');
-    header.style.cssText = 'font-weight:600;font-size:12px;color:#e0f7fa;';
+    header.style.cssText = 'font-weight:700;font-size:14px;color:#e0f7fa;letter-spacing:0.3px;';
     header.textContent = title;
+    
+    headerLeft.append(iconEl, header);
+    
     const etaEl = document.createElement('div');
-    etaEl.style.cssText = 'font-size:11px;color:#c5e1a5;';
-    headerRow.append(header, etaEl);
+    etaEl.style.cssText = 'font-size:14px;font-weight:700;color:#4CAF50;background:rgba(76,175,80,0.15);padding:6px 12px;border-radius:8px;border:1px solid rgba(76,175,80,0.3);';
+    headerRow.append(headerLeft, etaEl);
     card.appendChild(headerRow);
 
+    // Stats grid (visual, icon-based)
+    const statsGrid = document.createElement('div');
+    statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;';
+    
     const summaryEl = document.createElement('div');
-    summaryEl.style.cssText = 'font-size:11px;color:#dcedc8;';
-    card.appendChild(summaryEl);
-
+    summaryEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;';
+    statsGrid.appendChild(summaryEl);
+    
     const totalsEl = document.createElement('div');
-    totalsEl.style.cssText = 'font-size:10px;color:#cfd8dc;';
-    card.appendChild(totalsEl);
+    totalsEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;';
+    statsGrid.appendChild(totalsEl);
+    
+    card.appendChild(statsGrid);
 
+    // Simple status line with visual indicators
     const simpleEl = document.createElement('div');
-    simpleEl.style.cssText = 'font-size:10px;color:#b2dfdb;line-height:1.4;';
+    simpleEl.style.cssText = 'font-size:12px;color:#b2dfdb;line-height:1.6;padding:8px;background:rgba(178,223,219,0.1);border-radius:6px;border-left:3px solid #4CAF50;display:flex;align-items:center;gap:8px;';
     card.appendChild(simpleEl);
 
+    // Luck range (compact visual)
     const luckEl = document.createElement('div');
-    luckEl.style.cssText = 'font-size:10px;color:#9acccc;';
+    luckEl.style.cssText = 'font-size:11px;color:#80CBC4;padding:6px 10px;background:rgba(128,203,196,0.08);border-radius:6px;display:flex;align-items:center;gap:6px;';
     card.appendChild(luckEl);
 
+    // Pets table (cleaner header)
     const tableHeader = document.createElement('div');
-    tableHeader.style.cssText = 'display:grid;grid-template-columns:1.4fr 0.7fr 0.6fr 0.8fr;gap:6px;font-size:10px;color:#80cbc4;text-transform:uppercase;letter-spacing:0.4px;';
-    tableHeader.innerHTML = '<span>Pet</span><span>Hunger</span><span>Boost</span><span>XP</span>';
+    tableHeader.style.cssText = 'display:grid;grid-template-columns:1.4fr 0.7fr 0.6fr 0.8fr;gap:8px;font-size:11px;color:#4CAF50;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;padding:6px 8px;background:rgba(76,175,80,0.1);border-radius:6px;';
+    tableHeader.innerHTML = '<span>🐾 Pet</span><span>🍖 Hunger</span><span>⚡ Boost</span><span>✨ XP</span>';
     card.appendChild(tableHeader);
 
     const tableBody = document.createElement('div');
-    tableBody.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-height:18px;';
+    tableBody.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-height:18px;max-height:200px;overflow-y:auto;';
     card.appendChild(tableBody);
 
     return { card, etaEl, summaryEl, totalsEl, simpleEl, luckEl, tableBody } as const;
   };
 
-  const plantCard = createSectionCard('🌱 Plant Growth', 'rgba(129,199,132,0.45)');
+  const plantCard = createSectionCard('Plant Growth', 'rgba(76,175,80,0.6)', '🌱');
   body.appendChild(plantCard.card);
   uiState.turtlePlantEta = plantCard.etaEl;
   uiState.turtlePlantSummary = plantCard.summaryEl;
@@ -5732,7 +5993,7 @@ function createTurtleTimerSection(): HTMLElement {
   uiState.turtlePlantLuck = plantCard.luckEl;
   uiState.turtlePlantTable = plantCard.tableBody;
 
-  const eggCard = createSectionCard('🥚 Egg Hatching', 'rgba(179,157,219,0.45)');
+  const eggCard = createSectionCard('Egg Hatching', 'rgba(156,39,176,0.6)', '🥚');
   body.appendChild(eggCard.card);
   uiState.turtleEggEta = eggCard.etaEl;
   uiState.turtleEggSummary = eggCard.summaryEl;
@@ -5742,27 +6003,41 @@ function createTurtleTimerSection(): HTMLElement {
   uiState.turtleEggTable = eggCard.tableBody;
 
   const supportCard = document.createElement('div');
-  supportCard.style.cssText = 'padding:10px;border-radius:10px;border:1px solid rgba(255,224,130,0.45);background:rgba(30,24,12,0.4);display:flex;flex-direction:column;gap:6px;';
+  supportCard.style.cssText = 'padding:14px;border-radius:12px;border:2px solid rgba(255,152,0,0.6);background:linear-gradient(135deg, rgba(30,24,12,0.6), rgba(30,24,12,0.3));display:flex;flex-direction:column;gap:10px;box-shadow: 0 4px 12px rgba(0,0,0,0.3);';
 
+  const supportHeaderRow = document.createElement('div');
+  supportHeaderRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
+  
+  const supportIcon = document.createElement('span');
+  supportIcon.style.cssText = 'font-size:24px;';
+  supportIcon.textContent = '🍽️';
+  
   const supportHeader = document.createElement('div');
-  supportHeader.style.cssText = 'font-weight:600;font-size:12px;color:#ffe082;display:flex;justify-content:space-between;align-items:center;';
-  supportHeader.textContent = '🍽️ Food Turtles';
-  supportCard.appendChild(supportHeader);
+  supportHeader.style.cssText = 'font-weight:700;font-size:14px;color:#FFB74D;letter-spacing:0.3px;';
+  supportHeader.textContent = 'Food Turtles';
+  
+  supportHeaderRow.append(supportIcon, supportHeader);
+  supportCard.appendChild(supportHeaderRow);
 
+  const supportStatsGrid = document.createElement('div');
+  supportStatsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;';
+  
   const supportSummary = document.createElement('div');
-  supportSummary.style.cssText = 'font-size:11px;color:#ffe9a6;';
-  supportCard.appendChild(supportSummary);
-
+  supportSummary.style.cssText = 'padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;font-size:11px;color:#FFE082;';
+  supportStatsGrid.appendChild(supportSummary);
+  
   const supportTotals = document.createElement('div');
-  supportTotals.style.cssText = 'font-size:10px;color:#f6e7b5;';
-  supportCard.appendChild(supportTotals);
+  supportTotals.style.cssText = 'padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;font-size:11px;color:#FFE082;';
+  supportStatsGrid.appendChild(supportTotals);
+  
+  supportCard.appendChild(supportStatsGrid);
 
   const supportSimple = document.createElement('div');
-  supportSimple.style.cssText = 'font-size:10px;color:#ffecb3;line-height:1.4;';
+  supportSimple.style.cssText = 'font-size:12px;color:#FFECB3;line-height:1.6;padding:8px;background:rgba(255,236,179,0.1);border-radius:6px;border-left:3px solid #FFB74D;';
   supportCard.appendChild(supportSimple);
 
   const supportList = document.createElement('div');
-  supportList.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  supportList.style.cssText = 'display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;';
   supportCard.appendChild(supportList);
 
   body.appendChild(supportCard);

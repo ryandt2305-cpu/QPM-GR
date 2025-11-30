@@ -57,8 +57,9 @@ export const EGG_PET_RATES = {
   },
 
   Rare: {
-    Pig: 0.90,       // 90%
-    Cow: 0.10,       // 10%
+    Pig: 0.80,       // 80%
+    Cow: 0.15,       // 15%
+    Turkey: 0.05,    // 5%
   },
 
   Legendary: {
@@ -92,6 +93,7 @@ export const PET_ABILITY_POOLS = {
   // Rare Eggs
   Pig: ['Sell Boost II', 'Hatch XP Boost I', 'Max Strength I'],
   Cow: ['Seed Finder II', 'Hunger Boost I', 'Plant Growth I'],
+  Turkey: ['Rain Dance', 'Egg Growth II', 'Double Hatch'],
 
   // Legendary Eggs
   Turtle: ['Hunger Restore II', 'Hunger Boost II', 'Egg Growth II', 'Plant Growth II'],

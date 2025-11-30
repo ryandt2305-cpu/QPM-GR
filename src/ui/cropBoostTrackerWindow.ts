@@ -196,7 +196,7 @@ function renderCropBoostSection(root: HTMLElement): void {
   const stats = [
     { label: 'Total Crops', value: analysis.crops.length, color: '#fff' },
     { label: 'At Max Size', value: analysis.totalCropsAtMax, color: '#4CAF50' },
-    { label: 'Need Boosts', value: analysis.totalCropsNeedingBoost, color: '#FF9800' },
+    { label: 'Crops Needing Boost', value: analysis.totalCropsNeedingBoost, color: '#FF9800' },
     { label: 'Progress', value: `${analysis.crops.length > 0 ? Math.round((analysis.totalCropsAtMax / analysis.crops.length) * 100) : 0}%`, color: '#64B5F6' },
   ];
 

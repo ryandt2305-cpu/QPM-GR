@@ -16,6 +16,10 @@ export declare const CROP_BASE_STATS: Record<string, CropStats>;
  */
 export declare function getCropStats(cropName: string): CropStats | null;
 /**
+ * Get all crop names sorted by shop rarity order (common to rare)
+ */
+export declare function getAllCropNames(): string[];
+/**
  * Calculate crop value with scale
  */
 export declare function calculateCropValue(cropName: string, scale: number): number;

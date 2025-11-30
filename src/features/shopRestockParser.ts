@@ -114,33 +114,69 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
 
       if (dateParts.length !== 3 || timeParts.length !== 2) return Date.now();
 
-      // Detect date format based on values
-      // DD/MM/YYYY: First value is day (1-31), second is month (1-12)
-      // MM/DD/YYYY: First value is month (1-12), second is day (1-31)
-      // We use DD/MM/YYYY (Australian format) since that's what Discord exports use
-      // The key insight: if first value > 12, it must be a day (DD/MM/YYYY)
-      // If both <= 12, assume DD/MM/YYYY since exports are from Australian users
+      // Smart date format detection
+      // Discord exports can use MM/DD/YYYY (US) or DD/MM/YYYY (AU) depending on user locale
+      // Strategy:
+      // 1. If first value > 12, must be DD/MM/YYYY (day can't be month)
+      // 2. If second value > 12, must be MM/DD/YYYY (month can't be day)
+      // 3. If both <= 12, try both formats and pick the one closest to current date
+      //    (shop restocks shouldn't be far in the future)
+      
+      const first = dateParts[0]!;
+      const second = dateParts[1]!;
+      const year = dateParts[2]!;
       let day: number;
       let month: number;
-      const year = dateParts[2]!;
 
-      // Use DD/MM/YYYY format (Australian format used by Discord exports)
-      // First part is day, second is month
-      day = dateParts[0]!;
-      month = dateParts[1]!;
-
-      // Sanity check: if "day" > 31 or "month" > 12, dates are likely malformed
-      // Try swapping if the format seems wrong
-      if (day > 31 || month > 12) {
-        // Try MM/DD/YYYY instead
-        day = dateParts[1]!;
-        month = dateParts[0]!;
-
-        // If still invalid after swap, return current time (data is corrupted)
-        if (day > 31 || month > 12 || day < 1 || month < 1) {
+      // Validate basic ranges
+      if (first < 1 || second < 1 || first > 31 || second > 12) {
+        // Check if swapping helps
+        if (second >= 1 && second <= 31 && first >= 1 && first <= 12) {
+          // Swap: first is month, second is day (MM/DD/YYYY)
+          month = first;
+          day = second;
+        } else {
           log('⚠️ Invalid date in timestamp:', timestampStr);
           return Date.now();
         }
+      } else if (first > 12) {
+        // First value > 12, must be day (DD/MM/YYYY)
+        day = first;
+        month = second;
+      } else if (second > 12) {
+        // This shouldn't happen (second > 12 would fail validation above)
+        // but include for clarity: second is day (MM/DD/YYYY)
+        month = first;
+        day = second;
+      } else {
+        // Both values <= 12: ambiguous!
+        // Try both interpretations and pick the one closer to current date
+        const now = Date.now();
+        
+        // Try DD/MM/YYYY
+        const ddmmTimestamp = Date.UTC(year, first - 1, second, 0, 0, 0, 0);
+        const ddmmDiff = Math.abs(ddmmTimestamp - now);
+        
+        // Try MM/DD/YYYY
+        const mmddTimestamp = Date.UTC(year, second - 1, first, 0, 0, 0, 0);
+        const mmddDiff = Math.abs(mmddTimestamp - now);
+        
+        // Pick the interpretation closer to current date
+        if (mmddDiff < ddmmDiff) {
+          // MM/DD/YYYY is closer to now
+          month = first;
+          day = second;
+        } else {
+          // DD/MM/YYYY is closer to now
+          day = first;
+          month = second;
+        }
+      }
+
+      // Final validation
+      if (day < 1 || day > 31 || month < 1 || month > 12) {
+        log('⚠️ Invalid date after parsing:', timestampStr, { day, month, year });
+        return Date.now();
       }
 
       const hours = timeParts[0]!;

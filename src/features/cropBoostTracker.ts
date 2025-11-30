@@ -223,13 +223,17 @@ function scanGardenCrops(): CropSizeInfo[] {
 
         const species = slot.species;
         const currentScale = slot.targetScale ?? slot.scale ?? slot.plantScale ?? 1.0;
-        const maxScale = slot.maxScale ?? slot.targetMaxScale ?? lookupMaxScale(species) ?? 2.0;
+        // Normalize species name to lowercase for lookup
+        const normalizedSpecies = species.toLowerCase();
+        const maxScale = slot.maxScale ?? slot.targetMaxScale ?? lookupMaxScale(normalizedSpecies) ?? 2.0;
         const mutations = slot.mutations ?? [];
         const fruitCount = slot.fruitCount ?? slot.remainingFruitCount ?? 1;
         const endTime = slot.endTime ?? 0;
         const isMature = endTime > 0 && Date.now() >= endTime;
 
-        // Calculate size percentage (50% = scale 1.0, 100% = maxScale)
+        // Calculate size percentage
+        // Note: Crop Size Boost is applied to targetScale (1.0-3.5), not the 50-100% visual size
+        // The boost multiplies the scale, e.g., 10% boost = scale * 1.10
         const ratio = (currentScale - 1.0) / (maxScale - 1.0);
         const currentSizePercent = 50 + ratio * 50;
         const sizeRemaining = Math.max(0, 100 - currentSizePercent);
@@ -259,22 +263,33 @@ function scanGardenCrops(): CropSizeInfo[] {
 
 /**
  * Calculate boosts needed for a crop to reach 100% size
+ * IMPORTANT: Crop Size Boost is applied to the scale (1.0-maxScale), not the 50-100% visual size
+ * Each boost multiplies the scale by (1 + boostPercent/100)
  */
 function calculateBoostsNeeded(
   crop: CropSizeInfo,
   boostPercent: number
 ): number {
-  if (crop.sizeRemaining <= 0) return 0;
+  if (crop.currentScale >= crop.maxScale) return 0;
   if (boostPercent <= 0) return Infinity;
 
-  // How many boosts to reach 100%
-  return Math.ceil(crop.sizeRemaining / boostPercent);
+  // Calculate how many boosts needed to reach maxScale
+  // Each boost: newScale = currentScale * (1 + boostPercent/100)
+  // After n boosts: finalScale = currentScale * (1 + boostPercent/100)^n
+  // We need: currentScale * (1 + boostPercent/100)^n >= maxScale
+  // Solving for n: n = log(maxScale / currentScale) / log(1 + boostPercent/100)
+  
+  const multiplier = 1 + boostPercent / 100;
+  const scaleRatio = crop.maxScale / crop.currentScale;
+  const boostsNeeded = Math.log(scaleRatio) / Math.log(multiplier);
+  
+  return Math.ceil(boostsNeeded);
 }
 
 /**
- * Calculate time estimates using statistical formulas (fast, no simulation)
- * Each pet rolls independently - we calculate the combined probability per time unit
- * Returns P10 (optimistic), P50 (median/expected), P90 (pessimistic) percentiles
+ * Calculate time estimates based on proc rates
+ * NOTE: Crop Size Boost does NOT stack, so we only use the weakest pet
+ * Abilities proc relatively infrequently in practice
  */
 function calculateTimeEstimates(
   boostsNeeded: number,
@@ -284,36 +299,29 @@ function calculateTimeEstimates(
     return { p10: 0, p50: 0, p90: 0 };
   }
 
-  // Calculate combined probability per second
-  // Each pet rolls independently: P(at least 1 procs) = 1 - P(none proc)
-  const probPerSecond = boostPets.map(pet => pet.effectiveProcChance / 60 / 100); // Convert %/min to probability/sec
+  // Find the weakest boost pet (lowest effective boost %)
+  const weakestPet = boostPets.reduce((worst, pet) => 
+    pet.effectiveBoostPercent < worst.effectiveBoostPercent ? pet : worst
+  );
 
-  // Combined probability that at least one pet procs in a given second
-  // P(at least one) = 1 - P(all fail) = 1 - ∏(1 - p_i)
-  const probNoneProc = probPerSecond.reduce((acc, p) => acc * (1 - p), 1);
-  const probAtLeastOne = 1 - probNoneProc;
+  // Use only the weakest pet's proc rate for conservative estimates
+  // Expected minutes between procs for this pet
+  const minutesPerProc = weakestPet.expectedMinutesPerProc;
 
-  if (probAtLeastOne <= 0) {
-    return { p10: 0, p50: 0, p90: 0 };
-  }
+  // Conservative estimates (abilities don't proc as often in practice)
+  // Add 50% buffer to account for RNG variance and real-world proc rates
+  const adjustedMinutesPerProc = minutesPerProc * 1.5;
 
-  // For geometric distribution (time until success):
-  // CDF: P(T ≤ t) = 1 - (1-p)^t
-  // To find time for percentile α: t = log(1-α) / log(1-p)
-
-  // Calculate percentiles using proper geometric distribution
-  // Note: For small p, log(1-p) ≈ -p, but we use exact formula
-  const logOneMinusP = Math.log(1 - probAtLeastOne);
-
-  // For a single boost:
-  const secondsForP10 = Math.log(1 - 0.10) / logOneMinusP; // 10% will be faster
-  const secondsForP50 = Math.log(1 - 0.50) / logOneMinusP; // Median
-  const secondsForP90 = Math.log(1 - 0.90) / logOneMinusP; // 90% will be faster
-
-  // For N boosts, multiply by N (approximation for large N)
-  const p10 = (boostsNeeded * secondsForP10) / 60;
-  const p50 = (boostsNeeded * secondsForP50) / 60;
-  const p90 = (boostsNeeded * secondsForP90) / 60;
+  // Calculate time for N boosts with variance
+  const baseTime = boostsNeeded * adjustedMinutesPerProc;
+  
+  // Percentiles based on variance
+  // P10: optimistic (20% faster than expected)
+  // P50: median (expected value)
+  // P90: pessimistic (50% slower than expected)
+  const p10 = baseTime * 0.8;
+  const p50 = baseTime;
+  const p90 = baseTime * 1.5;
 
   return { p10, p50, p90 };
 }

@@ -16,6 +16,7 @@ export interface AbilityDefinition {
     effectSuffix?: string;
 }
 export declare function getAbilityDefinition(raw: string | null | undefined): AbilityDefinition | null;
+export declare function getAllAbilityDefinitions(): AbilityDefinition[];
 export interface AbilityStats {
     multiplier: number;
     chancePerRoll: number;

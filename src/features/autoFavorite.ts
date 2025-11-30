@@ -13,6 +13,12 @@ export interface AutoFavoriteConfig {
   species: string[]; // List of species names to auto-favorite
   mutations: string[]; // List of mutations to auto-favorite (Rainbow, Gold, Frozen, etc)
   petAbilities: string[]; // List of pet abilities to auto-favorite (Rainbow Granter, Gold Granter)
+  
+  // Advanced filters - now all multi-select arrays
+  filterByAbilities?: string[]; // Multiple ability names to filter by
+  filterByAbilityCount?: number | null | undefined; // Number of abilities (1-4)
+  filterBySpecies?: string[]; // Multiple species filter
+  filterByCropTypes?: string[]; // Multiple crop category filters (Seed, Fruit, Vegetable, Flower)
 }
 
 let config: AutoFavoriteConfig = {
@@ -20,21 +26,63 @@ let config: AutoFavoriteConfig = {
   species: [],
   mutations: [],
   petAbilities: [],
+  filterByAbilities: [],
+  filterByAbilityCount: null,
+  filterBySpecies: [],
+  filterByCropTypes: [],
 };
 
 const listeners = new Set<(config: AutoFavoriteConfig) => void>();
 let intervalId: number | null = null;
 let seenItemIds = new Set<string>();
 
+/**
+ * Get crop type category for filtering
+ */
+function getCropType(species: string | null | undefined): string | null {
+  if (!species) return null;
+  
+  const normalized = species.toLowerCase();
+  
+  // Seed crops
+  const seeds = ['wheat', 'corn', 'rice', 'barley', 'oat', 'sunflower'];
+  if (seeds.some(s => normalized.includes(s))) return 'Seed';
+  
+  // Fruits
+  const fruits = ['apple', 'banana', 'strawberry', 'blueberry', 'grape', 'watermelon', 'lemon', 'coconut', 'lychee', 'passionfruit', 'dragonfruit', 'pumpkin'];
+  if (fruits.some(f => normalized.includes(f))) return 'Fruit';
+  
+  // Vegetables
+  const vegetables = ['carrot', 'tomato', 'pepper', 'aloe', 'mushroom', 'bamboo', 'favabean', 'squash'];
+  if (vegetables.some(v => normalized.includes(v))) return 'Vegetable';
+  
+  // Flowers
+  const flowers = ['daffodil', 'lily', 'tulip', 'chrysanthemum', 'camellia', 'echeveria', 'cactus', 'burrostail'];
+  if (flowers.some(f => normalized.includes(f))) return 'Flower';
+  
+  return 'Other';
+}
+
 function loadConfig(): void {
   try {
     const stored = storage.get<Partial<AutoFavoriteConfig> | null>(STORAGE_KEY, null);
     if (stored && typeof stored === 'object') {
+      // Migrate old single-value filters to arrays
+      const migrateToArray = (value: any): string[] => {
+        if (Array.isArray(value)) return value;
+        if (value && typeof value === 'string') return [value];
+        return [];
+      };
+
       config = {
         enabled: stored.enabled ?? config.enabled,
         species: stored.species ?? config.species,
         mutations: stored.mutations ?? config.mutations,
         petAbilities: stored.petAbilities ?? config.petAbilities,
+        filterByAbilities: migrateToArray((stored as any).filterByAbilities || (stored as any).filterByAbility),
+        filterByAbilityCount: stored.filterByAbilityCount !== undefined ? stored.filterByAbilityCount : config.filterByAbilityCount,
+        filterBySpecies: migrateToArray((stored as any).filterBySpecies),
+        filterByCropTypes: migrateToArray((stored as any).filterByCropTypes || (stored as any).filterByCropType),
       };
     }
   } catch (error) {
@@ -85,6 +133,51 @@ function checkAndFavoriteNewItems(inventory: any): void {
 
     // Check if it's a pet
     if (item.itemType === 'Pet') {
+      let shouldFavoritePet = false;
+      let reason = '';
+
+      // Apply species filter for pets (check both species and petSpecies fields)
+      if (config.filterBySpecies && config.filterBySpecies.length > 0) {
+        const itemSpecies = item.species || item.petSpecies || '';
+        if (!config.filterBySpecies.includes(itemSpecies)) {
+          continue; // Skip this pet if it doesn't match species filter
+        }
+        shouldFavoritePet = true;
+        reason = 'filtered species';
+      }
+
+      // Filter by ability types (multi-select)
+      if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+        const petAbilities = item.abilities || [];
+        const hasAnyAbility = config.filterByAbilities.some(filterAbilityId => 
+          petAbilities.some((a: any) => {
+            // Get the ability string from the item
+            const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+            const abilityLower = abilityStr.toLowerCase();
+            const filterLower = filterAbilityId.toLowerCase();
+            
+            // Match if the pet's ability contains the filter ID (e.g., "ProduceEater" contains "produceeater")
+            // This handles ability IDs like "ProduceEater", "PlantGrowthBoost", etc.
+            return abilityLower.includes(filterLower) || abilityLower === filterLower;
+          })
+        );
+        if (!hasAnyAbility) continue; // Skip this pet if it doesn't have the filtered ability
+        shouldFavoritePet = true;
+        reason = 'filtered ability';
+      }
+
+      // Filter by ability count
+      if (config.filterByAbilityCount != null) {
+        const petAbilities = item.abilities || [];
+        if (petAbilities.length !== config.filterByAbilityCount) {
+          continue; // Skip this pet if it doesn't have the right ability count
+        }
+        if (!shouldFavoritePet) {
+          shouldFavoritePet = true;
+          reason = `${config.filterByAbilityCount} abilities`;
+        }
+      }
+      
       // Check pet mutations for Gold or Rainbow
       const petMutations = item.mutations || [];
       const hasGoldMutation = petMutations.includes('Gold');
@@ -101,30 +194,61 @@ function checkAndFavoriteNewItems(inventory: any): void {
         return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
       });
 
-      const shouldFavorite =
-        (targetPetAbilities.has('Gold Granter') && (hasGoldMutation || hasGoldGranterAbility)) ||
-        (targetPetAbilities.has('Rainbow Granter') && (hasRainbowMutation || hasRainbowGranterAbility));
+      // Check if Gold/Rainbow Granter filter is enabled
+      if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+        const hasGoldGranterFilter = config.filterByAbilities.some(abilityId => 
+          abilityId.toLowerCase().includes('goldgranter') || abilityId.toLowerCase() === 'gold granter'
+        );
+        const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId => 
+          abilityId.toLowerCase().includes('rainbowgranter') || abilityId.toLowerCase() === 'rainbow granter'
+        );
 
-      if (shouldFavorite) {
+        if (hasGoldGranterFilter && (hasGoldMutation || hasGoldGranterAbility)) {
+          shouldFavoritePet = true;
+          reason = 'Gold Granter';
+        }
+        if (hasRainbowGranterFilter && (hasRainbowMutation || hasRainbowGranterAbility)) {
+          shouldFavoritePet = true;
+          reason = 'Rainbow Granter';
+        }
+      }
+
+      if (shouldFavoritePet) {
         if (sendFavoriteMessage(item.id)) {
-          log(`🌟 [AUTO-FAVORITE] Auto-favorited pet: ${item.petSpecies || item.species || 'unknown'} (${hasGoldMutation || hasGoldGranterAbility ? 'Gold' : 'Rainbow'})`);
+          log(`🌟 [AUTO-FAVORITE] Auto-favorited pet: ${item.petSpecies || item.species || 'unknown'} (${reason})`);
           petCount++;
         }
       }
       continue;
     }
 
-    // Check if item matches species
-    const matchesSpecies = targetSpecies.has(item.species);
+    // Handle crops/produce
+    if (item.itemType === 'Produce') {
+      let shouldFavoriteCrop = false;
 
-    // Check if item matches any mutation
-    const itemMutations = item.mutations || [];
-    const matchesMutation = itemMutations.some((mut: string) => targetMutations.has(mut));
+      // Filter by crop type/name (now individual crop names)
+      if (config.filterByCropTypes && config.filterByCropTypes.length > 0) {
+        if (!config.filterByCropTypes.includes(item.species)) {
+          continue; // Skip this crop if it doesn't match the crop name filter
+        }
+        shouldFavoriteCrop = true;
+      }
 
-    if (matchesSpecies || matchesMutation) {
-      // Send favorite command
-      if (sendFavoriteMessage(item.id)) {
-        cropCount++;
+      // Check if item matches species (from legacy checkboxes)
+      if (targetSpecies.has(item.species)) {
+        shouldFavoriteCrop = true;
+      }
+
+      // Check if item matches any mutation
+      const itemMutations = item.mutations || [];
+      if (itemMutations.some((mut: string) => targetMutations.has(mut))) {
+        shouldFavoriteCrop = true;
+      }
+
+      if (shouldFavoriteCrop) {
+        if (sendFavoriteMessage(item.id)) {
+          cropCount++;
+        }
       }
     }
   }

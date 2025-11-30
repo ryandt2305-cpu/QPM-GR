@@ -24,7 +24,6 @@ export interface UIState {
     turtleDetail: HTMLElement | null;
     turtleFooter: HTMLElement | null;
     turtleEnableButtons: HTMLButtonElement[];
-    turtleBoardwalkToggles: HTMLInputElement[];
     turtleFocusSelects: HTMLSelectElement[];
     turtleFocusTargetSelects: HTMLSelectElement[];
     turtleFocusTargetContainers: HTMLElement[];
@@ -109,7 +108,7 @@ export interface AbilityContribution {
     effectDetail: string | null;
     effectPerHour: number;
 }
-export declare function createOriginalUI(): HTMLElement;
+export declare function createOriginalUI(): Promise<HTMLElement>;
 export declare function updateUIStatus(text: string): void;
 export declare function updateWeatherUI(text: string): void;
 export declare function updateShopStatus(text: string): void;

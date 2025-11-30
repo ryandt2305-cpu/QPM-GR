@@ -1,0 +1,239 @@
+{
+  "timestamp": "2025-11-30T09:10:38.885Z",
+  "source": "main-D6KeWgpc.js",
+  "pets": {
+    "Worm": {
+      "name": "Worm",
+      "hungerCost": 500,
+      "abilities": {
+        "SeedFinderI": 50,
+        "ProduceEater": 50
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2,
+      "sellPrice": 5000,
+      "weight": 0.1,
+      "moveProb": 0.1,
+      "hoursToMature": 12,
+      "rarity": "Common"
+    },
+    "Snail": {
+      "name": "Snail",
+      "hungerCost": 1000,
+      "abilities": {
+        "CoinFinderI": 100
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2,
+      "sellPrice": 10000,
+      "weight": 0.15,
+      "moveProb": 0.01,
+      "hoursToMature": 12,
+      "rarity": "Common"
+    },
+    "Bee": {
+      "name": "Bee",
+      "hungerCost": 1500,
+      "abilities": {
+        "ProduceScaleBoost": 50,
+        "ProduceMutationBoost": 50
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2.5,
+      "sellPrice": 30000,
+      "weight": 0.2,
+      "moveProb": 0.5,
+      "hoursToMature": 12,
+      "rarity": "Common"
+    },
+    "Chicken": {
+      "name": "Chicken",
+      "hungerCost": 3000,
+      "abilities": {
+        "EggGrowthBoost": 80,
+        "PetRefund": 20
+      },
+      "baseTileScale": 0.8,
+      "maxScale": 2,
+      "sellPrice": 50000,
+      "weight": 3,
+      "moveProb": 0.2,
+      "hoursToMature": 24,
+      "rarity": "Uncommon"
+    },
+    "Bunny": {
+      "name": "Bunny",
+      "hungerCost": 750,
+      "abilities": {
+        "CoinFinderII": 60,
+        "SellBoostI": 40
+      },
+      "baseTileScale": 0.7,
+      "maxScale": 2,
+      "sellPrice": 75000,
+      "weight": 2,
+      "moveProb": 0.3,
+      "hoursToMature": 24,
+      "rarity": "Uncommon"
+    },
+    "Dragonfly": {
+      "name": "Dragonfly",
+      "hungerCost": 250,
+      "abilities": {
+        "HungerRestore": 70,
+        "PetMutationBoost": 30
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2.5,
+      "sellPrice": 150000,
+      "weight": 0.2,
+      "moveProb": 0.7,
+      "hoursToMature": 24,
+      "rarity": "Uncommon"
+    },
+    "Pig": {
+      "name": "Pig",
+      "hungerCost": 50000,
+      "abilities": {
+        "SellBoostII": 30,
+        "PetAgeBoost": 30,
+        "PetHatchSizeBoost": 30
+      },
+      "baseTileScale": 1,
+      "maxScale": 2.5,
+      "sellPrice": 500000,
+      "weight": 200,
+      "moveProb": 0.2,
+      "hoursToMature": 72,
+      "rarity": "Rare"
+    },
+    "Cow": {
+      "name": "Cow",
+      "hungerCost": 25000,
+      "abilities": {
+        "SeedFinderII": 30,
+        "HungerBoost": 30,
+        "PlantGrowthBoost": 30
+      },
+      "baseTileScale": 1.1,
+      "maxScale": 2.5,
+      "sellPrice": 1000000,
+      "weight": 600,
+      "moveProb": 0.1,
+      "hoursToMature": 72,
+      "rarity": "Rare"
+    },
+    "Turkey": {
+      "name": "Turkey",
+      "hungerCost": 500,
+      "abilities": {
+        "RainDance": 60,
+        "EggGrowthBoostII_NEW": 35,
+        "DoubleHatch": 5
+      },
+      "baseTileScale": 1,
+      "maxScale": 2.5,
+      "sellPrice": 3000000,
+      "weight": 10,
+      "moveProb": 0.25,
+      "hoursToMature": 72,
+      "rarity": "Rare"
+    },
+    "Squirrel": {
+      "name": "Squirrel",
+      "hungerCost": 15000,
+      "abilities": {
+        "CoinFinderIII": 70,
+        "SellBoostIII": 20,
+        "PetMutationBoostII": 10
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2,
+      "sellPrice": 5000000,
+      "weight": 0.5,
+      "moveProb": 0.4,
+      "hoursToMature": 100,
+      "rarity": "Legendary"
+    },
+    "Turtle": {
+      "name": "Turtle",
+      "hungerCost": 100000,
+      "abilities": {
+        "HungerRestoreII": 25,
+        "HungerBoostII": 25,
+        "PlantGrowthBoostII": 25,
+        "EggGrowthBoostII": 25
+      },
+      "baseTileScale": 1,
+      "maxScale": 2.5,
+      "sellPrice": 10000000,
+      "weight": 150,
+      "moveProb": 0.05,
+      "hoursToMature": 100,
+      "rarity": "Legendary"
+    },
+    "Goat": {
+      "name": "Goat",
+      "hungerCost": 20000,
+      "abilities": {
+        "PetHatchSizeBoostII": 10,
+        "PetAgeBoostII": 40,
+        "PetXpBoost": 40
+      },
+      "baseTileScale": 1,
+      "maxScale": 2,
+      "sellPrice": 20000000,
+      "weight": 100,
+      "moveProb": 0.2,
+      "hoursToMature": 100,
+      "rarity": "Legendary"
+    },
+    "Butterfly": {
+      "name": "Butterfly",
+      "hungerCost": 25000,
+      "abilities": {
+        "ProduceScaleBoostII": 40,
+        "ProduceMutationBoostII": 40,
+        "SeedFinderIII": 20
+      },
+      "baseTileScale": 0.6,
+      "maxScale": 2.5,
+      "sellPrice": 50000000,
+      "weight": 0.2,
+      "moveProb": 0.6,
+      "hoursToMature": 144,
+      "rarity": "Mythic"
+    },
+    "Peacock": {
+      "name": "Peacock",
+      "hungerCost": 100000,
+      "abilities": {
+        "SellBoostIV": 40,
+        "PetXpBoostII": 50,
+        "PetRefundII": 10
+      },
+      "baseTileScale": 1.2,
+      "maxScale": 2.5,
+      "sellPrice": 100000000,
+      "weight": 5,
+      "moveProb": 0.2,
+      "hoursToMature": 144,
+      "rarity": "Mythic"
+    },
+    "Capybara": {
+      "name": "Capybara",
+      "hungerCost": 150000,
+      "abilities": {
+        "DoubleHarvest": 50,
+        "ProduceRefund": 50
+      },
+      "baseTileScale": 1,
+      "maxScale": 2.5,
+      "sellPrice": 200000000,
+      "weight": 50,
+      "moveProb": 0.2,
+      "hoursToMature": 144,
+      "rarity": "Mythic"
+    }
+  }
+}

@@ -15,6 +15,10 @@ const CURRENT_MIGRATION_VERSION = 1;
 // Items to track predictions for
 const TRACKED_PREDICTION_ITEMS = ['Mythical Eggs', 'Sunflower', 'Starweaver', 'Dawnbinder', 'Moonbinder'];
 
+// Performance optimization: Cache for item intervals to avoid recalculating
+let itemIntervalsCache: Map<string, number[]> | null = null;
+let itemIntervalsCacheVersion: number = 0;
+
 /**
  * Restock event data structure
  */
@@ -622,47 +626,86 @@ function percentile(arr: number[], p: number): number {
  * Get intervals between appearances of an item (with rapid restock filtering)
  * Uses item-specific thresholds to filter out clustering behavior
  */
-function getItemIntervals(itemName: string): number[] {
-  const appearances = restockEvents
-    .filter(event => event.items.some(item => item.name === itemName))
-    .map(event => event.timestamp)
-    .sort((a, b) => a - b);
-
-  if (appearances.length < 2) {
-    return [];
+/**
+ * Build cache for item intervals (performance optimization)
+ * Call this once before processing many items to avoid O(n*m) complexity
+ */
+function buildItemIntervalsCache(): void {
+  // Only rebuild if data changed
+  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
+    return;
   }
 
-  // Item-specific rapid restock thresholds to filter clustering
-  let rapidRestockThreshold: number;
+  itemIntervalsCache = new Map();
+  itemIntervalsCacheVersion = restockEvents.length;
 
-  if (itemName === 'Starweaver' || itemName === 'Dawnbinder' || itemName === 'Moonbinder') {
-    // Celestials can appear in clusters over multiple days
-    // Filter out anything within 5 days to only count gaps between clusters
-    rapidRestockThreshold = 5 * 24 * 60 * 60 * 1000; // 5 days
-  } else if (itemName === 'Sunflower' || itemName === 'Mythical Eggs') {
-    // Highly variable items - filter out same-day clusters
-    rapidRestockThreshold = 12 * 60 * 60 * 1000; // 12 hours
-  } else {
-    // Default: filter rapid succession (within 30 minutes)
-    rapidRestockThreshold = 30 * 60 * 1000; // 30 minutes
-  }
+  // Build appearance map for all items at once
+  const appearancesMap = new Map<string, number[]>();
 
-  const filteredAppearances: number[] = [appearances[0]!];
-
-  for (let i = 1; i < appearances.length; i++) {
-    const timeSinceLast = appearances[i]! - appearances[i - 1]!;
-    if (timeSinceLast > rapidRestockThreshold) {
-      filteredAppearances.push(appearances[i]!);
+  for (const event of restockEvents) {
+    for (const item of event.items) {
+      let appearances = appearancesMap.get(item.name);
+      if (!appearances) {
+        appearances = [];
+        appearancesMap.set(item.name, appearances);
+      }
+      appearances.push(event.timestamp);
     }
   }
 
-  // Calculate intervals
-  const intervals: number[] = [];
-  for (let i = 1; i < filteredAppearances.length; i++) {
-    intervals.push(filteredAppearances[i]! - filteredAppearances[i - 1]!);
+  // Calculate intervals for each item
+  for (const [itemName, appearances] of appearancesMap.entries()) {
+    appearances.sort((a, b) => a - b);
+
+    if (appearances.length < 2) {
+      itemIntervalsCache.set(itemName, []);
+      continue;
+    }
+
+    // Item-specific rapid restock thresholds to filter clustering
+    let rapidRestockThreshold: number;
+
+    if (itemName === 'Starweaver' || itemName === 'Dawnbinder' || itemName === 'Moonbinder') {
+      rapidRestockThreshold = 5 * 24 * 60 * 60 * 1000; // 5 days
+    } else if (itemName === 'Sunflower' || itemName === 'Mythical Eggs') {
+      rapidRestockThreshold = 12 * 60 * 60 * 1000; // 12 hours
+    } else {
+      rapidRestockThreshold = 30 * 60 * 1000; // 30 minutes
+    }
+
+    const filteredAppearances: number[] = [appearances[0]!];
+
+    for (let i = 1; i < appearances.length; i++) {
+      const timeSinceLast = appearances[i]! - appearances[i - 1]!;
+      if (timeSinceLast > rapidRestockThreshold) {
+        filteredAppearances.push(appearances[i]!);
+      }
+    }
+
+    // Calculate intervals
+    const intervals: number[] = [];
+    for (let i = 1; i < filteredAppearances.length; i++) {
+      intervals.push(filteredAppearances[i]! - filteredAppearances[i - 1]!);
+    }
+
+    itemIntervalsCache.set(itemName, intervals);
+  }
+}
+
+function getItemIntervals(itemName: string): number[] {
+  // Check cache first (performance optimization for large datasets)
+  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
+    const cached = itemIntervalsCache.get(itemName);
+    if (cached !== undefined) {
+      return cached;
+    }
   }
 
-  return intervals;
+  // If not in cache, build cache for all items
+  // (this happens on first call or after data changes)
+  buildItemIntervalsCache();
+
+  return itemIntervalsCache?.get(itemName) ?? [];
 }
 
 /**

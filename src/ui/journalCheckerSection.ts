@@ -1,6 +1,21 @@
 // src/ui/journalCheckerSection.ts
 // Visually revamped Journal Checker UI
 
+import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
+import { storage } from '../utils/storage';
+
+// Storage for user notes per species
+function getSpeciesNotes(species: string): string {
+  const notes = storage.get<Record<string, string>>('journal:notes', {});
+  return notes[species] || '';
+}
+
+function saveSpeciesNotes(species: string, notes: string): void {
+  const allNotes = storage.get<Record<string, string>>('journal:notes', {});
+  allNotes[species] = notes;
+  storage.set('journal:notes', allNotes);
+}
+
 export function createJournalCheckerSection(): HTMLElement {
   const root = document.createElement('div');
   root.dataset.qpmSection = 'journal-checker';
@@ -183,22 +198,46 @@ export function createJournalCheckerSection(): HTMLElement {
           speciesCard.style.transform = 'translateX(0)';
         });
 
+        // Get sprite
+        const speciesKey = species.species.toLowerCase().replace(/\s+/g, '');
+        const spriteDataUrl = getCropSpriteDataUrl(speciesKey);
+        const isComplete = percentage === 100;
+        
         speciesCard.innerHTML = `
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 18px;">🌿</span>
-              <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="color: #8BC34A; font-size: 13px; font-weight: bold;">${collectedCount}/${totalCount}</span>
-              <span style="
-                background: ${percentage === 100 ? '#8BC34A' : '#555'};
-                color: ${percentage === 100 ? '#000' : '#fff'};
-                padding: 2px 8px;
-                border-radius: 12px;
-                font-size: 11px;
-                font-weight: bold;
-              ">${Math.round(percentage)}%</span>
+          <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+            ${spriteDataUrl ? `
+              <div style="
+                width: 64px;
+                height: 64px;
+                background-image: url(${spriteDataUrl});
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
+                border-radius: 8px;
+                border: 2px solid ${isComplete ? '#8BC34A' : '#444'};
+                flex-shrink: 0;
+                image-rendering: pixelated;
+                ${isComplete ? 'box-shadow: 0 0 20px #8BC34A66; filter: saturate(1.5) brightness(1.2);' : ''}
+              "></div>
+            ` : ''}
+            <div style="flex: 1;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
+                  ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: #8BC34A; font-size: 13px; font-weight: bold;">${collectedCount}/${totalCount}</span>
+                  <span style="
+                    background: ${isComplete ? '#8BC34A' : '#555'};
+                    color: ${isComplete ? '#000' : '#fff'};
+                    padding: 2px 8px;
+                    border-radius: 12px;
+                    font-size: 11px;
+                    font-weight: bold;
+                  ">${Math.round(percentage)}%</span>
+                </div>
+              </div>
             </div>
           </div>
           <div style="
@@ -248,6 +287,36 @@ export function createJournalCheckerSection(): HTMLElement {
             }).join('')}
           </div>
         `;
+
+        // Add notes section
+        const notesContainer = document.createElement('div');
+        notesContainer.style.cssText = 'margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;';
+        
+        const notesLabel = document.createElement('div');
+        notesLabel.style.cssText = 'font-size: 11px; color: #aaa; margin-bottom: 6px; font-weight: 500;';
+        notesLabel.textContent = '📝 Notes';
+        notesContainer.appendChild(notesLabel);
+        
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = getSpeciesNotes(species.species);
+        notesTextarea.placeholder = 'Add your notes here...';
+        notesTextarea.style.cssText = `
+          width: 100%;
+          min-height: 60px;
+          padding: 8px;
+          background: rgba(0, 0, 0, 0.3);
+          border: 1px solid #444;
+          border-radius: 4px;
+          color: #fff;
+          font-size: 12px;
+          font-family: inherit;
+          resize: vertical;
+        `;
+        notesTextarea.addEventListener('blur', () => {
+          saveSpeciesNotes(species.species, notesTextarea.value);
+        });
+        notesContainer.appendChild(notesTextarea);
+        speciesCard.appendChild(notesContainer);
 
         resultsContainer.appendChild(speciesCard);
       }
@@ -299,20 +368,41 @@ export function createJournalCheckerSection(): HTMLElement {
           speciesCard.style.transform = 'translateX(0)';
         });
 
+        // Note: Pet sprites would require pet sprite sheet (not currently available)
+        // For now, we show emoji placeholder
+        const isComplete = percentage === 100;
+        
         let html = `
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 18px;">🐾</span>
-              <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
+          <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+            <div style="
+              width: 64px;
+              height: 64px;
+              background: linear-gradient(135deg, ${isComplete ? '#42A5F5' : '#333'}, ${isComplete ? '#64B5F6' : '#222'});
+              border-radius: 8px;
+              border: 2px solid ${isComplete ? '#42A5F5' : '#444'};
+              flex-shrink: 0;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 32px;
+              ${isComplete ? 'box-shadow: 0 0 20px #42A5F566;' : ''}
+            ">🐾</div>
+            <div style="flex: 1;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
+                  ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
+                </div>
+                <span style="
+                  background: ${isComplete ? '#42A5F5' : '#555'};
+                  color: ${isComplete ? '#000' : '#fff'};
+                  padding: 2px 8px;
+                  border-radius: 12px;
+                  font-size: 11px;
+                  font-weight: bold;
+                ">${Math.round(percentage)}%</span>
+              </div>
             </div>
-            <span style="
-              background: ${percentage === 100 ? '#42A5F5' : '#555'};
-              color: ${percentage === 100 ? '#000' : '#fff'};
-              padding: 2px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: bold;
-            ">${Math.round(percentage)}%</span>
           </div>
           <div style="
             background: #111;
@@ -365,6 +455,37 @@ export function createJournalCheckerSection(): HTMLElement {
         }
 
         speciesCard.innerHTML = html;
+        
+        // Add notes section for pets
+        const notesContainer = document.createElement('div');
+        notesContainer.style.cssText = 'margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;';
+        
+        const notesLabel = document.createElement('div');
+        notesLabel.style.cssText = 'font-size: 11px; color: #aaa; margin-bottom: 6px; font-weight: 500;';
+        notesLabel.textContent = '📝 Notes';
+        notesContainer.appendChild(notesLabel);
+        
+        const notesTextarea = document.createElement('textarea');
+        notesTextarea.value = getSpeciesNotes(`pet:${species.species}`);
+        notesTextarea.placeholder = 'Add your notes here...';
+        notesTextarea.style.cssText = `
+          width: 100%;
+          min-height: 60px;
+          padding: 8px;
+          background: rgba(0, 0, 0, 0.3);
+          border: 1px solid #444;
+          border-radius: 4px;
+          color: #fff;
+          font-size: 12px;
+          font-family: inherit;
+          resize: vertical;
+        `;
+        notesTextarea.addEventListener('blur', () => {
+          saveSpeciesNotes(`pet:${species.species}`, notesTextarea.value);
+        });
+        notesContainer.appendChild(notesTextarea);
+        speciesCard.appendChild(notesContainer);
+        
         resultsContainer.appendChild(speciesCard);
       }
     } else if (selectedCategory === 'recommendations') {

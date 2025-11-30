@@ -197,6 +197,16 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     notes: 'Converts a random uncolored crop to Rainbow using live garden snapshot.',
   },
   {
+    id: 'RainDance',
+    name: 'Rain Dance',
+    category: 'misc',
+    trigger: 'continuous',
+    baseProbability: 10,
+    rollPeriodMinutes: 1,
+    effectUnit: 'coins',
+    notes: 'Grants Wet mutation to crops. Turkey innate ability.',
+  },
+  {
     id: 'EggGrowthBoost',
     name: 'Egg Growth Boost I',
     aliases: ['Egg Growth Boost 1'],
@@ -208,18 +218,18 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     effectUnit: 'minutes',
   },
   {
-    id: 'EggGrowthBoostII',
+    id: 'EggGrowthBoostII_NEW',
     name: 'Egg Growth Boost II',
     aliases: ['Egg Growth Boost 2'],
     category: 'eggGrowth',
     trigger: 'continuous',
     baseProbability: 24,
     rollPeriodMinutes: 1,
-    effectValuePerProc: 10,
+    effectValuePerProc: 9,
     effectUnit: 'minutes',
   },
   {
-    id: 'EggGrowthBoostIII',
+    id: 'EggGrowthBoostII',
     name: 'Egg Growth Boost III',
     aliases: ['Egg Growth Boost 3'],
     category: 'eggGrowth',
@@ -468,6 +478,10 @@ export function getAbilityDefinition(raw: string | null | undefined): AbilityDef
   }
   const normalized = normalizeKey(raw);
   return abilityLookup.get(normalized) ?? null;
+}
+
+export function getAllAbilityDefinitions(): AbilityDefinition[] {
+  return [...ABILITY_DEFINITIONS];
 }
 
 const STRENGTH_BASELINE = 100;

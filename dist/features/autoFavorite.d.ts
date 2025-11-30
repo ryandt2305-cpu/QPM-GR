@@ -3,6 +3,10 @@ export interface AutoFavoriteConfig {
     species: string[];
     mutations: string[];
     petAbilities: string[];
+    filterByAbilities?: string[];
+    filterByAbilityCount?: number | null | undefined;
+    filterBySpecies?: string[];
+    filterByCropTypes?: string[];
 }
 export declare function initializeAutoFavorite(): void;
 export declare function getAutoFavoriteConfig(): AutoFavoriteConfig;

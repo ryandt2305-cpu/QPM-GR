@@ -46,8 +46,9 @@ export declare const EGG_PET_RATES: {
         readonly Dragonfly: 0.1;
     };
     readonly Rare: {
-        readonly Pig: 0.9;
-        readonly Cow: 0.1;
+        readonly Pig: 0.8;
+        readonly Cow: 0.15;
+        readonly Turkey: 0.05;
     };
     readonly Legendary: {
         readonly Turtle: 0.3;
@@ -73,6 +74,7 @@ export declare const PET_ABILITY_POOLS: {
     readonly Dragonfly: readonly ["Hunger Restore I", "Pet Mutation Boost I"];
     readonly Pig: readonly ["Sell Boost II", "Hatch XP Boost I", "Max Strength I"];
     readonly Cow: readonly ["Seed Finder II", "Hunger Boost I", "Plant Growth I"];
+    readonly Turkey: readonly ["Rain Dance", "Egg Growth II", "Double Hatch"];
     readonly Turtle: readonly ["Hunger Restore II", "Hunger Boost II", "Egg Growth II", "Plant Growth II"];
     readonly Goat: readonly ["XP Boost", "Hatch XP Boost II", "Max Strength II"];
     readonly Squirrel: readonly ["Pet Mutation Boost II", "Coin Finder III", "Sell Boost III"];

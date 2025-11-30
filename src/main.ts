@@ -21,6 +21,8 @@ import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvai
 import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
+import { spriteExtractor } from './utils/spriteExtractor';
+import { initCropSizeIndicator } from './features/cropSizeIndicator';
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -90,6 +92,59 @@ const QPM_DEBUG_API = {
       console.error('Failed to list atoms:', error);
       return null;
     }
+  },
+
+  // Expose sprite extractor for debugging
+  spriteExtractor: spriteExtractor,
+  
+  // Debug function to view all sprite tiles
+  viewAllSprites: () => {
+    console.log('=== Exporting all sprite tiles ===');
+    const container = document.createElement('div');
+    container.style.cssText = `
+      position: fixed;
+      top: 50px;
+      right: 50px;
+      background: rgba(0,0,0,0.9);
+      padding: 20px;
+      max-width: 800px;
+      max-height: 80vh;
+      overflow: auto;
+      z-index: 999999;
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 5px;
+    `;
+    
+    for (let i = 0; i < 60; i++) {
+      const tile = spriteExtractor.getTile('plants', i);
+      if (tile) {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position: relative; text-align: center;';
+        
+        const label = document.createElement('div');
+        label.textContent = `${i}`;
+        label.style.cssText = 'font-size: 10px; color: #fff; background: rgba(0,0,0,0.7); padding: 2px;';
+        
+        const img = new Image();
+        img.src = tile.toDataURL();
+        img.style.cssText = 'width: 64px; height: 64px; image-rendering: pixelated; border: 1px solid #444;';
+        img.title = `Tile ${i}`;
+        
+        wrapper.appendChild(label);
+        wrapper.appendChild(img);
+        container.appendChild(wrapper);
+      }
+    }
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.style.cssText = 'position: sticky; top: 0; left: 0; z-index: 1; grid-column: 1 / -1;';
+    closeBtn.onclick = () => container.remove();
+    container.insertBefore(closeBtn, container.firstChild);
+    
+    document.body.appendChild(container);
+    console.log('Sprite viewer opened. Click tiles to see index.');
   },
 
   checkTargetScale: () => {
@@ -776,6 +831,9 @@ async function waitForGame(): Promise<void> {
 async function initialize(): Promise<void> {
   log('🚀 Quinoa Pet Manager initializing...');
   
+  // Initialize sprite extractor early to intercept image loads
+  spriteExtractor.init();
+  
   // Wait for game to be ready
   await waitForGame();
   initializeStatsStore();
@@ -812,6 +870,9 @@ async function initialize(): Promise<void> {
   // Start crop boost tracker
   startCropBoostTracker();
 
+  // Initialize crop size indicator
+  initCropSizeIndicator();
+
   // Initialize public rooms
   initPublicRooms();
 
@@ -819,7 +880,7 @@ async function initialize(): Promise<void> {
   setCfg(cfg);
 
   // Create UI
-  createOriginalUI();
+  await createOriginalUI();
 
   // Start version checker (checks for updates periodically)
   startVersionChecker();

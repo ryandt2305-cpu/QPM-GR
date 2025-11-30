@@ -3,29 +3,30 @@
 // Source: https://magicgarden.wiki/
 
 export const PET_TIME_TO_MATURE: Record<string, number> = {
-  // Common pets
+  // Common pets (12 hours)
+  Worm: 12,
+  Snail: 12,
   Bee: 12,
-  Butterfly: 12,
-  Ladybug: 12,
-  Dragonfly: 12,
 
-  // Uncommon pets
-  Frog: 18,
-  Snake: 18,
-  Turtle: 18,
-  Lizard: 18,
+  // Uncommon pets (24 hours)
+  Chicken: 24,
+  Bunny: 24,
+  Dragonfly: 24,
 
-  // Rare pets
-  Peacock: 24,
-  Swan: 24,
-  Flamingo: 24,
+  // Rare pets (72 hours)
+  Pig: 72,
+  Cow: 72,
+  Turkey: 72,
 
-  // Epic pets
-  Unicorn: 36,
-  Dragon: 36,
-  Phoenix: 36,
+  // Legendary pets (100 hours)
+  Squirrel: 100,
+  Turtle: 100,
+  Goat: 100,
 
-  // Add more as needed - user can provide complete list
+  // Mythical pets (144 hours)
+  Butterfly: 144,
+  Peacock: 144,
+  Capybara: 144,
 };
 
 /**

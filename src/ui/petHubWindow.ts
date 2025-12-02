@@ -314,14 +314,30 @@ function isAriesScriptInjected(): boolean {
   // Check for Tampermonkey-injected script tags containing Aries code
   try {
     const scripts = Array.from(document.querySelectorAll('script'));
+    log(`[Aries] Checking ${scripts.length} script tags for Aries indicators...`);
 
+    let checkedScripts = 0;
     for (const script of scripts) {
       // Check script src or data attributes for Aries indicators
       const src = script.src || '';
+      const id = script.id || '';
       const dataScript = script.getAttribute('data-tampermonkey-script');
+      const allAttrs = Array.from(script.attributes).map(a => `${a.name}="${a.value.substring(0, 50)}"`).join(', ');
 
-      if (src.includes('aries') || src.includes('quinoa-ws') || src.includes('MGA')) {
+      checkedScripts++;
+
+      // Debug log first 5 scripts with their attributes
+      if (checkedScripts <= 5) {
+        log(`[Aries] Script ${checkedScripts}: src="${src.substring(0, 80)}", id="${id}", attrs=[${allAttrs}]`);
+      }
+
+      if (src.includes('aries') || src.includes('quinoa-ws') || src.includes('quinoa') || src.includes('MGA')) {
         log('[Aries] ✅ Found Aries script in src:', src);
+        return true;
+      }
+
+      if (id.toLowerCase().includes('aries') || id.toLowerCase().includes('quinoa')) {
+        log('[Aries] ✅ Found Aries in script ID:', id);
         return true;
       }
 
@@ -330,13 +346,24 @@ function isAriesScriptInjected(): boolean {
         return true;
       }
 
-      // Check inline script content for Aries signatures (first 500 chars only for performance)
-      const content = script.textContent?.substring(0, 500) || '';
-      if (content.includes('quinoa-ws') || content.includes('QuinoaWS') || content.includes('Aries')) {
+      // Check ALL attributes for Aries keywords
+      for (const attr of script.attributes) {
+        const attrValue = attr.value.toLowerCase();
+        if (attrValue.includes('aries') || attrValue.includes('quinoa') || attrValue.includes('mga')) {
+          log(`[Aries] ✅ Found Aries in attribute ${attr.name}:`, attr.value);
+          return true;
+        }
+      }
+
+      // Check inline script content for Aries signatures (first 1000 chars for better detection)
+      const content = script.textContent?.substring(0, 1000) || '';
+      if (content.includes('quinoa-ws') || content.includes('QuinoaWS') || content.includes('Aries') || content.includes('QWS')) {
         log('[Aries] ✅ Found Aries code signature in script content');
         return true;
       }
     }
+
+    log(`[Aries] Checked ${checkedScripts} scripts, no Aries indicators found`);
   } catch (error) {
     log('[Aries] Error checking scripts:', error);
   }

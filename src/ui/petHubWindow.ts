@@ -10,6 +10,7 @@ import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petMutationRenderer';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
 import { getPetMetadata } from '../data/petMetadata';
+import { getHungerDepletionTime } from '../data/petHungerDepletion';
 
 function formatNumber(value: number): string {
   if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
@@ -1846,17 +1847,16 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   let timePerLevelB: number | null = null;
 
   if (isDifferentSpecies && sharesSameAbilityType) {
-    // Calculate hunger depletion rate (hours per 100% hunger)
-    const metadataA = getPetMetadata(speciesA);
-    const metadataB = getPetMetadata(speciesB);
-    const hungerCostA = metadataA?.hungerCost ?? null;
-    const hungerCostB = metadataB?.hungerCost ?? null;
+    // Calculate hunger lifespan (hours to fully deplete from 100% to 0%)
+    // Using wiki data from petHungerDepletion.ts
+    const depletionMinutesA = getHungerDepletionTime(speciesA);
+    const depletionMinutesB = getHungerDepletionTime(speciesB);
 
-    if (hungerCostA && hungerCostA > 0) {
-      hungerDepletionA = 100000 / hungerCostA; // hours to deplete full hunger bar
+    if (depletionMinutesA && depletionMinutesA > 0) {
+      hungerDepletionA = depletionMinutesA / 60; // convert minutes to hours
     }
-    if (hungerCostB && hungerCostB > 0) {
-      hungerDepletionB = 100000 / hungerCostB;
+    if (depletionMinutesB && depletionMinutesB > 0) {
+      hungerDepletionB = depletionMinutesB / 60; // convert minutes to hours
     }
 
     // Calculate time per STR/level (hours per level)

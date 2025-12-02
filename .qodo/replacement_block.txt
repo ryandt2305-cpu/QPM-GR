@@ -1,0 +1,435 @@
+﻿function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null, slotIndex: number): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = `
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    align-items: stretch;
+  `;
+
+  const statsA = petA?.stats ?? null;
+  const statsB = petB?.stats ?? null;
+  const winner = determineSlotWinner(statsA, statsB);
+
+  const leftCard = create3v3PetCard(petA, slotIndex, winner === 'A');
+  const rightCard = create3v3PetCard(petB, slotIndex, winner === 'B');
+
+  const center = document.createElement('div');
+  center.style.cssText = `
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--qpm-border);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-content: center;
+    text-align: center;
+    font-size: 12px;
+    color: var(--qpm-text);
+  `;
+
+  const compareBadge = (label: string, a: number | string | null | undefined, b: number | string | null | undefined) => {
+    const valA = a ?? '—';
+    const valB = b ?? '—';
+    const numA = typeof a === 'number' ? a : null;
+    const numB = typeof b === 'number' ? b : null;
+    const highlightA = numA != null && numB != null && numA > numB;
+    const highlightB = numA != null && numB != null && numB > numA;
+    const lowlightA = numA != null && numB != null && numA < numB;
+    const lowlightB = numA != null && numB != null && numB < numA;
+    return `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <div style="background:rgba(143,130,255,0.08);padding:6px;border-radius:6px;${highlightA ? 'box-shadow:0 0 0 1px var(--qpm-success);' : ''}">
+          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} A</div>
+          <div style="font-weight:700;color:${highlightA ? 'var(--qpm-success)' : lowlightA ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valA}</div>
+        </div>
+        <div style="background:rgba(104,211,145,0.08);padding:6px;border-radius:6px;${highlightB ? 'box-shadow:0 0 0 1px var(--qpm-success);' : ''}">
+          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} B</div>
+          <div style="font-weight:700;color:${highlightB ? 'var(--qpm-success)' : lowlightB ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valB}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  const pickTopAbility = (pet: PetWithSource | null) => {
+    if (!pet) return null;
+    return [...pet.stats.abilities].sort((a, b) => {
+      const valueDiff = (b.valuePerHour || 0) - (a.valuePerHour || 0);
+      if (Math.abs(valueDiff) > 1e-6) return valueDiff;
+      return (b.procsPerHour || 0) - (a.procsPerHour || 0);
+    })[0] ?? null;
+  };
+  const abilityA = pickTopAbility(petA);
+  const abilityB = pickTopAbility(petB);
+  const renderAbilityRow = (ability: AbilityStats | null, label = '') => {
+    if (!ability) return '<div style="color:var(--qpm-text-dim);font-size:11px;">No proc data</div>';
+    const { valueText, procsText, probText } = formatAbilityValue(ability);
+    return `
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--qpm-text);padding:8px;border:1px solid var(--qpm-border);border-radius:8px;background:rgba(255,255,255,0.02);text-align:left;">
+        <div style="font-weight:700;">${label || ability.name}</div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Proc %</span><span style="font-weight:700;">${probText}</span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Procs/Hr</span><span style="font-weight:700;">${procsText}</span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Impact</span><span style="font-weight:700;">${valueText}</span></div>
+      </div>
+    `;
+  };
+
+  const needsProjection = (statsA && (statsA.currentStrength ?? 0) < (statsA.maxStrength ?? 0)) ||
+    (statsB && (statsB.currentStrength ?? 0) < (statsB.maxStrength ?? 0));
+  const projA = abilityA && statsA ? scaleAbilityToMax(abilityA, statsA.currentStrength, statsA.maxStrength) : null;
+  const projB = abilityB && statsB ? scaleAbilityToMax(abilityB, statsB.currentStrength, statsB.maxStrength) : null;
+
+  const projectionBlock = needsProjection
+    ? `
+      <div style="margin-top:4px;padding:8px;border:1px dashed var(--qpm-border);border-radius:8px;background:rgba(143,130,255,0.05);">
+        <div style="font-size:11px;color:var(--qpm-text-dim);margin-bottom:6px;">Potential ability output at max STR</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>${renderAbilityRow(projA, projA ? `${projA.name} (max)` : '')}</div>
+          <div>${renderAbilityRow(projB, projB ? `${projB.name} (max)` : '')}</div>
+        </div>
+      </div>
+    `
+    : '';
+
+  const procCompare = (abilityA && abilityB)
+    ? (() => {
+      const { probText: probA, procsText: procsA, valueText: valA } = formatAbilityValue(abilityA);
+      const { probText: probB, procsText: procsB, valueText: valB } = formatAbilityValue(abilityB);
+      return `
+        <div style="border:1px dashed var(--qpm-border);border-radius:8px;padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div style="text-align:left;">
+            <div style="font-weight:700;">${abilityA.name}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Proc: ${probA}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Procs/Hr: ${procsA}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Impact: ${valA}</div>
+          </div>
+          <div style="text-align:left;">
+            <div style="font-weight:700;">${abilityB.name}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Proc: ${probB}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Procs/Hr: ${procsB}</div>
+            <div style="color:var(--qpm-text-dim);font-size:11px;">Impact: ${valB}</div>
+          </div>
+        </div>
+      `;
+    })()
+    : '';
+
+  center.innerHTML = `
+    <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Slot ${slotIndex + 1}</div>
+    ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
+    ${compareBadge('Abilities', statsA?.abilityCount, statsB?.abilityCount)}
+    ${compareBadge('Mutations', statsA?.mutationCount, statsB?.mutationCount)}
+    ${procCompare}
+    <div style="background:rgba(255,255,255,0.02);border:1px solid var(--qpm-border);padding:8px;border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
+      <div>${renderAbilityRow(abilityA)}</div>
+      <div>${renderAbilityRow(abilityB)}</div>
+    </div>
+    ${projectionBlock}
+  `;
+
+  row.appendChild(leftCard);
+  row.appendChild(center);
+  row.appendChild(rightCard);
+  return row;
+}
+
+function determineSlotWinner(statsA: DetailedPetStats | null, statsB: DetailedPetStats | null): 'A' | 'B' | null {
+  if (statsA && !statsB) return 'A';
+  if (statsB && !statsA) return 'B';
+  if (!statsA || !statsB) return null;
+
+  const strengthA = statsA.currentStrength ?? 0;
+  const strengthB = statsB.currentStrength ?? 0;
+  if (strengthA !== strengthB) {
+    return strengthA > strengthB ? 'A' : 'B';
+  }
+
+  const abilityA = statsA.abilityCount ?? 0;
+  const abilityB = statsB.abilityCount ?? 0;
+  if (abilityA !== abilityB) {
+    return abilityA > abilityB ? 'A' : 'B';
+  }
+
+  const mutationA = statsA.mutationCount ?? 0;
+  const mutationB = statsB.mutationCount ?? 0;
+  if (mutationA !== mutationB) {
+    return mutationA > mutationB ? 'A' : 'B';
+  }
+
+  return null;
+}
+
+function createComparisonMetricRow(label: string, valueA: number | string, valueB: number | string): string {
+  const numA = typeof valueA === 'number' ? valueA : null;
+  const numB = typeof valueB === 'number' ? valueB : null;
+  let winnerA = false;
+  let winnerB = false;
+
+  if (numA != null && numB != null && numA !== numB) {
+    winnerA = numA > numB;
+    winnerB = numB > numA;
+  }
+
+  const renderValue = (value: number | string, winner: boolean, loser: boolean) => `
+    <span style="color: ${winner ? 'var(--qpm-success)' : loser ? 'var(--qpm-error)' : 'var(--qpm-text)'}; font-weight: ${winner ? '700' : '500'};">
+      ${winner ? '🏆 ' : ''}${value}
+    </span>
+  `;
+
+  return `
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div style="font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--qpm-text-dim);">${label}</div>
+      <div style="display: flex; justify-content: space-between; font-size: 12px;">
+        ${renderValue(valueA, winnerA, winnerB)}
+        <span style="color: var(--qpm-text-dim);">vs</span>
+        ${renderValue(valueB, winnerB, winnerA)}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Create 3v3 pet card with abilities
+ */
+function create3v3PetCard(pet: PetWithSource | null, slotNum: number, isWinner: boolean): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = `
+    background: rgba(143, 130, 255, 0.08);
+    border: 2px solid ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-border)'};
+    border-radius: 10px;
+    padding: 14px;
+    min-height: 190px;
+  `;
+
+  if (!pet) {
+    card.innerHTML = `
+      <div style="font-size: 13px; font-weight: 600; color: var(--qpm-text-dim); text-align: center;">
+        Empty Slot
+      </div>
+    `;
+    return card;
+  }
+
+  const stats = pet.stats;
+  const emoji = getPetEmoji(stats.species);
+  const name = getPetDisplayName(stats);
+  const sprite = getPetSpriteUrl(stats.species);
+  const avatar = sprite
+    ? `<div style="width:38px;height:38px;border-radius:8px;border:1px solid var(--qpm-border);background-image:url('${sprite}');background-size:contain;background-repeat:no-repeat;background-position:center;image-rendering:pixelated;background-color:rgba(143,130,255,0.1);"></div>`
+    : `<div style="font-size:24px;">${emoji}</div>`;
+
+  const strengthPct = stats.maxStrength ? Math.min(100, Math.round(((stats.currentStrength || 0) / stats.maxStrength) * 100)) : null;
+  const xpText = stats.xp ? formatNumber(stats.xp) : 'N/A';
+  const strengthBar = strengthPct != null
+    ? `<div style="margin-top:6px;">
+         <div style="font-size:10px;color:var(--qpm-text-dim);display:flex;justify-content:space-between;">
+           <span>STR Progress</span><span>${strengthPct}%</span>
+         </div>
+         <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+           <div style="height:100%;width:${strengthPct}%;background:linear-gradient(90deg,#9be7ff,#7c4dff);"></div>
+         </div>
+       </div>`
+    : '';
+
+  const strDelta = stats.maxStrength != null && stats.currentStrength != null
+    ? Math.max(0, stats.maxStrength - stats.currentStrength)
+    : null;
+  const xpPerLevel = stats.species ? getSpeciesXpPerLevel(stats.species) : null;
+  const estLevels = (stats.maxStrength && stats.currentStrength) ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30) : null;
+  const xpToMax = xpPerLevel && estLevels ? Math.round(estLevels * xpPerLevel) : null;
+  const maxHint = strDelta && strDelta > 0
+    ? `<div style="font-size:11px;color:var(--qpm-text-dim);margin-top:4px;">+${strDelta} STR to max${xpToMax ? ` • ~${formatNumber(xpToMax)} XP` : ''}</div>`
+    : '';
+
+  const statsGrid = `
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 11px; margin-bottom: 10px;">
+      ${createMiniStat('STR', stats.currentStrength)}
+      ${createMiniStat('Max STR', stats.maxStrength)}
+      ${createMiniStat('XP', xpText)}
+      ${createMiniStat('Abilities', stats.abilityCount)}
+      ${createMiniStat('Mutations', stats.mutationCount)}
+    </div>
+  `;
+
+  const topAbilities = [...stats.abilities].sort((a, b) => {
+    const valueDiff = (b.valuePerHour || 0) - (a.valuePerHour || 0);
+    if (Math.abs(valueDiff) > 0.01) return valueDiff;
+    return (b.procsPerHour || 0) - (a.procsPerHour || 0);
+  }).slice(0, 3);
+
+  const abilityCards = topAbilities.map((ability) => {
+    const { valueText, procsText, probText } = formatAbilityValue(ability);
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid var(--qpm-border);border-radius:8px;background:rgba(255,255,255,0.02);">
+        <div>
+          <div style="font-weight:700;color:var(--qpm-text);">${ability.name}</div>
+          <div style="font-size:10px;color:var(--qpm-text-dim);">${probText} proc chance</div>
+        </div>
+        <div style="text-align:right;font-size:11px;color:var(--qpm-text);">
+          <div style="font-weight:700;">${procsText}</div>
+          <div style="color:var(--qpm-text-dim);">${valueText}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  card.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+      ${avatar}
+      <div style="flex:1;">
+        <div style="font-size: 13px; font-weight: 700; color: ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-accent)'};">
+          ${name}
+        </div>
+        <div style="font-size: 11px; color: var(--qpm-text-dim);">${stats.species || 'Unknown Species'}</div>
+      </div>
+      <div style="font-size:10px;color:var(--qpm-text-dim);">Slot ${slotNum + 1}</div>
+    </div>
+    ${statsGrid}
+    ${strengthBar}
+    ${maxHint}
+    ${abilityCards
+      ? `<div style="font-size: 10px; color: var(--qpm-text-dim); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px;">Proc Focus</div>
+         <div style="display:flex;flex-direction:column;gap:6px;">${abilityCards}</div>`
+      : '<div style="font-size: 11px; color: var(--qpm-text-dim);">No abilities listed</div>'}
+  `;
+
+  return card;
+}
+
+function createMiniStat(label: string, value: number | string | null | undefined): string {
+  return `
+    <div style="background: rgba(143, 130, 255, 0.12); padding: 6px; border-radius: 6px;">
+      <div style="font-size: 10px; color: var(--qpm-text-dim); text-transform: uppercase; letter-spacing: 0.6px;">${label}</div>
+      <div style="font-size: 13px; font-weight: 600; color: var(--qpm-text);">${value ?? '—'}</div>
+    </div>
+  `;
+}
+
+/**
+ * Create compact pet card for team view
+ */
+function createCompactPetCard(pet: PetWithSource): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = `
+    background: rgba(143, 130, 255, 0.05);
+    border: 1px solid var(--qpm-border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 10px;
+  `;
+
+  const img = renderPetImage(pet.stats, 32, true);
+
+  card.innerHTML = `
+    <div style="display: flex; align-items: center; margin-bottom: 8px;">
+      ${img}
+      <div style="flex: 1;">
+        <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">${getPetDisplayName(pet.stats)}</div>
+        <div style="font-size: 11px; color: var(--qpm-text-dim);">${pet.stats.species || 'Unknown'}</div>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;">
+      <div style="color: var(--qpm-text-dim);">STR: <span style="color: var(--qpm-text); font-weight: 600;">${pet.stats.currentStrength || 'N/A'}</span></div>
+      <div style="color: var(--qpm-text-dim);">Abilities: <span style="color: var(--qpm-text); font-weight: 600;">${pet.stats.abilityCount}</span></div>
+    </div>
+  `;
+
+  return card;
+}
+
+/**
+ * Create basic stats comparison table
+ */
+function createBasicStatsComparison(statsA: DetailedPetStats, statsB: DetailedPetStats): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = `
+    background: rgba(143, 130, 255, 0.05);
+    border: 1px solid var(--qpm-border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  `;
+
+  const header = document.createElement('div');
+  header.style.cssText = `
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    padding: 14px 16px;
+    background: rgba(143, 130, 255, 0.12);
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--qpm-accent);
+    border-bottom: 1px solid var(--qpm-border);
+  `;
+
+  const petImageA = renderPetImage(statsA, 24, true);
+  const petImageB = renderPetImage(statsB, 24, true);
+  
+  header.innerHTML = `
+    <div>Attribute</div>
+    <div style="text-align: center;">${petImageA}${statsA.name || 'Pet A'}</div>
+    <div style="text-align: center;">${petImageB}${statsB.name || 'Pet B'}</div>
+  `;
+
+  const tbody = document.createElement('div');
+
+  const createRow = (label: string, valueA: string, valueB: string, numA: number | null, numB: number | null, higherIsBetter = true) => {
+    let winner = '';
+    if (numA != null && numB != null) {
+      if (numA > numB) {
+        winner = higherIsBetter ? 'A' : 'B';
+      } else if (numB > numA) {
+        winner = higherIsBetter ? 'B' : 'A';
+      }
+    }
+
+    const row = document.createElement('div');
+    row.style.cssText = `
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(143, 130, 255, 0.1);
+      transition: background 0.2s;
+    `;
+
+    row.addEventListener('mouseenter', () => row.style.background = 'rgba(143, 130, 255, 0.08)');
+    row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+
+    row.innerHTML = `
+      <div style="color: var(--qpm-text-dim); font-weight: 500;">${label}</div>
+      <div style="text-align: center; color: ${winner === 'A' ? 'var(--qpm-success)' : winner === 'B' ? 'var(--qpm-error)' : 'var(--qpm-text)'}; font-weight: ${winner === 'A' ? '700' : '400'};">
+        ${valueA} ${winner === 'A' ? '🏆' : ''}
+      </div>
+      <div style="text-align: center; color: ${winner === 'B' ? 'var(--qpm-success)' : winner === 'A' ? 'var(--qpm-error)' : 'var(--qpm-text)'}; font-weight: ${winner === 'B' ? '700' : '400'};">
+        ${valueB} ${winner === 'B' ? '🏆' : ''}
+      </div>
+    `;
+
+    return row;
+  };
+
+  tbody.appendChild(createRow('Species', statsA.species || 'N/A', statsB.species || 'N/A', null, null));
+  tbody.appendChild(createRow('💪 Current STR', `${statsA.currentStrength ?? 'N/A'}`, `${statsB.currentStrength ?? 'N/A'}`, statsA.currentStrength, statsB.currentStrength));
+  tbody.appendChild(createRow('🎯 Max STR', `${statsA.maxStrength ?? 'N/A'}`, `${statsB.maxStrength ?? 'N/A'}`, statsA.maxStrength, statsB.maxStrength));
+  tbody.appendChild(createRow('📈 Progress', `${statsA.strengthProgress ?? 'N/A'}%`, `${statsB.strengthProgress ?? 'N/A'}%`, statsA.strengthProgress, statsB.strengthProgress));
+  tbody.appendChild(createRow('✨ XP', statsA.xp != null ? formatNumber(statsA.xp) : 'N/A', statsB.xp != null ? formatNumber(statsB.xp) : 'N/A', statsA.xp, statsB.xp));
+  
+  if (statsA.hungerPct != null && statsB.hungerPct != null) {
+    tbody.appendChild(createRow('🍖 Hunger', `${statsA.hungerPct.toFixed(1)}%`, `${statsB.hungerPct.toFixed(1)}%`, statsA.hungerPct, statsB.hungerPct, false));
+  }
+  if (statsA.feedsPerHour != null && statsB.feedsPerHour != null) {
+    tbody.appendChild(createRow('⏱️ Feeds/Hr', statsA.feedsPerHour.toFixed(2), statsB.feedsPerHour.toFixed(2), statsA.feedsPerHour, statsB.feedsPerHour, false));
+  }
+  
+  tbody.appendChild(createRow('🌟 Mutations', `${statsA.mutationCount}`, `${statsB.mutationCount}`, statsA.mutationCount, statsB.mutationCount));
+  tbody.appendChild(createRow('⭐ Gold', statsA.hasGold ? 'Yes' : 'No', statsB.hasGold ? 'Yes' : 'No', statsA.hasGold ? 1 : 0, statsB.hasGold ? 1 : 0));
+  tbody.appendChild(createRow('🌈 Rainbow', statsA.hasRainbow ? 'Yes' : 'No', statsB.hasRainbow ? 'Yes' : 'No', statsA.hasRainbow ? 1 : 0, statsB.hasRainbow ? 1 : 0));
+  tbody.appendChild(createRow('⚡ Abilities', `${statsA.abilityCount}`, `${statsB.abilityCount}`, statsA.abilityCount, statsB.abilityCount));
+
+  section.appendChild(header);
+  section.appendChild(tbody);
+
+  return section;
+}
+

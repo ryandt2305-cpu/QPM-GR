@@ -1,7 +1,7 @@
 // src/ui/journalCheckerSection.ts
 // Visually revamped Journal Checker UI
 
-import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl, getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { storage } from '../utils/storage';
 
 // Storage for user notes per species
@@ -200,7 +200,7 @@ export function createJournalCheckerSection(): HTMLElement {
 
         // Get sprite
         const speciesKey = species.species.toLowerCase().replace(/\s+/g, '');
-        const spriteDataUrl = getCropSpriteDataUrl(speciesKey);
+        const spriteDataUrl = getCropSpriteDataUrl(speciesKey) || getCropSpriteDataUrl(species.species.toLowerCase());
         const isComplete = percentage === 100;
         
         speciesCard.innerHTML = `
@@ -368,30 +368,44 @@ export function createJournalCheckerSection(): HTMLElement {
           speciesCard.style.transform = 'translateX(0)';
         });
 
-        // Note: Pet sprites would require pet sprite sheet (not currently available)
-        // For now, we show emoji placeholder
         const isComplete = percentage === 100;
+        const petSprite = getPetSpriteDataUrl(species.species.toLowerCase());
+        const imageHtml = petSprite
+          ? `<div style="
+                width: 64px;
+                height: 64px;
+                background-image: url(${petSprite});
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
+                border-radius: 8px;
+                border: 2px solid ${isComplete ? '#42A5F5' : '#444'};
+                flex-shrink: 0;
+                image-rendering: pixelated;
+                ${isComplete ? 'box-shadow: 0 0 20px #42A5F566; filter: saturate(1.3);' : ''}
+              "></div>`
+          : `<div style="
+                width: 64px;
+                height: 64px;
+                background: linear-gradient(135deg, ${isComplete ? '#42A5F5' : '#333'}, ${isComplete ? '#64B5F6' : '#222'});
+                border-radius: 8px;
+                border: 2px solid ${isComplete ? '#42A5F5' : '#444'};
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 32px;
+                ${isComplete ? 'box-shadow: 0 0 20px #42A5F566;' : ''}
+              ">??</div>`;
         
         let html = `
           <div style="display: flex; gap: 12px; margin-bottom: 12px;">
-            <div style="
-              width: 64px;
-              height: 64px;
-              background: linear-gradient(135deg, ${isComplete ? '#42A5F5' : '#333'}, ${isComplete ? '#64B5F6' : '#222'});
-              border-radius: 8px;
-              border: 2px solid ${isComplete ? '#42A5F5' : '#444'};
-              flex-shrink: 0;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 32px;
-              ${isComplete ? 'box-shadow: 0 0 20px #42A5F566;' : ''}
-            ">🐾</div>
+            ${imageHtml}
             <div style="flex: 1;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
-                  ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
+                  ${isComplete ? '<span style="font-size: 16px;">?o"</span>' : ''}
                 </div>
                 <span style="
                   background: ${isComplete ? '#42A5F5' : '#555'};
@@ -420,7 +434,6 @@ export function createJournalCheckerSection(): HTMLElement {
             "></div>
           </div>
         `;
-
         if (variants.length > 0) {
           html += `
             <div style="margin-bottom: 12px;">

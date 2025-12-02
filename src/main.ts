@@ -21,8 +21,11 @@ import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvai
 import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
-import { spriteExtractor } from './utils/spriteExtractor';
+import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets } from './utils/spriteExtractor';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
+
+declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -93,6 +96,11 @@ const QPM_DEBUG_API = {
       return null;
     }
   },
+
+  showPetSpriteGrid: (sheet = 'pets', maxTiles = 80) => renderSpriteGridOverlay(sheet, maxTiles),
+  showAllSpriteSheets: (maxTilesPerSheet = 120) => renderAllSpriteSheetsOverlay(maxTilesPerSheet),
+  listSpriteResources: (category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => listTrackedSpriteResources(category),
+  loadTrackedSpriteSheets: (maxSheets = 8, category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => loadTrackedSpriteSheets(maxSheets, category),
 
   // Expose sprite extractor for debugging
   spriteExtractor: spriteExtractor,
@@ -701,10 +709,25 @@ const QPM_DEBUG_API = {
       return null;
     }
   },
+
+  // === PET DATA TESTER (for Comparison Hub development) ===
+  testPetData: testPetData,
+  testComparePets: testComparePets,
+  testAbilityDefinitions: testAbilityDefinitions,
 };
 
 shareGlobal('QPM', QPM_DEBUG_API);
-log('✅ QPM debug API registered (use QPM.debugPets() in console)');
+shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
+const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+(globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
+(globalDebugTarget as any).QPM = QPM_DEBUG_API;
+log('✅ QPM debug API registered');
+log('   • QPM.debugPets() - Debug active pets');
+log('   • QPM.testPetData() - Get detailed stats for all active pets');
+log('   • QPM.testComparePets(0, 1) - Compare two pets side-by-side');
+log('   • QPM.testAbilityDefinitions() - List all ability definitions');
+log('   ? QPM.showPetSpriteGrid() - Overlay pet sprite sheet with tile numbers');
+log('   ? QPM_DEBUG_API.showAllSpriteSheets() - Overlay all loaded sprite sheets');
 
 // Load configuration similar to original
 const LS_KEY = 'quinoa-pet-manager';
@@ -836,6 +859,13 @@ async function initialize(): Promise<void> {
   
   // Wait for game to be ready
   await waitForGame();
+  
+  // Export sprite inspector to whichever window context is available
+  if (typeof window !== 'undefined') {
+    const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    (targetWindow as any).inspectPetSprites = inspectPetSprites;
+    log('🖼️ inspectPetSprites() available in console');
+  }
   initializeStatsStore();
   initializePetXpTracker();
   initializeXpTracker();

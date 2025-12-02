@@ -3,6 +3,241 @@
 
 import { log } from './logger';
 
+declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+
+function getRuntimeWindow(): Window & typeof globalThis {
+  if (typeof unsafeWindow !== 'undefined' && unsafeWindow) {
+    return unsafeWindow;
+  }
+  return window;
+}
+
+function getRuntimeDocument(): Document | null {
+  const runtimeWindow = getRuntimeWindow();
+  return runtimeWindow.document || null;
+}
+
+type SpriteCategory = 'plants' | 'pets' | 'unknown';
+
+interface TrackedSpriteResource {
+  url: string;
+  sources: Set<string>;
+  lastSeen: number;
+  category: SpriteCategory;
+}
+
+const trackedSpriteResources = new Map<string, TrackedSpriteResource>();
+let spriteResourceSnifferStarted = false;
+const loadedExternalSpriteUrls = new Set<string>();
+
+const SPRITE_URL_HINTS = [
+  /\/assets\/(tiles|plants|allplants|pets|animals|sprites|atlas)\//i,
+  /(plants?|crops?|pet|animal|creature|mob|atlas|sheet)\.(png|webp)$/i,
+];
+
+const PET_URL_HINT = /(pet|animal|creature|mob)/i;
+const PLANT_URL_HINT = /(plant|crop|tile)/i;
+
+const DEFAULT_PLANT_SHEET_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/plants.png';
+const DEFAULT_PET_SHEET_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/pets.png';
+const DEFAULT_MUTATION_OVERLAYS_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/mutation-overlays.png';
+
+const PET_TILE_MAP: Record<string, number> = {
+  bee: 0,
+  chicken: 1,
+  bunny: 2,
+  turtle: 3,
+  capybara: 4,
+  cow: 5,
+  pig: 6,
+  butterfly: 7,
+  snail: 8,
+  worm: 9,
+  commonegg: 10,
+  uncommonegg: 11,
+  rareegg: 12,
+  legendaryegg: 13,
+  mythicalegg: 14,
+  divineegg: 15,
+  celestialegg: 16,
+  squirrel: 17,
+  goat: 18,
+  dragonfly: 19,
+  turkey: 28,
+  peacock: 29,
+};
+
+const MUTATION_OVERLAY_TILE_MAP: Record<string, number> = {
+  gold: 35,
+  rainbow: 44,
+};
+
+function normalizeSpriteUrl(url: string): string {
+  if (!url) return '';
+  const trimmed = url.split('#')[0] || url;
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+  try {
+    if (typeof window !== 'undefined') {
+      const normalized = new URL(trimmed, window.location.href);
+      normalized.hash = '';
+      return normalized.href;
+    }
+  } catch {
+    // Ignore parsing issues and fall back to trimmed URL
+  }
+  return trimmed;
+}
+
+function looksLikeSpriteResource(url: string): boolean {
+  return SPRITE_URL_HINTS.some(pattern => pattern.test(url));
+}
+
+function classifySpriteResource(url: string): SpriteCategory {
+  if (PET_URL_HINT.test(url)) return 'pets';
+  if (PLANT_URL_HINT.test(url)) return 'plants';
+  return 'unknown';
+}
+
+function createImageElement(): HTMLImageElement {
+  const runtimeWindow = getRuntimeWindow();
+  const ImageCtor = runtimeWindow.Image ?? Image;
+  return new ImageCtor();
+}
+
+function loadImageElement(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    try {
+      const img = createImageElement();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = (event) => reject(event);
+      img.src = url;
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function trackSpriteResource(input: string | null | undefined, source: string): void {
+  if (typeof window === 'undefined' || !input) return;
+  const normalized = normalizeSpriteUrl(String(input));
+  if (!normalized || !looksLikeSpriteResource(normalized)) return;
+
+  const existing = trackedSpriteResources.get(normalized);
+  const category = classifySpriteResource(normalized);
+  if (existing) {
+    existing.sources.add(source);
+    existing.lastSeen = Date.now();
+    if (existing.category === 'unknown' && category !== 'unknown') {
+      existing.category = category;
+    }
+    return;
+  }
+
+  trackedSpriteResources.set(normalized, {
+    url: normalized,
+    sources: new Set([source]),
+    lastSeen: Date.now(),
+    category,
+  });
+}
+
+function getTrackedSpriteResources(category: SpriteCategory | 'all' = 'all'): Array<{url: string; sources: string[]; lastSeen: number; category: SpriteCategory}> {
+  const items = Array.from(trackedSpriteResources.values());
+  const filtered = category === 'all' ? items : items.filter(item => item.category === category);
+  return filtered
+    .sort((a, b) => b.lastSeen - a.lastSeen)
+    .map(item => ({
+      url: item.url,
+      sources: Array.from(item.sources),
+      lastSeen: item.lastSeen,
+      category: item.category,
+    }));
+}
+
+function startSpriteResourceSniffer(): void {
+  if (spriteResourceSnifferStarted) {
+    return;
+  }
+
+  const runtimeWindow = getRuntimeWindow();
+  const runtimeDocument = getRuntimeDocument();
+  if (!runtimeWindow || !runtimeDocument) {
+    return;
+  }
+
+  spriteResourceSnifferStarted = true;
+
+  const perf = runtimeWindow.performance ?? performance;
+  if (perf && typeof perf.getEntriesByType === 'function') {
+    try {
+      const entries = perf.getEntriesByType('resource') as PerformanceResourceTiming[];
+      entries.forEach(entry => trackSpriteResource(entry.name, 'perf.initial'));
+    } catch (error) {
+      log('⚠️ Failed to read initial performance entries for sprite sniffing', error);
+    }
+  }
+
+  const PerfObserverCtor = runtimeWindow.PerformanceObserver ?? PerformanceObserver;
+  if (typeof PerfObserverCtor !== 'undefined') {
+    try {
+      const observer = new PerfObserverCtor((list: PerformanceObserverEntryList) => {
+        list.getEntries().forEach(entry => {
+          const name = (entry as PerformanceResourceTiming).name;
+          if (name) {
+            trackSpriteResource(name, 'perf.observer');
+          }
+        });
+      });
+      observer.observe({ entryTypes: ['resource'] });
+    } catch (error) {
+      log('⚠️ Failed to start sprite PerformanceObserver', error);
+    }
+  }
+
+  const ImageCtor = runtimeWindow.HTMLImageElement ?? HTMLImageElement;
+  if (ImageCtor) {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(ImageCtor.prototype, 'src');
+      if (descriptor && typeof descriptor.set === 'function') {
+        const originalSetter = descriptor.set;
+        const newDescriptor: PropertyDescriptor = {
+          configurable: descriptor.configurable ?? true,
+          enumerable: descriptor.enumerable ?? false,
+        };
+        if (descriptor.get) {
+          newDescriptor.get = descriptor.get.bind(ImageCtor.prototype);
+        }
+        newDescriptor.set = function setSpriteSrc(this: HTMLImageElement, value: string): void {
+          if (typeof value === 'string') {
+            trackSpriteResource(value, 'img.src');
+          }
+          return originalSetter.call(this, value);
+        };
+        Object.defineProperty(ImageCtor.prototype, 'src', newDescriptor);
+      }
+    } catch (error) {
+      log('⚠️ Failed to hook HTMLImageElement.src for sprite sniffing', error);
+    }
+  }
+
+  if (ImageCtor) {
+    try {
+      const nativeSetAttribute = ImageCtor.prototype.setAttribute;
+      ImageCtor.prototype.setAttribute = function patchedSetAttribute(name: string, value: string): void {
+        if (typeof name === 'string' && name.toLowerCase() === 'src' && typeof value === 'string') {
+          trackSpriteResource(value, 'img.setAttribute');
+        }
+        return nativeSetAttribute.call(this, name, value);
+      };
+    } catch (error) {
+      log('⚠️ Failed to hook HTMLImageElement.setAttribute for sprite sniffing', error);
+    }
+  }
+}
+
 interface SpriteSheet {
   url: string;
   image: HTMLImageElement;
@@ -32,6 +267,7 @@ class SpriteExtractor {
     if (this.initialized) return;
     this.initialized = true;
 
+    startSpriteResourceSniffer();
     log('🖼️ Initializing sprite extractor (waiting for game)...');
 
     // Wait for Pixi to be available before starting
@@ -42,7 +278,7 @@ class SpriteExtractor {
    * Wait for game to load and find sprite sheet URL
    */
   private async waitForPixi(): Promise<void> {
-    log('🔍 Looking for game sprite sheets...');
+    log('dY"? Looking for game sprite sheets...');
     
     // Wait for canvas to appear
     const waitForCanvas = async () => {
@@ -56,43 +292,75 @@ class SpriteExtractor {
 
     const canvas = await waitForCanvas();
     if (!canvas) {
-      log('⚠️ Canvas not found');
+      log('�s��,? Canvas not found');
       return;
     }
 
     // Wait for game to load assets
     await new Promise(r => setTimeout(r, 3000));
     
-    // Find plants.png sprite sheet from network resources
+    // Find plants, pets, and mutation overlay sheets from network resources
     let plantsUrl: string | null = null;
+    let petsUrl: string | null = null;
+    let mutationOverlayUrl: string | null = null;
     
-    if (performance && performance.getEntriesByType) {
-      const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+    const runtimeWindow = getRuntimeWindow();
+    const perf = runtimeWindow.performance ?? performance;
+    if (perf && typeof perf.getEntriesByType === 'function') {
+      const resources = perf.getEntriesByType('resource') as PerformanceResourceTiming[];
       const plantsResource = resources.find(r => r.name.includes('/assets/tiles/plants.png'));
       if (plantsResource) {
         plantsUrl = plantsResource.name;
+      }
+      const petsResource = resources.find(r => r.name.toLowerCase().includes('/assets/tiles/pets.png'));
+      if (petsResource) {
+        petsUrl = petsResource.name;
+      }
+      const mutationResource = resources.find(r => r.name.toLowerCase().includes('/assets/tiles/mutation-overlays.png'));
+      if (mutationResource) {
+        mutationOverlayUrl = mutationResource.name;
       }
     }
     
     if (!plantsUrl) {
       // Fallback: construct URL from base
-      plantsUrl = 'https://magicgarden.gg/version/19aaa98/assets/tiles/plants.png';
+      plantsUrl = DEFAULT_PLANT_SHEET_URL;
       log('  Using default plants.png URL');
     }
+    if (!petsUrl) {
+      petsUrl = DEFAULT_PET_SHEET_URL;
+      log('  Using default pets.png URL');
+    }
+    if (!mutationOverlayUrl) {
+      mutationOverlayUrl = DEFAULT_MUTATION_OVERLAYS_URL;
+      log('  Using default mutation-overlays.png URL');
+    }
     
-    log(`✅ Found plants sprite sheet: ${plantsUrl}`);
+    log(`�o. Found plants sprite sheet: ${plantsUrl}`);
     
-    // Load the sprite sheet
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      log(`✅ Loaded plants.png (${img.width}x${img.height})`);
+    try {
+      const img = await loadImageElement(plantsUrl);
+      log(`�o. Loaded plants.png (${img.width}x${img.height})`);
       this.processSheet('plants', img);
-    };
-    img.onerror = () => {
-      log('⚠️ Failed to load plants.png');
-    };
-    img.src = plantsUrl;
+    } catch (error) {
+      log('�s��,? Failed to load plants.png', error);
+    }
+
+    try {
+      const petImg = await loadImageElement(petsUrl);
+      log(`�o. Loaded pets.png (${petImg.width}x${petImg.height})`);
+      this.processSheet('pets', petImg);
+    } catch (error) {
+      log('�s��,? Failed to load pets.png', error);
+    }
+
+    try {
+      const overlayImg = await loadImageElement(mutationOverlayUrl);
+      log(`�o. Loaded mutation-overlays.png (${overlayImg.width}x${overlayImg.height})`);
+      this.processSheet('mutation-overlays', overlayImg);
+    } catch (error) {
+      log('�s��,? Failed to load mutation-overlays.png', error);
+    }
   }
 
   /**
@@ -101,7 +369,8 @@ class SpriteExtractor {
   private scanPixiTextures(): void {
     try {
       // Access Pixi from global scope (game loads it)
-      const PIXI = (window as any).PIXI;
+      const runtimeWindow = getRuntimeWindow();
+      const PIXI = (runtimeWindow as any).PIXI;
       if (!PIXI || !PIXI.utils || !PIXI.utils.TextureCache) {
         log('⚠️ Pixi TextureCache not found yet, will retry...');
         return;
@@ -117,33 +386,26 @@ class SpriteExtractor {
         if (!texture || !texture.baseTexture || !texture.baseTexture.resource) continue;
 
         const source = texture.baseTexture.resource.source;
-        if (!(source instanceof HTMLImageElement) && !(source instanceof HTMLCanvasElement)) continue;
 
-        // Check if this looks like a plant/crop sprite sheet
+        const ImageCtor = runtimeWindow.HTMLImageElement ?? HTMLImageElement;
+        const CanvasCtor = runtimeWindow.HTMLCanvasElement ?? HTMLCanvasElement;
+        const isImage = ImageCtor ? source instanceof ImageCtor : source instanceof HTMLImageElement;
+        const isCanvas = CanvasCtor ? source instanceof CanvasCtor : source instanceof HTMLCanvasElement;
+        if (!isImage && !isCanvas) continue;
+
+        // Check if this looks like a plant or pet sprite sheet
         const keyLower = key.toLowerCase();
-        if (!keyLower.includes('plant') && !keyLower.includes('crop') && !keyLower.includes('prod-plants')) continue;
-
-        // Get image element
-        let img: HTMLImageElement;
-        if (source instanceof HTMLCanvasElement) {
-          // Convert canvas to image
-          img = new Image();
-          img.src = source.toDataURL();
-        } else {
-          img = source;
-        }
+        const looksLikePlant = keyLower.includes('plant') || keyLower.includes('crop') || keyLower.includes('prod-plants');
+        const looksLikePet = keyLower.includes('pet') || keyLower.includes('animal') || keyLower.includes('creature') || keyLower.includes('mob');
+        if (!looksLikePlant && !looksLikePet) continue;
 
         // Check if already processed
         const sheetName = this.getSheetNameFromKey(key);
         if (this.sheets.has(sheetName)) continue;
 
         // Process this sheet
-        if (img.complete && img.naturalWidth > 0) {
-          this.processSheet(key, img);
-          newTexturesFound++;
-        } else {
-          img.addEventListener('load', () => this.processSheet(key, img), { once: true });
-        }
+        this.ingestTextureSource(key, source as HTMLImageElement | HTMLCanvasElement);
+        newTexturesFound++;
       }
 
       if (newTexturesFound > 0) {
@@ -164,6 +426,9 @@ class SpriteExtractor {
     if (lower.includes('prod-plants')) return 'prod-plants';
     if (lower.includes('plant')) return 'plants';
     if (lower.includes('crop')) return 'crops';
+    if (lower.includes('pet') || lower.includes('animal') || lower.includes('creature') || lower.includes('mob')) {
+      return 'pets';
+    }
     return key.split('/').pop()?.split('.')[0] || 'unknown';
   }
 
@@ -194,6 +459,42 @@ class SpriteExtractor {
     // Pre-slice tiles for common indices (0-100) for performance
     for (let i = 0; i < Math.min(100, tilesPerRow * tilesPerColumn); i++) {
       this.getTile(sheetName, i);
+    }
+  }
+
+  ingestTextureSource(key: string, source: HTMLImageElement | HTMLCanvasElement): void {
+    const sheetName = this.getSheetNameFromKey(key);
+    if (this.sheets.has(sheetName)) {
+      return;
+    }
+
+    const isCanvasLike = Boolean(
+      source && typeof (source as HTMLCanvasElement).toDataURL === 'function' && typeof (source as HTMLCanvasElement).getContext === 'function'
+    );
+
+    if (isCanvasLike) {
+      try {
+        const img = createImageElement();
+        img.src = (source as HTMLCanvasElement).toDataURL();
+        if (img.complete && img.naturalWidth > 0) {
+          this.processSheet(key, img);
+        } else {
+          img.addEventListener('load', () => this.processSheet(key, img), { once: true });
+        }
+      } catch (error) {
+        log('⚠️ Failed to clone canvas sprite sheet', error);
+      }
+      return;
+    }
+
+    const isImageLike = Boolean(source && typeof (source as HTMLImageElement).naturalWidth === 'number');
+    if (isImageLike) {
+      const img = source as HTMLImageElement;
+      if (img.complete && img.naturalWidth > 0) {
+        this.processSheet(key, img);
+      } else {
+        img.addEventListener('load', () => this.processSheet(key, img), { once: true });
+      }
     }
   }
 
@@ -352,10 +653,77 @@ class SpriteExtractor {
   }
 
   /**
+   * Get pet sprite by species name
+   */
+  getPetSprite(species: string): HTMLCanvasElement | null {
+    const sheetNames = ['pets', 'animals', 'creatures', 'mobs'];
+    const index = this.getPetSpriteIndex(species);
+    if (index === null) return null;
+
+    for (const sheetName of sheetNames) {
+      const tile = this.getTile(sheetName, index);
+      if (tile) return tile;
+    }
+
+    // Try any other processed sheet that looks like pets
+    for (const sheetName of this.getSheets()) {
+      if (sheetName.toLowerCase().includes('pet') || sheetName.toLowerCase().includes('animal')) {
+        const tile = this.getTile(sheetName, index);
+        if (tile) return tile;
+      }
+    }
+
+    return null;
+  }
+
+  private getPetSpriteIndex(rawSpecies: string): number | null {
+    if (!rawSpecies) return null;
+    const normalized = rawSpecies.toLowerCase().replace(/[^a-z]/g, '');
+    const index = PET_TILE_MAP[normalized];
+    if (typeof index !== 'number') {
+      log(`�s��,? Unknown pet species for sprite: "${rawSpecies}"`);
+      return null;
+    }
+    return index;
+  }
+
+  /**
    * Get all available sheets
    */
   getSheets(): string[] {
     return Array.from(this.sheets.keys());
+  }
+
+  getSheetSummaries(): Array<{ name: string; url: string; tileSize: number; tilesPerRow: number; tilesPerColumn: number }> {
+    return Array.from(this.sheets.entries()).map(([name, sheet]) => ({
+      name,
+      url: sheet.url,
+      tileSize: sheet.tileSize,
+      tilesPerRow: sheet.tilesPerRow,
+      tilesPerColumn: sheet.tilesPerColumn,
+    }));
+  }
+
+  /**
+   * Get mutation overlay tile
+   */
+  getMutationOverlay(mutation: string): HTMLCanvasElement | null {
+    const key = mutation.toLowerCase();
+    const index = MUTATION_OVERLAY_TILE_MAP[key];
+    if (typeof index !== 'number') return null;
+    return this.getTile('mutation-overlays', index);
+  }
+
+  async loadSheetFromUrl(url: string, alias?: string): Promise<boolean> {
+    try {
+      const normalizedUrl = normalizeSpriteUrl(url);
+      const img = await loadImageElement(normalizedUrl);
+      this.processSheet(alias ?? normalizedUrl, img);
+      return true;
+    } catch (error) {
+      log(`⚠️ Failed to load sprite sheet from ${url}`, error);
+      return false;
+    }
   }
 
   /**
@@ -368,6 +736,52 @@ class SpriteExtractor {
 
 // Global singleton instance
 export const spriteExtractor = new SpriteExtractor();
+
+function isLikelyPetSheet(summary: { name: string; url: string }): boolean {
+  const value = `${summary.name} ${summary.url}`.toLowerCase();
+  return value.includes('pet') || value.includes('animal') || value.includes('creature') || value.includes('mob');
+}
+
+function logExtractedPetSheets(): void {
+  const summaries = spriteExtractor
+    .getSheetSummaries()
+    .filter(isLikelyPetSheet);
+
+  if (!summaries.length) {
+    log('❌ No processed pet sprite sheets yet. Move pets into view to force loads, then rerun.');
+    return;
+  }
+
+  log('\n🐾 Extracted pet sprite sheets:');
+  summaries.forEach((summary, idx) => {
+    log(`   ${idx + 1}. ${summary.name} (${summary.tilesPerRow}x${summary.tilesPerColumn} tiles @ ${summary.tileSize}px)`);
+    log(`      source: ${summary.url}`);
+  });
+}
+
+export async function loadTrackedSpriteSheets(
+  maxSheets = 3,
+  category: SpriteCategory | 'all' = 'pets',
+): Promise<string[]> {
+  const tracked = getTrackedSpriteResources(category);
+  const loaded: string[] = [];
+
+  for (const entry of tracked) {
+    if (!entry.url || loadedExternalSpriteUrls.has(entry.url)) {
+      continue;
+    }
+    const success = await spriteExtractor.loadSheetFromUrl(entry.url);
+    if (success) {
+      loadedExternalSpriteUrls.add(entry.url);
+      loaded.push(entry.url);
+    }
+    if (loaded.length >= maxSheets) {
+      break;
+    }
+  }
+
+  return loaded;
+}
 
 /**
  * Get crop sprite as data URL for use in CSS background-image
@@ -387,6 +801,39 @@ export function getCropSpriteDataUrl(species: string): string | null {
 /**
  * Create a sprite element for rendering in UI
  */
+/**
+ * Get pet sprite as data URL for use in CSS background-image
+ */
+export function getPetSpriteDataUrl(species: string): string | null {
+  const canvas = spriteExtractor.getPetSprite(species);
+  if (!canvas) return null;
+
+  try {
+    return canvas.toDataURL('image/png');
+  } catch (e) {
+    log(`�s��,? Failed to convert pet sprite to data URL for ${species}`, e);
+    return null;
+  }
+}
+
+export function getPetSpriteCanvas(species: string): HTMLCanvasElement | null {
+  return spriteExtractor.getPetSprite(species);
+}
+
+/**
+ * Get mutation overlay sprite as data URL
+ */
+export function getMutationOverlayDataUrl(mutation: string): string | null {
+  const canvas = spriteExtractor.getMutationOverlay(mutation);
+  if (!canvas) return null;
+  try {
+    return canvas.toDataURL('image/png');
+  } catch (e) {
+    log(`�s��,? Failed to convert mutation overlay for ${mutation}`, e);
+    return null;
+  }
+}
+
 export function createSpriteElement(species: string, size: number = 24): HTMLElement | null {
   const canvas = spriteExtractor.getCropSprite(species);
   if (!canvas) return null;
@@ -413,3 +860,249 @@ export function createSpriteElement(species: string, size: number = 24): HTMLEle
 
   return div;
 }
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+async function waitForPixiTextureCacheReady(timeoutMs: number = 20000): Promise<{ PIXI: any; textureCache: Record<string, any> } | null> {
+  const start = Date.now();
+  let notified = false;
+
+  while (Date.now() - start < timeoutMs) {
+    const runtimeWindow = getRuntimeWindow();
+    const PIXI = (runtimeWindow as any)?.PIXI;
+    const textureCache = PIXI?.utils?.TextureCache;
+    if (textureCache && Object.keys(textureCache).length > 0) {
+      return { PIXI, textureCache };
+    }
+
+    if (!notified) {
+      log('⏳ Waiting for Pixi texture cache to be ready before scanning pet sprites...');
+      notified = true;
+    }
+
+    await delay(500);
+  }
+
+  return null;
+}
+
+/**
+ * Render an on-screen grid of a sprite sheet (useful for manual mapping)
+ */
+export function renderSpriteGridOverlay(sheetName = 'pets', maxTiles = 80): void {
+  const container = document.createElement('div');
+  container.style.cssText = `
+    position: fixed;
+    inset: 40px auto auto 40px;
+    max-height: 80vh;
+    max-width: 80vw;
+    overflow: auto;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.9);
+    border: 1px solid #444;
+    border-radius: 10px;
+    z-index: 999999;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  `;
+
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
+  header.innerHTML = `
+    <div style="font-weight:700;color:#fff;">Sprite Grid: ${sheetName}</div>
+    <button style="background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:4px 8px;cursor:pointer;">Close</button>
+  `;
+  header.querySelector('button')?.addEventListener('click', () => container.remove());
+  container.appendChild(header);
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;';
+
+  let tilesRendered = 0;
+  for (let i = 0; i < maxTiles; i++) {
+    const tile = spriteExtractor.getTile(sheetName, i);
+    if (!tile) continue;
+    tilesRendered++;
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'background:#111;border:1px solid #333;border-radius:8px;padding:6px;text-align:center;';
+
+    const label = document.createElement('div');
+    label.textContent = `#${i}`;
+    label.style.cssText = 'color:#999;font-size:11px;margin-bottom:4px;font-family:monospace;';
+
+    const img = new Image();
+    img.src = tile.toDataURL('image/png');
+    img.style.cssText = 'width:64px;height:64px;image-rendering:pixelated;margin:auto;display:block;';
+
+    wrapper.appendChild(label);
+    wrapper.appendChild(img);
+    grid.appendChild(wrapper);
+  }
+
+  if (tilesRendered === 0) {
+    const empty = document.createElement('div');
+    empty.textContent = 'No tiles available for this sheet yet.';
+    empty.style.cssText = 'color:#ccc;font-size:13px;';
+    container.appendChild(empty);
+  } else {
+    container.appendChild(grid);
+  }
+
+  document.body.appendChild(container);
+}
+
+export function renderAllSpriteSheetsOverlay(maxTilesPerSheet = 80): void {
+  const sheetNames = spriteExtractor.getSheets();
+  if (!sheetNames.length) {
+    log('⚠️ No sprite sheets recorded yet. Open your garden or hutch first.');
+    return;
+  }
+  sheetNames.forEach(name => renderSpriteGridOverlay(name, maxTilesPerSheet));
+}
+
+export function listTrackedSpriteResources(category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') {
+  return getTrackedSpriteResources(category === 'all' ? 'all' : category);
+}
+
+/**
+ * Scan Pixi texture cache for pet sprite sheets
+ * Console command: window.inspectPetSprites()
+ */
+export async function inspectPetSprites(): Promise<void> {
+  log('🔍 Scanning Pixi texture cache for pet sprite sheets...');
+  
+  try {
+    const pixiResult = await waitForPixiTextureCacheReady();
+    if (!pixiResult) {
+      log('⚠️ Pixi TextureCache never became available. Make sure you are in-game and pets have been rendered.');
+      const sniffed = getTrackedSpriteResources('pets');
+      if (sniffed.length > 0) {
+        log('\n🐾 Sprite resource sniffing still found pet-like URLs:');
+        sniffed.forEach((entry, idx) => {
+          log(`   ${idx + 1}. ${entry.url}`);
+          log(`      sources: ${entry.sources.join(', ') || 'unknown'} | last seen: ${new Date(entry.lastSeen).toLocaleTimeString()}`);
+        });
+      } else {
+        log('❌ No pet sprite URLs recorded yet. Move a pet into view to force the game to load their textures.');
+      }
+
+      const loaded = await loadTrackedSpriteSheets(5);
+      if (loaded.length > 0) {
+        log(`\n✅ Loaded ${loaded.length} pet sprite sheet${loaded.length === 1 ? '' : 's'} directly from tracked URLs.`);
+        logExtractedPetSheets();
+      } else if (sniffed.length > 0) {
+        log('⚠️ Unable to fetch the tracked pet sprite sheets automatically. Open your Pet Hutch or inventory so the game loads them, then rerun inspect.');
+      }
+      return;
+    }
+
+    const { textureCache } = pixiResult;
+    const runtimeWindow = getRuntimeWindow();
+    const ImageCtor = runtimeWindow.HTMLImageElement ?? HTMLImageElement;
+    const CanvasCtor = runtimeWindow.HTMLCanvasElement ?? HTMLCanvasElement;
+    const petSheets: Array<{key: string, width: number, height: number, url: string}> = [];
+
+    log('\n📦 Scanning all textures...');
+    let totalTextures = 0;
+    
+    for (const key in textureCache) {
+      if (!Object.prototype.hasOwnProperty.call(textureCache, key)) continue;
+      totalTextures++;
+      
+      const texture = textureCache[key];
+      if (!texture || !texture.baseTexture || !texture.baseTexture.resource) continue;
+
+      const source = texture.baseTexture.resource.source;
+      const isImage = ImageCtor ? source instanceof ImageCtor : Boolean(source?.naturalWidth);
+      const isCanvas = CanvasCtor ? source instanceof CanvasCtor : Boolean(source?.toDataURL);
+      if (!isImage && !isCanvas) continue;
+
+      if (isImage && (source as HTMLImageElement).src) {
+        trackSpriteResource((source as HTMLImageElement).src, 'pixi.cache');
+      }
+
+      const keyLower = key.toLowerCase();
+      
+      // Look for pet-related textures
+      if (keyLower.includes('pet') || 
+          keyLower.includes('animal') || 
+          keyLower.includes('creature') ||
+          keyLower.includes('mob')) {
+        const width = isImage ? (source as HTMLImageElement).naturalWidth : (source as HTMLCanvasElement).width;
+        const height = isImage ? (source as HTMLImageElement).naturalHeight : (source as HTMLCanvasElement).height;
+        const url = isImage ? (source as HTMLImageElement).src : 'canvas';
+        petSheets.push({ key, width, height, url });
+
+        // Ingest into sprite extractor so other features can reuse it
+        spriteExtractor.ingestTextureSource(key, source as HTMLImageElement | HTMLCanvasElement);
+      }
+    }
+
+    log(`\n✅ Scanned ${totalTextures} total textures`);
+    log(`\n🐾 Found ${petSheets.length} potential pet sprite sheets:\n`);
+    
+    if (petSheets.length === 0) {
+      log('❌ No pet sprite sheets found in Pixi cache.');
+      log('   Try looking for generic sprite sheets with "atlas" or "sprites" in the name:');
+      
+      // Show any atlas/sprite sheets
+      const atlasSheets: Array<{key: string, width: number, height: number}> = [];
+      for (const key in textureCache) {
+        if (!Object.prototype.hasOwnProperty.call(textureCache, key)) continue;
+        const texture = textureCache[key];
+        if (!texture || !texture.baseTexture || !texture.baseTexture.resource) continue;
+        const source = texture.baseTexture.resource.source;
+        if (!(source instanceof HTMLImageElement) && !(source instanceof HTMLCanvasElement)) continue;
+        
+        const keyLower = key.toLowerCase();
+        if (keyLower.includes('atlas') || keyLower.includes('sprites') || keyLower.includes('sheet')) {
+          const width = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
+          const height = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
+          atlasSheets.push({ key, width, height });
+        }
+      }
+      
+      if (atlasSheets.length > 0) {
+        log('\n📋 Atlas/sprite sheets found:');
+        atlasSheets.forEach((sheet, i) => {
+          log(`   ${i + 1}. "${sheet.key}" (${sheet.width}x${sheet.height})`);
+        });
+      }
+
+      const sniffed = getTrackedSpriteResources('pets');
+      if (sniffed.length > 0) {
+        log('\n📡 Sprite sniffing hints (pet candidates):');
+        sniffed.forEach((entry, idx) => {
+          log(`   ${idx + 1}. ${entry.url}`);
+          log(`      sources: ${entry.sources.join(', ') || 'unknown'} | last seen: ${new Date(entry.lastSeen).toLocaleTimeString()}`);
+        });
+      }
+    } else {
+      petSheets.forEach((sheet, i) => {
+        log(`${i + 1}. "${sheet.key}"`);
+        log(`   Size: ${sheet.width}x${sheet.height}`);
+        log(`   URL: ${sheet.url}`);
+        log(`   Tiles (256px): ${Math.floor(sheet.width / 256)}x${Math.floor(sheet.height / 256)} = ${Math.floor(sheet.width / 256) * Math.floor(sheet.height / 256)} tiles`);
+        log(`   Tiles (512px): ${Math.floor(sheet.width / 512)}x${Math.floor(sheet.height / 512)} = ${Math.floor(sheet.width / 512) * Math.floor(sheet.height / 512)} tiles`);
+        log('');
+      });
+      const sniffed = getTrackedSpriteResources('pets');
+      if (sniffed.length > 0) {
+        log('\n📡 Sprite sniffing hints (pet candidates):');
+        sniffed.forEach((entry, idx) => {
+          log(`   ${idx + 1}. ${entry.url}`);
+          log(`      sources: ${entry.sources.join(', ') || 'unknown'} | last seen: ${new Date(entry.lastSeen).toLocaleTimeString()}`);
+        });
+      }
+    }
+
+    log('\n💡 To extract a specific sprite sheet, note the key name above.');
+    log('   Example: if you see a sheet with pets, tell me which one!');
+    
+  } catch (error) {
+    log('❌ Error scanning for pet sprites:', error);
+  }
+}
+
+      logExtractedPetSheets();
+
+// Note: inspectPetSprites is exported to window in main.ts initialize()

@@ -269,30 +269,33 @@ export function getAllSpeciesXpConfig(): Record<string, number> {
  * This is the maximum scale a species can have
  */
 const SPECIES_MAX_SCALE: Record<string, number> = {
-  // Tier 1 (12 hours) - 1.75
-  'Worm': 1.75,
-  'Snail': 1.75,
-  'Bee': 1.75,
+  // Common (12 hours)
+  Worm: 2.0,
+  Snail: 2.0,
+  Bee: 2.5,
 
-  // Tier 2 (24 hours) - 1.75
-  'Chicken': 1.75,
-  'Bunny': 1.75,
-  'Dragonfly': 1.75,
+  // Uncommon (24 hours)
+  Chicken: 2.0,
+  Bunny: 2.0,
+  Dragonfly: 2.5,
 
-  // Tier 3 (72 hours) - 2.25
-  'Pig': 2.25,
-  'Cow': 2.5,
-  'Sheep': 2,
+  // Rare (72 hours)
+  Pig: 2.5,
+  Cow: 2.5,
+  Turkey: 2.5,
 
-  // Tier 4 (100 hours) - 2
-  'Squirrel': 2,
-  'Turtle': 2,
-  'Goat': 2,
+  // Legendary (100 hours)
+  Squirrel: 2.0,
+  Turtle: 2.5,
+  Goat: 2.0,
 
-  // Tier 5 (144 hours) - 2.5
-  'Butterfly': 2.5,
-  'Peacock': 2.5,
-  'Capybara': 2.5,
+  // Mythic (144 hours)
+  Butterfly: 2.5,
+  Peacock: 2.5,
+  Capybara: 2.5,
+
+  // Legacy/fallback entries
+  Sheep: 2.0,
 };
 
 /**

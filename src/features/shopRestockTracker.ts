@@ -143,6 +143,9 @@ let config: RestockConfig = {
   importedFiles: [],
   watchedItems: [],
 };
+let restockEventsSorted = true;
+let lastStorageMergeMs = 0;
+const STORAGE_MERGE_INTERVAL_MS = 15000;
 let predictionHistory: Map<string, PredictionRecord[]> = new Map(); // itemName -> history (max 3)
 let activePredictions: Map<string, number> = new Map(); // itemName -> predicted time (PERSISTED TO STORAGE)
 
@@ -225,6 +228,10 @@ export function initializeRestockTracker(): void {
   try {
     const savedRestocks = storage.get<RestockEvent[]>(STORAGE_KEY_RESTOCKS, []);
     restockEvents = savedRestocks;
+    if (restockEvents.length > 1) {
+      restockEvents.sort((a, b) => a.timestamp - b.timestamp);
+      restockEventsSorted = true;
+    }
 
     const savedConfig = storage.get<RestockConfig>(STORAGE_KEY_CONFIG, {
       importedFiles: [],
@@ -338,33 +345,41 @@ function loadDefaultRestockData(): void {
  * Save restocks to storage
  * Merges with existing storage to prevent data loss from multiple tabs
  */
-function saveRestocks(): void {
+function saveRestocks(forceMerge = false): void {
   try {
-    // Load current storage to merge with in-memory data
-    const storedEvents = storage.get<RestockEvent[]>(STORAGE_KEY_RESTOCKS, []);
-    const storedIds = new Set(restockEvents.map(e => e.id));
+    const now = Date.now();
+    const shouldMerge = forceMerge || (now - lastStorageMergeMs > STORAGE_MERGE_INTERVAL_MS);
 
-    // Add any events from storage that aren't in memory
-    let merged = 0;
-    for (const event of storedEvents) {
-      if (!storedIds.has(event.id)) {
-        restockEvents.push(event);
-        storedIds.add(event.id);
-        merged++;
+    if (shouldMerge) {
+      const storedEvents = storage.get<RestockEvent[]>(STORAGE_KEY_RESTOCKS, []);
+      const storedIds = new Set(restockEvents.map(e => e.id));
+
+      let merged = 0;
+      for (const event of storedEvents) {
+        if (!storedIds.has(event.id)) {
+          restockEvents.push(event);
+          storedIds.add(event.id);
+          merged++;
+          restockEventsSorted = false;
+        }
       }
+
+      if (merged > 0) {
+        log(`dY", Merged ${merged} events from storage (multi-tab sync)`);
+      }
+
+      lastStorageMergeMs = now;
     }
 
-    // Sort by timestamp
-    if (merged > 0) {
+    if (!restockEventsSorted) {
       restockEvents.sort((a, b) => a.timestamp - b.timestamp);
-      log(`🔄 Merged ${merged} events from storage (multi-tab sync)`);
+      restockEventsSorted = true;
     }
 
-    // Save merged data
     storage.set(STORAGE_KEY_RESTOCKS, restockEvents);
     storage.set(STORAGE_KEY_CONFIG, config);
   } catch (error) {
-    log('⚠️ Failed to save restock data', error);
+    log('?s??,? Failed to save restock data', error);
   }
 }
 
@@ -375,16 +390,17 @@ export function addRestockEvent(event: RestockEvent): void {
   // Check for duplicates (same timestamp)
   const exists = restockEvents.some(e => e.id === event.id);
   if (exists) {
-    log(`⚠️ Duplicate restock event skipped`);
+    log(`?s??,? Duplicate restock event skipped`);
     return;
   }
 
+  const previousLast = restockEvents[restockEvents.length - 1]?.timestamp ?? null;
   restockEvents.push(event);
+  if (previousLast != null && event.timestamp < previousLast) {
+    restockEventsSorted = false;
+  }
 
-  // Sort by timestamp to keep events in chronological order
-  restockEvents.sort((a, b) => a.timestamp - b.timestamp);
-
-  log(`✅ Saved restock event (${event.source}): Total ${restockEvents.length} events`);
+  log(`?o. Saved restock event (${event.source}): Total ${restockEvents.length} events`);
 
   // Check prediction accuracy
   checkPredictionAccuracy(event);
@@ -411,13 +427,12 @@ export function addRestockEvents(events: RestockEvent[]): void {
     }
   }
 
-  // Sort by timestamp
-  restockEvents.sort((a, b) => a.timestamp - b.timestamp);
+  restockEventsSorted = false;
 
-  saveRestocks();
+  saveRestocks(true);
   notifyListeners();
 
-  log(`📊 Added ${added} new restock events (${events.length - added} duplicates skipped)`);
+  log(`dY"S Added ${added} new restock events (${events.length - added} duplicates skipped)`);
 }
 
 /**
@@ -1046,6 +1061,11 @@ export function generatePredictions(): void {
   const now = Date.now();
 
   for (const itemName of TRACKED_PREDICTION_ITEMS) {
+    // Keep existing predictions (even if overdue) until the item actually restocks
+    if (activePredictions.has(itemName)) {
+      continue;
+    }
+
     const predictedTime = predictItemNextAppearance(itemName);
     if (predictedTime && predictedTime > now) {
       activePredictions.set(itemName, predictedTime);
@@ -1134,11 +1154,20 @@ export function getAllPredictionHistories(): Map<string, PredictionRecord[]> {
 }
 
 /**
+ * Get the current active prediction timestamp for an item (if any)
+ */
+export function getActivePrediction(itemName: string): number | null {
+  return activePredictions.get(itemName) ?? null;
+}
+
+/**
  * Clear all shop restock data (restocks, predictions, config)
  * Only clears shop restock specific keys, not all QPM data
  */
 export function clearAllRestocks(): void {
   restockEvents = [];
+  restockEventsSorted = true;
+  lastStorageMergeMs = Date.now();
   config.importedFiles = [];
   config.watchedItems = [];
   predictionHistory.clear();

@@ -165,6 +165,10 @@ export declare function getPredictionHistory(itemName: string): PredictionRecord
  */
 export declare function getAllPredictionHistories(): Map<string, PredictionRecord[]>;
 /**
+ * Get the current active prediction timestamp for an item (if any)
+ */
+export declare function getActivePrediction(itemName: string): number | null;
+/**
  * Clear all shop restock data (restocks, predictions, config)
  * Only clears shop restock specific keys, not all QPM data
  */

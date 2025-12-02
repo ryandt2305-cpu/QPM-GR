@@ -30,7 +30,7 @@ import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA, calcula
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
-import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats } from '../features/shopRestockTracker';
+import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
 import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 
@@ -3923,6 +3923,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   registerTab('trackers', 'Trackers', '📈', []);
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   registerTab('shop-restock', 'Shop Restock', '🏪', []);
+  registerTab('pet-hub', 'Pet Hub', '🐾', []);
   registerTab('public-rooms', 'Public Rooms', '🌐', []);
   registerTab('crop-boost', 'Crop Boosts', '🌱', []);
   registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
@@ -4060,6 +4061,24 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     });
     lockerButton.replaceWith(newLockerButton);
     tabButtons.set('locker', newLockerButton);
+  }
+
+  const petHubButton = tabButtons.get('pet-hub');
+  if (petHubButton) {
+    const newPetHubButton = petHubButton.cloneNode(true) as HTMLButtonElement;
+    newPetHubButton.dataset.windowId = 'pet-hub';
+    newPetHubButton.addEventListener('click', () => {
+      const renderPetHubWindow = (root: HTMLElement) => {
+        import('./petHubWindow').then(({ renderPetHubWindow }) => {
+          renderPetHubWindow(root);
+        }).catch(error => {
+          log('⚠️ Failed to load Pet Hub window', error);
+        });
+      };
+      toggleWindow('pet-hub', '🐾 Pet Hub', renderPetHubWindow, '1600px', '92vh');
+    });
+    petHubButton.replaceWith(newPetHubButton);
+    tabButtons.set('pet-hub', newPetHubButton);
   }
 
   activateTab('dashboard');
@@ -4623,10 +4642,32 @@ function createDashboardIndicatorsCard(): HTMLElement {
   const restockBox = document.createElement('div');
   restockBox.style.cssText = 'padding:10px 12px;border-radius:8px;background:linear-gradient(135deg, rgba(255,152,0,0.12), rgba(255,152,0,0.04));border:1px solid rgba(255,152,0,0.25);display:flex;flex-direction:column;gap:6px;';
 
+  const restockHeader = document.createElement('div');
+  restockHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;';
+
   const restockTitle = document.createElement('div');
   restockTitle.textContent = '🛒 Restock';
-  restockTitle.style.cssText = 'font-weight:700;font-size:12px;color:#ffab91;margin-bottom:2px;letter-spacing:0.3px;';
-  restockBox.appendChild(restockTitle);
+  restockTitle.style.cssText = 'font-weight:700;font-size:12px;color:#ffab91;letter-spacing:0.3px;';
+  restockHeader.appendChild(restockTitle);
+
+  const clearRestocksBtn = document.createElement('button');
+  clearRestocksBtn.type = 'button';
+  clearRestocksBtn.textContent = 'Clear Data';
+  clearRestocksBtn.style.cssText = 'padding:4px 8px;font-size:10px;color:#ffcc80;background:rgba(255,152,0,0.15);border:1px solid rgba(255,152,0,0.45);border-radius:6px;cursor:pointer;';
+  clearRestocksBtn.addEventListener('mouseenter', () => clearRestocksBtn.style.borderColor = '#ffcc80');
+  clearRestocksBtn.addEventListener('mouseleave', () => clearRestocksBtn.style.borderColor = 'rgba(255,152,0,0.45)');
+  clearRestocksBtn.onclick = () => {
+    if (confirm('Clear all saved shop restock history and predictions? This does not affect other QPM data.')) {
+      clearAllRestocks();
+      restockSummary.style.display = 'block';
+      restockSummary.textContent = 'Restock history cleared';
+      restockRows.innerHTML = '';
+      updateShopCountdownViews();
+    }
+  };
+  restockHeader.appendChild(clearRestocksBtn);
+
+  restockBox.appendChild(restockHeader);
 
   const restockSummary = document.createElement('div');
   restockSummary.style.cssText = 'font-size:10px;color:#b0b0b0;display:none;';
@@ -8979,4 +9020,3 @@ function saveCfg(): void {
     localStorage.setItem('quinoa-pet-manager', JSON.stringify(cfg));
   } catch {}
 }
-

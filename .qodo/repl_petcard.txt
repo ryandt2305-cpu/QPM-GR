@@ -1,0 +1,93 @@
+﻿function createPetCard(pet: PetWithSource): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = `
+    background: rgba(143, 130, 255, 0.05);
+    border: 1px solid var(--qpm-border);
+    border-radius: 8px;
+    padding: 16px;
+    transition: all 0.2s;
+    cursor: pointer;
+  `;
+
+  card.addEventListener('mouseenter', () => {
+    card.style.background = 'rgba(143, 130, 255, 0.12)';
+    card.style.borderColor = 'var(--qpm-accent)';
+    card.style.transform = 'translateY(-2px)';
+    card.style.boxShadow = '0 4px 12px rgba(143, 130, 255, 0.2)';
+  });
+
+  card.addEventListener('mouseleave', () => {
+    card.style.background = 'rgba(143, 130, 255, 0.05)';
+    card.style.borderColor = 'var(--qpm-border)';
+    card.style.transform = 'translateY(0)';
+    card.style.boxShadow = 'none';
+  });
+
+  const stats = pet.stats;
+  const header = document.createElement('div');
+  header.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--qpm-border);
+  `;
+
+  const petImageHtml = renderPetImage(stats, 48, true);
+  header.innerHTML = `
+    ${petImageHtml}
+    <div style="flex: 1;">
+      <div style="font-size: 16px; font-weight: 700; color: var(--qpm-accent);">${getPetDisplayName(stats)}</div>
+      <div style="font-size: 12px; color: var(--qpm-text-dim);">${stats.species || 'Unknown'}</div>
+    </div>
+  `;
+
+  const statsGrid = document.createElement('div');
+  statsGrid.style.cssText = `
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+  `;
+
+  const statItem = (label: string, value: string) => `
+    <div style="background: rgba(143, 130, 255, 0.08); padding: 8px; border-radius: 4px;">
+      <div style="font-size: 10px; color: var(--qpm-text-dim); text-transform: uppercase; margin-bottom: 3px;">${label}</div>
+      <div style="font-size: 14px; font-weight: 600; color: var(--qpm-text);">${value}</div>
+    </div>
+  `;
+
+  statsGrid.innerHTML = `
+    ${statItem('💪 STR', `${stats.currentStrength ?? 'N/A'}`)}
+    ${statItem('🎯 Max', `${stats.maxStrength ?? 'N/A'}`)}
+    ${statItem('⚡ Abilities', `${stats.abilityCount}`)}
+    ${statItem('✨ XP', stats.xp != null ? formatNumber(stats.xp) : 'N/A')}
+  `;
+
+  if (stats.mutations.length > 0) {
+    const mutDiv = document.createElement('div');
+    mutDiv.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;';
+    stats.mutations.forEach(mut => {
+      const badge = document.createElement('span');
+      badge.textContent = mut;
+      badge.style.cssText = `
+        background: ${mut === 'Gold' ? '#ffd700' : mut === 'Rainbow' ? 'linear-gradient(90deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #9400d3)' : 'var(--qpm-accent)'};
+        color: ${mut === 'Rainbow' || mut === 'Gold' ? '#000' : '#fff'};
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+      `;
+      mutDiv.appendChild(badge);
+    });
+
+    statsGrid.appendChild(mutDiv);
+  }
+
+  card.appendChild(header);
+  card.appendChild(statsGrid);
+
+  return card;
+}
+

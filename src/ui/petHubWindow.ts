@@ -191,7 +191,9 @@ function ensureAriesTeamsWatcher(): void {
       ariesStatus = 'unavailable';
       notifyAriesListeners();
       ariesWatcherPromise = null;
+      // Retry detection every 4 seconds (Aries mod might load after QPM)
       if (ariesRetryTimer == null && ariesTeamsListeners.size > 0) {
+        log('[Aries] Will retry detection in 4 seconds...');
         ariesRetryTimer = window.setTimeout(() => {
           ariesRetryTimer = null;
           ensureAriesTeamsWatcher();
@@ -199,6 +201,7 @@ function ensureAriesTeamsWatcher(): void {
       }
       return;
     }
+    log('[Aries] PetsService detected, setting up team sync');
     if (ariesRetryTimer != null) {
       window.clearTimeout(ariesRetryTimer);
       ariesRetryTimer = null;
@@ -211,21 +214,24 @@ function ensureAriesTeamsWatcher(): void {
     ariesStatus = 'ready';
     try {
       ariesTeamsCache = await resolveAriesTeams(service);
+      log(`[Aries] Loaded ${ariesTeamsCache.length} team(s):`, ariesTeamsCache.map(t => t.name).join(', '));
       notifyAriesListeners();
     } catch (error) {
-      log('Failed to read Aries teams', error);
+      log('[Aries] Failed to read Aries teams', error);
     }
     if (typeof service.onTeamsChangeNow === 'function') {
       try {
         await service.onTeamsChangeNow(raw => {
           ariesTeamsCache = normalizeAriesTeams(raw);
+          log(`[Aries] Teams updated: ${ariesTeamsCache.length} team(s)`);
           notifyAriesListeners();
         });
+        log('[Aries] Successfully subscribed to team changes');
       } catch (error) {
-        log('Failed to subscribe to Aries teams', error);
+        log('[Aries] Failed to subscribe to Aries teams', error);
       }
     } else {
-      log('Aries PetsService does not expose onTeamsChangeNow; presets will be static');
+      log('[Aries] onTeamsChangeNow not available; presets will be static');
     }
     ariesWatcherPromise = null;
   })().catch(error => {
@@ -247,20 +253,51 @@ function notifyAriesListeners(): void {
 
 function getAriesPetsService(): AriesPetsService | null {
   let candidate: AriesPetsService | undefined;
+
+  // Try pageWindow.PetsService
   candidate = (pageWindow as typeof window & { PetsService?: AriesPetsService }).PetsService;
-  if (!candidate && isIsolatedContext) {
+  if (candidate && typeof candidate.getTeams === 'function') {
+    log('[Aries] Found PetsService at pageWindow.PetsService');
+    return candidate;
+  }
+
+  // Try window.PetsService (isolated context)
+  if (isIsolatedContext) {
     candidate = (window as typeof window & { PetsService?: AriesPetsService }).PetsService;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] Found PetsService at window.PetsService');
+      return candidate;
+    }
   }
-  if (!candidate) {
-    candidate = readSharedGlobal<AriesPetsService>('PetsService');
+
+  // Try shared global
+  candidate = readSharedGlobal<AriesPetsService>('PetsService');
+  if (candidate && typeof candidate.getTeams === 'function') {
+    log('[Aries] Found PetsService via readSharedGlobal');
+    return candidate;
   }
-  const qws = (pageWindow as Record<string, unknown>).QWS ?? (window as Record<string, unknown>).QWS;
-  if (!candidate && qws && typeof (qws as Record<string, unknown>).PetsService === 'object') {
-    candidate = ((qws as Record<string, unknown>).PetsService ?? null) as AriesPetsService | null;
+
+  // Try QWS.PetsService
+  const pageQws = (pageWindow as unknown as Record<string, unknown>).QWS;
+  if (pageQws && typeof (pageQws as Record<string, unknown>).PetsService === 'object') {
+    candidate = ((pageQws as Record<string, unknown>).PetsService ?? undefined) as AriesPetsService | undefined;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] Found PetsService at pageWindow.QWS.PetsService');
+      return candidate;
+    }
   }
-  if (!candidate) return null;
-  if (typeof candidate.getTeams !== 'function') return null;
-  return candidate;
+
+  const winQws = (window as unknown as Record<string, unknown>).QWS;
+  if (winQws && typeof (winQws as Record<string, unknown>).PetsService === 'object') {
+    candidate = ((winQws as Record<string, unknown>).PetsService ?? undefined) as AriesPetsService | undefined;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] Found PetsService at window.QWS.PetsService');
+      return candidate;
+    }
+  }
+
+  log('[Aries] PetsService not found - Aries mod may not be loaded');
+  return null;
 }
 
 async function resolveAriesTeams(service: AriesPetsService): Promise<AriesTeamSummary[]> {
@@ -1847,9 +1884,30 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
 
   const ariesSection = document.createElement('div');
   ariesSection.style.cssText = 'display:none;flex-direction:column;gap:10px;margin-bottom:12px;padding:10px;border:1px solid var(--qpm-border);border-radius:10px;background:rgba(143,130,255,0.08);';
+
+  const ariesHeaderRow = document.createElement('div');
+  ariesHeaderRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
   const ariesHeader = document.createElement('div');
-  ariesHeader.textContent = 'Aries Mod presets';
+  ariesHeader.textContent = '🔗 Aries Mod Presets';
   ariesHeader.style.cssText = 'font-size:13px;font-weight:700;color:var(--qpm-accent);';
+
+  const refreshButton = document.createElement('button');
+  refreshButton.textContent = '🔄 Refresh';
+  refreshButton.style.cssText = 'padding:4px 8px;font-size:11px;background:rgba(143,130,255,0.2);color:var(--qpm-accent);border:1px solid var(--qpm-border);border-radius:4px;cursor:pointer;';
+  refreshButton.title = 'Manually retry detection of Aries Mod';
+  refreshButton.addEventListener('click', () => {
+    log('[Aries] Manual refresh triggered');
+    ariesWatcherAttached = false;
+    ariesWatcherPromise = null;
+    if (ariesRetryTimer != null) {
+      window.clearTimeout(ariesRetryTimer);
+      ariesRetryTimer = null;
+    }
+    ensureAriesTeamsWatcher();
+  });
+
+  ariesHeaderRow.append(ariesHeader, refreshButton);
+
   ariesStatusMsg = document.createElement('div');
   ariesStatusMsg.style.cssText = 'font-size:11px;color:var(--qpm-text-dim);';
   ariesStatusMsg.textContent = 'Detecting Aries Mod teams...';
@@ -1858,22 +1916,30 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const presetA = createPresetControl('Apply to Team A', team => applyAriesPreset(team, teamA));
   const presetB = createPresetControl('Apply to Team B', team => applyAriesPreset(team, teamB));
   presetControls.append(presetA.wrapper, presetB.wrapper);
-  ariesSection.append(ariesHeader, ariesStatusMsg, presetControls);
+  ariesSection.append(ariesHeaderRow, ariesStatusMsg, presetControls);
 
   const unsubscribeAries = subscribeToAriesTeams(({ status, teams }) => {
+    // Always show the section so users know the feature exists
+    ariesSection.style.display = 'flex';
+
     if (status === 'ready' && teams.length > 0) {
-      ariesSection.style.display = 'flex';
-      ariesStatusMsg.textContent = 'Select a preset to populate slots automatically.';
-      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      ariesStatusMsg.textContent = `✅ Found ${teams.length} preset(s). Select one to populate team slots automatically.`;
+      ariesStatusMsg.style.color = 'var(--qpm-success)';
       presetA.updateOptions(teams);
       presetB.updateOptions(teams);
+      presetControls.style.display = 'grid';
+    } else if (status === 'ready' && teams.length === 0) {
+      ariesStatusMsg.textContent = '⚠️ Aries Mod detected but no pet teams found. Create teams in the Aries mod first.';
+      ariesStatusMsg.style.color = 'var(--qpm-warning)';
+      presetControls.style.display = 'none';
+    } else if (status === 'unavailable') {
+      ariesStatusMsg.textContent = '❌ Aries Mod not detected. Install Aries mod to use preset integration. Click 🔄 to retry.';
+      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      presetControls.style.display = 'none';
     } else {
-      ariesSection.style.display = teams.length > 0 ? 'flex' : 'none';
-      if (status === 'unavailable') {
-        ariesStatusMsg.textContent = 'Aries Mod presets not detected.';
-      } else {
-        ariesStatusMsg.textContent = 'Detecting Aries Mod teams...';
-      }
+      ariesStatusMsg.textContent = '🔍 Detecting Aries Mod...';
+      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      presetControls.style.display = 'none';
     }
   });
   cleanupOnDetach(container, unsubscribeAries);

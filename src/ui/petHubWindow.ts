@@ -314,28 +314,29 @@ function isAriesModActuallyLoaded(): boolean {
   // Check for Aries-specific globals to confirm the mod is actually running
   // Don't just rely on localStorage which persists even when mod is disabled
 
-  // Check for QWS namespace
+  // Check for QWS namespace (most reliable indicator)
   const pageQws = (pageWindow as unknown as Record<string, unknown>).QWS;
   const winQws = (window as unknown as Record<string, unknown>).QWS;
 
-  if (pageQws || winQws) {
+  const hasQws = !!(pageQws || winQws);
+
+  // Also check if QWS has actual content (not just empty object)
+  if (hasQws) {
+    const qws = (pageQws || winQws) as Record<string, unknown>;
+    // QWS should have properties if Aries is actually loaded
+    const hasContent = Object.keys(qws).length > 0;
+    log(`[Aries] QWS check: exists=${hasQws}, hasContent=${hasContent}, keys=${Object.keys(qws).join(',')}`);
+    return hasContent;
+  }
+
+  // Check for Aries-specific DOM elements (userscript indicators)
+  const ariesScripts = document.querySelectorAll('script[src*="aries"], script[src*="quinoa-ws"]');
+  if (ariesScripts.length > 0) {
+    log('[Aries] Found Aries script tag in DOM');
     return true;
   }
 
-  // Check for any Aries-specific globals
-  const ariesIndicators = [
-    'QuinoaWS',
-    'QWS',
-    'AriesMod',
-    'MagicGardenAriesMod',
-  ];
-
-  for (const indicator of ariesIndicators) {
-    if ((pageWindow as any)[indicator] !== undefined || (window as any)[indicator] !== undefined) {
-      return true;
-    }
-  }
-
+  log('[Aries] No indicators found - mod not loaded');
   return false;
 }
 
@@ -1923,13 +1924,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
     // Batch updates to avoid multiple re-renders
     target.splice(0, target.length, ...resolved);
 
-    // Use requestAnimationFrame to defer the rebuild to next frame
-    requestAnimationFrame(() => {
-      rebuildManualSelectors();
-      render();
-    });
-
-    // Update status immediately (no lag)
+    // Update status immediately
     if (missingSlots.length) {
       ariesStatusMsg.textContent = `Applied "${team.name}" but slots ${missingSlots.join(', ')} are missing in Pet Hub data.`;
       ariesStatusMsg.style.color = 'var(--qpm-error)';
@@ -1937,6 +1932,12 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       ariesStatusMsg.textContent = `✅ Applied "${team.name}" preset.`;
       ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
+
+    // Defer expensive operations with a longer delay to prevent blocking
+    setTimeout(() => {
+      rebuildManualSelectors();
+      render();
+    }, 0);
   };
 
   const createPresetControl = (label: string, apply: (team: AriesTeamSummary) => void) => {

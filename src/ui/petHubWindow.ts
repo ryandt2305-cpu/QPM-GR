@@ -1773,6 +1773,48 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   };
   const abilityA = pickTopAbility(petA);
   const abilityB = pickTopAbility(petB);
+
+  // Cross-species comparisons (only for different species with same ability)
+  const speciesA = statsA?.species ?? null;
+  const speciesB = statsB?.species ?? null;
+  const isDifferentSpecies = speciesA && speciesB && speciesA !== speciesB;
+  const sharesSameAbility = abilityA && abilityB && (abilityA.baseName || abilityA.name) === (abilityB.baseName || abilityB.name);
+
+  let hungerDepletionA: number | null = null;
+  let hungerDepletionB: number | null = null;
+  let timePerLevelA: number | null = null;
+  let timePerLevelB: number | null = null;
+
+  if (isDifferentSpecies && sharesSameAbility) {
+    // Calculate hunger depletion rate (hours per 100% hunger)
+    const metadataA = getPetMetadata(speciesA);
+    const metadataB = getPetMetadata(speciesB);
+    const hungerCostA = metadataA?.hungerCost ?? null;
+    const hungerCostB = metadataB?.hungerCost ?? null;
+
+    if (hungerCostA && hungerCostA > 0) {
+      hungerDepletionA = 100000 / hungerCostA; // hours to deplete full hunger bar
+    }
+    if (hungerCostB && hungerCostB > 0) {
+      hungerDepletionB = 100000 / hungerCostB;
+    }
+
+    // Calculate time per STR/level (hours per level)
+    const xpPerLevelA = speciesA ? getSpeciesXpPerLevel(speciesA) : null;
+    const xpPerLevelB = speciesB ? getSpeciesXpPerLevel(speciesB) : null;
+
+    // Assume XP boost ability for now (can be refined)
+    const xpPerHourA = abilityA.valuePerHour ?? null;
+    const xpPerHourB = abilityB.valuePerHour ?? null;
+
+    if (xpPerLevelA && xpPerHourA && xpPerHourA > 0) {
+      timePerLevelA = xpPerLevelA / xpPerHourA;
+    }
+    if (xpPerLevelB && xpPerHourB && xpPerHourB > 0) {
+      timePerLevelB = xpPerLevelB / xpPerHourB;
+    }
+  }
+
   const renderAbilityRow = (
     ability: AbilityStats | null,
     label = '',
@@ -1848,6 +1890,15 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     `
     : '';
 
+  // Cross-species comparison badges
+  const crossSpeciesComparisons = isDifferentSpecies && sharesSameAbility ? `
+    <div style="margin-top:8px;padding:8px;border:1px dashed rgba(255,193,7,0.5);border-radius:8px;background:rgba(255,193,7,0.05);">
+      <div style="font-size:11px;color:rgba(255,193,7,0.9);margin-bottom:6px;font-weight:600;">📊 Cross-Species Comparison</div>
+      ${hungerDepletionA != null && hungerDepletionB != null ? compareBadge('Hunger Lifespan (h)', hungerDepletionA.toFixed(1), hungerDepletionB.toFixed(1)) : ''}
+      ${timePerLevelA != null && timePerLevelB != null ? compareBadge('Time/Level (h)', timePerLevelA.toFixed(2), timePerLevelB.toFixed(2)) : ''}
+    </div>
+  ` : '';
+
   center.innerHTML = `
     <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Duel Metrics</div>
     ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
@@ -1856,6 +1907,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
       <div>${renderAbilityRow(abilityA, '', probWinner === 'A' || abilityOverallWinner === 'A', procsWinner === 'A' || abilityOverallWinner === 'A', impactWinner === 'A' || abilityOverallWinner === 'A', 'left')}</div>
       <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B', 'right')}</div>
     </div>
+    ${crossSpeciesComparisons}
     ${projectionBlock}
   `;
 
@@ -1900,17 +1952,26 @@ function create3v3PetCard(
   const stats = pet.stats;
   const metadata = getPetMetadata(stats.species ?? null);
   const hungerPct = stats.hungerPct ?? null;
-  const strengthPct = stats.maxStrength && stats.currentStrength != null ? (stats.currentStrength / stats.maxStrength) * 100 : stats.strengthProgress ?? null;
-  const strengthLabel = stats.currentStrength != null && stats.maxStrength != null
-    ? `${stats.currentStrength.toFixed(0)} / ${stats.maxStrength.toFixed(0)} STR`
-    : stats.currentStrength != null ? `${stats.currentStrength.toFixed(0)} STR` : '—';
+
+  // Calculate XP per level progress
+  const xpPerLevel = stats.species ? getSpeciesXpPerLevel(stats.species) : null;
+  const currentXp = stats.xp ?? 0;
+  const xpTowardsNextLevel = xpPerLevel ? (currentXp % xpPerLevel) : 0;
+  const xpLevelProgress = xpPerLevel && xpPerLevel > 0 ? (xpTowardsNextLevel / xpPerLevel) * 100 : 0;
+  const xpLevelLabel = xpPerLevel ? `${xpTowardsNextLevel.toFixed(0)} / ${xpPerLevel} XP` : '—';
+
+  // Use metadata hungerCost for accurate depletion time calculation
+  const hungerCost = metadata?.hungerCost ?? null;
+  const hungerDepletionHours = hungerPct != null && hungerCost != null && hungerCost > 0
+    ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
+    : stats.timeUntilStarving ?? null;
+
   const hungerLabelParts: string[] = [];
   if (stats.hungerPct != null) hungerLabelParts.push(`${stats.hungerPct.toFixed(0)}%`);
-  if (stats.timeUntilStarving != null) hungerLabelParts.push(`${stats.timeUntilStarving.toFixed(1)}h left`);
-  if (metadata?.hungerCost != null) hungerLabelParts.push(`${metadata.hungerCost.toFixed(0)} hunger`);
+  if (hungerDepletionHours != null) hungerLabelParts.push(`${hungerDepletionHours.toFixed(1)}h left`);
   const hungerLabel = hungerLabelParts.join(' • ') || '—';
+
   const strDelta = stats.maxStrength != null && stats.currentStrength != null ? Math.max(0, stats.maxStrength - stats.currentStrength) : null;
-  const xpPerLevel = stats.species ? getSpeciesXpPerLevel(stats.species) : null;
   const estLevels = (stats.maxStrength && stats.currentStrength)
     ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30)
     : null;
@@ -1951,46 +2012,37 @@ function create3v3PetCard(
   // Create ability squares (up to 4) with hover tooltips, positioned to the left of pet image
   const abilitySquaresHtml = stats.abilities.slice(0, 4).map((ability, idx) => {
     const color = getAbilityColorByName(ability.baseName || ability.name);
-    // Escape HTML entities to prevent tooltip issues
-    const abilityName = (ability.name || 'Unknown Ability')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-    return `
-      <div
-        title="${abilityName}"
-        style="
-          width: 20px;
-          height: 20px;
-          background: ${color};
-          border-radius: 4px;
-          border: 1px solid rgba(255, 255, 255, 0.4);
-          cursor: help;
-          transition: all 0.2s;
-        "
-        onmouseenter="this.style.transform='scale(1.15)'; this.style.borderColor='rgba(255,255,255,0.8)';"
-        onmouseleave="this.style.transform='scale(1)'; this.style.borderColor='rgba(255,255,255,0.4)';"
-      ></div>
-    `;
+    const abilityName = ability.name || 'Unknown Ability';
+
+    return `<div title="${abilityName}" style="width: 20px; height: 20px; background: ${color}; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.transform='scale(1.15)'; this.style.borderColor='rgba(255,255,255,0.8)';" onmouseleave="this.style.transform='scale(1)'; this.style.borderColor='rgba(255,255,255,0.4)';"></div>`;
   }).join('');
 
   // Pet sprite with ability squares to the left
   const spriteBlock = `
-    <div style="position:relative;display:flex;align-items:center;gap:10px;justify-content:center;width:100%;padding:8px 0;">
-      <!-- Ability squares column (left side) -->
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        ${abilitySquaresHtml || '<div style="width:20px;height:20px;"></div>'}
+    <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:8px 0;">
+      <!-- STR text above image -->
+      <div style="font-size:13px;font-weight:600;color:${sideStyle.text};">
+        STR: ${stats.currentStrength != null ? stats.currentStrength.toFixed(0) : '?'}
       </div>
-      <!-- Pet image (centered) -->
-      ${renderPetImage(stats, 128, true)}
+
+      <!-- Pet image with ability squares -->
+      <div style="display:flex;align-items:center;gap:10px;justify-content:center;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${abilitySquaresHtml || '<div style="width:20px;height:20px;"></div>'}
+        </div>
+        ${renderPetImage(stats, 128, true)}
+      </div>
+
+      <!-- MAX STR text below image -->
+      <div style="font-size:13px;font-weight:600;color:${sideStyle.text};">
+        MAX STR: ${stats.maxStrength != null ? stats.maxStrength.toFixed(0) : '?'}
+      </div>
     </div>
   `;
 
   const statIndicators = `
     <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
-      ${renderStatIndicator('STR', strengthLabel, strengthPct, '#7ACBFF')}
+      ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
       ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
     </div>
   `;

@@ -311,32 +311,67 @@ function getAriesPetsService(): AriesPetsService | null {
 }
 
 function isAriesModActuallyLoaded(): boolean {
-  // Check for Aries-specific globals to confirm the mod is actually running
-  // Don't just rely on localStorage which persists even when mod is disabled
+  // Aries mod doesn't expose globals and localStorage persists
+  // Check for DOM elements or sessionStorage that only exist when mod is RUNNING
 
-  // Check for QWS namespace (most reliable indicator)
-  const pageQws = (pageWindow as unknown as Record<string, unknown>).QWS;
-  const winQws = (window as unknown as Record<string, unknown>).QWS;
+  // Check sessionStorage (clears when tab closes, unlike localStorage)
+  try {
+    const sessionKeys = Object.keys(sessionStorage);
+    const qwsSessionKeys = sessionKeys.filter(k =>
+      k.startsWith('qws:') ||
+      k.startsWith('MGA_') ||
+      k.includes('aries') ||
+      k.includes('quinoa-ws')
+    );
 
-  const hasQws = !!(pageQws || winQws);
-
-  // Also check if QWS has actual content (not just empty object)
-  if (hasQws) {
-    const qws = (pageQws || winQws) as Record<string, unknown>;
-    // QWS should have properties if Aries is actually loaded
-    const hasContent = Object.keys(qws).length > 0;
-    log(`[Aries] QWS check: exists=${hasQws}, hasContent=${hasContent}, keys=${Object.keys(qws).join(',')}`);
-    return hasContent;
+    if (qwsSessionKeys.length > 0) {
+      log(`[Aries] ✅ Found ${qwsSessionKeys.length} Aries sessionStorage keys - mod is running`);
+      return true;
+    }
+  } catch (error) {
+    // sessionStorage access error
   }
 
-  // Check for Aries-specific DOM elements (userscript indicators)
-  const ariesScripts = document.querySelectorAll('script[src*="aries"], script[src*="quinoa-ws"]');
-  if (ariesScripts.length > 0) {
-    log('[Aries] Found Aries script tag in DOM');
-    return true;
+  // Check for Aries-added DOM elements (UI components it creates)
+  try {
+    // Look for Aries-specific DOM markers
+    const ariesElements = document.querySelectorAll(
+      '[data-aries], [data-qws], .aries-mod, .qws-mod, #aries-menu, #qws-menu'
+    );
+
+    if (ariesElements.length > 0) {
+      log(`[Aries] ✅ Found ${ariesElements.length} Aries DOM elements - mod is running`);
+      return true;
+    }
+
+    // Check for Aries script tag with specific ID or data attribute
+    const ariesScript = document.querySelector('script[data-userscript*="aries"], script[data-userscript*="quinoa"]');
+    if (ariesScript) {
+      log('[Aries] ✅ Found Aries userscript tag - mod is running');
+      return true;
+    }
+  } catch (error) {
+    // DOM access error
   }
 
-  log('[Aries] No indicators found - mod not loaded');
+  // Fallback: Check if localStorage data was recently modified
+  // If Aries updates a timestamp key, we can use that
+  try {
+    const timestampKey = localStorage.getItem('qws:lastActive');
+    if (timestampKey) {
+      const timestamp = parseInt(timestampKey, 10);
+      const ageSeconds = (Date.now() - timestamp) / 1000;
+
+      if (ageSeconds < 30) { // Updated within last 30 seconds
+        log(`[Aries] ✅ Found recent activity timestamp (${ageSeconds.toFixed(1)}s ago) - mod is running`);
+        return true;
+      }
+    }
+  } catch {
+    // Timestamp check error
+  }
+
+  log('[Aries] ❌ No runtime indicators found - mod not currently running');
   return false;
 }
 

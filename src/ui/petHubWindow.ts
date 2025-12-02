@@ -310,7 +310,49 @@ function getAriesPetsService(): AriesPetsService | null {
   return null;
 }
 
+function isAriesScriptInjected(): boolean {
+  // Check for Tampermonkey-injected script tags containing Aries code
+  try {
+    const scripts = Array.from(document.querySelectorAll('script'));
+
+    for (const script of scripts) {
+      // Check script src or data attributes for Aries indicators
+      const src = script.src || '';
+      const dataScript = script.getAttribute('data-tampermonkey-script');
+
+      if (src.includes('aries') || src.includes('quinoa-ws') || src.includes('MGA')) {
+        log('[Aries] ✅ Found Aries script in src:', src);
+        return true;
+      }
+
+      if (dataScript && (dataScript.includes('aries') || dataScript.includes('quinoa') || dataScript.includes('MGA'))) {
+        log('[Aries] ✅ Found Aries in Tampermonkey data attribute');
+        return true;
+      }
+
+      // Check inline script content for Aries signatures (first 500 chars only for performance)
+      const content = script.textContent?.substring(0, 500) || '';
+      if (content.includes('quinoa-ws') || content.includes('QuinoaWS') || content.includes('Aries')) {
+        log('[Aries] ✅ Found Aries code signature in script content');
+        return true;
+      }
+    }
+  } catch (error) {
+    log('[Aries] Error checking scripts:', error);
+  }
+
+  return false;
+}
+
 function tryCreateLocalStorageFallback(): AriesPetsService | null {
+  // First check if Aries script is actually injected
+  if (!isAriesScriptInjected()) {
+    log('[Aries] ❌ Aries script not detected - skipping localStorage check');
+    return null;
+  }
+
+  log('[Aries] Script detected, checking for teams in localStorage...');
+
   // Known Aries mod localStorage keys (prioritized)
   const possibleKeys = [
     'qws:pets:teams:v1',      // Aries mod actual key
@@ -1903,11 +1945,14 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
 
-    // Defer expensive operations with a longer delay to prevent blocking
-    setTimeout(() => {
+    // Split the expensive operations across multiple frames to prevent freezing
+    requestIdleCallback(() => {
       rebuildManualSelectors();
+    }, { timeout: 100 });
+
+    requestIdleCallback(() => {
       render();
-    }, 0);
+    }, { timeout: 200 });
   };
 
   const createPresetControl = (label: string, apply: (team: AriesTeamSummary) => void) => {

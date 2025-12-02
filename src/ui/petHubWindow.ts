@@ -9,6 +9,7 @@ import { getInventoryItems } from '../store/inventory';
 import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petMutationRenderer';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
+import { getPetMetadata } from '../data/petMetadata';
 
 function formatNumber(value: number): string {
   if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
@@ -76,6 +77,152 @@ function scaleAbilityToMax(ability: AbilityStats, currentStr: number | null, max
     gardenValuePerProc: ability.gardenValuePerProc != null ? ability.gardenValuePerProc * ratio : null,
     effectiveValue: ability.effectiveValue != null ? ability.effectiveValue * ratio : ability.effectiveValue,
   };
+}
+
+function formatWeight(weight: number | null | undefined): string {
+  if (weight == null || Number.isNaN(weight)) return '—';
+  if (weight >= 1000) return `${(weight / 1000).toFixed(1)} t`;
+  if (weight >= 10) return `${weight.toFixed(0)} kg`;
+  if (weight >= 1) return `${weight.toFixed(1)} kg`;
+  return `${weight.toFixed(2)} kg`;
+}
+
+interface AbilityColorInfo {
+  base: string;
+  glow: string;
+  text: string;
+  border: string;
+  label: string;
+}
+
+const ABILITY_COLOR_MAP = {
+  plantGrowth: { base: '#2E7D32', glow: 'rgba(46,125,50,0.65)', text: '#C8E6C9', border: 'rgba(200,230,201,0.4)', label: 'Plant Growth' },
+  eggGrowth: { base: '#FF7043', glow: 'rgba(255,112,67,0.65)', text: '#FFE0B2', border: 'rgba(255,224,178,0.45)', label: 'Egg Growth' },
+  xp: { base: '#7C4DFF', glow: 'rgba(124,77,255,0.65)', text: '#EDE7F6', border: 'rgba(237,231,246,0.45)', label: 'XP' },
+  coins: { base: '#FFB300', glow: 'rgba(255,179,0,0.65)', text: '#FFF8E1', border: 'rgba(255,248,225,0.45)', label: 'Coins' },
+  misc: { base: '#90A4AE', glow: 'rgba(144,164,174,0.6)', text: '#ECEFF1', border: 'rgba(236,239,241,0.4)', label: 'Ability' },
+  hunger: { base: '#26C6DA', glow: 'rgba(38,198,218,0.65)', text: '#E0F7FA', border: 'rgba(224,247,250,0.45)', label: 'Hunger' },
+  mutation: { base: '#EC407A', glow: 'rgba(236,64,122,0.6)', text: '#FCE4EC', border: 'rgba(252,228,236,0.45)', label: 'Mutation' },
+  rainbow: { base: '#7C4DFF', glow: 'rgba(124,77,255,0.7)', text: '#F3E5F5', border: 'rgba(243,229,245,0.55)', label: 'Rainbow' },
+  gold: { base: '#FDD835', glow: 'rgba(253,216,53,0.75)', text: '#FFFDE7', border: 'rgba(255,253,231,0.55)', label: 'Gold' },
+  default: { base: '#5E5CE6', glow: 'rgba(94,92,230,0.5)', text: '#E0E7FF', border: 'rgba(224,231,255,0.4)', label: 'Ability' },
+} satisfies Record<string, AbilityColorInfo>;
+
+function getAbilityColorInfo(ability: AbilityStats | null): AbilityColorInfo {
+  if (!ability) return ABILITY_COLOR_MAP.default;
+  const category = ability.category ?? '';
+  if (category && Object.prototype.hasOwnProperty.call(ABILITY_COLOR_MAP, category)) {
+    return ABILITY_COLOR_MAP[category as keyof typeof ABILITY_COLOR_MAP];
+  }
+  const normalizedName = (ability.baseName ?? ability.name).toLowerCase();
+  if (normalizedName.includes('rainbow')) return ABILITY_COLOR_MAP.rainbow;
+  if (normalizedName.includes('gold')) return ABILITY_COLOR_MAP.gold;
+  if (normalizedName.includes('hunger')) return ABILITY_COLOR_MAP.hunger;
+  if (normalizedName.includes('mutation')) return ABILITY_COLOR_MAP.mutation;
+  return ABILITY_COLOR_MAP.default;
+}
+
+type DuelSide = 'left' | 'right';
+
+const DUEL_SIDE_STYLES: Record<DuelSide, { border: string; glow: string; text: string; gradient: string; accent: string }> = {
+  left: {
+    border: 'rgba(64,196,255,0.7)',
+    glow: '0 0 22px rgba(64,196,255,0.35)',
+    text: '#C9F1FF',
+    gradient: 'linear-gradient(135deg, rgba(64,196,255,0.16), rgba(10,23,42,0.75))',
+    accent: '#7dd3ff',
+  },
+  right: {
+    border: 'rgba(189,147,249,0.8)',
+    glow: '0 0 22px rgba(189,147,249,0.4)',
+    text: '#F7E5FF',
+    gradient: 'linear-gradient(135deg, rgba(189,147,249,0.18), rgba(25,6,41,0.8))',
+    accent: '#e3b7ff',
+  },
+};
+
+function clampPercentValue(value: number | null | undefined): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return Math.max(0, Math.min(100, value));
+}
+
+function renderProgressBar(label: string, pct: number | null, valueLabel: string, accent: string): string {
+  const clamped = clampPercentValue(pct);
+  const width = clamped != null ? `${clamped}%` : '0%';
+  const displayValue = valueLabel || (clamped != null ? `${clamped.toFixed(0)}%` : '—');
+  return `
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--qpm-text-dim,#9FA6B2);">
+        <span>${label}</span>
+        <span>${displayValue}</span>
+      </div>
+      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div style="height:100%;width:${width};background:linear-gradient(90deg, ${accent}, rgba(255,255,255,0.35));transition:width 0.3s ease;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function formatHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return '—';
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours >= 24) {
+    const days = hours / 24;
+    return days >= 1 ? `${days >= 10 ? days.toFixed(0) : days.toFixed(1)}d` : `${hours.toFixed(0)}h`;
+  }
+  return `${hours >= 10 ? hours.toFixed(0) : hours.toFixed(1)}h`;
+}
+
+function renderStatIndicator(label: string, value: string, pct: number | null, accent: string): string {
+  const progress = clampPercentValue(pct);
+  const width = progress != null ? `${progress}%` : '0%';
+  return `
+    <div style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:12px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;color:rgba(255,255,255,0.75);letter-spacing:0.4px;">${label}</span>
+        <span style="font-size:13px;font-weight:700;color:${accent};">${value}</span>
+      </div>
+      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div style="height:100%;width:${width};background:linear-gradient(90deg, ${accent}, rgba(255,255,255,0.65));transition:width 0.3s ease;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAbilitySquares(abilities: AbilityStats[]): string {
+  if (!abilities.length) return '';
+  const displayed = abilities.slice(0, 4);
+  const content = displayed
+    .map((ability, idx) => {
+      const colors = getAbilityColorInfo(ability);
+      const initials = (ability.baseName || ability.name)
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0])
+        .join('');
+      return `
+        <div title="${ability.name}" data-ability-index="${idx}" style="width:26px;height:26px;border-radius:8px;background:${colors.base};border:1px solid rgba(255,255,255,0.65);box-shadow:0 0 10px ${colors.glow};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:${colors.text};">
+          ${initials || '?'}
+        </div>
+      `;
+    })
+    .join('');
+
+  const placeholderCount = Math.max(0, 4 - displayed.length);
+  const placeholders = Array.from({ length: placeholderCount })
+    .map(
+      (_, idx) => `
+        <div data-ability-placeholder="${idx}" style="width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px dashed rgba(255,255,255,0.2);"></div>
+      `,
+    )
+    .join('');
+
+  return `
+    <div style="position:absolute;left:-38px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;">
+      ${content}${placeholders}
+    </div>
+  `;
 }
 
 interface PetWithSource {
@@ -1614,7 +1761,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   const projImpactWinner = winnerFor(abilityImpact(projA), abilityImpact(projB));
   const projOverallWinner = abilityWinner(projA, projB);
 
-  const leftCard = create3v3PetCard(petA, slotIndex, winner === 'A', abilityFilter, {
+  const leftCard = create3v3PetCard(petA, slotIndex, winner === 'A', abilityFilter, 'left', {
     str: statWinner.str === 'A',
     maxStr: statWinner.maxStr === 'A',
     xp: statWinner.xp === 'A',
@@ -1622,7 +1769,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     mutations: statWinner.mutations === 'A',
     abilityFocus: abilityOverallWinner === 'A',
   });
-  const rightCard = create3v3PetCard(petB, slotIndex, winner === 'B', abilityFilter, {
+  const rightCard = create3v3PetCard(petB, slotIndex, winner === 'B', abilityFilter, 'right', {
     str: statWinner.str === 'B',
     maxStr: statWinner.maxStr === 'B',
     xp: statWinner.xp === 'B',
@@ -1644,7 +1791,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     : '';
 
   center.innerHTML = `
-    <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Slot ${slotIndex + 1}</div>
+    <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Duel Metrics</div>
     ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
     ${compareBadge('Max STR', statsA?.maxStrength, statsB?.maxStrength)}
     <div style="background:rgba(255,255,255,0.02);border:1px solid var(--qpm-border);padding:8px;border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
@@ -1665,15 +1812,23 @@ function create3v3PetCard(
   slotNum: number,
   isWinner: boolean,
   abilityFilter: string,
+  side: DuelSide,
   highlights: SlotHighlightMap = {},
 ): HTMLElement {
   const card = document.createElement('div');
+  const sideStyle = DUEL_SIDE_STYLES[side];
+  const borderColor = isWinner ? 'rgba(64,255,194,0.9)' : sideStyle.border;
+  const boxShadow = isWinner ? '0 0 22px rgba(64,255,194,0.45)' : sideStyle.glow;
+  card.dataset.slot = String(slotNum + 1);
   card.style.cssText = `
-    background: rgba(143, 130, 255, 0.08);
-    border: 2px solid ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-border)'};
-    border-radius: 10px;
-    padding: 14px;
-    min-height: 190px;
+    background: ${sideStyle.gradient};
+    border: 1px solid ${borderColor};
+    border-radius: 16px;
+    padding: 16px;
+    min-height: 220px;
+    box-shadow: ${boxShadow};
+    position: relative;
+    overflow: hidden;
   `;
 
   if (!pet) {
@@ -1684,40 +1839,28 @@ function create3v3PetCard(
     `;
     return card;
   }
-
   const stats = pet.stats;
-  const strengthPct = stats.maxStrength ? Math.min(100, Math.round(((stats.currentStrength || 0) / stats.maxStrength) * 100)) : null;
-  const xpText = stats.xp ? formatNumber(stats.xp) : 'N/A';
-  const strengthBar = strengthPct != null
-    ? `<div style="margin-top:6px;">
-         <div style="font-size:10px;color:var(--qpm-text-dim);display:flex;justify-content:space-between;">
-           <span>STR Progress</span><span>${strengthPct}%</span>
-         </div>
-         <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
-           <div style="height:100%;width:${strengthPct}%;background:linear-gradient(90deg,#9be7ff,#7c4dff);"></div>
-         </div>
-       </div>`
-    : '';
-
-  const strDelta = stats.maxStrength != null && stats.currentStrength != null
-    ? Math.max(0, stats.maxStrength - stats.currentStrength)
-    : null;
+  const metadata = getPetMetadata(stats.species ?? null);
+  const maturityHours = stats.maturityTime ?? metadata?.maturityHours ?? null;
+  const hungerPct = stats.hungerPct ?? null;
+  const strengthPct = stats.maxStrength && stats.currentStrength != null ? (stats.currentStrength / stats.maxStrength) * 100 : stats.strengthProgress ?? null;
+  const strengthLabel = stats.currentStrength != null && stats.maxStrength != null
+    ? `${stats.currentStrength.toFixed(0)} / ${stats.maxStrength.toFixed(0)} STR`
+    : stats.currentStrength != null ? `${stats.currentStrength.toFixed(0)} STR` : '—';
+  const hungerLabelParts: string[] = [];
+  if (stats.hungerPct != null) hungerLabelParts.push(`${stats.hungerPct.toFixed(0)}%`);
+  if (stats.timeUntilStarving != null) hungerLabelParts.push(`${stats.timeUntilStarving.toFixed(1)}h left`);
+  if (metadata?.hungerCost != null) hungerLabelParts.push(`${metadata.hungerCost.toFixed(0)} hunger`);
+  const hungerLabel = hungerLabelParts.join(' • ') || '—';
+  const strDelta = stats.maxStrength != null && stats.currentStrength != null ? Math.max(0, stats.maxStrength - stats.currentStrength) : null;
   const xpPerLevel = stats.species ? getSpeciesXpPerLevel(stats.species) : null;
-  const estLevels = (stats.maxStrength && stats.currentStrength) ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30) : null;
+  const estLevels = (stats.maxStrength && stats.currentStrength)
+    ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30)
+    : null;
   const xpToMax = xpPerLevel && estLevels ? Math.round(estLevels * xpPerLevel) : null;
-  const maxHint = strDelta && strDelta > 0
-    ? `<div style="font-size:11px;color:var(--qpm-text-dim);margin-top:4px;">+${strDelta} STR to max${xpToMax ? ` • ~${formatNumber(xpToMax)} XP` : ''}</div>`
-    : '';
-
-  const statsGrid = `
-    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 11px; margin-bottom: 10px;">
-      ${statPill('STR', stats.currentStrength ?? 'N/A', highlights.str ? 'success' : undefined)}
-      ${statPill('Max STR', stats.maxStrength ?? 'N/A', highlights.maxStr ? 'success' : undefined)}
-      ${statPill('XP', xpText, highlights.xp ? 'success' : undefined)}
-      ${statPill('Abilities', stats.abilityCount ?? 0, highlights.abilities ? 'success' : undefined)}
-      ${statPill('Mutations', stats.mutationCount ?? stats.mutations.length, highlights.mutations ? 'success' : undefined)}
-    </div>
-  `;
+  const progressDetails = strDelta && strDelta > 0
+    ? `+${strDelta} STR to cap${xpToMax ? ` • ~${formatNumber(xpToMax)} XP` : ''}`
+    : stats.xp != null ? `${formatNumber(stats.xp)} XP` : '';
 
   const filterTerm = abilityFilter.trim().toLowerCase();
   const filteredAbilities = filterTerm
@@ -1730,45 +1873,48 @@ function create3v3PetCard(
     return (b.procsPerHour || 0) - (a.procsPerHour || 0);
   }).slice(0, 3);
 
-  const abilityCards = topAbilities.map((ability) => {
+  const abilityRows = topAbilities.map((ability) => {
     const { valueText, procsText, probText } = formatAbilityValue(ability);
+    const colors = getAbilityColorInfo(ability);
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid var(--qpm-border);border-radius:8px;background:rgba(255,255,255,0.02);">
-        <div>
-          <div style="font-weight:700;color:var(--qpm-text);">${ability.name}</div>
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${probText} proc chance</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;background:rgba(8,5,16,0.45);border:1px solid ${colors.border};box-shadow:0 0 14px ${colors.glow};">
+        <span style="width:18px;height:18px;border-radius:6px;background:${colors.base};border:1px solid rgba(255,255,255,0.15);"></span>
+        <div style="flex:1;">
+          <div style="font-size:12px;font-weight:600;color:${colors.text};">${ability.name}</div>
+          <div style="font-size:10px;color:var(--qpm-text-dim);">${valueText}</div>
         </div>
-        <div style="text-align:right;font-size:11px;color:var(--qpm-text);">
-          <div style="font-weight:700;">${procsText}</div>
-          <div style="color:var(--qpm-text-dim);">${valueText}</div>
+        <div style="text-align:right;font-size:10px;color:var(--qpm-text-dim);">
+          <div style="font-weight:600;color:${colors.text};">${procsText}</div>
+          <div>${probText} proc</div>
         </div>
       </div>
     `;
   }).join('');
 
-  const procHeaderColor = highlights.abilityFocus ? 'rgb(64, 255, 194)' : 'var(--qpm-text-dim)';
-  const procContainerStyle = highlights.abilityFocus
-    ? `display:flex;flex-direction:column;gap:6px;border:1px solid ${SUCCESS_HIGHLIGHT_BORDER};border-radius:8px;padding:6px;background:${SUCCESS_HIGHLIGHT_BG};`
-    : 'display:flex;flex-direction:column;gap:6px;';
+  const abilitySquareColumn = renderAbilitySquares(stats.abilities);
+  const spriteBlock = `
+    <div style="position:relative;display:flex;justify-content:center;width:100%;padding:6px 0;">
+      ${abilitySquareColumn}
+      ${renderPetImage(stats, 96, true)}
+    </div>
+  `;
+
+  const statIndicators = `
+    <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
+      ${renderStatIndicator('STR', strengthLabel, strengthPct, '#7ACBFF')}
+      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
+    </div>
+  `;
 
   card.innerHTML = `
-    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-      ${renderPetImage(stats, 38, true)}
-      <div style="flex:1;">
-        <div style="font-size: 13px; font-weight: 700; color: ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-accent)'};">
-          ${stats.name || stats.species || 'Pet'}
-        </div>
-        <div style="font-size: 11px; color: var(--qpm-text-dim);">${stats.species || 'Unknown Species'}</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:${sideStyle.text};">${stats.name || stats.species || 'Pet'}</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.7);">${stats.species || 'Unknown Species'}</div>
       </div>
-      <div style="font-size:10px;color:var(--qpm-text-dim);">Slot ${slotNum + 1}</div>
+      ${spriteBlock}
+      ${statIndicators}
     </div>
-    ${statsGrid}
-    ${strengthBar}
-    ${maxHint}
-     ${abilityCards
-      ? `<div style="font-size: 10px; color: ${procHeaderColor}; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px;">Proc Focus</div>
-        <div style="${procContainerStyle}">${abilityCards}</div>`
-      : '<div style="font-size: 11px; color: var(--qpm-text-dim);">No abilities listed</div>'}
   `;
 
   return card;

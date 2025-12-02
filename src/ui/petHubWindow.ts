@@ -112,6 +112,14 @@ const ABILITY_COLOR_MAP = {
 function getAbilityColorByName(abilityName: string): string {
   const name = (abilityName || '').toLowerCase();
 
+  // Rainbow and Gold special abilities - use gradients
+  if (name.includes('rainbow')) {
+    return 'linear-gradient(135deg, #FF0000 0%, #FF7F00 16.67%, #FFFF00 33.33%, #00FF00 50%, #0000FF 66.67%, #4B0082 83.33%, #9400D3 100%)';
+  }
+  if (name.includes('gold') || name.includes('golden')) {
+    return 'linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)';
+  }
+
   // Crop abilities - Orange/Red tones
   if (name.includes('crop eater')) return '#FF5722';
   if (name.includes('crop refund')) return '#FF5722';
@@ -1774,18 +1782,29 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   const abilityA = pickTopAbility(petA);
   const abilityB = pickTopAbility(petB);
 
-  // Cross-species comparisons (only for different species with same ability)
+  // Helper to extract base ability name without tier (removes I, II, III, IV, etc.)
+  const getBaseAbilityName = (ability: AbilityStats | null): string | null => {
+    if (!ability) return null;
+    const name = ability.baseName || ability.name;
+    // Remove Roman numerals at the end (I, II, III, IV, V)
+    return name.replace(/\s+(I|II|III|IV|V)$/i, '').trim();
+  };
+
+  // Cross-species comparisons (for different species with same ability type, regardless of tier)
   const speciesA = statsA?.species ?? null;
   const speciesB = statsB?.species ?? null;
   const isDifferentSpecies = speciesA && speciesB && speciesA !== speciesB;
-  const sharesSameAbility = abilityA && abilityB && (abilityA.baseName || abilityA.name) === (abilityB.baseName || abilityB.name);
+
+  const baseAbilityA = getBaseAbilityName(abilityA);
+  const baseAbilityB = getBaseAbilityName(abilityB);
+  const sharesSameAbilityType = baseAbilityA && baseAbilityB && baseAbilityA === baseAbilityB;
 
   let hungerDepletionA: number | null = null;
   let hungerDepletionB: number | null = null;
   let timePerLevelA: number | null = null;
   let timePerLevelB: number | null = null;
 
-  if (isDifferentSpecies && sharesSameAbility) {
+  if (isDifferentSpecies && sharesSameAbilityType) {
     // Calculate hunger depletion rate (hours per 100% hunger)
     const metadataA = getPetMetadata(speciesA);
     const metadataB = getPetMetadata(speciesB);
@@ -1804,8 +1823,8 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     const xpPerLevelB = speciesB ? getSpeciesXpPerLevel(speciesB) : null;
 
     // Assume XP boost ability for now (can be refined)
-    const xpPerHourA = abilityA.valuePerHour ?? null;
-    const xpPerHourB = abilityB.valuePerHour ?? null;
+    const xpPerHourA = abilityA ? (abilityA.valuePerHour ?? null) : null;
+    const xpPerHourB = abilityB ? (abilityB.valuePerHour ?? null) : null;
 
     if (xpPerLevelA && xpPerHourA && xpPerHourA > 0) {
       timePerLevelA = xpPerLevelA / xpPerHourA;
@@ -1891,7 +1910,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     : '';
 
   // Cross-species comparison badges
-  const crossSpeciesComparisons = isDifferentSpecies && sharesSameAbility ? `
+  const crossSpeciesComparisons = isDifferentSpecies && sharesSameAbilityType ? `
     <div style="margin-top:8px;padding:8px;border:1px dashed rgba(255,193,7,0.5);border-radius:8px;background:rgba(255,193,7,0.05);">
       <div style="font-size:11px;color:rgba(255,193,7,0.9);margin-bottom:6px;font-weight:600;">📊 Cross-Species Comparison</div>
       ${hungerDepletionA != null && hungerDepletionB != null ? compareBadge('Hunger Lifespan (h)', hungerDepletionA.toFixed(1), hungerDepletionB.toFixed(1)) : ''}
@@ -2009,15 +2028,22 @@ function create3v3PetCard(
     `;
   }).join('');
 
-  // Create ability squares (up to 4) with hover tooltips, positioned to the left of pet image
-  const abilitySquaresHtml = stats.abilities.slice(0, 4).map((ability, idx) => {
-    const color = getAbilityColorByName(ability.baseName || ability.name);
-    const abilityName = ability.name || 'Unknown Ability';
+  // Create ability squares (up to 4) with hover tooltips
+  // These will be dynamically added after card creation for proper tooltip handling
+  const abilitySquaresData = stats.abilities.slice(0, 4).map((ability) => ({
+    color: getAbilityColorByName(ability.baseName || ability.name),
+    name: ability.name || 'Unknown Ability',
+  }));
 
-    return `<div title="${abilityName}" style="width: 20px; height: 20px; background: ${color}; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.transform='scale(1.15)'; this.style.borderColor='rgba(255,255,255,0.8)';" onmouseleave="this.style.transform='scale(1)'; this.style.borderColor='rgba(255,255,255,0.4)';"></div>`;
-  }).join('');
+  // Define stat indicators first
+  const statIndicators = `
+    <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
+      ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
+      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
+    </div>
+  `;
 
-  // Pet sprite with ability squares to the left
+  // Pet sprite block - centered on pet image
   const spriteBlock = `
     <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:8px 0;">
       <!-- STR text above image -->
@@ -2025,25 +2051,18 @@ function create3v3PetCard(
         STR: ${stats.currentStrength != null ? stats.currentStrength.toFixed(0) : '?'}
       </div>
 
-      <!-- Pet image with ability squares -->
-      <div style="display:flex;align-items:center;gap:10px;justify-content:center;">
-        <div style="display:flex;flex-direction:column;gap:6px;">
-          ${abilitySquaresHtml || '<div style="width:20px;height:20px;"></div>'}
-        </div>
+      <!-- Pet image centered -->
+      <div style="position:relative;display:flex;justify-content:center;">
         ${renderPetImage(stats, 128, true)}
+
+        <!-- Ability squares positioned to the left of pet image -->
+        <div class="qpm-ability-squares" style="position:absolute;left:-30px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;"></div>
       </div>
 
       <!-- MAX STR text below image -->
       <div style="font-size:13px;font-weight:600;color:${sideStyle.text};">
         MAX STR: ${stats.maxStrength != null ? stats.maxStrength.toFixed(0) : '?'}
       </div>
-    </div>
-  `;
-
-  const statIndicators = `
-    <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
-      ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
-      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
     </div>
   `;
 
@@ -2057,6 +2076,33 @@ function create3v3PetCard(
       ${statIndicators}
     </div>
   `;
+
+  // Dynamically add ability squares with proper tooltips
+  const squaresContainer = card.querySelector('.qpm-ability-squares');
+  if (squaresContainer) {
+    abilitySquaresData.forEach(({ color, name }) => {
+      const square = document.createElement('div');
+      square.style.cssText = `
+        width: 20px;
+        height: 20px;
+        background: ${color};
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        cursor: help;
+        transition: all 0.2s;
+      `;
+      square.title = name; // Set title directly as property
+      square.addEventListener('mouseenter', () => {
+        square.style.transform = 'scale(1.15)';
+        square.style.borderColor = 'rgba(255,255,255,0.8)';
+      });
+      square.addEventListener('mouseleave', () => {
+        square.style.transform = 'scale(1)';
+        square.style.borderColor = 'rgba(255,255,255,0.4)';
+      });
+      squaresContainer.appendChild(square);
+    });
+  }
 
   return card;
 }

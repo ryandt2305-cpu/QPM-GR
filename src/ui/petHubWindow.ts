@@ -297,12 +297,12 @@ function getAriesPetsService(): AriesPetsService | null {
   }
 
   // Fallback: Try reading from localStorage if Aries stores teams there
-  // NOTE: We can't reliably detect if Aries is currently enabled since it
-  // doesn't expose globals and localStorage persists. If you see stale data,
-  // disable Aries in Tampermonkey and clear your browser's localStorage.
+  // NOTE: Aries userscripts don't appear in DOM (Tampermonkey isolation) and don't expose globals.
+  // We can't detect if it's currently enabled, so we show UI whenever valid teams exist.
+  // To hide stale data: localStorage.removeItem('qws:pets:teams:v1')
   const localStorageFallback = tryCreateLocalStorageFallback();
   if (localStorageFallback) {
-    log('[Aries] ✅ Found teams in localStorage (fallback mode)');
+    log('[Aries] ✅ Found teams in localStorage');
     return localStorageFallback;
   }
 
@@ -310,76 +310,7 @@ function getAriesPetsService(): AriesPetsService | null {
   return null;
 }
 
-function isAriesScriptInjected(): boolean {
-  // Check for Tampermonkey-injected script tags containing Aries code
-  try {
-    const scripts = Array.from(document.querySelectorAll('script'));
-    log(`[Aries] Checking ${scripts.length} script tags for Aries indicators...`);
-
-    let checkedScripts = 0;
-    for (const script of scripts) {
-      // Check script src or data attributes for Aries indicators
-      const src = script.src || '';
-      const id = script.id || '';
-      const dataScript = script.getAttribute('data-tampermonkey-script');
-      const allAttrs = Array.from(script.attributes).map(a => `${a.name}="${a.value.substring(0, 50)}"`).join(', ');
-
-      checkedScripts++;
-
-      // Debug log first 5 scripts with their attributes
-      if (checkedScripts <= 5) {
-        log(`[Aries] Script ${checkedScripts}: src="${src.substring(0, 80)}", id="${id}", attrs=[${allAttrs}]`);
-      }
-
-      if (src.includes('aries') || src.includes('quinoa-ws') || src.includes('quinoa') || src.includes('MGA')) {
-        log('[Aries] ✅ Found Aries script in src:', src);
-        return true;
-      }
-
-      if (id.toLowerCase().includes('aries') || id.toLowerCase().includes('quinoa')) {
-        log('[Aries] ✅ Found Aries in script ID:', id);
-        return true;
-      }
-
-      if (dataScript && (dataScript.includes('aries') || dataScript.includes('quinoa') || dataScript.includes('MGA'))) {
-        log('[Aries] ✅ Found Aries in Tampermonkey data attribute');
-        return true;
-      }
-
-      // Check ALL attributes for Aries keywords
-      for (const attr of script.attributes) {
-        const attrValue = attr.value.toLowerCase();
-        if (attrValue.includes('aries') || attrValue.includes('quinoa') || attrValue.includes('mga')) {
-          log(`[Aries] ✅ Found Aries in attribute ${attr.name}:`, attr.value);
-          return true;
-        }
-      }
-
-      // Check inline script content for Aries signatures (first 1000 chars for better detection)
-      const content = script.textContent?.substring(0, 1000) || '';
-      if (content.includes('quinoa-ws') || content.includes('QuinoaWS') || content.includes('Aries') || content.includes('QWS')) {
-        log('[Aries] ✅ Found Aries code signature in script content');
-        return true;
-      }
-    }
-
-    log(`[Aries] Checked ${checkedScripts} scripts, no Aries indicators found`);
-  } catch (error) {
-    log('[Aries] Error checking scripts:', error);
-  }
-
-  return false;
-}
-
 function tryCreateLocalStorageFallback(): AriesPetsService | null {
-  // First check if Aries script is actually injected
-  if (!isAriesScriptInjected()) {
-    log('[Aries] ❌ Aries script not detected - skipping localStorage check');
-    return null;
-  }
-
-  log('[Aries] Script detected, checking for teams in localStorage...');
-
   // Known Aries mod localStorage keys (prioritized)
   const possibleKeys = [
     'qws:pets:teams:v1',      // Aries mod actual key

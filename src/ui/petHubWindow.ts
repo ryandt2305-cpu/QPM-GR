@@ -108,6 +108,54 @@ const ABILITY_COLOR_MAP = {
   default: { base: '#5E5CE6', glow: 'rgba(94,92,230,0.5)', text: '#E0E7FF', border: 'rgba(224,231,255,0.4)', label: 'Ability' },
 } satisfies Record<string, AbilityColorInfo>;
 
+// Exact color mapping from Magic Garden wiki
+function getAbilityColorByName(abilityName: string): string {
+  const name = (abilityName || '').toLowerCase();
+
+  // Crop abilities - Orange/Red tones
+  if (name.includes('crop eater')) return '#FF5722';
+  if (name.includes('crop refund')) return '#FF5722';
+  if (name.includes('crop mutation boost')) return '#E91E63';
+  if (name.includes('crop size boost')) return '#4CAF50';
+
+  // Seed abilities - Orange
+  if (name.includes('seed finder')) return '#FF9800';
+
+  // Coin abilities - Yellow/Gold
+  if (name.includes('coin finder')) return '#FFD700';
+
+  // Egg abilities - Purple/Magenta
+  if (name.includes('egg growth boost')) return '#9C27B0';
+
+  // Pet abilities
+  if (name.includes('pet refund')) return '#00BCD4';
+  if (name.includes('pet mutation boost')) return '#E91E63';
+
+  // Sell abilities - Red
+  if (name.includes('sell boost')) return '#F44336';
+
+  // Hunger abilities - Pink
+  if (name.includes('hunger restore') || name.includes('hunger boost')) return '#EC407A';
+
+  // XP abilities - Purple/Blue
+  if (name.includes('hatch xp boost')) return '#7C4DFF';
+  if (name.includes('xp boost')) return '#2196F3';
+
+  // Strength abilities - Purple
+  if (name.includes('max strength boost')) return '#673AB7';
+
+  // Plant abilities - Teal/Cyan
+  if (name.includes('plant growth boost')) return '#26A69A';
+
+  // Weather/Special abilities - Blue
+  if (name.includes('rain dance')) return '#2196F3';
+  if (name.includes('double hatch')) return '#5C6BC0';
+  if (name.includes('double harvest')) return '#1976D2';
+
+  // Default
+  return '#90A4AE';
+}
+
 function getAbilityColorInfo(ability: AbilityStats | null): AbilityColorInfo {
   if (!ability) return ABILITY_COLOR_MAP.default;
   const category = ability.category ?? '';
@@ -1890,9 +1938,36 @@ function create3v3PetCard(
     `;
   }).join('');
 
-  // Enlarged pet sprite (128px), centered, no ability squares
+  // Create ability squares (up to 4) with hover tooltips, positioned to the left of pet image
+  const abilitySquaresHtml = stats.abilities.slice(0, 4).map((ability, idx) => {
+    const color = getAbilityColorByName(ability.baseName || ability.name);
+    const abilityName = ability.name;
+    return `
+      <div
+        title="${abilityName}"
+        style="
+          width: 20px;
+          height: 20px;
+          background: ${color};
+          border-radius: 4px;
+          border: 1px solid rgba(255, 255, 255, 0.4);
+          cursor: help;
+          transition: all 0.2s;
+        "
+        onmouseenter="this.style.transform='scale(1.15)'; this.style.borderColor='rgba(255,255,255,0.8)';"
+        onmouseleave="this.style.transform='scale(1)'; this.style.borderColor='rgba(255,255,255,0.4)';"
+      ></div>
+    `;
+  }).join('');
+
+  // Pet sprite with ability squares to the left
   const spriteBlock = `
-    <div style="position:relative;display:flex;justify-content:center;width:100%;padding:8px 0;">
+    <div style="position:relative;display:flex;align-items:center;gap:10px;justify-content:center;width:100%;padding:8px 0;">
+      <!-- Ability squares column (left side) -->
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${abilitySquaresHtml || '<div style="width:20px;height:20px;"></div>'}
+      </div>
+      <!-- Pet image (centered) -->
       ${renderPetImage(stats, 128, true)}
     </div>
   `;

@@ -308,8 +308,10 @@ function getAriesPetsService(): AriesPetsService | null {
 }
 
 function tryCreateLocalStorageFallback(): AriesPetsService | null {
-  // Common localStorage keys Aries might use
+  // Known Aries mod localStorage keys (prioritized)
   const possibleKeys = [
+    'qws:pets:teams:v1',      // Aries mod actual key
+    'MGA_petPresets',          // Alternative Aries key
     'aries:teams',
     'aries:petTeams',
     'qws:teams',

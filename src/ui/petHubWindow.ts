@@ -297,14 +297,46 @@ function getAriesPetsService(): AriesPetsService | null {
   }
 
   // Fallback: Try reading from localStorage if Aries stores teams there
-  const localStorageFallback = tryCreateLocalStorageFallback();
-  if (localStorageFallback) {
-    log('[Aries] ✅ Found teams in localStorage (fallback mode)');
-    return localStorageFallback;
+  // BUT ONLY if we can confirm Aries mod is actually loaded
+  if (isAriesModActuallyLoaded()) {
+    const localStorageFallback = tryCreateLocalStorageFallback();
+    if (localStorageFallback) {
+      log('[Aries] ✅ Found teams in localStorage (fallback mode)');
+      return localStorageFallback;
+    }
   }
 
   // Don't log "not found" - most users won't have Aries mod
   return null;
+}
+
+function isAriesModActuallyLoaded(): boolean {
+  // Check for Aries-specific globals to confirm the mod is actually running
+  // Don't just rely on localStorage which persists even when mod is disabled
+
+  // Check for QWS namespace
+  const pageQws = (pageWindow as unknown as Record<string, unknown>).QWS;
+  const winQws = (window as unknown as Record<string, unknown>).QWS;
+
+  if (pageQws || winQws) {
+    return true;
+  }
+
+  // Check for any Aries-specific globals
+  const ariesIndicators = [
+    'QuinoaWS',
+    'QWS',
+    'AriesMod',
+    'MagicGardenAriesMod',
+  ];
+
+  for (const indicator of ariesIndicators) {
+    if ((pageWindow as any)[indicator] !== undefined || (window as any)[indicator] !== undefined) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function tryCreateLocalStorageFallback(): AriesPetsService | null {
@@ -1887,15 +1919,23 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       }
       resolved[idx] = match;
     });
+
+    // Batch updates to avoid multiple re-renders
     target.splice(0, target.length, ...resolved);
-    rebuildManualSelectors();
-    render();
+
+    // Use requestAnimationFrame to defer the rebuild to next frame
+    requestAnimationFrame(() => {
+      rebuildManualSelectors();
+      render();
+    });
+
+    // Update status immediately (no lag)
     if (missingSlots.length) {
       ariesStatusMsg.textContent = `Applied "${team.name}" but slots ${missingSlots.join(', ')} are missing in Pet Hub data.`;
       ariesStatusMsg.style.color = 'var(--qpm-error)';
     } else {
-      ariesStatusMsg.textContent = `Applied "${team.name}" preset.`;
-      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      ariesStatusMsg.textContent = `✅ Applied "${team.name}" preset.`;
+      ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
   };
 

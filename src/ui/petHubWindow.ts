@@ -1768,20 +1768,6 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     return winnerFor(abilityProb(a), abilityProb(b));
   };
 
-  const pickTopAbility = (pet: PetWithSource | null) => {
-    if (!pet) return null;
-    const filtered = abilityFilter.trim()
-      ? pet.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
-      : pet.stats.abilities;
-    return [...filtered].sort((a, b) => {
-      const valueDiff = (b.valuePerHour || 0) - (a.valuePerHour || 0);
-      if (Math.abs(valueDiff) > 1e-6) return valueDiff;
-      return (b.procsPerHour || 0) - (a.procsPerHour || 0);
-    })[0] ?? null;
-  };
-  const abilityA = pickTopAbility(petA);
-  const abilityB = pickTopAbility(petB);
-
   // Helper to extract base ability name without tier (removes I, II, III, IV, etc.)
   const getBaseAbilityName = (ability: AbilityStats | null): string | null => {
     if (!ability) return null;
@@ -1795,9 +1781,64 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   const speciesB = statsB?.species ?? null;
   const isDifferentSpecies = speciesA && speciesB && speciesA !== speciesB;
 
-  const baseAbilityA = getBaseAbilityName(abilityA);
-  const baseAbilityB = getBaseAbilityName(abilityB);
-  const sharesSameAbilityType = baseAbilityA && baseAbilityB && baseAbilityA === baseAbilityB;
+  const pickTopAbility = (pet: PetWithSource | null) => {
+    if (!pet) return null;
+    const filtered = abilityFilter.trim()
+      ? pet.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
+      : pet.stats.abilities;
+    return [...filtered].sort((a, b) => {
+      const valueDiff = (b.valuePerHour || 0) - (a.valuePerHour || 0);
+      if (Math.abs(valueDiff) > 1e-6) return valueDiff;
+      return (b.procsPerHour || 0) - (a.procsPerHour || 0);
+    })[0] ?? null;
+  };
+
+  // For different species, prioritize matching abilities (same base type, regardless of tier)
+  let abilityA: AbilityStats | null = null;
+  let abilityB: AbilityStats | null = null;
+  let sharesSameAbilityType = false;
+
+  if (isDifferentSpecies && petA && petB) {
+    // Try to find matching abilities between the two pets
+    const abilitiesA = abilityFilter.trim()
+      ? petA.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
+      : petA.stats.abilities;
+    const abilitiesB = abilityFilter.trim()
+      ? petB.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
+      : petB.stats.abilities;
+
+    // Find matching base ability types
+    let matchFound = false;
+    for (const abilA of abilitiesA) {
+      const baseA = getBaseAbilityName(abilA);
+      if (!baseA) continue;
+
+      for (const abilB of abilitiesB) {
+        const baseB = getBaseAbilityName(abilB);
+        if (!baseB) continue;
+
+        if (baseA === baseB) {
+          // Found matching ability type! Prioritize these
+          abilityA = abilA;
+          abilityB = abilB;
+          sharesSameAbilityType = true;
+          matchFound = true;
+          break;
+        }
+      }
+      if (matchFound) break;
+    }
+
+    // If no match found, fall back to top abilities
+    if (!matchFound) {
+      abilityA = pickTopAbility(petA);
+      abilityB = pickTopAbility(petB);
+    }
+  } else {
+    // Same species or no cross-species comparison needed
+    abilityA = pickTopAbility(petA);
+    abilityB = pickTopAbility(petB);
+  }
 
   let hungerDepletionA: number | null = null;
   let hungerDepletionB: number | null = null;

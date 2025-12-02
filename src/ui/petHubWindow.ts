@@ -296,7 +296,57 @@ function getAriesPetsService(): AriesPetsService | null {
     }
   }
 
+  // Fallback: Try reading from localStorage if Aries stores teams there
+  const localStorageFallback = tryCreateLocalStorageFallback();
+  if (localStorageFallback) {
+    log('[Aries] ✅ Found teams in localStorage (fallback mode)');
+    return localStorageFallback;
+  }
+
   // Don't log "not found" - most users won't have Aries mod
+  return null;
+}
+
+function tryCreateLocalStorageFallback(): AriesPetsService | null {
+  // Common localStorage keys Aries might use
+  const possibleKeys = [
+    'aries:teams',
+    'aries:petTeams',
+    'qws:teams',
+    'qws:petTeams',
+    'petTeams',
+    'teams',
+  ];
+
+  for (const key of possibleKeys) {
+    try {
+      const stored = localStorage.getItem(key);
+      if (!stored) continue;
+
+      const data = JSON.parse(stored);
+      if (!Array.isArray(data)) continue;
+
+      // Validate it looks like team data
+      const hasTeamStructure = data.every(item =>
+        item &&
+        typeof item === 'object' &&
+        'id' in item &&
+        'name' in item &&
+        'slots' in item &&
+        Array.isArray(item.slots)
+      );
+
+      if (hasTeamStructure && data.length > 0) {
+        return {
+          getTeams: () => data,
+          // No live updates in fallback mode
+        };
+      }
+    } catch {
+      // Invalid JSON or structure, continue
+    }
+  }
+
   return null;
 }
 

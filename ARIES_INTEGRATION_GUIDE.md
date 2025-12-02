@@ -42,27 +42,49 @@ Both mods should now detect each other!
 
 ---
 
-## Option 2: Use localStorage Fallback
+## Option 2: Use localStorage Fallback (Automatic)
 
-If Aries stores teams in localStorage, QPM can read from there directly.
+QPM now automatically checks localStorage for Aries teams! No setup needed.
 
-### Check Aries Storage Keys
+### How It Works
 
-Open console and run:
-```javascript
-// Find Aries-related localStorage keys
-Object.keys(localStorage).filter(k => k.includes('aries') || k.includes('pet') || k.includes('team'))
-```
-
-### Common Storage Patterns
-
-Aries mod likely uses keys like:
+QPM checks these localStorage keys automatically:
 - `aries:teams`
 - `aries:petTeams`
 - `qws:teams`
+- `qws:petTeams`
 - `petTeams`
+- `teams`
 
-Once you find the key, QPM can read from it.
+If Aries stores teams in any of these keys with the correct structure, QPM will detect them automatically.
+
+### Find Your Storage Key
+
+Open console and run:
+```javascript
+// List all localStorage keys
+Object.keys(localStorage).filter(k =>
+  k.toLowerCase().includes('aries') ||
+  k.toLowerCase().includes('pet') ||
+  k.toLowerCase().includes('team')
+).forEach(k => {
+  console.log(k + ':', localStorage.getItem(k)?.substring(0, 100));
+});
+```
+
+### Manual Testing
+
+If Aries uses a different key, you can test by manually creating teams:
+```javascript
+localStorage.setItem('aries:teams', JSON.stringify([
+  {
+    id: 'test-1',
+    name: 'Test Team',
+    slots: ['petId1', 'petId2', null]
+  }
+]));
+// Then refresh Pet Hub 3v3 tab
+```
 
 ---
 

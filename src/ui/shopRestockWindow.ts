@@ -13,6 +13,7 @@ import {
   getTopLikelyItems,
   predictItemNextAppearance,
   predictItemDual,
+  getActivePrediction,
   getPredictionHistory,
   getDetailedPredictionStats,
   type PredictionRecord,
@@ -341,6 +342,26 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
   let isGlobalStatsExpanded = false;
   const allDetailedStatsSections: HTMLElement[] = []; // Track all stats sections
+  const countdownEntries: Array<{ target: number; element: HTMLElement }> = [];
+
+  const formatCountdown = (target: number) => {
+    const diff = target - Date.now();
+    const overdue = diff <= 0;
+    const absMs = Math.abs(diff);
+    const hours = Math.floor(absMs / (1000 * 60 * 60));
+    const minutes = Math.floor((absMs % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((absMs % (1000 * 60)) / 1000);
+    const formatted = `${overdue ? '-' : ''}${hours}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
+    return { formatted, overdue };
+  };
+
+  const updateCountdowns = () => {
+    countdownEntries.forEach(entry => {
+      const { formatted, overdue } = formatCountdown(entry.target);
+      entry.element.textContent = overdue ? `Overdue ${formatted}` : `ETA ${formatted}`;
+      entry.element.style.color = overdue ? '#f44336' : '#42A5F5';
+    });
+  };
 
   globalToggleBtn.addEventListener('mouseenter', () => {
     globalToggleBtn.style.background = 'rgba(66, 165, 245, 0.3)';
@@ -428,124 +449,32 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       font-size: 11px;
     `;
 
-    // Show dual prediction range if both available
-    if (dualPrediction.optimistic && dualPrediction.conservative) {
-      const now = Date.now();
+    const activePrediction = getActivePrediction(rareItem.name);
+    const targetPrediction = activePrediction ?? dualPrediction.conservative ?? dualPrediction.optimistic ?? null;
+    predictionText.innerHTML = '';
 
-      // Format time difference helper
-      const formatTimeDiff = (ms: number): string => {
-        const hours = Math.floor(ms / (1000 * 60 * 60));
-        const days = Math.floor(hours / 24);
-        if (days > 0) {
-          return `${days}d ${hours % 24}h`;
-        } else if (hours > 0) {
-          return `${hours}h`;
-        } else {
-          return 'Soon';
-        }
-      };
+    if (targetPrediction) {
+      const countdownLine = document.createElement('div');
+      countdownLine.style.cssText = 'font-weight: 700;';
+      predictionText.appendChild(countdownLine);
 
-      // Determine which prediction is earlier and which is later
-      const earliestTime = Math.min(dualPrediction.optimistic, dualPrediction.conservative);
-      const latestTime = Math.max(dualPrediction.optimistic, dualPrediction.conservative);
+      const exactLine = document.createElement('div');
+      exactLine.style.cssText = 'font-size: 10px; color: #aaa; margin-top: 2px;';
+      exactLine.textContent = `${activePrediction ? 'Original estimate' : 'Estimate'}: ${new Date(targetPrediction).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`;
+      predictionText.appendChild(exactLine);
 
-      const earliestDiff = earliestTime - now;
-      const latestDiff = latestTime - now;
-
-      const earliestText = formatTimeDiff(earliestDiff);
-      const latestText = formatTimeDiff(latestDiff);
-
-      // Format dates
-      const earliestDate = new Date(earliestTime);
-      const latestDate = new Date(latestTime);
-
-      const earliestDateStr = earliestDate.toLocaleDateString([], {
-        month: 'numeric',
-        day: 'numeric',
-        year: 'numeric'
-      });
-      const latestDateStr = latestDate.toLocaleDateString([], {
-        month: 'numeric',
-        day: 'numeric',
-        year: 'numeric'
-      });
-
-      // Check if same day
-      const isSameDay = earliestDate.toDateString() === latestDate.toDateString();
-
-      // Show range only if predictions differ significantly (>6 hours apart)
-      const diffHours = Math.abs(latestDiff - earliestDiff) / (1000 * 60 * 60);
-
-      if (diffHours > 6) {
-        let dateRangeText = '';
-        if (isSameDay) {
-          // Same day - show time difference instead of date range
-          const timeDiffHours = Math.floor(diffHours);
-          const timeDiffMinutes = Math.round((diffHours - timeDiffHours) * 60);
-          dateRangeText = timeDiffHours > 0
-            ? `(~${timeDiffHours}h ${timeDiffMinutes}m range on ${earliestDateStr})`
-            : `(~${timeDiffMinutes}m range on ${earliestDateStr})`;
-        } else {
-          // Different days - show date range
-          dateRangeText = `(~${earliestDateStr} - ~${latestDateStr})`;
-        }
-
-        predictionText.innerHTML = `
-          <span style="color: #4CAF50; font-weight: 600;">${earliestText}</span>
-          <span style="color: #aaa;"> - </span>
-          <span style="color: #FF9800; font-weight: 600;">${latestText}</span>
-          <span style="margin-left: 8px; font-size: 10px; color: #aaa;">Est.</span>
-          <br/>
-          <span style="font-size: 9px; color: #666;">${dateRangeText}</span>
-        `;
-      } else {
-        // Predictions are similar, just show the later estimate (more conservative)
-        const timeString = latestDate.toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true
-        });
-        const dateString = latestDate.toLocaleDateString([], {
-          month: 'short',
-          day: 'numeric'
-        });
-
-        predictionText.innerHTML = `
-          <span style="color: #42A5F5; font-weight: 600;">${latestText}</span>
-          <span style="margin-left: 8px; font-size: 10px;">(${timeString}, ${dateString})</span>
-        `;
-      }
-    } else if (dualPrediction.conservative) {
-      // Only conservative prediction available
-      const nextDate = new Date(dualPrediction.conservative);
-      const now = Date.now();
-      const diffMs = dualPrediction.conservative - now;
-      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-      const diffDays = Math.floor(diffHours / 24);
-
-      let timeText = '';
-      if (diffDays > 0) {
-        timeText = `~${diffDays}d ${diffHours % 24}h`;
-      } else if (diffHours > 0) {
-        timeText = `~${diffHours}h`;
-      } else {
-        timeText = 'Soon';
+      if (!activePrediction && dualPrediction.optimistic && dualPrediction.conservative && dualPrediction.optimistic !== dualPrediction.conservative) {
+        const rangeLine = document.createElement('div');
+        rangeLine.style.cssText = 'font-size: 10px; color: #666; margin-top: 2px;';
+        const earliest = Math.min(dualPrediction.optimistic, dualPrediction.conservative);
+        const latest = Math.max(dualPrediction.optimistic, dualPrediction.conservative);
+        const earliestStr = new Date(earliest).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const latestStr = new Date(latest).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        rangeLine.textContent = `Window: ~${earliestStr} - ~${latestStr}`;
+        predictionText.appendChild(rangeLine);
       }
 
-      const timeString = nextDate.toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-      const dateString = nextDate.toLocaleDateString([], {
-        month: 'short',
-        day: 'numeric'
-      });
-
-      predictionText.innerHTML = `
-        <span style="color: #42A5F5; font-weight: 600;">${timeText}</span>
-        <span style="margin-left: 8px; font-size: 10px;">(${timeString}, ${dateString})</span>
-      `;
+      countdownEntries.push({ target: targetPrediction, element: countdownLine });
     } else {
       predictionText.textContent = 'Insufficient data';
     }
@@ -951,6 +880,14 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   }
 
   section.appendChild(itemsList);
+
+  if (countdownEntries.length > 0) {
+    updateCountdowns();
+    if (state.countdownInterval !== null) {
+      clearInterval(state.countdownInterval);
+    }
+    state.countdownInterval = window.setInterval(updateCountdowns, 1000);
+  }
 
   // Wire up global toggle button to show/hide all detailed stats sections
   globalToggleBtn.addEventListener('click', () => {

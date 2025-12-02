@@ -9,6 +9,9 @@ let unsubscribeShop: (() => void) | null = null;
 let previousShopState: Map<string, number> | null = null;
 let isTracking = false;
 let isEnabled = true; // Default to enabled for backwards compatibility
+let lastProcessedSignature = '';
+let lastProcessedAt = 0;
+const MIN_PROCESS_INTERVAL_MS = 1200;
 
 /**
  * Item categories - only track seeds and eggs (comprehensive list)
@@ -172,6 +175,21 @@ export async function startLiveShopTracking(): Promise<void> {
     // Subscribe to shop stock updates (same system auto-buy uses)
     const unsub = onShopStock((shopState) => {
       try {
+        const signature = Object.values(shopState.categories || {})
+          .map(cat => cat.signature)
+          .join('|');
+        const now = Date.now();
+
+        // Throttle duplicate snapshots and rapid-fire updates to reduce lag
+        if (signature && signature === lastProcessedSignature && now - lastProcessedAt < MIN_PROCESS_INTERVAL_MS) {
+          return;
+        }
+        if (now - lastProcessedAt < MIN_PROCESS_INTERVAL_MS / 2) {
+          return;
+        }
+        lastProcessedSignature = signature;
+        lastProcessedAt = now;
+
         const currentInventory = extractShopInventory(shopState);
         const restockedItems = detectRestock(currentInventory, previousShopState);
 
@@ -216,6 +234,8 @@ export function stopLiveShopTracking(): void {
 
   isTracking = false;
   previousShopState = null;
+  lastProcessedSignature = '';
+  lastProcessedAt = 0;
   log('🛑 Live shop tracking stopped');
 }
 
@@ -244,6 +264,8 @@ export function disableLiveTracking(): void {
   if (isTracking) {
     stopLiveShopTracking();
   }
+  lastProcessedSignature = '';
+  lastProcessedAt = 0;
 }
 
 /**

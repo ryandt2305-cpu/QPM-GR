@@ -1841,7 +1841,6 @@ function create3v3PetCard(
   }
   const stats = pet.stats;
   const metadata = getPetMetadata(stats.species ?? null);
-  const maturityHours = stats.maturityTime ?? metadata?.maturityHours ?? null;
   const hungerPct = stats.hungerPct ?? null;
   const strengthPct = stats.maxStrength && stats.currentStrength != null ? (stats.currentStrength / stats.maxStrength) * 100 : stats.strengthProgress ?? null;
   const strengthLabel = stats.currentStrength != null && stats.maxStrength != null
@@ -1891,11 +1890,10 @@ function create3v3PetCard(
     `;
   }).join('');
 
-  const abilitySquareColumn = renderAbilitySquares(stats.abilities);
+  // Enlarged pet sprite (128px), centered, no ability squares
   const spriteBlock = `
-    <div style="position:relative;display:flex;justify-content:center;width:100%;padding:6px 0;">
-      ${abilitySquareColumn}
-      ${renderPetImage(stats, 96, true)}
+    <div style="position:relative;display:flex;justify-content:center;width:100%;padding:8px 0;">
+      ${renderPetImage(stats, 128, true)}
     </div>
   `;
 

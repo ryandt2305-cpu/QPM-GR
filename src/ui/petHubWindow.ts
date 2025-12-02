@@ -1727,15 +1727,20 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     const lowlightA = valid && numA < numB;
     const lowlightB = valid && numB < numA;
     const baseBg = 'rgba(143,130,255,0.08)';
+
+    // Side color coding - left (light blue), right (light purple)
+    const leftColor = '#C9F1FF';
+    const rightColor = '#F7E5FF';
+
     return `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <div style="background:${baseBg};padding:6px;border-radius:6px;${highlightA ? `box-shadow:0 0 0 1px ${SUCCESS_HIGHLIGHT_BORDER};background:${SUCCESS_HIGHLIGHT_BG};` : lowlightA ? 'box-shadow:0 0 0 1px var(--qpm-error);background:rgba(244,67,54,0.08);' : ''}">
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} A</div>
-          <div style="font-weight:700;color:${highlightA ? 'rgb(64, 255, 194)' : lowlightA ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valA}</div>
+          <div style="font-size:10px;color:${leftColor};">${label}</div>
+          <div style="font-weight:700;color:${highlightA ? 'rgb(64, 255, 194)' : lowlightA ? 'var(--qpm-error)' : leftColor};">${valA}</div>
         </div>
         <div style="background:${baseBg};padding:6px;border-radius:6px;${highlightB ? `box-shadow:0 0 0 1px ${SUCCESS_HIGHLIGHT_BORDER};background:${SUCCESS_HIGHLIGHT_BG};` : lowlightB ? 'box-shadow:0 0 0 1px var(--qpm-error);background:rgba(244,67,54,0.08);' : ''}">
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} B</div>
-          <div style="font-weight:700;color:${highlightB ? 'rgb(64, 255, 194)' : lowlightB ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valB}</div>
+          <div style="font-size:10px;color:${rightColor};">${label}</div>
+          <div style="font-weight:700;color:${highlightB ? 'rgb(64, 255, 194)' : lowlightB ? 'var(--qpm-error)' : rightColor};">${valB}</div>
         </div>
       </div>
     `;
@@ -1774,18 +1779,23 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     winProb = false,
     winProcs = false,
     winImpact = false,
+    side: 'left' | 'right' = 'left',
   ) => {
     if (!ability) return '<div style="color:var(--qpm-text-dim);font-size:11px;">No proc data</div>';
     const { valueText, procsText, probText } = formatAbilityValue(ability);
     const highlightColor = 'rgb(64, 255, 194)';
-    const probColor = winProb ? highlightColor : 'var(--qpm-text)';
-    const procsColor = winProcs ? highlightColor : 'var(--qpm-text)';
-    const impactColor = winImpact ? highlightColor : 'var(--qpm-text)';
+
+    // Side color coding - left (light blue), right (light purple)
+    const sideColor = side === 'left' ? '#C9F1FF' : '#F7E5FF';
+
+    const probColor = winProb ? highlightColor : sideColor;
+    const procsColor = winProcs ? highlightColor : sideColor;
+    const impactColor = winImpact ? highlightColor : sideColor;
     const isWinner = winProb || winProcs || winImpact;
     const borderColor = isWinner ? SUCCESS_HIGHLIGHT_BORDER : 'var(--qpm-border)';
     const backgroundColor = isWinner ? SUCCESS_HIGHLIGHT_BG : 'rgba(255,255,255,0.02)';
     return `
-      <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--qpm-text);padding:8px;border:1px solid ${borderColor};border-radius:8px;background:${backgroundColor};text-align:left;">
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:${sideColor};padding:8px;border:1px solid ${borderColor};border-radius:8px;background:${backgroundColor};text-align:left;">
         <div style="font-weight:700;">${label || ability.name}</div>
         <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Proc %</span><span style="font-weight:700;color:${probColor};">${probText}</span></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Procs/Hr</span><span style="font-weight:700;color:${procsColor};">${procsText}</span></div>
@@ -1831,8 +1841,8 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
       <div style="margin-top:4px;padding:8px;border:1px dashed var(--qpm-border);border-radius:8px;background:rgba(143,130,255,0.05);">
         <div style="font-size:11px;color:var(--qpm-text-dim);margin-bottom:6px;">Potential ability output at max STR</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>${renderAbilityRow(projA, projA ? `${projA.name} (max)` : '', projProbWinner === 'A' || projOverallWinner === 'A', projProcsWinner === 'A' || projOverallWinner === 'A', projImpactWinner === 'A' || projOverallWinner === 'A')}</div>
-          <div>${renderAbilityRow(projB, projB ? `${projB.name} (max)` : '', projProbWinner === 'B' || projOverallWinner === 'B', projProcsWinner === 'B' || projOverallWinner === 'B', projImpactWinner === 'B' || projOverallWinner === 'B')}</div>
+          <div>${renderAbilityRow(projA, projA ? `${projA.name} (max)` : '', projProbWinner === 'A' || projOverallWinner === 'A', projProcsWinner === 'A' || projOverallWinner === 'A', projImpactWinner === 'A' || projOverallWinner === 'A', 'left')}</div>
+          <div>${renderAbilityRow(projB, projB ? `${projB.name} (max)` : '', projProbWinner === 'B' || projOverallWinner === 'B', projProcsWinner === 'B' || projOverallWinner === 'B', projImpactWinner === 'B' || projOverallWinner === 'B', 'right')}</div>
         </div>
       </div>
     `
@@ -1843,8 +1853,8 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
     ${compareBadge('Max STR', statsA?.maxStrength, statsB?.maxStrength)}
     <div style="background:rgba(255,255,255,0.02);border:1px solid var(--qpm-border);padding:8px;border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
-      <div>${renderAbilityRow(abilityA, '', probWinner === 'A' || abilityOverallWinner === 'A', procsWinner === 'A' || abilityOverallWinner === 'A', impactWinner === 'A' || abilityOverallWinner === 'A')}</div>
-      <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B')}</div>
+      <div>${renderAbilityRow(abilityA, '', probWinner === 'A' || abilityOverallWinner === 'A', procsWinner === 'A' || abilityOverallWinner === 'A', impactWinner === 'A' || abilityOverallWinner === 'A', 'left')}</div>
+      <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B', 'right')}</div>
     </div>
     ${projectionBlock}
   `;
@@ -1941,7 +1951,13 @@ function create3v3PetCard(
   // Create ability squares (up to 4) with hover tooltips, positioned to the left of pet image
   const abilitySquaresHtml = stats.abilities.slice(0, 4).map((ability, idx) => {
     const color = getAbilityColorByName(ability.baseName || ability.name);
-    const abilityName = ability.name;
+    // Escape HTML entities to prevent tooltip issues
+    const abilityName = (ability.name || 'Unknown Ability')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
     return `
       <div
         title="${abilityName}"

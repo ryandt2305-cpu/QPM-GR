@@ -4,6 +4,14 @@
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { notify } from '../core/notifications';
+import {
+  predictItemWindows,
+  getMonitoringAlerts,
+  formatTimeWindow,
+  getItemConfig,
+  type WindowBasedPrediction,
+  type PredictionWindow
+} from './shopRestockPredictions';
 
 const STORAGE_KEY_RESTOCKS = 'qpm.shopRestocks.v1';
 const STORAGE_KEY_CONFIG = 'qpm.shopRestockConfig.v1';
@@ -1326,3 +1334,41 @@ export function removeWatchedItem(itemName: string): void {
   saveRestocks();
   notifyListeners();
 }
+
+/**
+ * Get window-based predictions for tracked items
+ */
+export function getWindowPredictions(): Map<string, WindowBasedPrediction> {
+  const predictions = new Map<string, WindowBasedPrediction>();
+
+  for (const itemName of TRACKED_PREDICTION_ITEMS) {
+    const stats = calculateItemStats();
+    const itemStats = stats.get(itemName);
+    const lastSeen = itemStats?.lastSeen ?? null;
+
+    // Get recent events (last 7 days) for correlation detection
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const recentEvents = restockEvents.filter(e => e.timestamp >= sevenDaysAgo);
+
+    const prediction = predictItemWindows(itemName, lastSeen, recentEvents);
+    predictions.set(itemName, prediction);
+  }
+
+  return predictions;
+}
+
+/**
+ * Get current monitoring alerts
+ */
+export function getCurrentMonitoringAlerts(): Array<{
+  itemName: string;
+  message: string;
+  urgency: 'high' | 'medium' | 'low';
+}> {
+  const predictions = getWindowPredictions();
+  return getMonitoringAlerts(predictions);
+}
+
+// Re-export types and utilities from predictions module
+export type { WindowBasedPrediction, PredictionWindow };
+export { formatTimeWindow, getItemConfig };

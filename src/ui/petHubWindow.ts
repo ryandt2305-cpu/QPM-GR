@@ -1898,9 +1898,15 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     const xpPerLevelA = speciesA ? getSpeciesXpPerLevel(speciesA) : null;
     const xpPerLevelB = speciesB ? getSpeciesXpPerLevel(speciesB) : null;
 
-    // Assume XP boost ability for now (can be refined)
-    const xpPerHourA = abilityA ? (abilityA.valuePerHour ?? null) : null;
-    const xpPerHourB = abilityB ? (abilityB.valuePerHour ?? null) : null;
+    // Calculate XP per hour - use actual data if available, otherwise use theoretical calculation
+    const xpPerHourA = abilityA ? (abilityA.valuePerHour && abilityA.valuePerHour > 0
+      ? abilityA.valuePerHour
+      : (abilityA.procsPerHour && abilityA.effectiveValue ? abilityA.procsPerHour * abilityA.effectiveValue : null)
+    ) : null;
+    const xpPerHourB = abilityB ? (abilityB.valuePerHour && abilityB.valuePerHour > 0
+      ? abilityB.valuePerHour
+      : (abilityB.procsPerHour && abilityB.effectiveValue ? abilityB.procsPerHour * abilityB.effectiveValue : null)
+    ) : null;
 
     if (xpPerLevelA && xpPerHourA && xpPerHourA > 0) {
       timePerLevelA = xpPerLevelA / xpPerHourA;
@@ -2055,14 +2061,21 @@ function create3v3PetCard(
   const xpLevelProgress = xpPerLevel && xpPerLevel > 0 ? (xpTowardsNextLevel / xpPerLevel) * 100 : 0;
   const xpLevelLabel = xpPerLevel ? `${xpTowardsNextLevel.toFixed(0)} / ${xpPerLevel} XP` : '—';
 
-  // Use metadata hungerCost for accurate depletion time calculation
-  const hungerCost = metadata?.hungerCost ?? null;
-  const hungerDepletionHours = hungerPct != null && hungerCost != null && hungerCost > 0
-    ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
-    : stats.timeUntilStarving ?? null;
+  // Calculate hunger display - always use wiki data for time calculation
+  const displayHungerPct: number | null = hungerPct;
+  let hungerDepletionHours: number | null = null;
+
+  // Always calculate depletion time using wiki data for consistent cross-species comparison
+  if (stats.species && hungerPct != null) {
+    const depletionMinutes = getHungerDepletionTime(stats.species);
+    if (depletionMinutes != null) {
+      // Calculate remaining time based on current hunger percentage
+      hungerDepletionHours = (hungerPct / 100) * (depletionMinutes / 60);
+    }
+  }
 
   const hungerLabelParts: string[] = [];
-  if (stats.hungerPct != null) hungerLabelParts.push(`${stats.hungerPct.toFixed(0)}%`);
+  if (displayHungerPct != null) hungerLabelParts.push(`${displayHungerPct.toFixed(0)}%`);
   if (hungerDepletionHours != null) hungerLabelParts.push(`${hungerDepletionHours.toFixed(1)}h left`);
   const hungerLabel = hungerLabelParts.join(' • ') || '—';
 
@@ -2115,7 +2128,7 @@ function create3v3PetCard(
   const statIndicators = `
     <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
       ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
-      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
+      ${renderStatIndicator('Hunger', hungerLabel, displayHungerPct, '#9BF5C3')}
     </div>
   `;
 

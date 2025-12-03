@@ -230,6 +230,7 @@ const SPECIES_HOURS_TO_MATURE: Record<string, number> = {
   'Dragonfly': 24,
   'Pig': 72,
   'Cow': 72,
+  'Turkey': 72,
   'Squirrel': 100,
   'Turtle': 100,
   'Goat': 100,

@@ -97,9 +97,6 @@ export function createJournalCheckerSection(): HTMLElement {
   const petVariantStatBox = createStatBox('🐾', 'Pet Variants', '...', '#42A5F5', '#1a212a, #1a1a1a');
   const overallStatBox = createStatBox('✨', 'Overall', '...', '#9C27B0', '#241a2a, #1a1a1a');
 
-  // Store reference to icon element for produce box (for rainbow variant)
-  const produceIcon = produceStatBox.querySelector('.stat-icon') as HTMLElement;
-
   statsContainer.appendChild(produceStatBox);
   statsContainer.appendChild(petVariantStatBox);
   statsContainer.appendChild(overallStatBox);
@@ -149,37 +146,6 @@ export function createJournalCheckerSection(): HTMLElement {
     updateStat(produceStatBox, `${stats.produce.collected}/${stats.produce.total}`);
     updateStat(petVariantStatBox, `${stats.petVariants.collected}/${stats.petVariants.total}`);
     updateStat(overallStatBox, `${Math.round(stats.overall.percentage)}%`);
-
-    // Show rainbow variant when all 11 crop types are collected
-    if (produceIcon && stats.produce.typesCollected === stats.produce.typesTotal) {
-      produceIcon.style.background = 'linear-gradient(45deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3)';
-      produceIcon.style.backgroundSize = '400% 400%';
-      produceIcon.style.animation = 'rainbow-shift 3s ease infinite';
-      produceIcon.style.webkitBackgroundClip = 'text';
-      produceIcon.style.backgroundClip = 'text';
-      produceIcon.style.webkitTextFillColor = 'transparent';
-
-      // Add keyframes for rainbow animation if not already added
-      if (!document.getElementById('rainbow-animation-keyframes')) {
-        const style = document.createElement('style');
-        style.id = 'rainbow-animation-keyframes';
-        style.textContent = `
-          @keyframes rainbow-shift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-          }
-        `;
-        document.head.appendChild(style);
-      }
-    } else if (produceIcon) {
-      // Reset to normal if not all types collected
-      produceIcon.style.background = '';
-      produceIcon.style.animation = '';
-      produceIcon.style.webkitBackgroundClip = '';
-      produceIcon.style.backgroundClip = '';
-      produceIcon.style.webkitTextFillColor = '';
-    }
 
     // Clear results
     resultsContainer.innerHTML = '';

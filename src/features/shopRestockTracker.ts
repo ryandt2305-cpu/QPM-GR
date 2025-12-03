@@ -21,6 +21,11 @@ let itemIntervalsCacheHash: string = '';
 let itemIntervalsCacheTimestamp: number = 0;
 const CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
+// Performance optimization: Cache for prediction stats to avoid expensive recalculations
+let predictionStatsCache: Map<string, DetailedPredictionStats> | null = null;
+let predictionStatsCacheHash: string = '';
+let predictionStatsCacheTimestamp: number = 0;
+
 /**
  * Restock event data structure
  */
@@ -914,6 +919,30 @@ export interface DetailedPredictionStats {
  * This provides comprehensive data for the "Show Detailed Stats" UI toggle
  */
 export function getDetailedPredictionStats(itemName: string): DetailedPredictionStats {
+  // Check cache first
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const cacheCheckTime = Date.now();
+  const cacheAge = cacheCheckTime - predictionStatsCacheTimestamp;
+
+  if (predictionStatsCache &&
+      predictionStatsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    const cached = predictionStatsCache.get(itemName);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  // Initialize cache if needed
+  if (!predictionStatsCache || predictionStatsCacheHash !== currentHash || cacheAge >= CACHE_MAX_AGE_MS) {
+    predictionStatsCache = new Map();
+    predictionStatsCacheHash = currentHash;
+    predictionStatsCacheTimestamp = cacheCheckTime;
+  }
+
   const defaultStats: DetailedPredictionStats = {
     itemName,
     predictedTime: null,
@@ -1022,7 +1051,7 @@ export function getDetailedPredictionStats(itemName: string): DetailedPrediction
   // Get predicted time
   const predictedTime = predictItemNextAppearance(itemName);
 
-  return {
+  const result: DetailedPredictionStats = {
     itemName,
     predictedTime,
     confidence,
@@ -1041,6 +1070,11 @@ export function getDetailedPredictionStats(itemName: string): DetailedPrediction
     variability,
     recommendedApproach,
   };
+
+  // Cache the result
+  predictionStatsCache?.set(itemName, result);
+
+  return result;
 }
 
 /**
@@ -1181,6 +1215,11 @@ export function clearAllRestocks(): void {
   itemIntervalsCache = null;
   itemIntervalsCacheHash = '';
   itemIntervalsCacheTimestamp = 0;
+
+  // Clear prediction stats cache
+  predictionStatsCache = null;
+  predictionStatsCacheHash = '';
+  predictionStatsCacheTimestamp = 0;
 
   // Clear only shop restock specific storage keys by setting empty values
   storage.set(STORAGE_KEY_RESTOCKS, []);

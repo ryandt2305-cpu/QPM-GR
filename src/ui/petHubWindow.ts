@@ -292,6 +292,19 @@ let activeSpriteDropdown: { element: HTMLElement; select: HTMLSelectElement } | 
 let spriteDropdownListenersAttached = false;
 const SUCCESS_HIGHLIGHT_BG = 'rgba(64, 255, 194, 0.28)';
 const SUCCESS_HIGHLIGHT_BORDER = 'rgba(64, 255, 194, 0.9)';
+
+// Performance: Cache sprite URLs to avoid redundant lookups (300+ calls per Aries team apply)
+const spriteCache = new Map<string, string | null>();
+function getCachedSprite(pet: PetWithSource): string | null {
+  const cacheKey = `${pet.stats.species}-${pet.stats.mutations?.join(',') || 'none'}`;
+  if (spriteCache.has(cacheKey)) {
+    return spriteCache.get(cacheKey)!;
+  }
+  const sprite = getDisplaySprite(pet.stats);
+  spriteCache.set(cacheKey, sprite);
+  return sprite;
+}
+
 const handleDropdownScroll = (event: Event): void => {
   if (!activeSpriteDropdown) return;
   const target = event.target as Node | null;
@@ -1126,7 +1139,7 @@ function applyOptionSprites(select: HTMLSelectElement, pets: PetWithSource[]): v
     const idx = Number(opt.value);
     const pet = pets[idx];
     if (!pet) return;
-    const sprite = getDisplaySprite(pet.stats);
+    const sprite = getCachedSprite(pet); // Use cached sprite lookup
     if (sprite) {
       opt.style.backgroundImage = `url(${sprite})`;
       opt.style.backgroundRepeat = 'no-repeat';
@@ -2232,7 +2245,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
         newTeam[idx] = allPets[i] ?? null;
         onChange(newTeam);
         applySelectPreview(select, newTeam[idx]);
-        render();
+        debouncedRender();
       });
       select.dataset.rebuild = '1';
       (select as HTMLSelectElement & { _rebuild?: () => void })._rebuild = rebuildOptions;
@@ -2277,14 +2290,9 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
 
-    // Split the expensive operations across multiple frames to prevent freezing
-    requestIdleCallback(() => {
-      rebuildManualSelectors();
-    }, { timeout: 100 });
-
-    requestIdleCallback(() => {
-      render();
-    }, { timeout: 200 });
+    // Batch selector rebuild and render into one operation
+    rebuildManualSelectors();
+    debouncedRender();
   };
 
   const createPresetControl = (label: string, apply: (team: AriesTeamSummary) => void) => {
@@ -2402,6 +2410,18 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
     slotsWrapper.appendChild(fragment);
   };
 
+  // Debounce render to prevent multiple rapid calls (e.g., during Aries team application)
+  let renderTimeout: number | null = null;
+  const debouncedRender = () => {
+    if (renderTimeout != null) {
+      window.clearTimeout(renderTimeout);
+    }
+    renderTimeout = window.setTimeout(() => {
+      renderTimeout = null;
+      render();
+    }, 50); // 50ms debounce - fast enough to feel instant, slow enough to batch updates
+  };
+
   const filterWrap = document.createElement('div');
   filterWrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;align-items:center;text-align:center;';
   const filterLabel = document.createElement('div');
@@ -2419,7 +2439,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   filterSelect.addEventListener('change', () => {
     abilityFilter = filterSelect.value.trim();
     rebuildManualSelectors();
-    render();
+    debouncedRender();
   });
   filterWrap.appendChild(filterLabel);
   filterWrap.appendChild(filterSelect);

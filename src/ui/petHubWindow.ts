@@ -286,17 +286,137 @@ type SlotHighlightMap = {
   abilityFocus?: boolean;
 };
 
+type SpriteStatsInput = Pick<DetailedPetStats, 'species' | 'mutations' | 'hasGold' | 'hasRainbow'>;
+
 const MUTATION_DISPLAY_PRIORITY: MutationSpriteType[] = ['rainbow', 'gold'];
 const spriteDropdownRegistry = new WeakMap<HTMLSelectElement, () => PetWithSource[]>();
 let activeSpriteDropdown: { element: HTMLElement; select: HTMLSelectElement } | null = null;
 let spriteDropdownListenersAttached = false;
 const SUCCESS_HIGHLIGHT_BG = 'rgba(64, 255, 194, 0.28)';
 const SUCCESS_HIGHLIGHT_BORDER = 'rgba(64, 255, 194, 0.9)';
+const PET_PROCESS_YIELD_INTERVAL = 8;
 
 // Performance: Cache sprite URLs to avoid redundant lookups (300+ calls per Aries team apply)
 const spriteCache = new Map<string, string | null>();
+const OPTION_SPRITE_PREVIEW_LIMIT = 16;
+
+function getSpriteCacheKey(stats: SpriteStatsInput): string {
+  const speciesKey = stats.species ?? 'unknown';
+  const mutationKey = stats.mutations && stats.mutations.length ? stats.mutations.join(',') : 'none';
+  return `${speciesKey}-${mutationKey}`;
+}
+type SpriteDescriptor = {
+  species: string | null;
+  mutations: string[];
+  hasGold: boolean;
+  hasRainbow: boolean;
+};
+
+const spriteDescriptorRegistry = new Map<string, SpriteDescriptor>();
+const spriteHydrationQueue = new Set<HTMLElement>();
+let spriteDescriptorCounter = 0;
+let spriteHydrationScheduled = false;
+const SPRITE_HYDRATION_FRAME_BUDGET_MS = 12;
+
+function registerSpriteDescriptor(stats: DetailedPetStats): string {
+  const id = `sprite-${++spriteDescriptorCounter}`;
+  spriteDescriptorRegistry.set(id, {
+    species: stats.species ?? null,
+    mutations: [...(stats.mutations ?? [])],
+    hasGold: Boolean(stats.hasGold),
+    hasRainbow: Boolean(stats.hasRainbow),
+  });
+  return id;
+}
+
+function hydrateSpritesWithin(root: ParentNode | null): void {
+  if (!root) return;
+  const nodes = root.querySelectorAll<HTMLElement>('[data-pet-sprite-id]');
+  nodes.forEach(node => {
+    if (node.dataset.petSpriteHydrated === '1') return;
+    if (!node.dataset.petSpriteId) return;
+    spriteHydrationQueue.add(node);
+  });
+  if (spriteHydrationQueue.size) {
+    scheduleSpriteHydration();
+  }
+}
+
+function scheduleSpriteHydration(): void {
+  if (spriteHydrationScheduled) return;
+  spriteHydrationScheduled = true;
+  const raf = pageWindow?.requestAnimationFrame ?? window.requestAnimationFrame;
+  if (typeof raf === 'function') {
+    raf(processSpriteHydrationQueue);
+  } else {
+    window.setTimeout(processSpriteHydrationQueue, 16);
+  }
+}
+
+function processSpriteHydrationQueue(): void {
+  spriteHydrationScheduled = false;
+  if (!spriteHydrationQueue.size) {
+    return;
+  }
+  const start = performance.now();
+  for (const node of Array.from(spriteHydrationQueue)) {
+    spriteHydrationQueue.delete(node);
+    hydrateSpriteNode(node);
+    if (performance.now() - start >= SPRITE_HYDRATION_FRAME_BUDGET_MS) {
+      break;
+    }
+  }
+  if (spriteHydrationQueue.size) {
+    scheduleSpriteHydration();
+  }
+}
+
+function hydrateSpriteNode(node: HTMLElement): void {
+  if (!node.isConnected) {
+    const orphanId = node.dataset.petSpriteId;
+    if (orphanId) {
+      spriteDescriptorRegistry.delete(orphanId);
+    }
+    node.removeAttribute('data-pet-sprite-id');
+    node.dataset.petSpriteHydrated = '1';
+    return;
+  }
+  const descriptorId = node.dataset.petSpriteId;
+  if (!descriptorId) {
+    return;
+  }
+  const descriptor = spriteDescriptorRegistry.get(descriptorId);
+  if (!descriptor) {
+    node.dataset.petSpriteHydrated = '1';
+    node.removeAttribute('data-pet-sprite-id');
+    return;
+  }
+  const sprite = getDisplaySprite({
+    species: descriptor.species,
+    mutations: descriptor.mutations,
+    hasGold: descriptor.hasGold,
+    hasRainbow: descriptor.hasRainbow,
+  });
+  if (sprite) {
+    node.style.backgroundImage = `url(${sprite})`;
+    if (descriptor.species) {
+      spriteCache.set(getSpriteCacheKey(descriptor), sprite);
+    }
+  }
+  spriteDescriptorRegistry.delete(descriptorId);
+  node.dataset.petSpriteHydrated = '1';
+  node.removeAttribute('data-pet-sprite-id');
+}
+
+function resetSpriteHydrationState(): void {
+  spriteDescriptorRegistry.clear();
+  spriteHydrationQueue.clear();
+  spriteDescriptorCounter = 0;
+  spriteHydrationScheduled = false;
+}
+
 function getCachedSprite(pet: PetWithSource): string | null {
-  const cacheKey = `${pet.stats.species}-${pet.stats.mutations?.join(',') || 'none'}`;
+  const cacheKey = getSpriteCacheKey(pet.stats);
   if (spriteCache.has(cacheKey)) {
     return spriteCache.get(cacheKey)!;
   }
@@ -314,7 +434,18 @@ const handleDropdownScroll = (event: Event): void => {
   closeActiveSpriteDropdown();
 };
 
-function getDisplaySprite(stats: DetailedPetStats | null | undefined): string | null {
+function yieldToBrowser(): Promise<void> {
+  return new Promise(resolve => {
+    const raf = pageWindow?.requestAnimationFrame ?? window.requestAnimationFrame;
+    if (typeof raf === 'function') {
+      raf(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
+function getDisplaySprite(stats: SpriteStatsInput | null | undefined): string | null {
   if (!stats?.species) {
     return null;
   }
@@ -333,7 +464,7 @@ function getDisplaySprite(stats: DetailedPetStats | null | undefined): string | 
   return getPetSpriteDataUrl(speciesKey);
 }
 
-function extractKnownMutations(stats: DetailedPetStats): Set<MutationSpriteType> {
+function extractKnownMutations(stats: SpriteStatsInput): Set<MutationSpriteType> {
   const result = new Set<MutationSpriteType>();
   const push = (value: unknown) => {
     const normalized = normalizeMutationName(value);
@@ -1134,20 +1265,32 @@ function convertPetItemToActiveInfo(entry: any): ActivePetInfo | null {
 }
 
 function applyOptionSprites(select: HTMLSelectElement, pets: PetWithSource[]): void {
-  Array.from(select.options).forEach(opt => {
-    const idx = Number(opt.value);
-    const pet = pets[idx];
-    if (!pet) return;
-    const sprite = getCachedSprite(pet); // Use cached sprite lookup
-    if (sprite) {
-      opt.style.backgroundImage = `url(${sprite})`;
-      opt.style.backgroundRepeat = 'no-repeat';
-      opt.style.backgroundSize = '20px 20px';
-      opt.style.backgroundPosition = '6px center';
-      opt.style.paddingLeft = '30px';
-      opt.style.imageRendering = 'pixelated';
+  let applied = 0;
+  const options = Array.from(select.options);
+  for (const opt of options) {
+    if (applied >= OPTION_SPRITE_PREVIEW_LIMIT) {
+      break;
     }
-  });
+    const idx = Number(opt.value);
+    if (!Number.isFinite(idx)) {
+      continue;
+    }
+    const pet = pets[idx];
+    if (!pet) {
+      continue;
+    }
+    const sprite = spriteCache.get(getSpriteCacheKey(pet.stats));
+    if (!sprite) {
+      continue;
+    }
+    opt.style.backgroundImage = `url(${sprite})`;
+    opt.style.backgroundRepeat = 'no-repeat';
+    opt.style.backgroundSize = '20px 20px';
+    opt.style.backgroundPosition = '6px center';
+    opt.style.paddingLeft = '30px';
+    opt.style.imageRendering = 'pixelated';
+    applied += 1;
+  }
 }
 
 function buildPetIdLookup(pets: PetWithSource[]): Map<string, PetWithSource> {
@@ -1195,26 +1338,44 @@ function applySelectPreview(select: HTMLSelectElement, pet: PetWithSource | null
 
 async function getAllPets(): Promise<PetWithSource[]> {
   const allPets: PetWithSource[] = [];
+  let processedCount = 0;
 
-  const appendPet = (entry: any, source: 'inventory' | 'hutch') => {
+  const maybeYield = async () => {
+    processedCount += 1;
+    if (processedCount % PET_PROCESS_YIELD_INTERVAL === 0) {
+      await yieldToBrowser();
+    }
+  };
+
+  const pushPetStats = async (
+    petInfo: ActivePetInfo,
+    source: PetWithSource['source'],
+    errorLabel: string,
+  ) => {
     try {
-      const petInfo = convertPetItemToActiveInfo(entry);
-      if (!petInfo) return;
       const stats = getDetailedPetStats(petInfo);
       allPets.push({ stats, source, petInfo });
     } catch (error) {
-      log(`Failed to get stats for ${source} pet:`, error);
+      log(errorLabel, error);
+    } finally {
+      await maybeYield();
+    }
+  };
+
+  const appendPet = async (entry: any, source: 'inventory' | 'hutch') => {
+    try {
+      const petInfo = convertPetItemToActiveInfo(entry);
+      if (!petInfo) return;
+      await pushPetStats(petInfo, source, `Failed to get stats for ${source} pet:`);
+    } catch (error) {
+      log(`Failed to convert ${source} entry to pet info:`, error);
+      await maybeYield();
     }
   };
 
   const activePets = getActivePetInfos();
   for (const petInfo of activePets) {
-    try {
-      const stats = getDetailedPetStats(petInfo);
-      allPets.push({ stats, source: 'active', petInfo });
-    } catch (error) {
-      log('Failed to get stats for active pet:', error);
-    }
+    await pushPetStats(petInfo, 'active', 'Failed to get stats for active pet:');
   }
 
   const [inventoryEntries, hutchEntries] = await Promise.all([
@@ -1222,8 +1383,12 @@ async function getAllPets(): Promise<PetWithSource[]> {
     fetchHutchPetEntries(),
   ]);
 
-  inventoryEntries.forEach(entry => appendPet(entry, 'inventory'));
-  hutchEntries.forEach(entry => appendPet(entry, 'hutch'));
+  for (const entry of inventoryEntries) {
+    await appendPet(entry, 'inventory');
+  }
+  for (const entry of hutchEntries) {
+    await appendPet(entry, 'hutch');
+  }
 
   return allPets;
 }
@@ -1231,20 +1396,23 @@ async function getAllPets(): Promise<PetWithSource[]> {
 // --- Rendering helpers ----------------------------------------------------
 
 function renderPetImage(stats: DetailedPetStats, size: number, bordered = false): string {
-  const sprite = getDisplaySprite(stats);
-  const baseBg = sprite ? `url(${sprite}) center/contain no-repeat` : 'linear-gradient(135deg,#3a3f5a,#202437)';
+  const descriptorId = stats.species ? registerSpriteDescriptor(stats) : null;
   const baseStyle = `
     width: ${size}px;
     height: ${size}px;
     border-radius: ${Math.round(size * 0.2)}px;
-    background: ${baseBg};
+    background: linear-gradient(135deg,#3a3f5a,#202437);
     position: relative;
     overflow: hidden;
     image-rendering: pixelated;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
     ${bordered ? 'border: 1px solid var(--qpm-border);' : ''}
   `;
+  const dataAttr = descriptorId ? `data-pet-sprite-id="${descriptorId}"` : '';
   return `
-    <div style="${baseStyle}"></div>
+    <div ${dataAttr} style="${baseStyle}"></div>
   `;
 }
 
@@ -1421,6 +1589,7 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
         } else if (activeTab === 'team') {
           contentContainer.appendChild(createTeamCompareTab(allPets));
         }
+        hydrateSpritesWithin(contentContainer);
       });
     } else {
       // Render lightweight tabs immediately
@@ -1429,6 +1598,7 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
       } else if (activeTab === 'team') {
         contentContainer.appendChild(createTeamCompareTab(allPets));
       }
+      hydrateSpritesWithin(contentContainer);
     }
   };
 
@@ -1446,6 +1616,7 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
       window.clearTimeout(ariesRetryTimer);
       ariesRetryTimer = null;
     }
+    resetSpriteHydrationState();
   });
 }
 
@@ -1564,6 +1735,8 @@ function createOverviewTab(allPets: PetWithSource[]): HTMLElement {
   if (inventorySection) container.appendChild(inventorySection);
   if (hutchSection) container.appendChild(hutchSection);
 
+  hydrateSpritesWithin(container);
+
   return container;
 }
 
@@ -1640,6 +1813,7 @@ function createCompareTab(allPets: PetWithSource[]): HTMLElement {
 
     comparisonArea.innerHTML = '';
     comparisonArea.appendChild(create3v3SlotRow(petA, petB, 0, abilityFilter));
+    hydrateSpritesWithin(comparisonArea);
   };
 
   const selectorArea = document.createElement('div');
@@ -2442,6 +2616,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       slotsWrapper.removeChild(slotsWrapper.firstChild);
     }
     slotsWrapper.appendChild(fragment);
+    hydrateSpritesWithin(slotsWrapper);
   };
 
   // Debounce render to prevent multiple rapid calls (e.g., during Aries team application)

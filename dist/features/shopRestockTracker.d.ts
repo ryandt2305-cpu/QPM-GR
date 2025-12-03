@@ -199,11 +199,11 @@ export declare function addWatchedItem(itemName: string): void;
  */
 export declare function removeWatchedItem(itemName: string): void;
 /**
- * Get window-based predictions for tracked items
+ * Get window-based predictions for tracked items (with caching)
  */
 export declare function getWindowPredictions(): Map<string, WindowBasedPrediction>;
 /**
- * Get current monitoring alerts
+ * Get current monitoring alerts (with caching)
  */
 export declare function getCurrentMonitoringAlerts(): Array<{
     itemName: string;

@@ -305,7 +305,7 @@ function createLiveTrackingSection(): HTMLElement {
 }
 
 /**
- * Create prediction section
+ * Create prediction section (window-based)
  */
 function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   const section = document.createElement('div');
@@ -318,7 +318,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
 
   const heading = document.createElement('h4');
-  heading.textContent = '🔮 Next Rare Restock Estimation';
+  heading.textContent = '🔮 Next Rare Restock Windows';
   heading.style.cssText = `
     margin: 0 0 4px 0;
     color: #42A5F5;
@@ -328,7 +328,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
   // Add disclaimer
   const disclaimer = document.createElement('p');
-  disclaimer.textContent = '(This will never be 100%, only estimates based of patterns and timings)';
+  disclaimer.textContent = 'Window-based predictions from pseudo-RNG analysis of 34,861 events';
   disclaimer.style.cssText = `
     margin: 0 0 12px 0;
     font-size: 10px;
@@ -337,55 +337,51 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
   section.appendChild(disclaimer);
 
-  // Global "Show Detailed Stats" toggle button
-  const globalToggleBtn = document.createElement('button');
-  globalToggleBtn.textContent = '📊 Show Detailed Stats';
-  globalToggleBtn.style.cssText = `
-    width: 100%;
-    padding: 8px;
-    background: rgba(66, 165, 245, 0.15);
-    border: 1px solid rgba(66, 165, 245, 0.3);
-    color: #42A5F5;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    border-radius: 4px;
-    margin-bottom: 12px;
-    transition: all 0.2s;
-  `;
+  // Get all window predictions
+  const predictions = getWindowPredictions();
 
-  let isGlobalStatsExpanded = false;
-  const allDetailedStatsSections: HTMLElement[] = []; // Track all stats sections
-  const countdownEntries: Array<{ target: number; element: HTMLElement }> = [];
+  // Get current monitoring alerts
+  const alerts = getCurrentMonitoringAlerts();
 
-  const formatCountdown = (target: number) => {
-    const diff = target - Date.now();
-    const overdue = diff <= 0;
-    const absMs = Math.abs(diff);
-    const hours = Math.floor(absMs / (1000 * 60 * 60));
-    const minutes = Math.floor((absMs % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((absMs % (1000 * 60)) / 1000);
-    const formatted = `${overdue ? '-' : ''}${hours}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
-    return { formatted, overdue };
-  };
+  // Show alerts if any
+  if (alerts.length > 0) {
+    const alertsContainer = document.createElement('div');
+    alertsContainer.style.cssText = `
+      margin-bottom: 12px;
+      padding: 10px;
+      background: rgba(255, 152, 0, 0.15);
+      border: 2px solid rgba(255, 152, 0, 0.4);
+      border-radius: 6px;
+    `;
 
-  const updateCountdowns = () => {
-    countdownEntries.forEach(entry => {
-      const { formatted, overdue } = formatCountdown(entry.target);
-      entry.element.textContent = overdue ? `Overdue ${formatted}` : `ETA ${formatted}`;
-      entry.element.style.color = overdue ? '#f44336' : '#42A5F5';
-    });
-  };
+    const alertsTitle = document.createElement('div');
+    alertsTitle.textContent = '🚨 Active Alerts';
+    alertsTitle.style.cssText = `
+      color: #FF9800;
+      font-weight: 700;
+      font-size: 11px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    `;
+    alertsContainer.appendChild(alertsTitle);
 
-  globalToggleBtn.addEventListener('mouseenter', () => {
-    globalToggleBtn.style.background = 'rgba(66, 165, 245, 0.3)';
-  });
+    for (const alert of alerts) {
+      const alertRow = document.createElement('div');
+      alertRow.style.cssText = `
+        padding: 6px 8px;
+        margin-bottom: 4px;
+        background: rgba(0, 0, 0, 0.3);
+        border-left: 3px solid ${alert.urgency === 'high' ? '#f44336' : alert.urgency === 'medium' ? '#FF9800' : '#4CAF50'};
+        border-radius: 3px;
+        font-size: 10px;
+        color: #fff;
+      `;
+      alertRow.textContent = alert.message;
+      alertsContainer.appendChild(alertRow);
+    }
 
-  globalToggleBtn.addEventListener('mouseleave', () => {
-    globalToggleBtn.style.background = isGlobalStatsExpanded ? 'rgba(66, 165, 245, 0.25)' : 'rgba(66, 165, 245, 0.15)';
-  });
-
-  section.appendChild(globalToggleBtn);
+    section.appendChild(alertsContainer);
+  }
 
   // Specific rare items to track
   const rareItems = [
@@ -404,10 +400,12 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   `;
 
   for (const rareItem of rareItems) {
-    const dualPrediction = predictItemDual(rareItem.name);
+    const prediction = predictions.get(rareItem.name);
     const history = getPredictionHistory(rareItem.name);
 
-    // Container for item + history
+    if (!prediction) continue;
+
+    // Container for item + details
     const itemContainer = document.createElement('div');
     itemContainer.style.cssText = `
       background: rgba(0, 0, 0, 0.3);
@@ -416,12 +414,12 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       overflow: hidden;
     `;
 
-    // Main row (current prediction) - Always clickable to show history or "no data" message
+    // Main row (current status)
     const itemRow = document.createElement('div');
     itemRow.style.cssText = `
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
       padding: 10px 12px;
       cursor: pointer;
       transition: background 0.2s;
@@ -445,7 +443,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       font-size: 12px;
     `;
 
-    // Expand indicator (always show to indicate clickability)
+    // Expand indicator
     const expandIndicator = document.createElement('span');
     expandIndicator.textContent = '▼';
     expandIndicator.style.cssText = `
@@ -457,436 +455,285 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
     leftSide.appendChild(itemName);
     leftSide.appendChild(expandIndicator);
 
-    const predictionText = document.createElement('span');
-    predictionText.style.cssText = `
-      color: var(--qpm-text-muted, #aaa);
-      font-size: 11px;
+    // Status and windows display
+    const statusContainer = document.createElement('div');
+    statusContainer.style.cssText = `
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      font-size: 10px;
     `;
 
-    const activePrediction = getActivePrediction(rareItem.name);
-    const targetPrediction = activePrediction ?? dualPrediction.conservative ?? dualPrediction.optimistic ?? null;
-    predictionText.innerHTML = '';
+    // Status badge
+    const statusBadge = document.createElement('div');
+    statusBadge.style.cssText = `
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 9px;
+      text-transform: uppercase;
+    `;
 
-    if (targetPrediction) {
-      const countdownLine = document.createElement('div');
-      countdownLine.style.cssText = 'font-weight: 700;';
-      predictionText.appendChild(countdownLine);
-
-      const exactLine = document.createElement('div');
-      exactLine.style.cssText = 'font-size: 10px; color: #aaa; margin-top: 2px;';
-      exactLine.textContent = `${activePrediction ? 'Original estimate' : 'Estimate'}: ${new Date(targetPrediction).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`;
-      predictionText.appendChild(exactLine);
-
-      if (!activePrediction && dualPrediction.optimistic && dualPrediction.conservative && dualPrediction.optimistic !== dualPrediction.conservative) {
-        const rangeLine = document.createElement('div');
-        rangeLine.style.cssText = 'font-size: 10px; color: #666; margin-top: 2px;';
-        const earliest = Math.min(dualPrediction.optimistic, dualPrediction.conservative);
-        const latest = Math.max(dualPrediction.optimistic, dualPrediction.conservative);
-        const earliestStr = new Date(earliest).toLocaleDateString([], { month: 'short', day: 'numeric' });
-        const latestStr = new Date(latest).toLocaleDateString([], { month: 'short', day: 'numeric' });
-        rangeLine.textContent = `Window: ~${earliestStr} - ~${latestStr}`;
-        predictionText.appendChild(rangeLine);
-      }
-
-      countdownEntries.push({ target: targetPrediction, element: countdownLine });
+    if (prediction.cooldownActive) {
+      statusBadge.textContent = '⏳ Cooldown';
+      statusBadge.style.cssText += 'background: rgba(244, 67, 54, 0.3); color: #f44336; border: 1px solid #f44336;';
+    } else if (prediction.tooEarly) {
+      statusBadge.textContent = '⏰ Too Early';
+      statusBadge.style.cssText += 'background: rgba(255, 152, 0, 0.3); color: #FF9800; border: 1px solid #FF9800;';
+    } else if (prediction.nextWindows.length > 0) {
+      statusBadge.textContent = '✅ Windows Available';
+      statusBadge.style.cssText += 'background: rgba(76, 175, 80, 0.3); color: #4CAF50; border: 1px solid #4CAF50;';
     } else {
-      predictionText.textContent = 'Insufficient data';
+      statusBadge.textContent = '❓ Monitoring';
+      statusBadge.style.cssText += 'background: rgba(158, 158, 158, 0.3); color: #9e9e9e; border: 1px solid #9e9e9e;';
+    }
+
+    statusContainer.appendChild(statusBadge);
+
+    // Time since last seen
+    if (prediction.timeSinceLastSeen !== null) {
+      const timeSinceText = document.createElement('div');
+      timeSinceText.style.cssText = 'color: #aaa; font-size: 9px;';
+      const hours = prediction.timeSinceLastSeen.toFixed(1);
+      const days = (prediction.timeSinceLastSeen / 24).toFixed(1);
+      timeSinceText.textContent = `Last seen: ${days}d ago (${hours}h)`;
+      statusContainer.appendChild(timeSinceText);
     }
 
     itemRow.appendChild(leftSide);
-    itemRow.appendChild(predictionText);
+    itemRow.appendChild(statusContainer);
     itemContainer.appendChild(itemRow);
 
-    // Detailed Stats Section (collapsible)
-    const detailedStatsSection = document.createElement('div');
-    detailedStatsSection.style.cssText = `
-      display: none;
-      padding: 16px;
-      background: linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(33, 150, 243, 0.1) 100%);
-      border-top: 2px solid rgba(66, 165, 245, 0.4);
-      font-size: 11px;
-      border-radius: 0 0 6px 6px;
-    `;
-
-    // Get detailed stats
-    const detailedStats = getDetailedPredictionStats(rareItem.name);
-
-    if (detailedStats.sampleSize > 0) {
-      // Format helper for durations
-      const formatDuration = (ms: number | null): string => {
-        if (ms === null) return 'N/A';
-        const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
-        if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-        if (hours > 0) return `${hours}h ${minutes}m`;
-        return `${minutes}m`;
-      };
-
-      // Title for detailed stats
-      const detailedTitle = document.createElement('div');
-      detailedTitle.style.cssText = `
-        color: #42A5F5;
-        font-weight: 700;
-        margin-bottom: 12px;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        border-bottom: 1px solid rgba(66, 165, 245, 0.3);
-        padding-bottom: 6px;
-      `;
-      detailedTitle.textContent = '📈 Statistical Analysis';
-      detailedStatsSection.appendChild(detailedTitle);
-
-      // Create stats grid with better styling
-      const statsGrid = document.createElement('div');
-      statsGrid.style.cssText = `
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px 20px;
-        margin-bottom: 14px;
-        background: rgba(0, 0, 0, 0.2);
-        padding: 12px;
-        border-radius: 6px;
-        border: 1px solid rgba(66, 165, 245, 0.2);
-      `;
-
-      // Statistical measures
-      const statsData = [
-        { label: 'Median Interval', value: formatDuration(detailedStats.median), color: '#42A5F5', icon: '📊' },
-        { label: 'Mean Interval', value: formatDuration(detailedStats.mean), color: '#42A5F5', icon: '📈' },
-        { label: 'Std Deviation', value: formatDuration(detailedStats.stdDev), color: '#FF9800', icon: '📉' },
-        { label: 'Variability (CV)', value: detailedStats.coefficientOfVariation !== null ? detailedStats.coefficientOfVariation.toFixed(2) : 'N/A', color: '#FF9800', icon: '🎲' },
-      ];
-
-      for (const stat of statsData) {
-        const statRow = document.createElement('div');
-        statRow.style.cssText = `
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 6px 8px;
-          background: rgba(255, 255, 255, 0.03);
-          border-radius: 4px;
-          transition: background 0.2s;
-        `;
-        statRow.addEventListener('mouseenter', () => {
-          statRow.style.background = 'rgba(255, 255, 255, 0.08)';
-        });
-        statRow.addEventListener('mouseleave', () => {
-          statRow.style.background = 'rgba(255, 255, 255, 0.03)';
-        });
-        statRow.innerHTML = `
-          <span style="color: #aaa; font-size: 11px;">
-            <span style="margin-right: 4px;">${stat.icon}</span>${stat.label}
-          </span>
-          <span style="color: ${stat.color}; font-weight: 700; font-size: 12px;">${stat.value}</span>
-        `;
-        statsGrid.appendChild(statRow);
-      }
-
-      detailedStatsSection.appendChild(statsGrid);
-
-      // Confidence intervals
-      const confidenceSection = document.createElement('div');
-      confidenceSection.style.cssText = 'margin-bottom: 14px;';
-      const confidenceTitle = document.createElement('div');
-      confidenceTitle.style.cssText = `
-        color: #4CAF50;
-        font-weight: 700;
-        margin-bottom: 8px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      `;
-      confidenceTitle.textContent = '📐 Confidence Intervals';
-      confidenceSection.appendChild(confidenceTitle);
-
-      const confidenceGrid = document.createElement('div');
-      confidenceGrid.style.cssText = `
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 8px;
-        background: rgba(0, 0, 0, 0.2);
-        padding: 12px;
-        border-radius: 6px;
-        border: 1px solid rgba(76, 175, 80, 0.2);
-      `;
-
-      const intervals = [
-        { label: '25th Percentile', value: formatDuration(detailedStats.interval25th), icon: '⬇️' },
-        { label: '50th (Median)', value: formatDuration(detailedStats.median), icon: '➡️' },
-        { label: '75th Percentile', value: formatDuration(detailedStats.interval75th), icon: '⬆️' },
-      ];
-
-      for (const interval of intervals) {
-        const intervalItem = document.createElement('div');
-        intervalItem.style.cssText = `
-          text-align: center;
-          padding: 8px;
-          background: rgba(255, 255, 255, 0.03);
-          border-radius: 4px;
-          transition: all 0.2s;
-        `;
-        intervalItem.addEventListener('mouseenter', () => {
-          intervalItem.style.background = 'rgba(76, 175, 80, 0.15)';
-          intervalItem.style.transform = 'scale(1.05)';
-        });
-        intervalItem.addEventListener('mouseleave', () => {
-          intervalItem.style.background = 'rgba(255, 255, 255, 0.03)';
-          intervalItem.style.transform = '';
-        });
-        intervalItem.innerHTML = `
-          <div style="color: #888; font-size: 9px; margin-bottom: 4px;">
-            <span style="margin-right: 2px;">${interval.icon}</span>${interval.label}
-          </div>
-          <div style="color: #4CAF50; font-weight: 700; font-size: 13px;">${interval.value}</div>
-        `;
-        confidenceGrid.appendChild(intervalItem);
-      }
-
-      confidenceSection.appendChild(confidenceGrid);
-      detailedStatsSection.appendChild(confidenceSection);
-
-      // Probability windows
-      const probabilitySection = document.createElement('div');
-      probabilitySection.style.cssText = 'margin-bottom: 14px;';
-      const probabilityTitle = document.createElement('div');
-      probabilityTitle.style.cssText = `
-        color: #FFEB3B;
-        font-weight: 700;
-        margin-bottom: 8px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      `;
-      probabilityTitle.textContent = '🎯 Probability of Next Restock';
-      probabilitySection.appendChild(probabilityTitle);
-
-      const probabilityGrid = document.createElement('div');
-      probabilityGrid.style.cssText = `
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 8px;
-        background: rgba(0, 0, 0, 0.2);
-        padding: 12px;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 235, 59, 0.2);
-      `;
-
-      // Format probability with proper handling of 0% and 100%
-      const formatProbability = (prob: number | null): string => {
-        if (prob === null) return 'N/A';
-        if (prob === 0) return '<1%';
-        if (prob === 100) return '>99%';
-        return `${prob}%`;
-      };
-
-      const probabilities = [
-        { label: 'Next 6h:', value: formatProbability(detailedStats.probabilityNext6h) },
-        { label: 'Next 24h:', value: formatProbability(detailedStats.probabilityNext24h) },
-        { label: 'Next 7d:', value: formatProbability(detailedStats.probabilityNext7d) },
-      ];
-
-      const probabilityIcons = ['⏰', '📅', '📆'];
-      for (let i = 0; i < probabilities.length; i++) {
-        const prob = probabilities[i]!;
-        const probItem = document.createElement('div');
-        probItem.style.cssText = `
-          text-align: center;
-          padding: 8px;
-          background: rgba(255, 255, 255, 0.03);
-          border-radius: 4px;
-          transition: all 0.2s;
-        `;
-        probItem.addEventListener('mouseenter', () => {
-          probItem.style.background = 'rgba(255, 235, 59, 0.15)';
-          probItem.style.transform = 'scale(1.05)';
-        });
-        probItem.addEventListener('mouseleave', () => {
-          probItem.style.background = 'rgba(255, 255, 255, 0.03)';
-          probItem.style.transform = '';
-        });
-        probItem.innerHTML = `
-          <div style="color: #888; font-size: 9px; margin-bottom: 4px;">
-            <span style="margin-right: 2px;">${probabilityIcons[i]}</span>${prob.label}
-          </div>
-          <div style="color: #FFEB3B; font-weight: 700; font-size: 13px;">${prob.value}</div>
-        `;
-        probabilityGrid.appendChild(probItem);
-      }
-
-      probabilitySection.appendChild(probabilityGrid);
-      detailedStatsSection.appendChild(probabilitySection);
-
-      // Variability and data quality
-      const metaSection = document.createElement('div');
-      metaSection.style.cssText = `
-        padding: 12px;
-        border-top: 2px solid rgba(255, 255, 255, 0.1);
-        margin-top: 8px;
-        background: rgba(0, 0, 0, 0.2);
-        border-radius: 6px;
-      `;
-
-      const metaTitle = document.createElement('div');
-      metaTitle.style.cssText = `
-        color: #CE93D8;
-        font-weight: 700;
-        margin-bottom: 8px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      `;
-      metaTitle.textContent = '💡 Data Quality';
-      metaSection.appendChild(metaTitle);
-
-      const variabilityBadge = document.createElement('span');
-      const badgeColors = {
-        'highly_variable': '#f44336',
-        'moderate': '#FF9800',
-        'consistent': '#4CAF50',
-      };
-      variabilityBadge.style.cssText = `
-        display: inline-block;
-        padding: 4px 10px;
-        background: ${badgeColors[detailedStats.variability]};
-        color: white;
-        border-radius: 12px;
-        font-size: 10px;
-        font-weight: 700;
-        margin-right: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      `;
-      variabilityBadge.textContent = detailedStats.variability.replace('_', ' ');
-
-      const sampleInfo = document.createElement('span');
-      sampleInfo.style.cssText = `
-        color: #888;
-        font-size: 10px;
-        background: rgba(255, 255, 255, 0.05);
-        padding: 4px 8px;
-        border-radius: 8px;
-      `;
-      sampleInfo.innerHTML = `📊 ${detailedStats.sampleSize} intervals analyzed`;
-
-      metaSection.appendChild(variabilityBadge);
-      metaSection.appendChild(sampleInfo);
-
-      const recommendationText = document.createElement('div');
-      recommendationText.style.cssText = `
-        color: #aaa;
-        font-size: 10px;
-        margin-top: 8px;
-        font-style: italic;
-        padding: 8px;
-        background: rgba(255, 255, 255, 0.03);
-        border-left: 3px solid #CE93D8;
-        border-radius: 0 4px 4px 0;
-      `;
-      recommendationText.innerHTML = `💬 ${detailedStats.recommendedApproach}`;
-      metaSection.appendChild(recommendationText);
-
-      detailedStatsSection.appendChild(metaSection);
-    } else {
-      const noStatsMsg = document.createElement('div');
-      noStatsMsg.style.cssText = 'color: #666; font-style: italic; text-align: center;';
-      noStatsMsg.textContent = 'Not enough data for detailed statistics';
-      detailedStatsSection.appendChild(noStatsMsg);
-    }
-
-    // Add detailed stats section to container and track it for global toggle
-    itemContainer.appendChild(detailedStatsSection);
-    allDetailedStatsSections.push(detailedStatsSection);
-
-    // History section (always create, show "No history" if empty)
-    const historySection = document.createElement('div');
-    historySection.style.cssText = `
+    // Details section (collapsible)
+    const detailsSection = document.createElement('div');
+    detailsSection.style.cssText = `
       display: none;
       padding: 12px;
-      background: rgba(0, 0, 0, 0.3);
+      background: linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(33, 150, 243, 0.1) 100%);
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       font-size: 10px;
     `;
 
-    if (history.length > 0) {
-      for (let i = 0; i < Math.min(3, history.length); i++) {
-        const record = history[i]!;
-        const predDate = record.predictedTime ? new Date(record.predictedTime) : null;
-        const actualDate = record.actualTime ? new Date(record.actualTime) : null;
+    // Show cooldown/practical minimum if active
+    if (prediction.cooldownActive || prediction.tooEarly) {
+      const waitSection = document.createElement('div');
+      waitSection.style.cssText = `
+        padding: 10px;
+        background: rgba(255, 152, 0, 0.1);
+        border-left: 3px solid #FF9800;
+        border-radius: 3px;
+        margin-bottom: 10px;
+      `;
 
-        const recordRow = document.createElement('div');
-        recordRow.style.cssText = `
-          margin-bottom: ${i < Math.min(3, history.length) - 1 ? '8px' : '0'};
-          padding-bottom: ${i < Math.min(3, history.length) - 1 ? '8px' : '0'};
-          border-bottom: ${i < Math.min(3, history.length) - 1 ? '1px solid rgba(255, 255, 255, 0.05)' : 'none'};
-        `;
-
-        const estimatedRow = document.createElement('div');
-        estimatedRow.style.cssText = 'color: #aaa; margin-bottom: 2px;';
-        if (predDate) {
-          estimatedRow.innerHTML = `
-            <span style="color: #42A5F5;">QPM Estimated:</span> ${predDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-          `;
-        } else {
-          estimatedRow.innerHTML = `
-            <span style="color: #666;">QPM Estimated:</span> <span style="font-style: italic;">No prediction yet</span>
-          `;
-        }
-
-        const actualRow = document.createElement('div');
-        if (actualDate) {
-          let accuracyText = '';
-          if (record.differenceMs !== null && record.differenceMs !== undefined) {
-            // Format difference as hh:mm:ss
-            const diffMs = Math.abs(record.differenceMs);
-            const hours = Math.floor(diffMs / (1000 * 60 * 60));
-            const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
-            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-            const diffText = `(${timeStr} range)`;
-            const diffColor = diffMs <= 45 * 60 * 1000
-              ? '#4CAF50'  // ≤45 min - Green
-              : diffMs <= 120 * 60 * 1000
-                ? '#FFEB3B'  // ≤2 hours - Yellow
-                : diffMs <= 240 * 60 * 1000
-                  ? '#FF9800'  // ≤4 hours - Orange
-                  : '#f44336';  // >4 hours - Red
-
-            accuracyText = `<span style="color: ${diffColor}; font-weight: 600;">${diffText}</span>`;
-          }
-
-          actualRow.style.cssText = 'color: #aaa;';
-          actualRow.innerHTML = `
-            <span style="color: #4CAF50;">Actual Restock:</span> ${actualDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-            ${accuracyText}
-          `;
-        } else {
-          actualRow.style.cssText = 'color: #666;';
-          actualRow.textContent = 'Actual Restock: Pending...';
-        }
-
-        recordRow.appendChild(estimatedRow);
-        recordRow.appendChild(actualRow);
-        historySection.appendChild(recordRow);
+      if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
+        const cooldownText = document.createElement('div');
+        cooldownText.style.cssText = 'color: #f44336; font-weight: 600; margin-bottom: 4px;';
+        cooldownText.textContent = `⏳ Hard cooldown: ${prediction.hardCooldownRemaining.toFixed(1)}h remaining`;
+        waitSection.appendChild(cooldownText);
       }
-    } else {
-      // No history yet
-      const noHistoryMsg = document.createElement('div');
-      noHistoryMsg.style.cssText = 'color: #666; font-style: italic; text-align: center;';
-      noHistoryMsg.textContent = 'No prediction history yet. Wait for a restock to occur!';
-      historySection.appendChild(noHistoryMsg);
+
+      if (prediction.tooEarly && prediction.practicalMinimumRemaining !== null) {
+        const practicalText = document.createElement('div');
+        practicalText.style.cssText = 'color: #FF9800; font-weight: 600;';
+        const hours = prediction.practicalMinimumRemaining.toFixed(1);
+        const days = (prediction.practicalMinimumRemaining / 24).toFixed(1);
+        practicalText.textContent = `⏰ Practical minimum: ${days}d (${hours}h) remaining`;
+        waitSection.appendChild(practicalText);
+
+        const explanation = document.createElement('div');
+        explanation.style.cssText = 'color: #888; font-size: 9px; margin-top: 4px; font-style: italic;';
+        explanation.textContent = 'Based on historical intervals - prevents false alarms';
+        waitSection.appendChild(explanation);
+      }
+
+      detailsSection.appendChild(waitSection);
     }
 
-    itemContainer.appendChild(historySection);
+    // Show correlation signals
+    if (prediction.correlationSignals && prediction.correlationSignals.length > 0) {
+      const correlationSection = document.createElement('div');
+      correlationSection.style.cssText = `
+        padding: 10px;
+        background: rgba(206, 147, 216, 0.1);
+        border-left: 3px solid #CE93D8;
+        border-radius: 3px;
+        margin-bottom: 10px;
+      `;
+
+      const correlationTitle = document.createElement('div');
+      correlationTitle.style.cssText = 'color: #CE93D8; font-weight: 700; margin-bottom: 6px;';
+      correlationTitle.textContent = '🔗 Correlation Signals';
+      correlationSection.appendChild(correlationTitle);
+
+      for (const signal of prediction.correlationSignals) {
+        const signalRow = document.createElement('div');
+        signalRow.style.cssText = 'color: #fff; margin-bottom: 4px;';
+        const probabilityPercent = (signal.probability * 100).toFixed(0);
+        signalRow.innerHTML = `<span style="color: #FFD700;">Sunflower detected</span> → <span style="color: ${rareItem.color};">${rareItem.name} possible</span> <span style="color: #CE93D8;">(${probabilityPercent}%)</span>`;
+        correlationSection.appendChild(signalRow);
+
+        const timeAgo = document.createElement('div');
+        timeAgo.style.cssText = 'color: #888; font-size: 9px; margin-left: 12px;';
+        const hoursAgo = ((Date.now() - signal.detectedAt) / (1000 * 60 * 60)).toFixed(1);
+        timeAgo.textContent = `Detected ${hoursAgo}h ago`;
+        correlationSection.appendChild(timeAgo);
+      }
+
+      detailsSection.appendChild(correlationSection);
+    }
+
+    // Show next windows
+    if (prediction.nextWindows.length > 0) {
+      const windowsSection = document.createElement('div');
+      windowsSection.style.cssText = `
+        padding: 10px;
+        background: rgba(66, 165, 245, 0.1);
+        border-left: 3px solid #42A5F5;
+        border-radius: 3px;
+        margin-bottom: 10px;
+      `;
+
+      const windowsTitle = document.createElement('div');
+      windowsTitle.style.cssText = 'color: #42A5F5; font-weight: 700; margin-bottom: 6px;';
+      windowsTitle.textContent = '📅 Next Possible Windows';
+      windowsSection.appendChild(windowsTitle);
+
+      for (let i = 0; i < Math.min(5, prediction.nextWindows.length); i++) {
+        const window = prediction.nextWindows[i]!;
+        const windowRow = document.createElement('div');
+        windowRow.style.cssText = `
+          padding: 6px 8px;
+          margin-bottom: 4px;
+          background: rgba(0, 0, 0, 0.3);
+          border-radius: 3px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        `;
+
+        const timeText = document.createElement('span');
+        timeText.style.cssText = 'color: #fff;';
+        timeText.textContent = formatTimeWindow(window);
+
+        const confidenceBadge = document.createElement('span');
+        confidenceBadge.style.cssText = `
+          padding: 2px 6px;
+          border-radius: 8px;
+          font-size: 8px;
+          font-weight: 700;
+          text-transform: uppercase;
+        `;
+        if (window.confidence === 'high') {
+          confidenceBadge.textContent = 'HIGH';
+          confidenceBadge.style.cssText += 'background: #4CAF50; color: white;';
+        } else if (window.confidence === 'medium') {
+          confidenceBadge.textContent = 'MED';
+          confidenceBadge.style.cssText += 'background: #FF9800; color: white;';
+        } else {
+          confidenceBadge.textContent = 'LOW';
+          confidenceBadge.style.cssText += 'background: #666; color: white;';
+        }
+
+        windowRow.appendChild(timeText);
+        windowRow.appendChild(confidenceBadge);
+        windowsSection.appendChild(windowRow);
+      }
+
+      detailsSection.appendChild(windowsSection);
+    }
+
+    // Show monitoring schedule
+    if (prediction.monitoringSchedule) {
+      const scheduleSection = document.createElement('div');
+      scheduleSection.style.cssText = `
+        padding: 10px;
+        background: rgba(76, 175, 80, 0.1);
+        border-left: 3px solid #4CAF50;
+        border-radius: 3px;
+        margin-bottom: 10px;
+      `;
+
+      const scheduleTitle = document.createElement('div');
+      scheduleTitle.style.cssText = 'color: #4CAF50; font-weight: 700; margin-bottom: 6px;';
+      scheduleTitle.textContent = '⏰ Monitoring Schedule';
+      scheduleSection.appendChild(scheduleTitle);
+
+      const scheduleText = document.createElement('div');
+      scheduleText.style.cssText = 'color: #aaa; margin-bottom: 6px;';
+      scheduleText.textContent = prediction.monitoringSchedule.message;
+      scheduleSection.appendChild(scheduleText);
+
+      const hoursContainer = document.createElement('div');
+      hoursContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px;';
+
+      for (const hour of prediction.monitoringSchedule.optimalHours) {
+        const hourBadge = document.createElement('span');
+        hourBadge.style.cssText = `
+          padding: 3px 6px;
+          background: rgba(76, 175, 80, 0.3);
+          border: 1px solid #4CAF50;
+          border-radius: 4px;
+          font-size: 9px;
+          font-weight: 600;
+          color: #4CAF50;
+        `;
+        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+        const period = hour >= 12 ? 'PM' : 'AM';
+        hourBadge.textContent = `${hour12}${period}`;
+        hoursContainer.appendChild(hourBadge);
+      }
+
+      scheduleSection.appendChild(hoursContainer);
+      detailsSection.appendChild(scheduleSection);
+    }
+
+    // History section (reuse from old system)
+    if (history.length > 0) {
+      const historySection = document.createElement('div');
+      historySection.style.cssText = `
+        padding: 10px;
+        background: rgba(0, 0, 0, 0.3);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+      `;
+
+      const historyTitle = document.createElement('div');
+      historyTitle.style.cssText = 'color: #42A5F5; font-weight: 700; margin-bottom: 6px;';
+      historyTitle.textContent = '📊 Recent History';
+      historySection.appendChild(historyTitle);
+
+      for (let i = 0; i < Math.min(3, history.length); i++) {
+        const record = history[i]!;
+        const actualDate = record.actualTime ? new Date(record.actualTime) : null;
+
+        if (actualDate) {
+          const historyRow = document.createElement('div');
+          historyRow.style.cssText = `
+            color: #aaa;
+            font-size: 9px;
+            margin-bottom: 4px;
+            padding: 4px 6px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 3px;
+          `;
+          historyRow.innerHTML = `
+            <span style="color: #4CAF50;">✓</span> ${actualDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
+          `;
+          historySection.appendChild(historyRow);
+        }
+      }
+
+      detailsSection.appendChild(historySection);
+    }
+
+    itemContainer.appendChild(detailsSection);
 
     // Toggle expand/collapse
     let isExpanded = false;
     itemRow.addEventListener('click', () => {
       isExpanded = !isExpanded;
-      historySection.style.display = isExpanded ? 'block' : 'none';
+      detailsSection.style.display = isExpanded ? 'block' : 'none';
       expandIndicator.style.transform = isExpanded ? 'rotate(180deg)' : '';
     });
 
@@ -894,28 +741,6 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   }
 
   section.appendChild(itemsList);
-
-  if (countdownEntries.length > 0) {
-    updateCountdowns();
-    if (state.countdownInterval !== null) {
-      clearInterval(state.countdownInterval);
-    }
-    state.countdownInterval = window.setInterval(updateCountdowns, 1000);
-  }
-
-  // Wire up global toggle button to show/hide all detailed stats sections
-  globalToggleBtn.addEventListener('click', () => {
-    isGlobalStatsExpanded = !isGlobalStatsExpanded;
-
-    // Toggle all detailed stats sections
-    for (const statsSection of allDetailedStatsSections) {
-      statsSection.style.display = isGlobalStatsExpanded ? 'block' : 'none';
-    }
-
-    // Update button appearance
-    globalToggleBtn.textContent = isGlobalStatsExpanded ? '📊 Hide Detailed Stats' : '📊 Show Detailed Stats';
-    globalToggleBtn.style.background = isGlobalStatsExpanded ? 'rgba(66, 165, 245, 0.25)' : 'rgba(66, 165, 245, 0.15)';
-  });
 
   return section;
 }

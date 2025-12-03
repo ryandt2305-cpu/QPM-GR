@@ -4,6 +4,14 @@
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { notify } from '../core/notifications';
+import {
+  predictItemWindows,
+  getMonitoringAlerts,
+  formatTimeWindow,
+  getItemConfig,
+  type WindowBasedPrediction,
+  type PredictionWindow
+} from './shopRestockPredictions';
 
 const STORAGE_KEY_RESTOCKS = 'qpm.shopRestocks.v1';
 const STORAGE_KEY_CONFIG = 'qpm.shopRestockConfig.v1';
@@ -17,7 +25,29 @@ const TRACKED_PREDICTION_ITEMS = ['Mythical Eggs', 'Sunflower', 'Starweaver', 'D
 
 // Performance optimization: Cache for item intervals to avoid recalculating
 let itemIntervalsCache: Map<string, number[]> | null = null;
-let itemIntervalsCacheVersion: number = 0;
+let itemIntervalsCacheHash: string = '';
+let itemIntervalsCacheTimestamp: number = 0;
+const CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes (increased from 5)
+
+// Performance optimization: Cache for prediction stats to avoid expensive recalculations
+let predictionStatsCache: Map<string, DetailedPredictionStats> | null = null;
+let predictionStatsCacheHash: string = '';
+let predictionStatsCacheTimestamp: number = 0;
+
+// Performance optimization: Cache for item stats to avoid recalculating on every render
+let itemStatsCache: Map<string, ItemStats> | null = null;
+let itemStatsCacheHash: string = '';
+let itemStatsCacheTimestamp: number = 0;
+
+// Performance optimization: Cache for window predictions to avoid expensive recalculations
+let windowPredictionsCache: Map<string, WindowBasedPrediction> | null = null;
+let windowPredictionsCacheHash: string = '';
+let windowPredictionsCacheTimestamp: number = 0;
+
+// Performance optimization: Cache for monitoring alerts
+let monitoringAlertsCache: Array<{ itemName: string; message: string; urgency: 'high' | 'medium' | 'low' }> | null = null;
+let monitoringAlertsCacheHash: string = '';
+let monitoringAlertsCacheTimestamp: number = 0;
 
 /**
  * Restock event data structure
@@ -450,9 +480,25 @@ export function getRestocksInRange(startTime: number, endTime: number): RestockE
 }
 
 /**
- * Calculate item statistics
+ * Calculate item statistics (with aggressive caching)
  */
 export function calculateItemStats(): Map<string, ItemStats> {
+  // Check cache first
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const now = Date.now();
+  const cacheAge = now - itemStatsCacheTimestamp;
+
+  // Return cached result if data hasn't changed and cache is fresh
+  if (itemStatsCache &&
+      itemStatsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    return new Map(itemStatsCache); // Return copy to prevent mutation
+  }
+
+  // Rebuild cache
   const statsMap = new Map<string, ItemStats>();
   const totalRestocks = restockEvents.length;
 
@@ -495,7 +541,12 @@ export function calculateItemStats(): Map<string, ItemStats> {
     stats.rarity = getItemRarity(stats.name);
   }
 
-  return statsMap;
+  // Update cache
+  itemStatsCache = statsMap;
+  itemStatsCacheHash = currentHash;
+  itemStatsCacheTimestamp = now;
+
+  return new Map(statsMap); // Return copy to prevent mutation
 }
 
 /**
@@ -646,13 +697,24 @@ function percentile(arr: number[], p: number): number {
  * Call this once before processing many items to avoid O(n*m) complexity
  */
 function buildItemIntervalsCache(): void {
-  // Only rebuild if data changed
-  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
+  // Create hash of event data to detect changes (not just length)
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const now = Date.now();
+  const cacheAge = now - itemIntervalsCacheTimestamp;
+
+  // Only rebuild if data changed OR cache expired
+  if (itemIntervalsCache &&
+      itemIntervalsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
     return;
   }
 
   itemIntervalsCache = new Map();
-  itemIntervalsCacheVersion = restockEvents.length;
+  itemIntervalsCacheHash = currentHash;
+  itemIntervalsCacheTimestamp = now;
 
   // Build appearance map for all items at once
   const appearancesMap = new Map<string, number[]>();
@@ -708,16 +770,7 @@ function buildItemIntervalsCache(): void {
 }
 
 function getItemIntervals(itemName: string): number[] {
-  // Check cache first (performance optimization for large datasets)
-  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
-    const cached = itemIntervalsCache.get(itemName);
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
-
-  // If not in cache, build cache for all items
-  // (this happens on first call or after data changes)
+  // Always use buildItemIntervalsCache - it checks if rebuild is needed
   buildItemIntervalsCache();
 
   return itemIntervalsCache?.get(itemName) ?? [];
@@ -910,6 +963,30 @@ export interface DetailedPredictionStats {
  * This provides comprehensive data for the "Show Detailed Stats" UI toggle
  */
 export function getDetailedPredictionStats(itemName: string): DetailedPredictionStats {
+  // Check cache first
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const cacheCheckTime = Date.now();
+  const cacheAge = cacheCheckTime - predictionStatsCacheTimestamp;
+
+  if (predictionStatsCache &&
+      predictionStatsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    const cached = predictionStatsCache.get(itemName);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  // Initialize cache if needed
+  if (!predictionStatsCache || predictionStatsCacheHash !== currentHash || cacheAge >= CACHE_MAX_AGE_MS) {
+    predictionStatsCache = new Map();
+    predictionStatsCacheHash = currentHash;
+    predictionStatsCacheTimestamp = cacheCheckTime;
+  }
+
   const defaultStats: DetailedPredictionStats = {
     itemName,
     predictedTime: null,
@@ -1018,7 +1095,7 @@ export function getDetailedPredictionStats(itemName: string): DetailedPrediction
   // Get predicted time
   const predictedTime = predictItemNextAppearance(itemName);
 
-  return {
+  const result: DetailedPredictionStats = {
     itemName,
     predictedTime,
     confidence,
@@ -1037,6 +1114,11 @@ export function getDetailedPredictionStats(itemName: string): DetailedPrediction
     variability,
     recommendedApproach,
   };
+
+  // Cache the result
+  predictionStatsCache?.set(itemName, result);
+
+  return result;
 }
 
 /**
@@ -1173,6 +1255,31 @@ export function clearAllRestocks(): void {
   predictionHistory.clear();
   activePredictions.clear();
 
+  // Clear interval cache
+  itemIntervalsCache = null;
+  itemIntervalsCacheHash = '';
+  itemIntervalsCacheTimestamp = 0;
+
+  // Clear prediction stats cache
+  predictionStatsCache = null;
+  predictionStatsCacheHash = '';
+  predictionStatsCacheTimestamp = 0;
+
+  // Clear item stats cache
+  itemStatsCache = null;
+  itemStatsCacheHash = '';
+  itemStatsCacheTimestamp = 0;
+
+  // Clear window predictions cache
+  windowPredictionsCache = null;
+  windowPredictionsCacheHash = '';
+  windowPredictionsCacheTimestamp = 0;
+
+  // Clear monitoring alerts cache
+  monitoringAlertsCache = null;
+  monitoringAlertsCacheHash = '';
+  monitoringAlertsCacheTimestamp = 0;
+
   // Clear only shop restock specific storage keys by setting empty values
   storage.set(STORAGE_KEY_RESTOCKS, []);
   storage.set(STORAGE_KEY_CONFIG, { importedFiles: [], watchedItems: [] });
@@ -1247,3 +1354,87 @@ export function removeWatchedItem(itemName: string): void {
   saveRestocks();
   notifyListeners();
 }
+
+/**
+ * Get window-based predictions for tracked items (with caching)
+ */
+export function getWindowPredictions(): Map<string, WindowBasedPrediction> {
+  // Generate cache key based ONLY on data changes (not time)
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : 'empty';
+
+  const now = Date.now();
+  const cacheAge = now - windowPredictionsCacheTimestamp;
+
+  // Return cached result if data hasn't changed and cache is reasonably fresh
+  // Only recalculate if data changed OR cache is older than 15 minutes
+  if (windowPredictionsCache &&
+      windowPredictionsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    return new Map(windowPredictionsCache); // Return copy to prevent mutation
+  }
+
+  // Rebuild cache (only when data changes or cache expires)
+  const predictions = new Map<string, WindowBasedPrediction>();
+
+  for (const itemName of TRACKED_PREDICTION_ITEMS) {
+    const stats = calculateItemStats();
+    const itemStats = stats.get(itemName);
+    const lastSeen = itemStats?.lastSeen ?? null;
+
+    // Get recent events (last 7 days) for correlation detection
+    const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+    const recentEvents = restockEvents.filter(e => e.timestamp >= sevenDaysAgo);
+
+    // Pass both recent events (for correlations) and all events (for statistical predictions)
+    const prediction = predictItemWindows(itemName, lastSeen, recentEvents, restockEvents);
+    predictions.set(itemName, prediction);
+  }
+
+  // Update cache
+  windowPredictionsCache = predictions;
+  windowPredictionsCacheHash = currentHash;
+  windowPredictionsCacheTimestamp = now;
+
+  return new Map(predictions); // Return copy to prevent mutation
+}
+
+/**
+ * Get current monitoring alerts (with caching)
+ */
+export function getCurrentMonitoringAlerts(): Array<{
+  itemName: string;
+  message: string;
+  urgency: 'high' | 'medium' | 'low';
+}> {
+  // Generate cache key based on predictions + current hour (not minute)
+  // Alerts check for active windows, which are hour-based, so we only need to recalculate on hour changes
+  const now = Date.now();
+  const currentHour = Math.floor(now / (60 * 60 * 1000)); // Round to hour
+  const currentHash = windowPredictionsCacheHash + `-${currentHour}`;
+
+  const cacheAge = now - monitoringAlertsCacheTimestamp;
+
+  // Return cached result if predictions and hour haven't changed
+  if (monitoringAlertsCache &&
+      monitoringAlertsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    return [...monitoringAlertsCache]; // Return copy to prevent mutation
+  }
+
+  // Rebuild cache (only when predictions change or hour changes)
+  const predictions = getWindowPredictions();
+  const alerts = getMonitoringAlerts(predictions);
+
+  // Update cache
+  monitoringAlertsCache = alerts;
+  monitoringAlertsCacheHash = currentHash;
+  monitoringAlertsCacheTimestamp = now;
+
+  return [...alerts]; // Return copy to prevent mutation
+}
+
+// Re-export types and utilities from predictions module
+export type { WindowBasedPrediction, PredictionWindow };
+export { formatTimeWindow, getItemConfig };

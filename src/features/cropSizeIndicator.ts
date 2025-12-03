@@ -388,8 +388,8 @@ function injectCropSizeInfo(element: Element): void {
     return; // Can't inject without container
   }
 
-  // Format the size text - simplified display
-  const size = Math.round(sizeInfo.sizePercent);
+  // Format the size text - floor to show accurate size (game rounds internally)
+  const size = Math.floor(sizeInfo.sizePercent);
   const sizeText = `Size: ${size}`;
   
   // Use Aries-style injection: reuse span, structured DOM

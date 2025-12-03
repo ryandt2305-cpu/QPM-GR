@@ -714,6 +714,51 @@ const QPM_DEBUG_API = {
   testPetData: testPetData,
   testComparePets: testComparePets,
   testAbilityDefinitions: testAbilityDefinitions,
+
+  // === ARIES MOD INTEGRATION DEBUG ===
+  debugAriesIntegration: () => {
+    console.log('=== Aries Mod Integration Debug ===\n');
+
+    // Check different global locations
+    const checks = [
+      { name: 'window.PetsService', value: (window as any).PetsService },
+      { name: 'window.QWS', value: (window as any).QWS },
+      { name: 'window.QWS?.PetsService', value: (window as any).QWS?.PetsService },
+      { name: 'unsafeWindow.PetsService', value: (typeof unsafeWindow !== 'undefined' ? (unsafeWindow as any).PetsService : undefined) },
+      { name: 'unsafeWindow.QWS', value: (typeof unsafeWindow !== 'undefined' ? (unsafeWindow as any).QWS : undefined) },
+    ];
+
+    console.log('Checking for PetsService in various locations:\n');
+    checks.forEach(check => {
+      if (check.value !== undefined) {
+        console.log(`✅ ${check.name}:`, check.value);
+        if (check.value && typeof check.value === 'object') {
+          console.log(`   Properties:`, Object.keys(check.value));
+          if (typeof check.value.getTeams === 'function') {
+            try {
+              const teams = check.value.getTeams();
+              console.log(`   Teams (${Array.isArray(teams) ? teams.length : 'N/A'}):`, teams);
+            } catch (e) {
+              console.log(`   Error calling getTeams():`, e);
+            }
+          }
+        }
+      } else {
+        console.log(`❌ ${check.name}: Not found`);
+      }
+    });
+
+    console.log('\n=== Instructions ===');
+    console.log('If PetsService is not detected:');
+    console.log('1. Make sure Aries mod is installed and running');
+    console.log('2. Check that both scripts are loaded (QPM and Aries)');
+    console.log('3. Try reloading the page');
+    console.log('4. Check console for "[Aries]" prefixed logs from QPM');
+    console.log('\nIf you see PetsService but it\'s not working:');
+    console.log('• Open Pet Hub (QPM menu) and go to "3v3 Compare" tab');
+    console.log('• Click the "🔄 Refresh" button in the Aries section');
+    console.log('• Check console for detection logs');
+  },
 };
 
 shareGlobal('QPM', QPM_DEBUG_API);
@@ -726,6 +771,7 @@ log('   • QPM.debugPets() - Debug active pets');
 log('   • QPM.testPetData() - Get detailed stats for all active pets');
 log('   • QPM.testComparePets(0, 1) - Compare two pets side-by-side');
 log('   • QPM.testAbilityDefinitions() - List all ability definitions');
+log('   • QPM.debugAriesIntegration() - Check Aries mod detection status');
 log('   ? QPM.showPetSpriteGrid() - Overlay pet sprite sheet with tile numbers');
 log('   ? QPM_DEBUG_API.showAllSpriteSheets() - Overlay all loaded sprite sheets');
 

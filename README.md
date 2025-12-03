@@ -1,93 +1,162 @@
 # Quinoa Pet Manager: General Release (QPM-GR)
 
-**QPM-GR** (Quinoa Pet Manager – General Release) is an information and analytics companion for the browser game **Magic Garden**.  
-It plugs into your existing Magic Garden tooling and surfaces detailed pet and garden data so you can make better decisions, optimise profit, and understand what your pets are actually doing over time.
+**QPM-GR** is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, and tracking utilities. The project is currently in **ALPHA** - expect frequent updates and improvements as new features are integrated.
 
-> **Status:** ALPHA – not optimised, very WIP, lots of spaghetti. Expect rough edges and breaking changes.
+**Current Version:** 2.0.0
+
+### Focus Areas
+
+- **Pet Hub Analytics**: Compare pets, highlight best stats, surface ability math, and integrate with Aries Mod presets
+- **Inventory Controls**: Auto-favorite, crop locking, journal completion helpers, and turtle timers
+- **Shop & Weather Tooling**: Restock tracking with predictions, mutation reminders, weather data, and XP tracking
 
 ---
 
 ## Key Features
 
+### 🐾 Pet Hub & Analytics
 
-### 🐾 Pet Overview & Analytics
-- View all pets with their rarity, level, and ability.
-- See real ability uptime: procs per minute/hour based on actual behaviour.
-- Compare pets in real gameplay conditions
+**Pet Overview**
+- View all active pets with rarity, level, and abilities
+- Real-time ability uptime tracking (procs per minute/hour)
+- Compare pets in actual gameplay conditions
+- Integration with Aries Mod preset data when available
 
-### ⭐ Auto Favourite (Smart Pet/Produce Favouriting)
-- Automatically favourites pets or produce based on user configured variables.
+**Pet Comparison**
+- Side-by-side stat comparison
+- Ability effectiveness analysis
+- Best slot identification
+- Visual highlighting of superior stats
 
-### 🧺 Bulk Inventory Crop Favouriting (Crop-Type Locking)
-- Instantly favourite large groups of crops in your inventory.
-- Useful for:
-  - Cleaning up messy inventories
-  - Locking all crops of the same type (e.g., all Carrots or all Strawberries)
-  - Preventing accidental selling or discarding
-- Saves a huge amount of manual clicking.
+### ⭐ Auto Favourite
+
+Smart auto-favoriting system for pets and produce based on configurable rules:
+- Automatically favorite pets by rarity, level, or ability
+- Protect valuable crops from accidental selling
+- Customizable filtering rules
+- Real-time updates as items are acquired
+
+### 🧺 Crop-Type Locking (Bulk Favoriting)
+
+Instantly favorite large groups of crops in your inventory:
+- Lock all crops of the same type (e.g., all Carrots or Strawberries)
+- Prevent accidental selling or discarding
+- Clean up messy inventories quickly
+- Saves massive amounts of manual clicking
 
 ### 📘 Journal Checker
-- Identifies seeds/crops you still need for journal completion.
-- Shows missing entries at a glance.
-- Helps you plan planting cycles to finish your journal efficiently.
+
+Complete your Magic Garden journal efficiently:
+- Identifies missing seeds/crops for journal completion
+- Shows progress for produce (11 crop types) and pets
+- Smart Tips: recommends what to plant/hatch next
+- Visual progress indicators
+- Rainbow variant display when all 11 crop types are collected
+- Sprite-based display for crops and pets
 
 ### 🌈 Ability Tracker
-- Logs every time a pet ability triggers.
-- Shows total procs, timing between procs, and which pets contribute the most.
-- Great for comparing ability effectiveness 
-- Perfect for finding your most profitable pet setups
 
+Comprehensive ability logging and analysis:
+- Logs every pet ability trigger in real-time
+- Shows total procs, timing between procs, and contribution by pet
+- Compare ability effectiveness across different pets
+- Identify most profitable pet setups
+- Historical ability data for optimization
 
 ### 🛒 Shop Restock Tracker
-- Tracks all Magic Garden shop restocks.
-- Based off the data, it can predict when the next restock for every item will be
-- Find out when rare seeds and eggs might drop
+
+Advanced shop restock tracking with predictive analytics:
+- **Live Tracking**: Automatically detects shop restocks in real-time
+- **Discord Import**: Import historical restock data from Discord HTML exports
+- **Dual Prediction System**:
+  - **Time-based Predictions**: Based on average intervals between restocks
+  - **Window-based Predictions**: Statistical analysis of restock patterns
+- **Item Analytics**: Detailed statistics for each shop item (appearance rate, average quantity, last seen)
+- **Smart Alerts**: Countdown timers for upcoming restocks
+- **Tracked Items**: Mythical Eggs, Starweaver, Dawnbinder, Moonbinder, Sunflower, and more
+- **Data Management**: Export data as HTML or clear restock history
+
+**Dashboard Features**:
+- Quick-view cards for key items (Starweaver, Dawnbinder, Moonbinder, Mythical Eggs)
+- Last seen timestamps with relative time display
+- Clear Restock Data button for easy data management
 
 ### 🐢 Turtle Timer
-- A small utility timer specifically for Turtle pets, calculating plant growth, egg growth, and food support
 
+Specialized utility timer for Turtle pets:
+- Plant growth calculations
+- Egg growth timing
+- Food support tracking
+- Optimized for Turtle-specific mechanics
 
 ### 🧠 XP Tracker
-- Tracks your XP gained during the session.
-Displays:
-  XP per minute 
-  XP per hour
-  Total XP gained
-  Session runtime
 
-Helps compare pets, garden layouts, and farming setups for leveling efficiency.
+Track your leveling efficiency during farming sessions:
+- **Real-time XP tracking**: XP per minute, XP per hour
+- **Total XP gained**: Cumulative session tracking
+- **Session runtime**: Track how long you've been farming
+- **Comparison tool**: Compare different pets, layouts, and farming strategies
+
+### 🔒 Crop Size Indicator
+
+Accurate crop size display for garden management:
+- Shows exact crop size percentage (uses floor calculation to match game's internal rounding)
+- Visual tooltips on crops
+- Helps optimize harvest timing
+- Size-based crop sorting
+
+### 🌦️ Weather Hub
+
+Weather-related features and tracking:
+- Current weather display
+- Weather effect tracking for mutations
+- Weather-dependent ability monitoring
+- Mutation opportunity alerts
+
+### 🔔 Notifications & Alerts
+
+Smart notification system:
+- Mutation opportunities
+- Shop restock alerts
+- Harvest reminders
+- Pet ability milestones
+- Customizable notification preferences
+
 ---
-
-## Repository Layout
-
-- `src/`
-  - TypeScript source for the main QPM-GR logic and UI.
-  - Built with Vite + TypeScript for a fast dev loop and simple bundling.
-- `scripts/`
-  - Helper / maintenance scripts for working with the project.
-- `discover-seed-ids.js`
-  - Utility to probe the game and discover internal **seed IDs** for mapping purposes.
-- `discover-shop-ids.js`
-  - Utility to inspect the **shop** and log internal IDs / structures.
-- `websocket-final-discovery.js`
-  - Helper for exploring Magic Garden’s WebSocket traffic and structure.
-- `PUSH_TO_QPM-GR.sh`
-  - Local convenience script to push this project to the `QPM-GR` GitHub repo.
-- `package.json`, `tsconfig.json`, `vite.config.ts`
-  - Standard TypeScript/Vite project configuration.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Node.js** (LTS or later recommended)
-- **npm** or **pnpm** or **yarn**
-- A working Magic Garden setup (browser) plus whatever loader/overlay you use to inject custom scripts (e.g. Tampermonkey, MGModLoader, custom Electron wrapper, etc.).
-
-### 1. Clone the Repository
+## Build & Test
 
 ```bash
 git clone https://github.com/ryandt2305-cpu/QPM-GR.git
 cd QPM-GR
+npm install
+
+# iterative build during development
+npm run dev
+
+# production bundle + userscript wrapper
+npm run build:dist
+```
+
+- The Tampermonkey-ready bundle is emitted to `dist/QPM.user.js`.
+- `scripts/build-userscript.js` wraps the Vite IIFE output with the metadata header.
+- `scraped-data/*.json` feeds TypeScript data helpers at runtime—don’t remove those files unless you regenerate them.
+
+---
+
+## Minimal Repo Layout
+
+- `src/` – all runtime TypeScript (core, features, UI, stores, data, utils, types).
+- `scripts/` – build pipeline and data maintenance scripts (`build-userscript`, `scrape-game-data`, etc.).
+- `scraped-data/` – JSON payloads consumed by the app (pets, crops, abilities reports).
+- `dist/` – build artifacts that ship to users.
+- `DOCUMENTATION.md` – the single consolidated knowledge base containing every prior guide, plan, and research log.
+
+Everything else has been trimmed so the repository only carries what’s required to build, test, or reason about the userscript.
+
+---
+
+## Need Details?
+
+- Architectural notes, historical feature plans, rare restock heatmaps, testing instructions, Firebase setup, and archived dev utilities now live inside [`DOCUMENTATION.md`](DOCUMENTATION.md).
+- Legacy helper snippets such as the atom inspector, WebSocket discovery probe, and rainbow-effect reverse engineering script have been preserved in that file under **“Archived Dev Utilities.”**
+

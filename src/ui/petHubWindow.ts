@@ -9,18 +9,9 @@ import { getInventoryItems } from '../store/inventory';
 import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petMutationRenderer';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
-
-function formatNumber(value: number): string {
-  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toFixed(0);
-}
-
-function formatCoins(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return '—';
-  return `${formatNumber(value)}`;
-}
+import { getPetMetadata } from '../data/petMetadata';
+import { getHungerDepletionTime } from '../data/petHungerDepletion';
+import { formatNumber, formatCoins } from '../utils/formatters';
 
 function formatAbilityValue(ability: AbilityStats): { valueText: string; procsText: string; probText: string } {
   const probText = ability.effectiveProbability != null ? `${ability.effectiveProbability.toFixed(1)}%` : '—';
@@ -78,6 +69,208 @@ function scaleAbilityToMax(ability: AbilityStats, currentStr: number | null, max
   };
 }
 
+function formatWeight(weight: number | null | undefined): string {
+  if (weight == null || Number.isNaN(weight)) return '—';
+  if (weight >= 1000) return `${(weight / 1000).toFixed(1)} t`;
+  if (weight >= 10) return `${weight.toFixed(0)} kg`;
+  if (weight >= 1) return `${weight.toFixed(1)} kg`;
+  return `${weight.toFixed(2)} kg`;
+}
+
+interface AbilityColorInfo {
+  base: string;
+  glow: string;
+  text: string;
+  border: string;
+  label: string;
+}
+
+const ABILITY_COLOR_MAP = {
+  plantGrowth: { base: '#2E7D32', glow: 'rgba(46,125,50,0.65)', text: '#C8E6C9', border: 'rgba(200,230,201,0.4)', label: 'Plant Growth' },
+  eggGrowth: { base: '#FF7043', glow: 'rgba(255,112,67,0.65)', text: '#FFE0B2', border: 'rgba(255,224,178,0.45)', label: 'Egg Growth' },
+  xp: { base: '#7C4DFF', glow: 'rgba(124,77,255,0.65)', text: '#EDE7F6', border: 'rgba(237,231,246,0.45)', label: 'XP' },
+  coins: { base: '#FFB300', glow: 'rgba(255,179,0,0.65)', text: '#FFF8E1', border: 'rgba(255,248,225,0.45)', label: 'Coins' },
+  misc: { base: '#90A4AE', glow: 'rgba(144,164,174,0.6)', text: '#ECEFF1', border: 'rgba(236,239,241,0.4)', label: 'Ability' },
+  hunger: { base: '#26C6DA', glow: 'rgba(38,198,218,0.65)', text: '#E0F7FA', border: 'rgba(224,247,250,0.45)', label: 'Hunger' },
+  mutation: { base: '#EC407A', glow: 'rgba(236,64,122,0.6)', text: '#FCE4EC', border: 'rgba(252,228,236,0.45)', label: 'Mutation' },
+  rainbow: { base: '#7C4DFF', glow: 'rgba(124,77,255,0.7)', text: '#F3E5F5', border: 'rgba(243,229,245,0.55)', label: 'Rainbow' },
+  gold: { base: '#FDD835', glow: 'rgba(253,216,53,0.75)', text: '#FFFDE7', border: 'rgba(255,253,231,0.55)', label: 'Gold' },
+  default: { base: '#5E5CE6', glow: 'rgba(94,92,230,0.5)', text: '#E0E7FF', border: 'rgba(224,231,255,0.4)', label: 'Ability' },
+} satisfies Record<string, AbilityColorInfo>;
+
+// Exact color mapping from Magic Garden wiki
+function getAbilityColorByName(abilityName: string): string {
+  const name = (abilityName || '').toLowerCase();
+
+  // Rainbow and Gold special abilities - use gradients
+  if (name.includes('rainbow')) {
+    return 'linear-gradient(135deg, #FF0000 0%, #FF7F00 16.67%, #FFFF00 33.33%, #00FF00 50%, #0000FF 66.67%, #4B0082 83.33%, #9400D3 100%)';
+  }
+  if (name.includes('gold') || name.includes('golden')) {
+    return 'linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)';
+  }
+
+  // Crop abilities - Orange/Red tones
+  if (name.includes('crop eater')) return '#FF5722';
+  if (name.includes('crop refund')) return '#FF5722';
+  if (name.includes('crop mutation boost')) return '#E91E63';
+  if (name.includes('crop size boost')) return '#4CAF50';
+
+  // Seed abilities - Orange
+  if (name.includes('seed finder')) return '#FF9800';
+
+  // Coin abilities - Yellow/Gold
+  if (name.includes('coin finder')) return '#FFD700';
+
+  // Egg abilities - Purple/Magenta
+  if (name.includes('egg growth boost')) return '#9C27B0';
+
+  // Pet abilities
+  if (name.includes('pet refund')) return '#00BCD4';
+  if (name.includes('pet mutation boost')) return '#E91E63';
+
+  // Sell abilities - Red
+  if (name.includes('sell boost')) return '#F44336';
+
+  // Hunger abilities - Pink
+  if (name.includes('hunger restore') || name.includes('hunger boost')) return '#EC407A';
+
+  // XP abilities - Purple/Blue
+  if (name.includes('hatch xp boost')) return '#7C4DFF';
+  if (name.includes('xp boost')) return '#2196F3';
+
+  // Strength abilities - Purple
+  if (name.includes('max strength boost')) return '#673AB7';
+
+  // Plant abilities - Teal/Cyan
+  if (name.includes('plant growth boost')) return '#26A69A';
+
+  // Weather/Special abilities - Blue
+  if (name.includes('rain dance')) return '#2196F3';
+  if (name.includes('double hatch')) return '#5C6BC0';
+  if (name.includes('double harvest')) return '#1976D2';
+
+  // Default
+  return '#90A4AE';
+}
+
+function getAbilityColorInfo(ability: AbilityStats | null): AbilityColorInfo {
+  if (!ability) return ABILITY_COLOR_MAP.default;
+  const category = ability.category ?? '';
+  if (category && Object.prototype.hasOwnProperty.call(ABILITY_COLOR_MAP, category)) {
+    return ABILITY_COLOR_MAP[category as keyof typeof ABILITY_COLOR_MAP];
+  }
+  const normalizedName = (ability.baseName ?? ability.name).toLowerCase();
+  if (normalizedName.includes('rainbow')) return ABILITY_COLOR_MAP.rainbow;
+  if (normalizedName.includes('gold')) return ABILITY_COLOR_MAP.gold;
+  if (normalizedName.includes('hunger')) return ABILITY_COLOR_MAP.hunger;
+  if (normalizedName.includes('mutation')) return ABILITY_COLOR_MAP.mutation;
+  return ABILITY_COLOR_MAP.default;
+}
+
+type DuelSide = 'left' | 'right';
+
+const DUEL_SIDE_STYLES: Record<DuelSide, { border: string; glow: string; text: string; gradient: string; accent: string }> = {
+  left: {
+    border: 'rgba(64,196,255,0.7)',
+    glow: '0 0 22px rgba(64,196,255,0.35)',
+    text: '#C9F1FF',
+    gradient: 'linear-gradient(135deg, rgba(64,196,255,0.16), rgba(10,23,42,0.75))',
+    accent: '#7dd3ff',
+  },
+  right: {
+    border: 'rgba(189,147,249,0.8)',
+    glow: '0 0 22px rgba(189,147,249,0.4)',
+    text: '#F7E5FF',
+    gradient: 'linear-gradient(135deg, rgba(189,147,249,0.18), rgba(25,6,41,0.8))',
+    accent: '#e3b7ff',
+  },
+};
+
+function clampPercentValue(value: number | null | undefined): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return Math.max(0, Math.min(100, value));
+}
+
+function renderProgressBar(label: string, pct: number | null, valueLabel: string, accent: string): string {
+  const clamped = clampPercentValue(pct);
+  const width = clamped != null ? `${clamped}%` : '0%';
+  const displayValue = valueLabel || (clamped != null ? `${clamped.toFixed(0)}%` : '—');
+  return `
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--qpm-text-dim,#9FA6B2);">
+        <span>${label}</span>
+        <span>${displayValue}</span>
+      </div>
+      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div style="height:100%;width:${width};background:linear-gradient(90deg, ${accent}, rgba(255,255,255,0.35));transition:width 0.3s ease;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function formatHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return '—';
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours >= 24) {
+    const days = hours / 24;
+    return days >= 1 ? `${days >= 10 ? days.toFixed(0) : days.toFixed(1)}d` : `${hours.toFixed(0)}h`;
+  }
+  return `${hours >= 10 ? hours.toFixed(0) : hours.toFixed(1)}h`;
+}
+
+function renderStatIndicator(label: string, value: string, pct: number | null, accent: string): string {
+  const progress = clampPercentValue(pct);
+  const width = progress != null ? `${progress}%` : '0%';
+  return `
+    <div style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:12px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;color:rgba(255,255,255,0.75);letter-spacing:0.4px;">${label}</span>
+        <span style="font-size:13px;font-weight:700;color:${accent};">${value}</span>
+      </div>
+      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div style="height:100%;width:${width};background:linear-gradient(90deg, ${accent}, rgba(255,255,255,0.65));transition:width 0.3s ease;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAbilitySquares(abilities: AbilityStats[]): string {
+  if (!abilities.length) return '';
+  const displayed = abilities.slice(0, 4);
+  const content = displayed
+    .map((ability, idx) => {
+      const colors = getAbilityColorInfo(ability);
+      const initials = (ability.baseName || ability.name)
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0])
+        .join('');
+      return `
+        <div title="${ability.name}" data-ability-index="${idx}" style="width:26px;height:26px;border-radius:8px;background:${colors.base};border:1px solid rgba(255,255,255,0.65);box-shadow:0 0 10px ${colors.glow};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:${colors.text};">
+          ${initials || '?'}
+        </div>
+      `;
+    })
+    .join('');
+
+  const placeholderCount = Math.max(0, 4 - displayed.length);
+  const placeholders = Array.from({ length: placeholderCount })
+    .map(
+      (_, idx) => `
+        <div data-ability-placeholder="${idx}" style="width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px dashed rgba(255,255,255,0.2);"></div>
+      `,
+    )
+    .join('');
+
+  return `
+    <div style="position:absolute;left:-38px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;">
+      ${content}${placeholders}
+    </div>
+  `;
+}
+
 interface PetWithSource {
   stats: DetailedPetStats;
   source: 'active' | 'inventory' | 'hutch';
@@ -99,6 +292,19 @@ let activeSpriteDropdown: { element: HTMLElement; select: HTMLSelectElement } | 
 let spriteDropdownListenersAttached = false;
 const SUCCESS_HIGHLIGHT_BG = 'rgba(64, 255, 194, 0.28)';
 const SUCCESS_HIGHLIGHT_BORDER = 'rgba(64, 255, 194, 0.9)';
+
+// Performance: Cache sprite URLs to avoid redundant lookups (300+ calls per Aries team apply)
+const spriteCache = new Map<string, string | null>();
+function getCachedSprite(pet: PetWithSource): string | null {
+  const cacheKey = `${pet.stats.species}-${pet.stats.mutations?.join(',') || 'none'}`;
+  if (spriteCache.has(cacheKey)) {
+    return spriteCache.get(cacheKey)!;
+  }
+  const sprite = getDisplaySprite(pet.stats);
+  spriteCache.set(cacheKey, sprite);
+  return sprite;
+}
+
 const handleDropdownScroll = (event: Event): void => {
   if (!activeSpriteDropdown) return;
   const target = event.target as Node | null;
@@ -191,6 +397,8 @@ function ensureAriesTeamsWatcher(): void {
       ariesStatus = 'unavailable';
       notifyAriesListeners();
       ariesWatcherPromise = null;
+      // Retry detection every 4 seconds (Aries mod might load after QPM)
+      // No logging here to avoid spam for users without Aries
       if (ariesRetryTimer == null && ariesTeamsListeners.size > 0) {
         ariesRetryTimer = window.setTimeout(() => {
           ariesRetryTimer = null;
@@ -199,6 +407,7 @@ function ensureAriesTeamsWatcher(): void {
       }
       return;
     }
+    log('[Aries] 🔗 PetsService detected, setting up team sync');
     if (ariesRetryTimer != null) {
       window.clearTimeout(ariesRetryTimer);
       ariesRetryTimer = null;
@@ -211,21 +420,24 @@ function ensureAriesTeamsWatcher(): void {
     ariesStatus = 'ready';
     try {
       ariesTeamsCache = await resolveAriesTeams(service);
+      log(`[Aries] Loaded ${ariesTeamsCache.length} team(s):`, ariesTeamsCache.map(t => t.name).join(', '));
       notifyAriesListeners();
     } catch (error) {
-      log('Failed to read Aries teams', error);
+      log('[Aries] Failed to read Aries teams', error);
     }
     if (typeof service.onTeamsChangeNow === 'function') {
       try {
         await service.onTeamsChangeNow(raw => {
           ariesTeamsCache = normalizeAriesTeams(raw);
+          log(`[Aries] Teams updated: ${ariesTeamsCache.length} team(s)`);
           notifyAriesListeners();
         });
+        log('[Aries] Successfully subscribed to team changes');
       } catch (error) {
-        log('Failed to subscribe to Aries teams', error);
+        log('[Aries] Failed to subscribe to Aries teams', error);
       }
     } else {
-      log('Aries PetsService does not expose onTeamsChangeNow; presets will be static');
+      log('[Aries] onTeamsChangeNow not available; presets will be static');
     }
     ariesWatcherPromise = null;
   })().catch(error => {
@@ -247,20 +459,106 @@ function notifyAriesListeners(): void {
 
 function getAriesPetsService(): AriesPetsService | null {
   let candidate: AriesPetsService | undefined;
+
+  // Try pageWindow.PetsService
   candidate = (pageWindow as typeof window & { PetsService?: AriesPetsService }).PetsService;
-  if (!candidate && isIsolatedContext) {
+  if (candidate && typeof candidate.getTeams === 'function') {
+    log('[Aries] ✅ Found PetsService at pageWindow.PetsService');
+    return candidate;
+  }
+
+  // Try window.PetsService (isolated context)
+  if (isIsolatedContext) {
     candidate = (window as typeof window & { PetsService?: AriesPetsService }).PetsService;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] ✅ Found PetsService at window.PetsService');
+      return candidate;
+    }
   }
-  if (!candidate) {
-    candidate = readSharedGlobal<AriesPetsService>('PetsService');
+
+  // Try shared global
+  candidate = readSharedGlobal<AriesPetsService>('PetsService');
+  if (candidate && typeof candidate.getTeams === 'function') {
+    log('[Aries] ✅ Found PetsService via readSharedGlobal');
+    return candidate;
   }
-  const qws = (pageWindow as Record<string, unknown>).QWS ?? (window as Record<string, unknown>).QWS;
-  if (!candidate && qws && typeof (qws as Record<string, unknown>).PetsService === 'object') {
-    candidate = ((qws as Record<string, unknown>).PetsService ?? null) as AriesPetsService | null;
+
+  // Try QWS.PetsService
+  const pageQws = (pageWindow as unknown as Record<string, unknown>).QWS;
+  if (pageQws && typeof (pageQws as Record<string, unknown>).PetsService === 'object') {
+    candidate = ((pageQws as Record<string, unknown>).PetsService ?? undefined) as AriesPetsService | undefined;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] ✅ Found PetsService at pageWindow.QWS.PetsService');
+      return candidate;
+    }
   }
-  if (!candidate) return null;
-  if (typeof candidate.getTeams !== 'function') return null;
-  return candidate;
+
+  const winQws = (window as unknown as Record<string, unknown>).QWS;
+  if (winQws && typeof (winQws as Record<string, unknown>).PetsService === 'object') {
+    candidate = ((winQws as Record<string, unknown>).PetsService ?? undefined) as AriesPetsService | undefined;
+    if (candidate && typeof candidate.getTeams === 'function') {
+      log('[Aries] ✅ Found PetsService at window.QWS.PetsService');
+      return candidate;
+    }
+  }
+
+  // Fallback: Try reading from localStorage if Aries stores teams there
+  // NOTE: Aries userscripts don't appear in DOM (Tampermonkey isolation) and don't expose globals.
+  // We can't detect if it's currently enabled, so we show UI whenever valid teams exist.
+  // To hide stale data: localStorage.removeItem('qws:pets:teams:v1')
+  const localStorageFallback = tryCreateLocalStorageFallback();
+  if (localStorageFallback) {
+    log('[Aries] ✅ Found teams in localStorage');
+    return localStorageFallback;
+  }
+
+  // Don't log "not found" - most users won't have Aries mod
+  return null;
+}
+
+function tryCreateLocalStorageFallback(): AriesPetsService | null {
+  // Known Aries mod localStorage keys (prioritized)
+  const possibleKeys = [
+    'qws:pets:teams:v1',      // Aries mod actual key
+    'MGA_petPresets',          // Alternative Aries key
+    'aries:teams',
+    'aries:petTeams',
+    'qws:teams',
+    'qws:petTeams',
+    'petTeams',
+    'teams',
+  ];
+
+  for (const key of possibleKeys) {
+    try {
+      const stored = localStorage.getItem(key);
+      if (!stored) continue;
+
+      const data = JSON.parse(stored);
+      if (!Array.isArray(data)) continue;
+
+      // Validate it looks like team data
+      const hasTeamStructure = data.every(item =>
+        item &&
+        typeof item === 'object' &&
+        'id' in item &&
+        'name' in item &&
+        'slots' in item &&
+        Array.isArray(item.slots)
+      );
+
+      if (hasTeamStructure && data.length > 0) {
+        return {
+          getTeams: () => data,
+          // No live updates in fallback mode
+        };
+      }
+    } catch {
+      // Invalid JSON or structure, continue
+    }
+  }
+
+  return null;
 }
 
 async function resolveAriesTeams(service: AriesPetsService): Promise<AriesTeamSummary[]> {
@@ -448,7 +746,6 @@ function createSpriteDropdownItem(select: HTMLSelectElement, value: string, labe
     width: 30px;
     height: 30px;
     border-radius: 8px;
-    border: 1px solid var(--qpm-border);
     flex-shrink: 0;
     image-rendering: pixelated;
     background: ${sprite ? `url("${sprite}") center/contain no-repeat` : 'rgba(255,255,255,0.05)'};
@@ -497,9 +794,11 @@ function attachSpriteDropdownListeners(): void {
   document.addEventListener('keydown', handleDropdownKeydown, true);
 }
 
-function detachSpriteDropdownListeners(): void {
-  if (!spriteDropdownListenersAttached || activeSpriteDropdown) return;
+function detachSpriteDropdownListeners(force: boolean = false): void {
+  if (!spriteDropdownListenersAttached) return;
+  if (!force && activeSpriteDropdown) return; // Don't detach if dropdown is active unless forced
   spriteDropdownListenersAttached = false;
+  activeSpriteDropdown = null; // Clear active dropdown reference
   document.removeEventListener('mousedown', handleDropdownGlobalMouseDown, true);
   window.removeEventListener('resize', closeActiveSpriteDropdown);
   document.removeEventListener('scroll', handleDropdownScroll, true);
@@ -839,7 +1138,7 @@ function applyOptionSprites(select: HTMLSelectElement, pets: PetWithSource[]): v
     const idx = Number(opt.value);
     const pet = pets[idx];
     if (!pet) return;
-    const sprite = getDisplaySprite(pet.stats);
+    const sprite = getCachedSprite(pet); // Use cached sprite lookup
     if (sprite) {
       opt.style.backgroundImage = `url(${sprite})`;
       opt.style.backgroundRepeat = 'no-repeat';
@@ -1102,11 +1401,34 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
   };
 
   const renderContent = () => {
+    // Clear previous content
     contentContainer.innerHTML = '';
-    if (activeTab === 'compare') {
-      contentContainer.appendChild(createCompareTab(allPets));
-    } else if (activeTab === 'team') {
-      contentContainer.appendChild(createTeamCompareTab(allPets));
+
+    // Show loading indicator for heavy tabs
+    const needsLoading = (activeTab === 'team' && allPets.length > 10);
+
+    if (needsLoading) {
+      const loadingDiv = document.createElement('div');
+      loadingDiv.style.cssText = 'padding:40px;text-align:center;color:var(--qpm-text-dim);';
+      loadingDiv.textContent = '⏳ Loading...';
+      contentContainer.appendChild(loadingDiv);
+
+      // Defer expensive tab rendering to prevent UI freeze
+      requestAnimationFrame(() => {
+        contentContainer.innerHTML = '';
+        if (activeTab === 'compare') {
+          contentContainer.appendChild(createCompareTab(allPets));
+        } else if (activeTab === 'team') {
+          contentContainer.appendChild(createTeamCompareTab(allPets));
+        }
+      });
+    } else {
+      // Render lightweight tabs immediately
+      if (activeTab === 'compare') {
+        contentContainer.appendChild(createCompareTab(allPets));
+      } else if (activeTab === 'team') {
+        contentContainer.appendChild(createTeamCompareTab(allPets));
+      }
     }
   };
 
@@ -1116,6 +1438,15 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
   root.appendChild(tabContainer);
   root.appendChild(contentContainer);
   renderContent();
+
+  // Clean up sprite dropdown listeners when Pet Hub window is destroyed
+  cleanupOnDetach(root, () => {
+    detachSpriteDropdownListeners(true); // Force cleanup
+    if (ariesRetryTimer != null) {
+      window.clearTimeout(ariesRetryTimer);
+      ariesRetryTimer = null;
+    }
+  });
 }
 
 // --- Overview -------------------------------------------------------------
@@ -1155,7 +1486,7 @@ function createPetCard(pet: PetWithSource): HTMLElement {
     border-bottom: 1px solid var(--qpm-border);
   `;
 
-  const petImageHtml = renderPetImage(stats, 48, true);
+  const petImageHtml = renderPetImage(stats, 48, false);
   header.innerHTML = `
     ${petImageHtml}
     <div style="flex: 1;">
@@ -1440,15 +1771,20 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     const lowlightA = valid && numA < numB;
     const lowlightB = valid && numB < numA;
     const baseBg = 'rgba(143,130,255,0.08)';
+
+    // Side color coding - left (light blue), right (light purple)
+    const leftColor = '#C9F1FF';
+    const rightColor = '#F7E5FF';
+
     return `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <div style="background:${baseBg};padding:6px;border-radius:6px;${highlightA ? `box-shadow:0 0 0 1px ${SUCCESS_HIGHLIGHT_BORDER};background:${SUCCESS_HIGHLIGHT_BG};` : lowlightA ? 'box-shadow:0 0 0 1px var(--qpm-error);background:rgba(244,67,54,0.08);' : ''}">
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} A</div>
-          <div style="font-weight:700;color:${highlightA ? 'rgb(64, 255, 194)' : lowlightA ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valA}</div>
+          <div style="font-size:10px;color:${leftColor};">${label}</div>
+          <div style="font-weight:700;color:${highlightA ? 'rgb(64, 255, 194)' : lowlightA ? 'var(--qpm-error)' : leftColor};">${valA}</div>
         </div>
         <div style="background:${baseBg};padding:6px;border-radius:6px;${highlightB ? `box-shadow:0 0 0 1px ${SUCCESS_HIGHLIGHT_BORDER};background:${SUCCESS_HIGHLIGHT_BG};` : lowlightB ? 'box-shadow:0 0 0 1px var(--qpm-error);background:rgba(244,67,54,0.08);' : ''}">
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${label} B</div>
-          <div style="font-weight:700;color:${highlightB ? 'rgb(64, 255, 194)' : lowlightB ? 'var(--qpm-error)' : 'var(--qpm-text)'};">${valB}</div>
+          <div style="font-size:10px;color:${rightColor};">${label}</div>
+          <div style="font-weight:700;color:${highlightB ? 'rgb(64, 255, 194)' : lowlightB ? 'var(--qpm-error)' : rightColor};">${valB}</div>
         </div>
       </div>
     `;
@@ -1468,6 +1804,19 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     return winnerFor(abilityProb(a), abilityProb(b));
   };
 
+  // Helper to extract base ability name without tier (removes I, II, III, IV, etc.)
+  const getBaseAbilityName = (ability: AbilityStats | null): string | null => {
+    if (!ability) return null;
+    const name = ability.baseName || ability.name;
+    // Remove Roman numerals at the end (I, II, III, IV, V)
+    return name.replace(/\s+(I|II|III|IV|V)$/i, '').trim();
+  };
+
+  // Cross-species comparisons (for different species with same ability type, regardless of tier)
+  const speciesA = statsA?.species ?? null;
+  const speciesB = statsB?.species ?? null;
+  const isDifferentSpecies = speciesA && speciesB && speciesA !== speciesB;
+
   const pickTopAbility = (pet: PetWithSource | null) => {
     if (!pet) return null;
     const filtered = abilityFilter.trim()
@@ -1479,26 +1828,111 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
       return (b.procsPerHour || 0) - (a.procsPerHour || 0);
     })[0] ?? null;
   };
-  const abilityA = pickTopAbility(petA);
-  const abilityB = pickTopAbility(petB);
+
+  // For different species, prioritize matching abilities (same base type, regardless of tier)
+  let abilityA: AbilityStats | null = null;
+  let abilityB: AbilityStats | null = null;
+  let sharesSameAbilityType = false;
+
+  if (isDifferentSpecies && petA && petB) {
+    // Try to find matching abilities between the two pets
+    const abilitiesA = abilityFilter.trim()
+      ? petA.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
+      : petA.stats.abilities;
+    const abilitiesB = abilityFilter.trim()
+      ? petB.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
+      : petB.stats.abilities;
+
+    // Find matching base ability types
+    let matchFound = false;
+    for (const abilA of abilitiesA) {
+      const baseA = getBaseAbilityName(abilA);
+      if (!baseA) continue;
+
+      for (const abilB of abilitiesB) {
+        const baseB = getBaseAbilityName(abilB);
+        if (!baseB) continue;
+
+        if (baseA === baseB) {
+          // Found matching ability type! Prioritize these
+          abilityA = abilA;
+          abilityB = abilB;
+          sharesSameAbilityType = true;
+          matchFound = true;
+          break;
+        }
+      }
+      if (matchFound) break;
+    }
+
+    // If no match found, fall back to top abilities
+    if (!matchFound) {
+      abilityA = pickTopAbility(petA);
+      abilityB = pickTopAbility(petB);
+    }
+  } else {
+    // Same species or no cross-species comparison needed
+    abilityA = pickTopAbility(petA);
+    abilityB = pickTopAbility(petB);
+  }
+
+  let hungerDepletionA: number | null = null;
+  let hungerDepletionB: number | null = null;
+  let timePerLevelA: number | null = null;
+  let timePerLevelB: number | null = null;
+
+  if (isDifferentSpecies && sharesSameAbilityType) {
+    // Calculate hunger lifespan (hours to fully deplete from 100% to 0%)
+    // Using wiki data from petHungerDepletion.ts
+    const depletionMinutesA = getHungerDepletionTime(speciesA);
+    const depletionMinutesB = getHungerDepletionTime(speciesB);
+
+    if (depletionMinutesA && depletionMinutesA > 0) {
+      hungerDepletionA = depletionMinutesA / 60; // convert minutes to hours
+    }
+    if (depletionMinutesB && depletionMinutesB > 0) {
+      hungerDepletionB = depletionMinutesB / 60; // convert minutes to hours
+    }
+
+    // Calculate time per STR/level (hours per level)
+    const xpPerLevelA = speciesA ? getSpeciesXpPerLevel(speciesA) : null;
+    const xpPerLevelB = speciesB ? getSpeciesXpPerLevel(speciesB) : null;
+
+    // Assume XP boost ability for now (can be refined)
+    const xpPerHourA = abilityA ? (abilityA.valuePerHour ?? null) : null;
+    const xpPerHourB = abilityB ? (abilityB.valuePerHour ?? null) : null;
+
+    if (xpPerLevelA && xpPerHourA && xpPerHourA > 0) {
+      timePerLevelA = xpPerLevelA / xpPerHourA;
+    }
+    if (xpPerLevelB && xpPerHourB && xpPerHourB > 0) {
+      timePerLevelB = xpPerLevelB / xpPerHourB;
+    }
+  }
+
   const renderAbilityRow = (
     ability: AbilityStats | null,
     label = '',
     winProb = false,
     winProcs = false,
     winImpact = false,
+    side: 'left' | 'right' = 'left',
   ) => {
     if (!ability) return '<div style="color:var(--qpm-text-dim);font-size:11px;">No proc data</div>';
     const { valueText, procsText, probText } = formatAbilityValue(ability);
     const highlightColor = 'rgb(64, 255, 194)';
-    const probColor = winProb ? highlightColor : 'var(--qpm-text)';
-    const procsColor = winProcs ? highlightColor : 'var(--qpm-text)';
-    const impactColor = winImpact ? highlightColor : 'var(--qpm-text)';
+
+    // Side color coding - left (light blue), right (light purple)
+    const sideColor = side === 'left' ? '#C9F1FF' : '#F7E5FF';
+
+    const probColor = winProb ? highlightColor : sideColor;
+    const procsColor = winProcs ? highlightColor : sideColor;
+    const impactColor = winImpact ? highlightColor : sideColor;
     const isWinner = winProb || winProcs || winImpact;
     const borderColor = isWinner ? SUCCESS_HIGHLIGHT_BORDER : 'var(--qpm-border)';
     const backgroundColor = isWinner ? SUCCESS_HIGHLIGHT_BG : 'rgba(255,255,255,0.02)';
     return `
-      <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--qpm-text);padding:8px;border:1px solid ${borderColor};border-radius:8px;background:${backgroundColor};text-align:left;">
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:${sideColor};padding:8px;border:1px solid ${borderColor};border-radius:8px;background:${backgroundColor};text-align:left;">
         <div style="font-weight:700;">${label || ability.name}</div>
         <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Proc %</span><span style="font-weight:700;color:${probColor};">${probText}</span></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:var(--qpm-text-dim);">Procs/Hr</span><span style="font-weight:700;color:${procsColor};">${procsText}</span></div>
@@ -1522,7 +1956,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   const projImpactWinner = winnerFor(abilityImpact(projA), abilityImpact(projB));
   const projOverallWinner = abilityWinner(projA, projB);
 
-  const leftCard = create3v3PetCard(petA, slotIndex, winner === 'A', abilityFilter, {
+  const leftCard = create3v3PetCard(petA, slotIndex, winner === 'A', abilityFilter, 'left', {
     str: statWinner.str === 'A',
     maxStr: statWinner.maxStr === 'A',
     xp: statWinner.xp === 'A',
@@ -1530,7 +1964,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     mutations: statWinner.mutations === 'A',
     abilityFocus: abilityOverallWinner === 'A',
   });
-  const rightCard = create3v3PetCard(petB, slotIndex, winner === 'B', abilityFilter, {
+  const rightCard = create3v3PetCard(petB, slotIndex, winner === 'B', abilityFilter, 'right', {
     str: statWinner.str === 'B',
     maxStr: statWinner.maxStr === 'B',
     xp: statWinner.xp === 'B',
@@ -1544,21 +1978,31 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
       <div style="margin-top:4px;padding:8px;border:1px dashed var(--qpm-border);border-radius:8px;background:rgba(143,130,255,0.05);">
         <div style="font-size:11px;color:var(--qpm-text-dim);margin-bottom:6px;">Potential ability output at max STR</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>${renderAbilityRow(projA, projA ? `${projA.name} (max)` : '', projProbWinner === 'A' || projOverallWinner === 'A', projProcsWinner === 'A' || projOverallWinner === 'A', projImpactWinner === 'A' || projOverallWinner === 'A')}</div>
-          <div>${renderAbilityRow(projB, projB ? `${projB.name} (max)` : '', projProbWinner === 'B' || projOverallWinner === 'B', projProcsWinner === 'B' || projOverallWinner === 'B', projImpactWinner === 'B' || projOverallWinner === 'B')}</div>
+          <div>${renderAbilityRow(projA, projA ? `${projA.name} (max)` : '', projProbWinner === 'A' || projOverallWinner === 'A', projProcsWinner === 'A' || projOverallWinner === 'A', projImpactWinner === 'A' || projOverallWinner === 'A', 'left')}</div>
+          <div>${renderAbilityRow(projB, projB ? `${projB.name} (max)` : '', projProbWinner === 'B' || projOverallWinner === 'B', projProcsWinner === 'B' || projOverallWinner === 'B', projImpactWinner === 'B' || projOverallWinner === 'B', 'right')}</div>
         </div>
       </div>
     `
     : '';
 
+  // Cross-species comparison badges
+  const crossSpeciesComparisons = isDifferentSpecies && sharesSameAbilityType ? `
+    <div style="margin-top:8px;padding:8px;border:1px dashed rgba(255,193,7,0.5);border-radius:8px;background:rgba(255,193,7,0.05);">
+      <div style="font-size:11px;color:rgba(255,193,7,0.9);margin-bottom:6px;font-weight:600;">📊 Cross-Species Comparison</div>
+      ${hungerDepletionA != null && hungerDepletionB != null ? compareBadge('Hunger Lifespan (h)', hungerDepletionA.toFixed(1), hungerDepletionB.toFixed(1)) : ''}
+      ${timePerLevelA != null && timePerLevelB != null ? compareBadge('Time/Level (h)', timePerLevelA.toFixed(2), timePerLevelB.toFixed(2)) : ''}
+    </div>
+  ` : '';
+
   center.innerHTML = `
-    <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Slot ${slotIndex + 1}</div>
+    <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Duel Metrics</div>
     ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
     ${compareBadge('Max STR', statsA?.maxStrength, statsB?.maxStrength)}
     <div style="background:rgba(255,255,255,0.02);border:1px solid var(--qpm-border);padding:8px;border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
-      <div>${renderAbilityRow(abilityA, '', probWinner === 'A' || abilityOverallWinner === 'A', procsWinner === 'A' || abilityOverallWinner === 'A', impactWinner === 'A' || abilityOverallWinner === 'A')}</div>
-      <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B')}</div>
+      <div>${renderAbilityRow(abilityA, '', probWinner === 'A' || abilityOverallWinner === 'A', procsWinner === 'A' || abilityOverallWinner === 'A', impactWinner === 'A' || abilityOverallWinner === 'A', 'left')}</div>
+      <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B', 'right')}</div>
     </div>
+    ${crossSpeciesComparisons}
     ${projectionBlock}
   `;
 
@@ -1573,15 +2017,23 @@ function create3v3PetCard(
   slotNum: number,
   isWinner: boolean,
   abilityFilter: string,
+  side: DuelSide,
   highlights: SlotHighlightMap = {},
 ): HTMLElement {
   const card = document.createElement('div');
+  const sideStyle = DUEL_SIDE_STYLES[side];
+  const borderColor = isWinner ? 'rgba(64,255,194,0.9)' : sideStyle.border;
+  const boxShadow = isWinner ? '0 0 22px rgba(64,255,194,0.45)' : sideStyle.glow;
+  card.dataset.slot = String(slotNum + 1);
   card.style.cssText = `
-    background: rgba(143, 130, 255, 0.08);
-    border: 2px solid ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-border)'};
-    border-radius: 10px;
-    padding: 14px;
-    min-height: 190px;
+    background: ${sideStyle.gradient};
+    border: 1px solid ${borderColor};
+    border-radius: 16px;
+    padding: 16px;
+    min-height: 220px;
+    box-shadow: ${boxShadow};
+    position: relative;
+    overflow: hidden;
   `;
 
   if (!pet) {
@@ -1592,40 +2044,36 @@ function create3v3PetCard(
     `;
     return card;
   }
-
   const stats = pet.stats;
-  const strengthPct = stats.maxStrength ? Math.min(100, Math.round(((stats.currentStrength || 0) / stats.maxStrength) * 100)) : null;
-  const xpText = stats.xp ? formatNumber(stats.xp) : 'N/A';
-  const strengthBar = strengthPct != null
-    ? `<div style="margin-top:6px;">
-         <div style="font-size:10px;color:var(--qpm-text-dim);display:flex;justify-content:space-between;">
-           <span>STR Progress</span><span>${strengthPct}%</span>
-         </div>
-         <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
-           <div style="height:100%;width:${strengthPct}%;background:linear-gradient(90deg,#9be7ff,#7c4dff);"></div>
-         </div>
-       </div>`
-    : '';
+  const metadata = getPetMetadata(stats.species ?? null);
+  const hungerPct = stats.hungerPct ?? null;
 
-  const strDelta = stats.maxStrength != null && stats.currentStrength != null
-    ? Math.max(0, stats.maxStrength - stats.currentStrength)
-    : null;
+  // Calculate XP per level progress
   const xpPerLevel = stats.species ? getSpeciesXpPerLevel(stats.species) : null;
-  const estLevels = (stats.maxStrength && stats.currentStrength) ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30) : null;
-  const xpToMax = xpPerLevel && estLevels ? Math.round(estLevels * xpPerLevel) : null;
-  const maxHint = strDelta && strDelta > 0
-    ? `<div style="font-size:11px;color:var(--qpm-text-dim);margin-top:4px;">+${strDelta} STR to max${xpToMax ? ` • ~${formatNumber(xpToMax)} XP` : ''}</div>`
-    : '';
+  const currentXp = stats.xp ?? 0;
+  const xpTowardsNextLevel = xpPerLevel ? (currentXp % xpPerLevel) : 0;
+  const xpLevelProgress = xpPerLevel && xpPerLevel > 0 ? (xpTowardsNextLevel / xpPerLevel) * 100 : 0;
+  const xpLevelLabel = xpPerLevel ? `${xpTowardsNextLevel.toFixed(0)} / ${xpPerLevel} XP` : '—';
 
-  const statsGrid = `
-    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 11px; margin-bottom: 10px;">
-      ${statPill('STR', stats.currentStrength ?? 'N/A', highlights.str ? 'success' : undefined)}
-      ${statPill('Max STR', stats.maxStrength ?? 'N/A', highlights.maxStr ? 'success' : undefined)}
-      ${statPill('XP', xpText, highlights.xp ? 'success' : undefined)}
-      ${statPill('Abilities', stats.abilityCount ?? 0, highlights.abilities ? 'success' : undefined)}
-      ${statPill('Mutations', stats.mutationCount ?? stats.mutations.length, highlights.mutations ? 'success' : undefined)}
-    </div>
-  `;
+  // Use metadata hungerCost for accurate depletion time calculation
+  const hungerCost = metadata?.hungerCost ?? null;
+  const hungerDepletionHours = hungerPct != null && hungerCost != null && hungerCost > 0
+    ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
+    : stats.timeUntilStarving ?? null;
+
+  const hungerLabelParts: string[] = [];
+  if (stats.hungerPct != null) hungerLabelParts.push(`${stats.hungerPct.toFixed(0)}%`);
+  if (hungerDepletionHours != null) hungerLabelParts.push(`${hungerDepletionHours.toFixed(1)}h left`);
+  const hungerLabel = hungerLabelParts.join(' • ') || '—';
+
+  const strDelta = stats.maxStrength != null && stats.currentStrength != null ? Math.max(0, stats.maxStrength - stats.currentStrength) : null;
+  const estLevels = (stats.maxStrength && stats.currentStrength)
+    ? Math.max(0, stats.maxStrength - stats.currentStrength) / Math.max(1, stats.maxStrength / 30)
+    : null;
+  const xpToMax = xpPerLevel && estLevels ? Math.round(estLevels * xpPerLevel) : null;
+  const progressDetails = strDelta && strDelta > 0
+    ? `+${strDelta} STR to cap${xpToMax ? ` • ~${formatNumber(xpToMax)} XP` : ''}`
+    : stats.xp != null ? `${formatNumber(stats.xp)} XP` : '';
 
   const filterTerm = abilityFilter.trim().toLowerCase();
   const filteredAbilities = filterTerm
@@ -1638,46 +2086,99 @@ function create3v3PetCard(
     return (b.procsPerHour || 0) - (a.procsPerHour || 0);
   }).slice(0, 3);
 
-  const abilityCards = topAbilities.map((ability) => {
+  const abilityRows = topAbilities.map((ability) => {
     const { valueText, procsText, probText } = formatAbilityValue(ability);
+    const colors = getAbilityColorInfo(ability);
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid var(--qpm-border);border-radius:8px;background:rgba(255,255,255,0.02);">
-        <div>
-          <div style="font-weight:700;color:var(--qpm-text);">${ability.name}</div>
-          <div style="font-size:10px;color:var(--qpm-text-dim);">${probText} proc chance</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;background:rgba(8,5,16,0.45);border:1px solid ${colors.border};box-shadow:0 0 14px ${colors.glow};">
+        <span style="width:18px;height:18px;border-radius:6px;background:${colors.base};border:1px solid rgba(255,255,255,0.15);"></span>
+        <div style="flex:1;">
+          <div style="font-size:12px;font-weight:600;color:${colors.text};">${ability.name}</div>
+          <div style="font-size:10px;color:var(--qpm-text-dim);">${valueText}</div>
         </div>
-        <div style="text-align:right;font-size:11px;color:var(--qpm-text);">
-          <div style="font-weight:700;">${procsText}</div>
-          <div style="color:var(--qpm-text-dim);">${valueText}</div>
+        <div style="text-align:right;font-size:10px;color:var(--qpm-text-dim);">
+          <div style="font-weight:600;color:${colors.text};">${procsText}</div>
+          <div>${probText} proc</div>
         </div>
       </div>
     `;
   }).join('');
 
-  const procHeaderColor = highlights.abilityFocus ? 'rgb(64, 255, 194)' : 'var(--qpm-text-dim)';
-  const procContainerStyle = highlights.abilityFocus
-    ? `display:flex;flex-direction:column;gap:6px;border:1px solid ${SUCCESS_HIGHLIGHT_BORDER};border-radius:8px;padding:6px;background:${SUCCESS_HIGHLIGHT_BG};`
-    : 'display:flex;flex-direction:column;gap:6px;';
+  // Create ability squares (up to 4) with hover tooltips
+  // These will be dynamically added after card creation for proper tooltip handling
+  const abilitySquaresData = stats.abilities.slice(0, 4).map((ability) => ({
+    color: getAbilityColorByName(ability.baseName || ability.name),
+    name: ability.name || 'Unknown Ability',
+  }));
+
+  // Define stat indicators first
+  const statIndicators = `
+    <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
+      ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
+      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
+    </div>
+  `;
+
+  // Pet sprite block - centered on pet image
+  const spriteBlock = `
+    <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:8px 0;">
+      <!-- STR text above image -->
+      <div style="font-size:13px;font-weight:600;color:${sideStyle.text};">
+        STR: ${stats.currentStrength != null ? stats.currentStrength.toFixed(0) : '?'}
+      </div>
+
+      <!-- Pet image centered -->
+      <div style="position:relative;display:flex;justify-content:center;">
+        ${renderPetImage(stats, 128, false)}
+
+        <!-- Ability squares positioned to the left of pet image -->
+        <div class="qpm-ability-squares" style="position:absolute;left:-30px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;"></div>
+      </div>
+
+      <!-- MAX STR text below image -->
+      <div style="font-size:13px;font-weight:600;color:${sideStyle.text};">
+        MAX STR: ${stats.maxStrength != null ? stats.maxStrength.toFixed(0) : '?'}
+      </div>
+    </div>
+  `;
 
   card.innerHTML = `
-    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-      ${renderPetImage(stats, 38, true)}
-      <div style="flex:1;">
-        <div style="font-size: 13px; font-weight: 700; color: ${isWinner ? 'var(--qpm-success)' : 'var(--qpm-accent)'};">
-          ${stats.name || stats.species || 'Pet'}
-        </div>
-        <div style="font-size: 11px; color: var(--qpm-text-dim);">${stats.species || 'Unknown Species'}</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:${sideStyle.text};">${stats.name || stats.species || 'Pet'}</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.7);">${stats.species || 'Unknown Species'}</div>
       </div>
-      <div style="font-size:10px;color:var(--qpm-text-dim);">Slot ${slotNum + 1}</div>
+      ${spriteBlock}
+      ${statIndicators}
     </div>
-    ${statsGrid}
-    ${strengthBar}
-    ${maxHint}
-     ${abilityCards
-      ? `<div style="font-size: 10px; color: ${procHeaderColor}; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px;">Proc Focus</div>
-        <div style="${procContainerStyle}">${abilityCards}</div>`
-      : '<div style="font-size: 11px; color: var(--qpm-text-dim);">No abilities listed</div>'}
   `;
+
+  // Dynamically add ability squares with proper tooltips
+  const squaresContainer = card.querySelector('.qpm-ability-squares');
+  if (squaresContainer) {
+    abilitySquaresData.forEach(({ color, name }) => {
+      const square = document.createElement('div');
+      square.style.cssText = `
+        width: 20px;
+        height: 20px;
+        background: ${color};
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        cursor: help;
+        transition: all 0.2s;
+      `;
+      square.title = name; // Set title directly as property
+      square.addEventListener('mouseenter', () => {
+        square.style.transform = 'scale(1.15)';
+        square.style.borderColor = 'rgba(255,255,255,0.8)';
+      });
+      square.addEventListener('mouseleave', () => {
+        square.style.transform = 'scale(1)';
+        square.style.borderColor = 'rgba(255,255,255,0.4)';
+      });
+      squaresContainer.appendChild(square);
+    });
+  }
 
   return card;
 }
@@ -1766,7 +2267,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
         newTeam[idx] = allPets[i] ?? null;
         onChange(newTeam);
         applySelectPreview(select, newTeam[idx]);
-        render();
+        debouncedRender();
       });
       select.dataset.rebuild = '1';
       (select as HTMLSelectElement & { _rebuild?: () => void })._rebuild = rebuildOptions;
@@ -1798,16 +2299,21 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       }
       resolved[idx] = match;
     });
+
+    // Batch updates to avoid multiple re-renders
     target.splice(0, target.length, ...resolved);
-    rebuildManualSelectors();
-    render();
+
+    // Update status immediately
     if (missingSlots.length) {
       ariesStatusMsg.textContent = `Applied "${team.name}" but slots ${missingSlots.join(', ')} are missing in Pet Hub data.`;
       ariesStatusMsg.style.color = 'var(--qpm-error)';
     } else {
-      ariesStatusMsg.textContent = `Applied "${team.name}" preset.`;
-      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      ariesStatusMsg.textContent = `✅ Applied "${team.name}" preset.`;
+      ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
+
+    // Only render comparison rows (selectors don't need rebuilding - teams changed, not filter)
+    debouncedRender();
   };
 
   const createPresetControl = (label: string, apply: (team: AriesTeamSummary) => void) => {
@@ -1847,9 +2353,30 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
 
   const ariesSection = document.createElement('div');
   ariesSection.style.cssText = 'display:none;flex-direction:column;gap:10px;margin-bottom:12px;padding:10px;border:1px solid var(--qpm-border);border-radius:10px;background:rgba(143,130,255,0.08);';
+
+  const ariesHeaderRow = document.createElement('div');
+  ariesHeaderRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
   const ariesHeader = document.createElement('div');
-  ariesHeader.textContent = 'Aries Mod presets';
+  ariesHeader.textContent = '🔗 Aries Mod Presets';
   ariesHeader.style.cssText = 'font-size:13px;font-weight:700;color:var(--qpm-accent);';
+
+  const refreshButton = document.createElement('button');
+  refreshButton.textContent = '🔄 Refresh';
+  refreshButton.style.cssText = 'padding:4px 8px;font-size:11px;background:rgba(143,130,255,0.2);color:var(--qpm-accent);border:1px solid var(--qpm-border);border-radius:4px;cursor:pointer;';
+  refreshButton.title = 'Manually retry detection of Aries Mod';
+  refreshButton.addEventListener('click', () => {
+    log('[Aries] Manual refresh triggered');
+    ariesWatcherAttached = false;
+    ariesWatcherPromise = null;
+    if (ariesRetryTimer != null) {
+      window.clearTimeout(ariesRetryTimer);
+      ariesRetryTimer = null;
+    }
+    ensureAriesTeamsWatcher();
+  });
+
+  ariesHeaderRow.append(ariesHeader, refreshButton);
+
   ariesStatusMsg = document.createElement('div');
   ariesStatusMsg.style.cssText = 'font-size:11px;color:var(--qpm-text-dim);';
   ariesStatusMsg.textContent = 'Detecting Aries Mod teams...';
@@ -1858,22 +2385,26 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const presetA = createPresetControl('Apply to Team A', team => applyAriesPreset(team, teamA));
   const presetB = createPresetControl('Apply to Team B', team => applyAriesPreset(team, teamB));
   presetControls.append(presetA.wrapper, presetB.wrapper);
-  ariesSection.append(ariesHeader, ariesStatusMsg, presetControls);
+  ariesSection.append(ariesHeaderRow, ariesStatusMsg, presetControls);
 
   const unsubscribeAries = subscribeToAriesTeams(({ status, teams }) => {
+    // Only show the section when Aries is successfully detected
     if (status === 'ready' && teams.length > 0) {
       ariesSection.style.display = 'flex';
-      ariesStatusMsg.textContent = 'Select a preset to populate slots automatically.';
-      ariesStatusMsg.style.color = 'var(--qpm-text-dim)';
+      ariesStatusMsg.textContent = `✅ Found ${teams.length} preset(s). Select one to populate team slots automatically.`;
+      ariesStatusMsg.style.color = 'var(--qpm-success)';
       presetA.updateOptions(teams);
       presetB.updateOptions(teams);
+      presetControls.style.display = 'grid';
+    } else if (status === 'ready' && teams.length === 0) {
+      // Aries detected but no teams - show section with helpful message
+      ariesSection.style.display = 'flex';
+      ariesStatusMsg.textContent = '⚠️ No pet teams found in Aries Mod. Create teams first.';
+      ariesStatusMsg.style.color = 'var(--qpm-warning)';
+      presetControls.style.display = 'none';
     } else {
-      ariesSection.style.display = teams.length > 0 ? 'flex' : 'none';
-      if (status === 'unavailable') {
-        ariesStatusMsg.textContent = 'Aries Mod presets not detected.';
-      } else {
-        ariesStatusMsg.textContent = 'Detecting Aries Mod teams...';
-      }
+      // Not detected or still detecting - hide completely
+      ariesSection.style.display = 'none';
     }
   });
   cleanupOnDetach(container, unsubscribeAries);
@@ -1881,11 +2412,35 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const slotsWrapper = document.createElement('div');
   slotsWrapper.style.cssText = 'display:grid;grid-template-columns:1fr;gap:12px;';
 
+  // Cache row elements to avoid full DOM regeneration on every render
+  const cachedRows: HTMLElement[] = [];
+
   const render = () => {
-    slotsWrapper.innerHTML = '';
+    // Use DocumentFragment for batch DOM operations
+    const fragment = document.createDocumentFragment();
+
     for (let i = 0; i < 3; i++) {
-      slotsWrapper.appendChild(create3v3SlotRow(teamA[i] ?? null, teamB[i] ?? null, i, abilityFilter));
+      const newRow = create3v3SlotRow(teamA[i] ?? null, teamB[i] ?? null, i, abilityFilter);
+      fragment.appendChild(newRow);
     }
+
+    // Replace all rows at once instead of clearing innerHTML
+    while (slotsWrapper.firstChild) {
+      slotsWrapper.removeChild(slotsWrapper.firstChild);
+    }
+    slotsWrapper.appendChild(fragment);
+  };
+
+  // Debounce render to prevent multiple rapid calls (e.g., during Aries team application)
+  let renderTimeout: number | null = null;
+  const debouncedRender = () => {
+    if (renderTimeout != null) {
+      window.clearTimeout(renderTimeout);
+    }
+    renderTimeout = window.setTimeout(() => {
+      renderTimeout = null;
+      render();
+    }, 50); // 50ms debounce - fast enough to feel instant, slow enough to batch updates
   };
 
   const filterWrap = document.createElement('div');
@@ -1896,14 +2451,16 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const filterSelect = document.createElement('select');
   filterSelect.style.cssText = 'padding:6px 10px;border:1px solid var(--qpm-border);border-radius:6px;background:rgba(18,20,26,0.6);color:var(--qpm-text);font-size:13px;width:220px;';
   filterSelect.appendChild(new Option('All abilities', ''));
-  Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0]))))
+
+  // Cache ability names to avoid recomputing on every render - compute once at tab creation
+  const abilityNames = Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0]))))
     .filter((name): name is string => Boolean(name))
-    .sort()
-    .forEach(name => filterSelect.appendChild(new Option(name, name.toLowerCase())));
+    .sort();
+  abilityNames.forEach(name => filterSelect.appendChild(new Option(name, name.toLowerCase())));
   filterSelect.addEventListener('change', () => {
     abilityFilter = filterSelect.value.trim();
     rebuildManualSelectors();
-    render();
+    debouncedRender();
   });
   filterWrap.appendChild(filterLabel);
   filterWrap.appendChild(filterSelect);

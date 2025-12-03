@@ -115,62 +115,26 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
       if (dateParts.length !== 3 || timeParts.length !== 2) return Date.now();
 
       // Smart date format detection
-      // Discord exports can use MM/DD/YYYY (US) or DD/MM/YYYY (AU) depending on user locale
+      // Discord exports from AEST typically use DD/MM/YYYY (Australian date format)
       // Strategy:
       // 1. If first value > 12, must be DD/MM/YYYY (day can't be month)
-      // 2. If second value > 12, must be MM/DD/YYYY (month can't be day)
-      // 3. If both <= 12, try both formats and pick the one closest to current date
-      //    (shop restocks shouldn't be far in the future)
-      
+      // 2. Otherwise, assume DD/MM/YYYY (Australian standard for AEST timezone)
+
       const first = dateParts[0]!;
       const second = dateParts[1]!;
       const year = dateParts[2]!;
       let day: number;
       let month: number;
 
-      // Validate basic ranges
-      if (first < 1 || second < 1 || first > 31 || second > 12) {
-        // Check if swapping helps
-        if (second >= 1 && second <= 31 && first >= 1 && first <= 12) {
-          // Swap: first is month, second is day (MM/DD/YYYY)
-          month = first;
-          day = second;
-        } else {
-          log('⚠️ Invalid date in timestamp:', timestampStr);
-          return Date.now();
-        }
-      } else if (first > 12) {
+      if (first > 12) {
         // First value > 12, must be day (DD/MM/YYYY)
         day = first;
         month = second;
-      } else if (second > 12) {
-        // This shouldn't happen (second > 12 would fail validation above)
-        // but include for clarity: second is day (MM/DD/YYYY)
-        month = first;
-        day = second;
       } else {
-        // Both values <= 12: ambiguous!
-        // Try both interpretations and pick the one closer to current date
-        const now = Date.now();
-        
-        // Try DD/MM/YYYY
-        const ddmmTimestamp = Date.UTC(year, first - 1, second, 0, 0, 0, 0);
-        const ddmmDiff = Math.abs(ddmmTimestamp - now);
-        
-        // Try MM/DD/YYYY
-        const mmddTimestamp = Date.UTC(year, second - 1, first, 0, 0, 0, 0);
-        const mmddDiff = Math.abs(mmddTimestamp - now);
-        
-        // Pick the interpretation closer to current date
-        if (mmddDiff < ddmmDiff) {
-          // MM/DD/YYYY is closer to now
-          month = first;
-          day = second;
-        } else {
-          // DD/MM/YYYY is closer to now
-          day = first;
-          month = second;
-        }
+        // Assume DD/MM/YYYY (Australian standard for AEST exports)
+        // This is more reliable than trying to guess based on proximity to current date
+        day = first;
+        month = second;
       }
 
       // Final validation
@@ -280,80 +244,102 @@ function generateRestockId(timestamp: number, items: RestockItem[]): string {
 }
 
 /**
- * Parse Discord HTML export to extract restock events
+ * Parse Discord HTML export to extract restock events (chunked for performance)
  */
-export function parseDiscordHtml(htmlContent: string): RestockEvent[] {
+export async function parseDiscordHtml(htmlContent: string): Promise<RestockEvent[]> {
   const events: RestockEvent[] = [];
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
 
   // Find all message groups from Magic Shopkeeper
-  const messageGroups = doc.querySelectorAll('.chatlog__message-group');
+  const messageGroups = Array.from(doc.querySelectorAll('.chatlog__message-group'));
 
   let currentBaseDate: Date | undefined;
 
-  for (const group of messageGroups) {
-    // Check if this is from Magic Shopkeeper
-    const authorElement = group.querySelector('.chatlog__author');
-    if (!authorElement || !authorElement.textContent?.includes('Magic Shopkeeper')) {
-      continue;
-    }
+  // Process message groups in chunks to prevent UI freeze
+  const CHUNK_SIZE = 50; // Process 50 message groups at a time
+  const totalGroups = messageGroups.length;
+  let processedGroups = 0;
 
-    // Get the base timestamp from the first message
-    const firstTimestampEl = group.querySelector('.chatlog__timestamp a');
-    if (firstTimestampEl) {
-      const fullTimestamp = firstTimestampEl.textContent?.trim() || '';
-      const timestamp = parseTimestamp(fullTimestamp);
-      currentBaseDate = new Date(timestamp);
-    }
+  log(`📊 Parsing ${totalGroups} message groups from Discord HTML...`);
 
-    // Process all messages in this group
-    const messages = group.querySelectorAll('.chatlog__message-container');
+  // Process in chunks with async/await to yield to UI thread
+  for (let chunkStart = 0; chunkStart < totalGroups; chunkStart += CHUNK_SIZE) {
+    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, totalGroups);
+    const chunk = messageGroups.slice(chunkStart, chunkEnd);
 
-    for (const message of messages) {
-      // Get timestamp
-      let timestampStr = '';
-      let timestamp = 0;
-
-      const fullTimestampEl = message.querySelector('.chatlog__timestamp a');
-      const shortTimestampEl = message.querySelector('.chatlog__short-timestamp');
-
-      if (fullTimestampEl) {
-        timestampStr = fullTimestampEl.textContent?.trim() || '';
-        timestamp = parseTimestamp(timestampStr);
-        currentBaseDate = new Date(timestamp);
-      } else if (shortTimestampEl) {
-        timestampStr = shortTimestampEl.textContent?.trim() || '';
-        timestamp = parseTimestamp(timestampStr, currentBaseDate);
-      } else {
-        continue; // Skip if no timestamp
+    // Process this chunk
+    for (const group of chunk) {
+      // Check if this is from Magic Shopkeeper
+      const authorElement = group.querySelector('.chatlog__author');
+      if (!authorElement || !authorElement.textContent?.includes('Magic Shopkeeper')) {
+        continue;
       }
 
-      // Get message content
-      const contentEl = message.querySelector('.chatlog__content');
-      if (!contentEl) continue;
+      // Get the base timestamp from the first message
+      const firstTimestampEl = group.querySelector('.chatlog__timestamp a');
+      if (firstTimestampEl) {
+        const fullTimestamp = firstTimestampEl.textContent?.trim() || '';
+        const timestamp = parseTimestamp(fullTimestamp);
+        currentBaseDate = new Date(timestamp);
+      }
 
-      const content = contentEl.textContent?.trim() || '';
-      if (!content) continue;
+      // Process all messages in this group
+      const messages = group.querySelectorAll('.chatlog__message-container');
 
-      // Parse items
-      const items = parseItems(content);
-      if (items.length === 0) continue;
+      for (const message of messages) {
+        // Get timestamp
+        let timestampStr = '';
+        let timestamp = 0;
 
-      // Create restock event
-      const event: RestockEvent = {
-        id: generateRestockId(timestamp, items),
-        timestamp,
-        dateString: timestampStr,
-        items,
-        source: 'discord',
-      };
+        const fullTimestampEl = message.querySelector('.chatlog__timestamp a');
+        const shortTimestampEl = message.querySelector('.chatlog__short-timestamp');
 
-      events.push(event);
+        if (fullTimestampEl) {
+          timestampStr = fullTimestampEl.textContent?.trim() || '';
+          timestamp = parseTimestamp(timestampStr);
+          currentBaseDate = new Date(timestamp);
+        } else if (shortTimestampEl) {
+          timestampStr = shortTimestampEl.textContent?.trim() || '';
+          timestamp = parseTimestamp(timestampStr, currentBaseDate);
+        } else {
+          continue; // Skip if no timestamp
+        }
+
+        // Get message content
+        const contentEl = message.querySelector('.chatlog__content');
+        if (!contentEl) continue;
+
+        const content = contentEl.textContent?.trim() || '';
+        if (!content) continue;
+
+        // Parse items
+        const items = parseItems(content);
+        if (items.length === 0) continue;
+
+        // Create restock event
+        const event: RestockEvent = {
+          id: generateRestockId(timestamp, items),
+          timestamp,
+          dateString: timestampStr,
+          items,
+          source: 'discord',
+        };
+
+        events.push(event);
+      }
+    }
+
+    processedGroups += chunk.length;
+
+    // Yield to UI thread after each chunk (except last)
+    if (chunkEnd < totalGroups) {
+      log(`📊 Parsed ${processedGroups}/${totalGroups} message groups (${events.length} events so far)...`);
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
 
-  log(`📊 Parsed ${events.length} restock events from Discord HTML`);
+  log(`✅ Parsed ${events.length} restock events from ${totalGroups} message groups`);
   return events;
 }
 

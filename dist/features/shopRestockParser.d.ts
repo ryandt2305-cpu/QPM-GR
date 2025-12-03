@@ -1,8 +1,8 @@
 import { RestockEvent } from './shopRestockTracker';
 /**
- * Parse Discord HTML export to extract restock events
+ * Parse Discord HTML export to extract restock events (chunked for performance)
  */
-export declare function parseDiscordHtml(htmlContent: string): RestockEvent[];
+export declare function parseDiscordHtml(htmlContent: string): Promise<RestockEvent[]>;
 /**
  * Parse Discord HTML from a file
  */

@@ -2543,25 +2543,26 @@ function createMutationValueSection(): HTMLElement {
 
   body.appendChild(reminderSection);
 
-  // Reset button
-  const resetButton = document.createElement('button');
-  resetButton.textContent = '🔄 Reset Session Stats';
-  resetButton.style.cssText = 'width:100%;padding:8px;background:#2a1a1a;color:#FF6B6B;border:1px solid #FF6B6B;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;margin-bottom:12px;transition:all 0.2s;';
-  resetButton.onmouseenter = () => {
-    resetButton.style.background = '#3a2020';
-    resetButton.style.borderColor = '#FF8888';
+  // Clear Restock Data button
+  const clearRestockButton = document.createElement('button');
+  clearRestockButton.textContent = '🗑️ Clear Restock Data';
+  clearRestockButton.style.cssText = 'width:100%;padding:8px;background:#2a1a1a;color:#FF6B6B;border:1px solid #FF6B6B;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;margin-bottom:12px;transition:all 0.2s;';
+  clearRestockButton.onmouseenter = () => {
+    clearRestockButton.style.background = '#3a2020';
+    clearRestockButton.style.borderColor = '#FF8888';
   };
-  resetButton.onmouseleave = () => {
-    resetButton.style.background = '#2a1a1a';
-    resetButton.style.borderColor = '#FF6B6B';
+  clearRestockButton.onmouseleave = () => {
+    clearRestockButton.style.background = '#2a1a1a';
+    clearRestockButton.style.borderColor = '#FF6B6B';
   };
-  resetButton.onclick = () => {
-    if (confirm('Reset mutation value tracking? This will start a new session but keep your best records.')) {
-      resetMutationValueTracking();
-      log('🔄 Mutation value tracking reset');
+  clearRestockButton.onclick = () => {
+    if (confirm('⚠️ This will clear all Shop Restock history and prediction data.\n\nYour other QPM settings (auto-feed, XP tracking, etc.) will NOT be affected.\n\nThis cannot be undone. Are you sure?')) {
+      clearAllRestocks();
+      log('🗑️ Shop restock data cleared');
+      alert('✅ Shop restock history and prediction data has been cleared.');
     }
   };
-  body.appendChild(resetButton);
+  body.appendChild(clearRestockButton);
 
   const valueContainer = document.createElement('div');
   valueContainer.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
@@ -3883,6 +3884,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       'trackers': 'rgba(156, 39, 176, 0.28)',      // Purple
       'xp-tracker': 'rgba(255, 152, 0, 0.28)',     // Orange
       'shop-restock': 'rgba(0, 188, 212, 0.28)',   // Cyan
+      'pet-hub': 'rgba(103, 58, 183, 0.28)',       // Deep Purple
       'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
       'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
       'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
@@ -4544,9 +4546,16 @@ function createStatsHeader(): HTMLElement {
     log('⚠️ Failed to start live shop tracking', error);
   });
 
-  // Subscribe to restock updates to refresh cards
+  // Subscribe to restock updates to refresh cards (with debouncing)
+  let debounceTimer: number | null = null;
   onRestockUpdate(() => {
-    updateShopRestockCards();
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = window.setTimeout(() => {
+      debounceTimer = null;
+      updateShopRestockCards();
+    }, 500); // Debounce 500ms to batch rapid updates
   });
 
   // Initial render

@@ -55,6 +55,8 @@ export declare function getJournalStats(): Promise<{
         collected: number;
         total: number;
         percentage: number;
+        typesCollected: number;
+        typesTotal: number;
     };
     petVariants: {
         collected: number;

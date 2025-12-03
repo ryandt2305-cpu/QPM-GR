@@ -1,3 +1,4 @@
+import { formatTimeWindow, getItemConfig, WindowBasedPrediction, PredictionWindow } from './shopRestockPredictions';
 /**
  * Restock event data structure
  */
@@ -63,7 +64,7 @@ export declare function getAllRestockEvents(): RestockEvent[];
  */
 export declare function getRestocksInRange(startTime: number, endTime: number): RestockEvent[];
 /**
- * Calculate item statistics
+ * Calculate item statistics (with aggressive caching)
  */
 export declare function calculateItemStats(): Map<string, ItemStats>;
 /**
@@ -197,4 +198,18 @@ export declare function addWatchedItem(itemName: string): void;
  * Remove item from watch list
  */
 export declare function removeWatchedItem(itemName: string): void;
+/**
+ * Get window-based predictions for tracked items (with caching)
+ */
+export declare function getWindowPredictions(): Map<string, WindowBasedPrediction>;
+/**
+ * Get current monitoring alerts (with caching)
+ */
+export declare function getCurrentMonitoringAlerts(): Array<{
+    itemName: string;
+    message: string;
+    urgency: 'high' | 'medium' | 'low';
+}>;
+export type { WindowBasedPrediction, PredictionWindow };
+export { formatTimeWindow, getItemConfig };
 //# sourceMappingURL=shopRestockTracker.d.ts.map

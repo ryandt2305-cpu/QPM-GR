@@ -155,9 +155,16 @@ export function createShopRestockWindow(): ShopRestockWindowState {
   // Initial render
   renderContent(state);
 
-  // Subscribe to updates
+  // Subscribe to updates with debouncing to prevent excessive re-renders
+  let debounceTimer: number | null = null;
   onRestockUpdate(() => {
-    renderContent(state);
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = window.setTimeout(() => {
+      debounceTimer = null;
+      renderContent(state);
+    }, 500); // Debounce 500ms to batch rapid updates
   });
 
   return state;
@@ -491,6 +498,33 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
     statusContainer.appendChild(statusBadge);
 
+    // Next window time range (always visible)
+    const nextWindowDisplay = document.createElement('div');
+    nextWindowDisplay.style.cssText = 'color: #42A5F5; font-size: 10px; font-weight: 600; text-align: right;';
+
+    if (prediction.nextWindows.length > 0) {
+      const nextWindow = prediction.nextWindows[0]!;
+      const startDate = new Date(nextWindow.startTime);
+      const endDate = new Date(nextWindow.endTime);
+      const startTimeStr = startDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+      const endTimeStr = endDate.toLocaleString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+      nextWindowDisplay.textContent = `${startTimeStr} - ${endTimeStr}`;
+    } else if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
+      // Show cooldown countdown
+      nextWindowDisplay.style.color = '#f44336';
+      nextWindowDisplay.setAttribute('data-countdown-target', String(Date.now() + (prediction.hardCooldownRemaining * 60 * 60 * 1000)));
+      nextWindowDisplay.setAttribute('data-countdown-prefix', 'Cooldown: ');
+    } else if (prediction.tooEarly && prediction.practicalMinimumRemaining !== null) {
+      // Show practical minimum countdown
+      nextWindowDisplay.style.color = '#FF9800';
+      nextWindowDisplay.setAttribute('data-countdown-target', String(Date.now() + (prediction.practicalMinimumRemaining * 60 * 60 * 1000)));
+      nextWindowDisplay.setAttribute('data-countdown-prefix', 'Monitor in: ');
+    }
+
+    if (nextWindowDisplay.textContent || nextWindowDisplay.hasAttribute('data-countdown-target')) {
+      statusContainer.appendChild(nextWindowDisplay);
+    }
+
     // Time since last seen
     if (prediction.timeSinceLastSeen !== null) {
       const timeSinceText = document.createElement('div');
@@ -529,16 +563,16 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
         const cooldownText = document.createElement('div');
         cooldownText.style.cssText = 'color: #f44336; font-weight: 600; margin-bottom: 4px;';
-        cooldownText.textContent = `⏳ Hard cooldown: ${prediction.hardCooldownRemaining.toFixed(1)}h remaining`;
+        cooldownText.setAttribute('data-countdown-target', String(Date.now() + (prediction.hardCooldownRemaining * 60 * 60 * 1000)));
+        cooldownText.setAttribute('data-countdown-prefix', '⏳ Hard cooldown: ');
         waitSection.appendChild(cooldownText);
       }
 
       if (prediction.tooEarly && prediction.practicalMinimumRemaining !== null) {
         const practicalText = document.createElement('div');
-        practicalText.style.cssText = 'color: #FF9800; font-weight: 600;';
-        const hours = prediction.practicalMinimumRemaining.toFixed(1);
-        const days = (prediction.practicalMinimumRemaining / 24).toFixed(1);
-        practicalText.textContent = `⏰ Practical minimum: ${days}d (${hours}h) remaining`;
+        practicalText.style.cssText = 'color: #FF9800; font-weight: 600; margin-bottom: 4px;';
+        practicalText.setAttribute('data-countdown-target', String(Date.now() + (prediction.practicalMinimumRemaining * 60 * 60 * 1000)));
+        practicalText.setAttribute('data-countdown-prefix', '⏰ Practical minimum: ');
         waitSection.appendChild(practicalText);
 
         const explanation = document.createElement('div');
@@ -667,16 +701,20 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       const hoursContainer = document.createElement('div');
       hoursContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px;';
 
+      const currentHour = new Date().getHours();
+
       for (const hour of prediction.monitoringSchedule.optimalHours) {
         const hourBadge = document.createElement('span');
+        const isCurrentHour = hour === currentHour;
+
         hourBadge.style.cssText = `
           padding: 3px 6px;
-          background: rgba(76, 175, 80, 0.3);
-          border: 1px solid #4CAF50;
+          background: ${isCurrentHour ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'};
+          border: 1px solid ${isCurrentHour ? '#4CAF50' : '#f44336'};
           border-radius: 4px;
           font-size: 9px;
           font-weight: 600;
-          color: #4CAF50;
+          color: ${isCurrentHour ? '#4CAF50' : '#f44336'};
         `;
         const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
         const period = hour >= 12 ? 'PM' : 'AM';
@@ -741,6 +779,57 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   }
 
   section.appendChild(itemsList);
+
+  // Setup live countdowns (performance-friendly, update every second)
+  const updateCountdowns = () => {
+    const now = Date.now();
+    const countdownElements = section.querySelectorAll('[data-countdown-target]');
+
+    countdownElements.forEach(el => {
+      const element = el as HTMLElement;
+      const target = parseInt(element.getAttribute('data-countdown-target') || '0', 10);
+      const prefix = element.getAttribute('data-countdown-prefix') || '';
+
+      if (target > 0) {
+        const diff = target - now;
+
+        if (diff <= 0) {
+          // Countdown finished
+          element.textContent = prefix + '00d 00h 00m 00s';
+          element.style.color = '#4CAF50';
+        } else {
+          // Calculate dd:hh:mm:ss
+          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+          const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+          const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+          const formatted = `${days.toString().padStart(2, '0')}d ${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
+          element.textContent = prefix + formatted;
+        }
+      }
+    });
+  };
+
+  // Initial update
+  updateCountdowns();
+
+  // Update every second (only if window is still in DOM)
+  if (state.countdownInterval !== null) {
+    clearInterval(state.countdownInterval);
+  }
+  state.countdownInterval = window.setInterval(() => {
+    // Check if section is still in DOM before updating
+    if (document.contains(section)) {
+      updateCountdowns();
+    } else {
+      // Cleanup if removed from DOM
+      if (state.countdownInterval !== null) {
+        clearInterval(state.countdownInterval);
+        state.countdownInterval = null;
+      }
+    }
+  }, 1000);
 
   return section;
 }

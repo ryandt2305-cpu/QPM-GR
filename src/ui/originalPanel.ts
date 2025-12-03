@@ -4544,9 +4544,16 @@ function createStatsHeader(): HTMLElement {
     log('⚠️ Failed to start live shop tracking', error);
   });
 
-  // Subscribe to restock updates to refresh cards
+  // Subscribe to restock updates to refresh cards (with debouncing)
+  let debounceTimer: number | null = null;
   onRestockUpdate(() => {
-    updateShopRestockCards();
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = window.setTimeout(() => {
+      debounceTimer = null;
+      updateShopRestockCards();
+    }, 500); // Debounce 500ms to batch rapid updates
   });
 
   // Initial render

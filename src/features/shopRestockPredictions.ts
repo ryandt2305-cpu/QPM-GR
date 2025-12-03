@@ -299,8 +299,10 @@ export function predictItemWindows(
     ? config.practicalMinimumHours - timeSinceLastHours
     : 0;
 
-  // Get correlation signals
-  const correlationSignals = checkCorrelationSignals(itemName, recentEvents, currentTime);
+  // Get correlation signals (only if not in cooldown or too early)
+  const correlationSignals = (!cooldownActive && !tooEarly)
+    ? checkCorrelationSignals(itemName, recentEvents, currentTime)
+    : [];
 
   // Get next windows
   const nextWindows = getNextTimeWindows(itemName, lastSeenTime, currentTime, recentEvents);

@@ -1359,23 +1359,23 @@ export function removeWatchedItem(itemName: string): void {
  * Get window-based predictions for tracked items (with caching)
  */
 export function getWindowPredictions(): Map<string, WindowBasedPrediction> {
-  // Generate cache key based on data and current time (rounded to nearest minute)
-  const now = Date.now();
-  const currentMinute = Math.floor(now / (60 * 1000)); // Round to minute
+  // Generate cache key based ONLY on data changes (not time)
   const currentHash = restockEvents.length > 0
-    ? `${restockEvents.length}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}-${currentMinute}`
-    : `empty-${currentMinute}`;
+    ? `${restockEvents.length}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : 'empty';
 
+  const now = Date.now();
   const cacheAge = now - windowPredictionsCacheTimestamp;
 
-  // Return cached result if data hasn't changed and cache is fresh
+  // Return cached result if data hasn't changed and cache is reasonably fresh
+  // Only recalculate if data changed OR cache is older than 15 minutes
   if (windowPredictionsCache &&
       windowPredictionsCacheHash === currentHash &&
       cacheAge < CACHE_MAX_AGE_MS) {
     return new Map(windowPredictionsCache); // Return copy to prevent mutation
   }
 
-  // Rebuild cache
+  // Rebuild cache (only when data changes or cache expires)
   const predictions = new Map<string, WindowBasedPrediction>();
 
   for (const itemName of TRACKED_PREDICTION_ITEMS) {
@@ -1407,21 +1407,22 @@ export function getCurrentMonitoringAlerts(): Array<{
   message: string;
   urgency: 'high' | 'medium' | 'low';
 }> {
-  // Generate cache key based on predictions cache
+  // Generate cache key based on predictions + current hour (not minute)
+  // Alerts check for active windows, which are hour-based, so we only need to recalculate on hour changes
   const now = Date.now();
-  const currentMinute = Math.floor(now / (60 * 1000)); // Round to minute
-  const currentHash = windowPredictionsCacheHash + `-${currentMinute}`;
+  const currentHour = Math.floor(now / (60 * 60 * 1000)); // Round to hour
+  const currentHash = windowPredictionsCacheHash + `-${currentHour}`;
 
   const cacheAge = now - monitoringAlertsCacheTimestamp;
 
-  // Return cached result if predictions haven't changed and cache is fresh
+  // Return cached result if predictions and hour haven't changed
   if (monitoringAlertsCache &&
       monitoringAlertsCacheHash === currentHash &&
       cacheAge < CACHE_MAX_AGE_MS) {
     return [...monitoringAlertsCache]; // Return copy to prevent mutation
   }
 
-  // Rebuild cache
+  // Rebuild cache (only when predictions change or hour changes)
   const predictions = getWindowPredictions();
   const alerts = getMonitoringAlerts(predictions);
 

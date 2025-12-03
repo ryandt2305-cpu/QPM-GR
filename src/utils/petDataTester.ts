@@ -7,7 +7,12 @@ import { getHungerCapForSpecies } from '../data/petHungerCaps';
 import { getHungerDepletionRate } from '../data/petHungerDepletion';
 import { getTimeToMature } from '../data/petTimeToMature';
 import { log } from './logger';
-import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from '../features/abilityValuation';
+import {
+  buildAbilityValuationContext,
+  resolveDynamicAbilityEffect,
+  type AbilityValuationContext,
+  type DynamicAbilityEffect,
+} from '../features/abilityValuation';
 import { calculateMaxStrength, getSpeciesMaxScale } from '../store/xpTracker';
 
 /**
@@ -104,6 +109,54 @@ export interface AbilityStats {
 /**
  * Calculate detailed ability statistics
  */
+const DYNAMIC_ABILITY_IDS = new Set([
+  'ProduceScaleBoost',
+  'ProduceScaleBoostII',
+  'GoldGranter',
+  'RainbowGranter',
+  'ProduceMutationBoost',
+  'ProduceMutationBoostII',
+]);
+
+const ABILITY_CONTEXT_TTL_MS = 5000;
+let cachedAbilityContext: AbilityValuationContext | null = null;
+let cachedAbilityContextTimestamp = 0;
+
+function getCachedAbilityValuationContext(): AbilityValuationContext | null {
+  const now = Date.now();
+  if (cachedAbilityContext && now - cachedAbilityContextTimestamp < ABILITY_CONTEXT_TTL_MS) {
+    return cachedAbilityContext;
+  }
+  try {
+    cachedAbilityContext = buildAbilityValuationContext();
+    cachedAbilityContextTimestamp = now;
+  } catch (error) {
+    cachedAbilityContext = null;
+    cachedAbilityContextTimestamp = 0;
+    log('Failed to build ability valuation context:', error);
+  }
+  return cachedAbilityContext;
+}
+
+function resolveDynamicAbilityEffectWithCache(
+  abilityId: string,
+  strength: number | null,
+): DynamicAbilityEffect | null {
+  if (!DYNAMIC_ABILITY_IDS.has(abilityId)) {
+    return null;
+  }
+  const context = getCachedAbilityValuationContext();
+  if (!context) {
+    return null;
+  }
+  try {
+    return resolveDynamicAbilityEffect(abilityId, context, strength);
+  } catch (error) {
+    log('Failed to resolve dynamic ability effect:', error);
+    return null;
+  }
+}
+
 function calculateAbilityStats(
   abilityId: string,
   petStrength: number | null,
@@ -157,24 +210,17 @@ function calculateAbilityStats(
   let gardenValuePerProc: number | null = null;
   let gardenValueDetail: string | null = null;
   
-  try {
-    const context = buildAbilityValuationContext();
-    const dynamicEffect = resolveDynamicAbilityEffect(abilityId, context, strength);
-    
-    if (dynamicEffect) {
-      gardenValuePerProc = dynamicEffect.effectPerProc;
-      gardenValueDetail = dynamicEffect.detail;
-      
-      // Update valuePerHour/Day with garden value if not already set
-      if (gardenValuePerProc > 0 && procsPerHour != null) {
-        if (valuePerHour == null) {
-          valuePerHour = gardenValuePerProc * procsPerHour;
-          valuePerDay = valuePerHour * 24;
-        }
-      }
+  const dynamicEffect = resolveDynamicAbilityEffectWithCache(abilityId, strength);
+  if (dynamicEffect) {
+    gardenValuePerProc = dynamicEffect.effectPerProc;
+    gardenValueDetail = dynamicEffect.detail;
+
+    // Update valuePerHour/Day with garden value if not already set
+    if (gardenValuePerProc != null && gardenValuePerProc > 0 && procsPerHour != null && valuePerHour == null) {
+      valuePerHour = gardenValuePerProc * procsPerHour;
+      valuePerDay = valuePerHour * 24;
     }
-  } catch (error) {
-    // Garden context might not be available, that's okay
+  } else if (DYNAMIC_ABILITY_IDS.has(abilityId) && gardenValueDetail == null) {
     gardenValueDetail = 'Garden context not available';
   }
   

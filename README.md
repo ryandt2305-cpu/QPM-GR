@@ -1,6 +1,6 @@
 # Quinoa Pet Manager: General Release (QPM-GR)
 
-**QPM-GR** is a TypeScript userscript that layers analytics, automation helpers, and tracking utilities on top of **Magic Garden**. The project is still considered **ALPHA** software—expect frequent changes and the occasional rough edge while we continue integrating new features such as the Cross-Pet preset bridge.
+**QPM-GR** is a TypeScript userscript that layers analytics, automation helpers, and tracking utilities on top of **Magic Garden**. The project is still considered **ALPHA** software—expect frequent changes and the occasional rough edge while we continue integrating new features such as the Pet Hub.
 
 ---
 

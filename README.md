@@ -8,7 +8,7 @@
 
 - **Pet Hub analytics**: compare slots, highlight best stats, surface ability math, and (optionally) read Aries Mod presets when present.
 - **Inventory controls**: auto-favorite, crop locking, journal completion helpers, and turtle timers that reduce daily micromanagement.
-- **Shop + weather tooling**: restock tracking/exporting, mutation reminders, weather hub data, and XP trackers that quantify farming sessions.
+- **Shop + weather tooling**: restock tracking/exporting, mutation reminders, weather hub data, and XP trackers.
 
 All research notes, feature guides, patch notes, and historical analyses now live in a single reference file: [`DOCUMENTATION.md`](DOCUMENTATION.md).
 

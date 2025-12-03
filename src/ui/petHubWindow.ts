@@ -1898,9 +1898,15 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     const xpPerLevelA = speciesA ? getSpeciesXpPerLevel(speciesA) : null;
     const xpPerLevelB = speciesB ? getSpeciesXpPerLevel(speciesB) : null;
 
-    // Assume XP boost ability for now (can be refined)
-    const xpPerHourA = abilityA ? (abilityA.valuePerHour ?? null) : null;
-    const xpPerHourB = abilityB ? (abilityB.valuePerHour ?? null) : null;
+    // Calculate XP per hour - use actual data if available, otherwise use theoretical calculation
+    const xpPerHourA = abilityA ? (abilityA.valuePerHour && abilityA.valuePerHour > 0
+      ? abilityA.valuePerHour
+      : (abilityA.procsPerHour && abilityA.effectiveValue ? abilityA.procsPerHour * abilityA.effectiveValue : null)
+    ) : null;
+    const xpPerHourB = abilityB ? (abilityB.valuePerHour && abilityB.valuePerHour > 0
+      ? abilityB.valuePerHour
+      : (abilityB.procsPerHour && abilityB.effectiveValue ? abilityB.procsPerHour * abilityB.effectiveValue : null)
+    ) : null;
 
     if (xpPerLevelA && xpPerHourA && xpPerHourA > 0) {
       timePerLevelA = xpPerLevelA / xpPerHourA;
@@ -2055,21 +2061,17 @@ function create3v3PetCard(
   const xpLevelProgress = xpPerLevel && xpPerLevel > 0 ? (xpTowardsNextLevel / xpPerLevel) * 100 : 0;
   const xpLevelLabel = xpPerLevel ? `${xpTowardsNextLevel.toFixed(0)} / ${xpPerLevel} XP` : '—';
 
-  // Calculate hunger display - use wiki data for inventory/hutch pets
-  let displayHungerPct: number | null = hungerPct;
+  // Calculate hunger display - always use wiki data for time calculation
+  const displayHungerPct: number | null = hungerPct;
   let hungerDepletionHours: number | null = null;
 
-  if (hungerPct != null) {
-    // Active pet - use current hunger and calculate depletion
-    const hungerCost = metadata?.hungerCost ?? null;
-    hungerDepletionHours = hungerCost != null && hungerCost > 0
-      ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
-      : stats.timeUntilStarving ?? null;
-  } else if (stats.species) {
-    // Inventory/hutch pet - assume 100% hunger and use wiki depletion time
-    displayHungerPct = 100;
+  // Always calculate depletion time using wiki data for consistent cross-species comparison
+  if (stats.species && hungerPct != null) {
     const depletionMinutes = getHungerDepletionTime(stats.species);
-    hungerDepletionHours = depletionMinutes != null ? depletionMinutes / 60 : null;
+    if (depletionMinutes != null) {
+      // Calculate remaining time based on current hunger percentage
+      hungerDepletionHours = (hungerPct / 100) * (depletionMinutes / 60);
+    }
   }
 
   const hungerLabelParts: string[] = [];

@@ -2055,14 +2055,25 @@ function create3v3PetCard(
   const xpLevelProgress = xpPerLevel && xpPerLevel > 0 ? (xpTowardsNextLevel / xpPerLevel) * 100 : 0;
   const xpLevelLabel = xpPerLevel ? `${xpTowardsNextLevel.toFixed(0)} / ${xpPerLevel} XP` : '—';
 
-  // Use metadata hungerCost for accurate depletion time calculation
-  const hungerCost = metadata?.hungerCost ?? null;
-  const hungerDepletionHours = hungerPct != null && hungerCost != null && hungerCost > 0
-    ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
-    : stats.timeUntilStarving ?? null;
+  // Calculate hunger display - use wiki data for inventory/hutch pets
+  let displayHungerPct: number | null = hungerPct;
+  let hungerDepletionHours: number | null = null;
+
+  if (hungerPct != null) {
+    // Active pet - use current hunger and calculate depletion
+    const hungerCost = metadata?.hungerCost ?? null;
+    hungerDepletionHours = hungerCost != null && hungerCost > 0
+      ? (hungerPct / 100) * 100000 / hungerCost // 100000 is max hunger
+      : stats.timeUntilStarving ?? null;
+  } else if (stats.species) {
+    // Inventory/hutch pet - assume 100% hunger and use wiki depletion time
+    displayHungerPct = 100;
+    const depletionMinutes = getHungerDepletionTime(stats.species);
+    hungerDepletionHours = depletionMinutes != null ? depletionMinutes / 60 : null;
+  }
 
   const hungerLabelParts: string[] = [];
-  if (stats.hungerPct != null) hungerLabelParts.push(`${stats.hungerPct.toFixed(0)}%`);
+  if (displayHungerPct != null) hungerLabelParts.push(`${displayHungerPct.toFixed(0)}%`);
   if (hungerDepletionHours != null) hungerLabelParts.push(`${hungerDepletionHours.toFixed(1)}h left`);
   const hungerLabel = hungerLabelParts.join(' • ') || '—';
 
@@ -2115,7 +2126,7 @@ function create3v3PetCard(
   const statIndicators = `
     <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
       ${renderStatIndicator('XP/Level', xpLevelLabel, xpLevelProgress, '#7C4DFF')}
-      ${renderStatIndicator('Hunger', hungerLabel, hungerPct, '#9BF5C3')}
+      ${renderStatIndicator('Hunger', hungerLabel, displayHungerPct, '#9BF5C3')}
     </div>
   `;
 

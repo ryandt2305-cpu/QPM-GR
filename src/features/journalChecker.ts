@@ -376,7 +376,7 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
  * Get statistics about journal completion
  */
 export async function getJournalStats(): Promise<{
-  produce: { collected: number; total: number; percentage: number };
+  produce: { collected: number; total: number; percentage: number; typesCollected: number; typesTotal: number };
   petVariants: { collected: number; total: number; percentage: number };
   overall: { collected: number; total: number; percentage: number };
 } | null> {
@@ -387,13 +387,21 @@ export async function getJournalStats(): Promise<{
   let produceTotal = 0;
   let petVariantsCollected = 0;
   let petVariantsTotal = 0;
+  let cropTypesCollected = 0;
+  const cropTypesTotal = summary.produce.length;
 
   // Count produce
   for (const species of summary.produce) {
+    let speciesHasVariant = false;
     for (const variant of species.variants) {
       produceTotal++;
-      if (variant.collected) produceCollected++;
+      if (variant.collected) {
+        produceCollected++;
+        speciesHasVariant = true;
+      }
     }
+    // Count crop type as collected if at least one variant is collected
+    if (speciesHasVariant) cropTypesCollected++;
   }
 
   // Count pet variants only (no abilities)
@@ -412,6 +420,8 @@ export async function getJournalStats(): Promise<{
       collected: produceCollected,
       total: produceTotal,
       percentage: produceTotal > 0 ? (produceCollected / produceTotal) * 100 : 0,
+      typesCollected: cropTypesCollected,
+      typesTotal: cropTypesTotal,
     },
     petVariants: {
       collected: petVariantsCollected,

@@ -3883,6 +3883,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       'trackers': 'rgba(156, 39, 176, 0.28)',      // Purple
       'xp-tracker': 'rgba(255, 152, 0, 0.28)',     // Orange
       'shop-restock': 'rgba(0, 188, 212, 0.28)',   // Cyan
+      'pet-hub': 'rgba(103, 58, 183, 0.28)',       // Deep Purple
       'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
       'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
       'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow

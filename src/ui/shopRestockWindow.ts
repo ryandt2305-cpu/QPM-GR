@@ -504,22 +504,32 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       let earliestTime: number | null = null;
       let latestTime: number | null = null;
 
-      // Get earliest from pseudo-RNG windows
+      const now = Date.now();
+
+      // Get earliest from pseudo-RNG windows (filter out past windows)
       if (prediction.nextWindows.length > 0) {
-        earliestTime = prediction.nextWindows[0]!.startTime;
-        latestTime = prediction.nextWindows[0]!.endTime;
+        // Find first window that hasn't ended yet
+        const futureWindow = prediction.nextWindows.find(w => w.endTime > now);
+        if (futureWindow) {
+          earliestTime = futureWindow.startTime;
+          latestTime = futureWindow.endTime;
+        }
       }
 
-      // Compare with statistical prediction range
+      // Compare with statistical prediction range (only if in future)
       if (prediction.statisticalPrediction) {
         const statEarliest = prediction.statisticalPrediction.certaintyRange.earliest;
         const statLatest = prediction.statisticalPrediction.certaintyRange.latest;
 
-        earliestTime = earliestTime ? Math.min(earliestTime, statEarliest) : statEarliest;
-        latestTime = latestTime ? Math.max(latestTime, statLatest) : statLatest;
+        // Only include statistical prediction if it's in the future
+        if (statLatest > now) {
+          earliestTime = earliestTime ? Math.min(earliestTime, statEarliest) : statEarliest;
+          latestTime = latestTime ? Math.max(latestTime, statLatest) : statLatest;
+        }
       }
 
-      if (earliestTime && latestTime) {
+      // Only display if the prediction is in the future
+      if (earliestTime && latestTime && latestTime > now) {
         const earliestDate = new Date(earliestTime);
         const latestDate = new Date(latestTime);
         const earliestStr = earliestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
@@ -634,8 +644,11 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       detailsSection.appendChild(correlationSection);
     }
 
-    // Show next windows
-    if (prediction.nextWindows.length > 0) {
+    // Show next windows (filter out past windows)
+    const now = Date.now();
+    const futureWindows = prediction.nextWindows.filter(w => w.endTime > now);
+
+    if (futureWindows.length > 0) {
       const windowsSection = document.createElement('div');
       windowsSection.style.cssText = `
         padding: 10px;
@@ -650,8 +663,8 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       windowsTitle.textContent = '📅 Next Possible Windows';
       windowsSection.appendChild(windowsTitle);
 
-      for (let i = 0; i < Math.min(5, prediction.nextWindows.length); i++) {
-        const window = prediction.nextWindows[i]!;
+      for (let i = 0; i < Math.min(5, futureWindows.length); i++) {
+        const window = futureWindows[i]!
         const windowRow = document.createElement('div');
         windowRow.style.cssText = `
           padding: 6px 8px;

@@ -746,7 +746,6 @@ function createSpriteDropdownItem(select: HTMLSelectElement, value: string, labe
     width: 30px;
     height: 30px;
     border-radius: 8px;
-    border: 1px solid var(--qpm-border);
     flex-shrink: 0;
     image-rendering: pixelated;
     background: ${sprite ? `url("${sprite}") center/contain no-repeat` : 'rgba(255,255,255,0.05)'};
@@ -1487,7 +1486,7 @@ function createPetCard(pet: PetWithSource): HTMLElement {
     border-bottom: 1px solid var(--qpm-border);
   `;
 
-  const petImageHtml = renderPetImage(stats, 48, true);
+  const petImageHtml = renderPetImage(stats, 48, false);
   header.innerHTML = `
     ${petImageHtml}
     <div style="flex: 1;">
@@ -2130,7 +2129,7 @@ function create3v3PetCard(
 
       <!-- Pet image centered -->
       <div style="position:relative;display:flex;justify-content:center;">
-        ${renderPetImage(stats, 128, true)}
+        ${renderPetImage(stats, 128, false)}
 
         <!-- Ability squares positioned to the left of pet image -->
         <div class="qpm-ability-squares" style="position:absolute;left:-30px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;"></div>

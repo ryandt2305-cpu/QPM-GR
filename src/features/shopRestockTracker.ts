@@ -19,12 +19,17 @@ const TRACKED_PREDICTION_ITEMS = ['Mythical Eggs', 'Sunflower', 'Starweaver', 'D
 let itemIntervalsCache: Map<string, number[]> | null = null;
 let itemIntervalsCacheHash: string = '';
 let itemIntervalsCacheTimestamp: number = 0;
-const CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes (increased from 5)
 
 // Performance optimization: Cache for prediction stats to avoid expensive recalculations
 let predictionStatsCache: Map<string, DetailedPredictionStats> | null = null;
 let predictionStatsCacheHash: string = '';
 let predictionStatsCacheTimestamp: number = 0;
+
+// Performance optimization: Cache for item stats to avoid recalculating on every render
+let itemStatsCache: Map<string, ItemStats> | null = null;
+let itemStatsCacheHash: string = '';
+let itemStatsCacheTimestamp: number = 0;
 
 /**
  * Restock event data structure
@@ -457,9 +462,25 @@ export function getRestocksInRange(startTime: number, endTime: number): RestockE
 }
 
 /**
- * Calculate item statistics
+ * Calculate item statistics (with aggressive caching)
  */
 export function calculateItemStats(): Map<string, ItemStats> {
+  // Check cache first
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const now = Date.now();
+  const cacheAge = now - itemStatsCacheTimestamp;
+
+  // Return cached result if data hasn't changed and cache is fresh
+  if (itemStatsCache &&
+      itemStatsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
+    return new Map(itemStatsCache); // Return copy to prevent mutation
+  }
+
+  // Rebuild cache
   const statsMap = new Map<string, ItemStats>();
   const totalRestocks = restockEvents.length;
 
@@ -502,7 +523,12 @@ export function calculateItemStats(): Map<string, ItemStats> {
     stats.rarity = getItemRarity(stats.name);
   }
 
-  return statsMap;
+  // Update cache
+  itemStatsCache = statsMap;
+  itemStatsCacheHash = currentHash;
+  itemStatsCacheTimestamp = now;
+
+  return new Map(statsMap); // Return copy to prevent mutation
 }
 
 /**
@@ -1220,6 +1246,11 @@ export function clearAllRestocks(): void {
   predictionStatsCache = null;
   predictionStatsCacheHash = '';
   predictionStatsCacheTimestamp = 0;
+
+  // Clear item stats cache
+  itemStatsCache = null;
+  itemStatsCacheHash = '';
+  itemStatsCacheTimestamp = 0;
 
   // Clear only shop restock specific storage keys by setting empty values
   storage.set(STORAGE_KEY_RESTOCKS, []);

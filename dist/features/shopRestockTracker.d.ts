@@ -63,7 +63,7 @@ export declare function getAllRestockEvents(): RestockEvent[];
  */
 export declare function getRestocksInRange(startTime: number, endTime: number): RestockEvent[];
 /**
- * Calculate item statistics
+ * Calculate item statistics (with aggressive caching)
  */
 export declare function calculateItemStats(): Map<string, ItemStats>;
 /**

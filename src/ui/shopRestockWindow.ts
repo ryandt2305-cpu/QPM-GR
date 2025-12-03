@@ -1134,7 +1134,7 @@ function createSummarySection(summary: ReturnType<typeof getSummaryStats>): HTML
 }
 
 /**
- * Create item statistics section
+ * Create item statistics section (virtualized for performance)
  */
 function createItemStatsSection(): HTMLElement {
   const section = document.createElement('div');
@@ -1155,6 +1155,11 @@ function createItemStatsSection(): HTMLElement {
   const stats = Array.from(statsMap.values())
     .filter(stat => stat.type !== 'unknown') // Filter out unknown items
     .sort((a, b) => b.totalRestocks - a.totalRestocks);
+
+  // Performance: Only render top 30 items initially
+  const INITIAL_ITEMS = 30;
+  let currentlyShowing = INITIAL_ITEMS;
+  let isExpanded = false;
 
   // Create table
   const table = document.createElement('table');
@@ -1189,13 +1194,15 @@ function createItemStatsSection(): HTMLElement {
 
   // Body
   const tbody = document.createElement('tbody');
-  for (const stat of stats) {
+
+  // Helper function to create a row
+  const createRow = (stat: ReturnType<typeof calculateItemStats> extends Map<string, infer T> ? T : never) => {
     const row = document.createElement('tr');
     row.style.cssText = `
       border-bottom: 1px solid var(--qpm-border, #444);
     `;
 
-    // Rarity color
+    // Rarity colors
     const rarityColors: Record<string, string> = {
       'common': '#aaa',
       'uncommon': '#4CAF50',
@@ -1246,11 +1253,76 @@ function createItemStatsSection(): HTMLElement {
       row.appendChild(td);
     }
 
-    tbody.appendChild(row);
-  }
-  table.appendChild(tbody);
+    return row;
+  };
 
+  // Render initial items
+  for (let i = 0; i < Math.min(INITIAL_ITEMS, stats.length); i++) {
+    tbody.appendChild(createRow(stats[i]!));
+  }
+
+  table.appendChild(tbody);
   section.appendChild(table);
+
+  // Add "Show More" button if there are more items
+  if (stats.length > INITIAL_ITEMS) {
+    const showMoreBtn = document.createElement('button');
+    showMoreBtn.textContent = `📋 Show All Items (${stats.length - INITIAL_ITEMS} more)`;
+    showMoreBtn.style.cssText = `
+      width: 100%;
+      padding: 10px;
+      margin-top: 12px;
+      background: rgba(66, 165, 245, 0.15);
+      border: 1px solid rgba(66, 165, 245, 0.3);
+      color: #42A5F5;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+    `;
+
+    showMoreBtn.addEventListener('mouseenter', () => {
+      showMoreBtn.style.background = 'rgba(66, 165, 245, 0.25)';
+    });
+
+    showMoreBtn.addEventListener('mouseleave', () => {
+      showMoreBtn.style.background = isExpanded ? 'rgba(66, 165, 245, 0.2)' : 'rgba(66, 165, 245, 0.15)';
+    });
+
+    showMoreBtn.addEventListener('click', () => {
+      if (!isExpanded) {
+        // Show all remaining items
+        showMoreBtn.textContent = '⏳ Loading...';
+        showMoreBtn.disabled = true;
+
+        // Defer rendering to prevent UI freeze
+        requestAnimationFrame(() => {
+          for (let i = currentlyShowing; i < stats.length; i++) {
+            tbody.appendChild(createRow(stats[i]!));
+          }
+          currentlyShowing = stats.length;
+          isExpanded = true;
+
+          showMoreBtn.textContent = '📋 Show Less';
+          showMoreBtn.disabled = false;
+          showMoreBtn.style.background = 'rgba(66, 165, 245, 0.2)';
+        });
+      } else {
+        // Collapse back to initial items
+        while (tbody.children.length > INITIAL_ITEMS) {
+          tbody.removeChild(tbody.lastChild!);
+        }
+        currentlyShowing = INITIAL_ITEMS;
+        isExpanded = false;
+        showMoreBtn.textContent = `📋 Show All Items (${stats.length - INITIAL_ITEMS} more)`;
+        showMoreBtn.style.background = 'rgba(66, 165, 245, 0.15)';
+      }
+    });
+
+    section.appendChild(showMoreBtn);
+  }
+
   return section;
 }
 

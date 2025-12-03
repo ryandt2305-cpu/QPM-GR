@@ -1,93 +1,55 @@
 # Quinoa Pet Manager: General Release (QPM-GR)
 
-**QPM-GR** (Quinoa Pet Manager – General Release) is an information and analytics companion for the browser game **Magic Garden**.  
-It plugs into your existing Magic Garden tooling and surfaces detailed pet and garden data so you can make better decisions, optimise profit, and understand what your pets are actually doing over time.
-
-> **Status:** ALPHA – not optimised, very WIP, lots of spaghetti. Expect rough edges and breaking changes.
+**QPM-GR** is a TypeScript userscript that layers analytics, automation helpers, and tracking utilities on top of **Magic Garden**. The project is still considered **ALPHA** software—expect frequent changes and the occasional rough edge while we continue integrating new features such as the Cross-Pet preset bridge.
 
 ---
 
-## Key Features
+## Focus Areas
 
+- **Pet Hub analytics**: compare slots, highlight best stats, surface ability math, and (optionally) read Aries Mod presets when present.
+- **Inventory controls**: auto-favorite, crop locking, journal completion helpers, and turtle timers that reduce daily micromanagement.
+- **Shop + weather tooling**: restock tracking/exporting, mutation reminders, weather hub data, and XP trackers that quantify farming sessions.
 
-### 🐾 Pet Overview & Analytics
-- View all pets with their rarity, level, and ability.
-- See real ability uptime: procs per minute/hour based on actual behaviour.
-- Compare pets in real gameplay conditions
-
-### ⭐ Auto Favourite (Smart Pet/Produce Favouriting)
-- Automatically favourites pets or produce based on user configured variables.
-
-### 🧺 Bulk Inventory Crop Favouriting (Crop-Type Locking)
-- Instantly favourite large groups of crops in your inventory.
-- Useful for:
-  - Cleaning up messy inventories
-  - Locking all crops of the same type (e.g., all Carrots or all Strawberries)
-  - Preventing accidental selling or discarding
-- Saves a huge amount of manual clicking.
-
-### 📘 Journal Checker
-- Identifies seeds/crops you still need for journal completion.
-- Shows missing entries at a glance.
-- Helps you plan planting cycles to finish your journal efficiently.
-
-### 🌈 Ability Tracker
-- Logs every time a pet ability triggers.
-- Shows total procs, timing between procs, and which pets contribute the most.
-- Great for comparing ability effectiveness 
-- Perfect for finding your most profitable pet setups
-
-
-### 🛒 Shop Restock Tracker
-- Tracks all Magic Garden shop restocks.
-- Based off the data, it can predict when the next restock for every item will be
-- Find out when rare seeds and eggs might drop
-
-### 🐢 Turtle Timer
-- A small utility timer specifically for Turtle pets, calculating plant growth, egg growth, and food support
-
-
-### 🧠 XP Tracker
-- Tracks your XP gained during the session.
-Displays:
-  XP per minute 
-  XP per hour
-  Total XP gained
-  Session runtime
-
-Helps compare pets, garden layouts, and farming setups for leveling efficiency.
----
-
-## Repository Layout
-
-- `src/`
-  - TypeScript source for the main QPM-GR logic and UI.
-  - Built with Vite + TypeScript for a fast dev loop and simple bundling.
-- `scripts/`
-  - Helper / maintenance scripts for working with the project.
-- `discover-seed-ids.js`
-  - Utility to probe the game and discover internal **seed IDs** for mapping purposes.
-- `discover-shop-ids.js`
-  - Utility to inspect the **shop** and log internal IDs / structures.
-- `websocket-final-discovery.js`
-  - Helper for exploring Magic Garden’s WebSocket traffic and structure.
-- `PUSH_TO_QPM-GR.sh`
-  - Local convenience script to push this project to the `QPM-GR` GitHub repo.
-- `package.json`, `tsconfig.json`, `vite.config.ts`
-  - Standard TypeScript/Vite project configuration.
+All research notes, feature guides, patch notes, and historical analyses now live in a single reference file: [`DOCUMENTATION.md`](DOCUMENTATION.md).
 
 ---
 
-## Getting Started
-
-### Prerequisites
-
-- **Node.js** (LTS or later recommended)
-- **npm** or **pnpm** or **yarn**
-- A working Magic Garden setup (browser) plus whatever loader/overlay you use to inject custom scripts (e.g. Tampermonkey, MGModLoader, custom Electron wrapper, etc.).
-
-### 1. Clone the Repository
+## Build & Test
 
 ```bash
 git clone https://github.com/ryandt2305-cpu/QPM-GR.git
 cd QPM-GR
+npm install
+
+# iterative build during development
+npm run dev
+
+# production bundle + userscript wrapper
+npm run build:dist
+```
+
+- The Tampermonkey-ready bundle is emitted to `dist/QPM.user.js`.
+- `scripts/build-userscript.js` wraps the Vite IIFE output with the metadata header.
+- `scraped-data/*.json` feeds TypeScript data helpers at runtime—don’t remove those files unless you regenerate them.
+
+---
+
+## Minimal Repo Layout
+
+- `src/` – all runtime TypeScript (core, features, UI, stores, data, utils, types).
+- `scripts/` – build pipeline and data maintenance scripts (`build-userscript`, `scrape-game-data`, etc.).
+- `scraped-data/` – JSON payloads consumed by the app (pets, crops, abilities reports).
+- `dist/` – build artifacts that ship to users.
+- `DOCUMENTATION.md` – the single consolidated knowledge base containing every prior guide, plan, and research log.
+
+Everything else has been trimmed so the repository only carries what’s required to build, test, or reason about the userscript.
+
+---
+
+## Need Details?
+
+- Architectural notes, historical feature plans, rare restock heatmaps, testing instructions, Firebase setup, and archived dev utilities now live inside [`DOCUMENTATION.md`](DOCUMENTATION.md).
+- Legacy helper snippets such as the atom inspector, WebSocket discovery probe, and rainbow-effect reverse engineering script have been preserved in that file under **“Archived Dev Utilities.”**
+
+If something critical is missing after the cleanup, open an issue describing the workflow so we can restore or modernize it without re-cluttering the repo.
+  Total XP gained

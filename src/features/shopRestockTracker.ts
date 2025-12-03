@@ -17,7 +17,9 @@ const TRACKED_PREDICTION_ITEMS = ['Mythical Eggs', 'Sunflower', 'Starweaver', 'D
 
 // Performance optimization: Cache for item intervals to avoid recalculating
 let itemIntervalsCache: Map<string, number[]> | null = null;
-let itemIntervalsCacheVersion: number = 0;
+let itemIntervalsCacheHash: string = '';
+let itemIntervalsCacheTimestamp: number = 0;
+const CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Restock event data structure
@@ -646,13 +648,24 @@ function percentile(arr: number[], p: number): number {
  * Call this once before processing many items to avoid O(n*m) complexity
  */
 function buildItemIntervalsCache(): void {
-  // Only rebuild if data changed
-  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
+  // Create hash of event data to detect changes (not just length)
+  const currentHash = restockEvents.length > 0
+    ? `${restockEvents.length}-${restockEvents[0]?.timestamp ?? 0}-${restockEvents[restockEvents.length - 1]?.timestamp ?? 0}`
+    : '';
+
+  const now = Date.now();
+  const cacheAge = now - itemIntervalsCacheTimestamp;
+
+  // Only rebuild if data changed OR cache expired
+  if (itemIntervalsCache &&
+      itemIntervalsCacheHash === currentHash &&
+      cacheAge < CACHE_MAX_AGE_MS) {
     return;
   }
 
   itemIntervalsCache = new Map();
-  itemIntervalsCacheVersion = restockEvents.length;
+  itemIntervalsCacheHash = currentHash;
+  itemIntervalsCacheTimestamp = now;
 
   // Build appearance map for all items at once
   const appearancesMap = new Map<string, number[]>();
@@ -708,16 +721,7 @@ function buildItemIntervalsCache(): void {
 }
 
 function getItemIntervals(itemName: string): number[] {
-  // Check cache first (performance optimization for large datasets)
-  if (itemIntervalsCache && itemIntervalsCacheVersion === restockEvents.length) {
-    const cached = itemIntervalsCache.get(itemName);
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
-
-  // If not in cache, build cache for all items
-  // (this happens on first call or after data changes)
+  // Always use buildItemIntervalsCache - it checks if rebuild is needed
   buildItemIntervalsCache();
 
   return itemIntervalsCache?.get(itemName) ?? [];
@@ -1172,6 +1176,11 @@ export function clearAllRestocks(): void {
   config.watchedItems = [];
   predictionHistory.clear();
   activePredictions.clear();
+
+  // Clear interval cache
+  itemIntervalsCache = null;
+  itemIntervalsCacheHash = '';
+  itemIntervalsCacheTimestamp = 0;
 
   // Clear only shop restock specific storage keys by setting empty values
   storage.set(STORAGE_KEY_RESTOCKS, []);

@@ -11,18 +11,7 @@ import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petM
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
 import { getPetMetadata } from '../data/petMetadata';
 import { getHungerDepletionTime } from '../data/petHungerDepletion';
-
-function formatNumber(value: number): string {
-  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toFixed(0);
-}
-
-function formatCoins(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return '—';
-  return `${formatNumber(value)}`;
-}
+import { formatNumber, formatCoins } from '../utils/formatters';
 
 function formatAbilityValue(ability: AbilityStats): { valueText: string; procsText: string; probText: string } {
   const probText = ability.effectiveProbability != null ? `${ability.effectiveProbability.toFixed(1)}%` : '—';
@@ -793,9 +782,11 @@ function attachSpriteDropdownListeners(): void {
   document.addEventListener('keydown', handleDropdownKeydown, true);
 }
 
-function detachSpriteDropdownListeners(): void {
-  if (!spriteDropdownListenersAttached || activeSpriteDropdown) return;
+function detachSpriteDropdownListeners(force: boolean = false): void {
+  if (!spriteDropdownListenersAttached) return;
+  if (!force && activeSpriteDropdown) return; // Don't detach if dropdown is active unless forced
   spriteDropdownListenersAttached = false;
+  activeSpriteDropdown = null; // Clear active dropdown reference
   document.removeEventListener('mousedown', handleDropdownGlobalMouseDown, true);
   window.removeEventListener('resize', closeActiveSpriteDropdown);
   document.removeEventListener('scroll', handleDropdownScroll, true);
@@ -1412,6 +1403,15 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
   root.appendChild(tabContainer);
   root.appendChild(contentContainer);
   renderContent();
+
+  // Clean up sprite dropdown listeners when Pet Hub window is destroyed
+  cleanupOnDetach(root, () => {
+    detachSpriteDropdownListeners(true); // Force cleanup
+    if (ariesRetryTimer != null) {
+      window.clearTimeout(ariesRetryTimer);
+      ariesRetryTimer = null;
+    }
+  });
 }
 
 // --- Overview -------------------------------------------------------------
@@ -2383,11 +2383,23 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const slotsWrapper = document.createElement('div');
   slotsWrapper.style.cssText = 'display:grid;grid-template-columns:1fr;gap:12px;';
 
+  // Cache row elements to avoid full DOM regeneration on every render
+  const cachedRows: HTMLElement[] = [];
+
   const render = () => {
-    slotsWrapper.innerHTML = '';
+    // Use DocumentFragment for batch DOM operations
+    const fragment = document.createDocumentFragment();
+
     for (let i = 0; i < 3; i++) {
-      slotsWrapper.appendChild(create3v3SlotRow(teamA[i] ?? null, teamB[i] ?? null, i, abilityFilter));
+      const newRow = create3v3SlotRow(teamA[i] ?? null, teamB[i] ?? null, i, abilityFilter);
+      fragment.appendChild(newRow);
     }
+
+    // Replace all rows at once instead of clearing innerHTML
+    while (slotsWrapper.firstChild) {
+      slotsWrapper.removeChild(slotsWrapper.firstChild);
+    }
+    slotsWrapper.appendChild(fragment);
   };
 
   const filterWrap = document.createElement('div');
@@ -2398,10 +2410,12 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   const filterSelect = document.createElement('select');
   filterSelect.style.cssText = 'padding:6px 10px;border:1px solid var(--qpm-border);border-radius:6px;background:rgba(18,20,26,0.6);color:var(--qpm-text);font-size:13px;width:220px;';
   filterSelect.appendChild(new Option('All abilities', ''));
-  Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0]))))
+
+  // Cache ability names to avoid recomputing on every render - compute once at tab creation
+  const abilityNames = Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0]))))
     .filter((name): name is string => Boolean(name))
-    .sort()
-    .forEach(name => filterSelect.appendChild(new Option(name, name.toLowerCase())));
+    .sort();
+  abilityNames.forEach(name => filterSelect.appendChild(new Option(name, name.toLowerCase())));
   filterSelect.addEventListener('change', () => {
     abilityFilter = filterSelect.value.trim();
     rebuildManualSelectors();

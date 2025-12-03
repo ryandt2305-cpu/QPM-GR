@@ -1367,11 +1367,28 @@ export function getWindowPredictions(): Map<string, WindowBasedPrediction> {
   const now = Date.now();
   const cacheAge = now - windowPredictionsCacheTimestamp;
 
-  // Return cached result if data hasn't changed and cache is reasonably fresh
-  // Only recalculate if data changed OR cache is older than 15 minutes
+  // Check if any cached predictions have expired (all windows passed)
+  let allWindowsExpired = false;
+  if (windowPredictionsCache && windowPredictionsCache.size > 0) {
+    // Check if all predictions have no active windows (all ended)
+    let hasActiveWindow = false;
+    for (const prediction of windowPredictionsCache.values()) {
+      // Check if any window hasn't ended yet
+      const hasValidWindow = prediction.nextWindows.some(w => w.endTime >= now);
+      if (hasValidWindow || prediction.cooldownActive || prediction.tooEarly) {
+        hasActiveWindow = true;
+        break;
+      }
+    }
+    allWindowsExpired = !hasActiveWindow;
+  }
+
+  // Return cached result if data hasn't changed, cache is fresh, AND predictions haven't expired
+  // Recalculate if: data changed OR cache is old OR all predictions expired
   if (windowPredictionsCache &&
       windowPredictionsCacheHash === currentHash &&
-      cacheAge < CACHE_MAX_AGE_MS) {
+      cacheAge < CACHE_MAX_AGE_MS &&
+      !allWindowsExpired) {
     return new Map(windowPredictionsCache); // Return copy to prevent mutation
   }
 

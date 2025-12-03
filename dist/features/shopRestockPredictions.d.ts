@@ -39,6 +39,14 @@ export interface WindowBasedPrediction {
     timeSinceLastSeen: number | null;
     hardCooldownRemaining: number | null;
     practicalMinimumRemaining: number | null;
+    statisticalPrediction?: {
+        estimatedTime: number;
+        certaintyRange: {
+            earliest: number;
+            latest: number;
+        };
+        confidence: 'high' | 'medium' | 'low';
+    } | undefined;
     correlationSignals?: {
         itemName: string;
         detectedAt: number;
@@ -53,7 +61,7 @@ export interface WindowBasedPrediction {
 /**
  * Get window-based prediction for an item
  */
-export declare function predictItemWindows(itemName: string, lastSeenTime: number | null, recentEvents: RestockEvent[]): WindowBasedPrediction;
+export declare function predictItemWindows(itemName: string, lastSeenTime: number | null, recentEvents: RestockEvent[], allEvents: RestockEvent[]): WindowBasedPrediction;
 /**
  * Get monitoring alert status for current time
  * Returns items that should trigger monitoring alerts

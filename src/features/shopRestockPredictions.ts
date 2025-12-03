@@ -111,6 +111,13 @@ export interface WindowBasedPrediction {
   hardCooldownRemaining: number | null; // Hours
   practicalMinimumRemaining: number | null; // Hours
 
+  // Statistical prediction (mean-based)
+  statisticalPrediction?: {
+    estimatedTime: number; // Timestamp
+    certaintyRange: { earliest: number; latest: number }; // Timestamps
+    confidence: 'high' | 'medium' | 'low';
+  } | undefined;
+
   // Correlation signals
   correlationSignals?: {
     itemName: string;
@@ -245,12 +252,80 @@ function checkCorrelationSignals(
 }
 
 /**
+ * Round interval to human-friendly number
+ * 2513 → 2500, 1234 → 1200, 45678 → 46000
+ */
+function roundToHumanNumber(value: number): number {
+  if (value < 100) return Math.round(value / 10) * 10;
+  if (value < 1000) return Math.round(value / 50) * 50;
+  if (value < 10000) return Math.round(value / 100) * 100;
+  return Math.round(value / 1000) * 1000;
+}
+
+/**
+ * Calculate statistical prediction based on mean interval
+ * This uses a simple distribution approach based on historical intervals
+ */
+function calculateStatisticalPrediction(
+  itemName: string,
+  lastSeenTime: number,
+  allEvents: RestockEvent[]
+): { estimatedTime: number; certaintyRange: { earliest: number; latest: number }; confidence: 'high' | 'medium' | 'low' } | null {
+  // Get all timestamps for this item
+  const timestamps = allEvents
+    .filter(event => event.items.some(item => item.name === itemName))
+    .map(event => event.timestamp)
+    .sort((a, b) => a - b);
+
+  if (timestamps.length < 2) return null;
+
+  // Calculate intervals
+  const intervals: number[] = [];
+  for (let i = 1; i < timestamps.length; i++) {
+    intervals.push(timestamps[i]! - timestamps[i - 1]!);
+  }
+
+  // Calculate mean and standard deviation
+  const sum = intervals.reduce((acc, val) => acc + val, 0);
+  const mean = sum / intervals.length;
+
+  const variance = intervals.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / intervals.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Round mean to human-friendly number
+  const roundedMean = roundToHumanNumber(mean);
+
+  // Calculate estimated next restock time
+  const estimatedTime = lastSeenTime + roundedMean;
+
+  // Use standard deviation for certainty range
+  // 1 stdDev = ~68% confidence, 1.5 stdDev = ~86% confidence
+  const certaintyBuffer = stdDev * 1.5;
+  const earliest = estimatedTime - certaintyBuffer;
+  const latest = estimatedTime + certaintyBuffer;
+
+  // Determine confidence based on coefficient of variation (CV)
+  const cv = stdDev / mean;
+  let confidence: 'high' | 'medium' | 'low';
+  if (cv < 0.3) confidence = 'high'; // Low variability
+  else if (cv < 0.6) confidence = 'medium';
+  else confidence = 'low'; // High variability
+
+  return {
+    estimatedTime,
+    certaintyRange: { earliest, latest },
+    confidence
+  };
+}
+
+/**
  * Get window-based prediction for an item
  */
 export function predictItemWindows(
   itemName: string,
   lastSeenTime: number | null,
-  recentEvents: RestockEvent[]
+  recentEvents: RestockEvent[],
+  allEvents: RestockEvent[]
 ): WindowBasedPrediction {
   const config = ITEM_CONFIGS[itemName];
 
@@ -307,6 +382,9 @@ export function predictItemWindows(
   // Get next windows
   const nextWindows = getNextTimeWindows(itemName, lastSeenTime, currentTime, recentEvents);
 
+  // Calculate statistical prediction (mean-based, most likely time from distribution peak)
+  const statisticalPrediction = calculateStatisticalPrediction(itemName, lastSeenTime, allEvents);
+
   // Generate monitoring schedule
   const monitoringSchedule = config.allowedHours ? {
     message: `Optimal monitoring hours (all times local)`,
@@ -322,6 +400,7 @@ export function predictItemWindows(
     timeSinceLastSeen: timeSinceLastHours,
     hardCooldownRemaining,
     practicalMinimumRemaining,
+    statisticalPrediction: statisticalPrediction || undefined,
     correlationSignals: correlationSignals.length > 0 ? correlationSignals : undefined,
     monitoringSchedule
   };

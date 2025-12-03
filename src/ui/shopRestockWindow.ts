@@ -488,27 +488,44 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
     } else if (prediction.tooEarly) {
       statusBadge.textContent = '⏰ Too Early';
       statusBadge.style.cssText += 'background: rgba(255, 152, 0, 0.3); color: #FF9800; border: 1px solid #FF9800;';
-    } else if (prediction.nextWindows.length > 0) {
-      statusBadge.textContent = '✅ Windows Available';
-      statusBadge.style.cssText += 'background: rgba(76, 175, 80, 0.3); color: #4CAF50; border: 1px solid #4CAF50;';
     } else {
-      statusBadge.textContent = '❓ Monitoring';
-      statusBadge.style.cssText += 'background: rgba(158, 158, 158, 0.3); color: #9e9e9e; border: 1px solid #9e9e9e;';
+      statusBadge.textContent = '📊 Monitoring';
+      statusBadge.style.cssText += 'background: rgba(66, 165, 245, 0.3); color: #42A5F5; border: 1px solid #42A5F5;';
     }
 
     statusContainer.appendChild(statusBadge);
 
-    // Next window time range (always visible)
+    // Next window time range (always visible) - combines both prediction methods
     const nextWindowDisplay = document.createElement('div');
     nextWindowDisplay.style.cssText = 'color: #42A5F5; font-size: 10px; font-weight: 600; text-align: right;';
 
-    if (prediction.nextWindows.length > 0) {
-      const nextWindow = prediction.nextWindows[0]!;
-      const startDate = new Date(nextWindow.startTime);
-      const endDate = new Date(nextWindow.endTime);
-      const startTimeStr = startDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-      const endTimeStr = endDate.toLocaleString([], { hour: 'numeric', minute: '2-digit', hour12: true });
-      nextWindowDisplay.textContent = `${startTimeStr} - ${endTimeStr}`;
+    if (!prediction.cooldownActive && !prediction.tooEarly) {
+      // Combine pseudo-RNG window and statistical prediction to show range
+      let earliestTime: number | null = null;
+      let latestTime: number | null = null;
+
+      // Get earliest from pseudo-RNG windows
+      if (prediction.nextWindows.length > 0) {
+        earliestTime = prediction.nextWindows[0]!.startTime;
+        latestTime = prediction.nextWindows[0]!.endTime;
+      }
+
+      // Compare with statistical prediction range
+      if (prediction.statisticalPrediction) {
+        const statEarliest = prediction.statisticalPrediction.certaintyRange.earliest;
+        const statLatest = prediction.statisticalPrediction.certaintyRange.latest;
+
+        earliestTime = earliestTime ? Math.min(earliestTime, statEarliest) : statEarliest;
+        latestTime = latestTime ? Math.max(latestTime, statLatest) : statLatest;
+      }
+
+      if (earliestTime && latestTime) {
+        const earliestDate = new Date(earliestTime);
+        const latestDate = new Date(latestTime);
+        const earliestStr = earliestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+        const latestStr = latestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+        nextWindowDisplay.textContent = `${earliestStr} - ${latestStr}`;
+      }
     } else if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
       // Show cooldown countdown
       nextWindowDisplay.style.color = '#f44336';
@@ -726,8 +743,14 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
       detailsSection.appendChild(scheduleSection);
     }
 
-    // History section (reuse from old system)
-    if (history.length > 0) {
+    // Past 3 restocks section
+    const allEvents = getAllRestockEvents();
+    const itemRestocks = allEvents
+      .filter(event => event.items.some(item => item.name === rareItem.name))
+      .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
+      .slice(0, 3);
+
+    if (itemRestocks.length > 0) {
       const historySection = document.createElement('div');
       historySection.style.cssText = `
         padding: 10px;
@@ -738,28 +761,24 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
       const historyTitle = document.createElement('div');
       historyTitle.style.cssText = 'color: #42A5F5; font-weight: 700; margin-bottom: 6px;';
-      historyTitle.textContent = '📊 Recent History';
+      historyTitle.textContent = '📊 Past 3 Restocks';
       historySection.appendChild(historyTitle);
 
-      for (let i = 0; i < Math.min(3, history.length); i++) {
-        const record = history[i]!;
-        const actualDate = record.actualTime ? new Date(record.actualTime) : null;
-
-        if (actualDate) {
-          const historyRow = document.createElement('div');
-          historyRow.style.cssText = `
-            color: #aaa;
-            font-size: 9px;
-            margin-bottom: 4px;
-            padding: 4px 6px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 3px;
-          `;
-          historyRow.innerHTML = `
-            <span style="color: #4CAF50;">✓</span> ${actualDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-          `;
-          historySection.appendChild(historyRow);
-        }
+      for (const event of itemRestocks) {
+        const restockDate = new Date(event.timestamp);
+        const historyRow = document.createElement('div');
+        historyRow.style.cssText = `
+          color: #aaa;
+          font-size: 9px;
+          margin-bottom: 4px;
+          padding: 4px 6px;
+          background: rgba(255, 255, 255, 0.03);
+          border-radius: 3px;
+        `;
+        historyRow.innerHTML = `
+          <span style="color: #4CAF50;">✓</span> ${restockDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
+        `;
+        historySection.appendChild(historyRow);
       }
 
       detailsSection.appendChild(historySection);

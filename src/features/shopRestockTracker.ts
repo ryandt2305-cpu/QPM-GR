@@ -1387,7 +1387,8 @@ export function getWindowPredictions(): Map<string, WindowBasedPrediction> {
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
     const recentEvents = restockEvents.filter(e => e.timestamp >= sevenDaysAgo);
 
-    const prediction = predictItemWindows(itemName, lastSeen, recentEvents);
+    // Pass both recent events (for correlations) and all events (for statistical predictions)
+    const prediction = predictItemWindows(itemName, lastSeen, recentEvents, restockEvents);
     predictions.set(itemName, prediction);
   }
 

@@ -51,5 +51,3 @@ Everything else has been trimmed so the repository only carries what’s require
 - Architectural notes, historical feature plans, rare restock heatmaps, testing instructions, Firebase setup, and archived dev utilities now live inside [`DOCUMENTATION.md`](DOCUMENTATION.md).
 - Legacy helper snippets such as the atom inspector, WebSocket discovery probe, and rainbow-effect reverse engineering script have been preserved in that file under **“Archived Dev Utilities.”**
 
-If something critical is missing after the cleanup, open an issue describing the workflow so we can restore or modernize it without re-cluttering the repo.
-  Total XP gained

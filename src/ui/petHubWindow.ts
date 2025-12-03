@@ -1402,11 +1402,34 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
   };
 
   const renderContent = () => {
+    // Clear previous content
     contentContainer.innerHTML = '';
-    if (activeTab === 'compare') {
-      contentContainer.appendChild(createCompareTab(allPets));
-    } else if (activeTab === 'team') {
-      contentContainer.appendChild(createTeamCompareTab(allPets));
+
+    // Show loading indicator for heavy tabs
+    const needsLoading = (activeTab === 'team' && allPets.length > 10);
+
+    if (needsLoading) {
+      const loadingDiv = document.createElement('div');
+      loadingDiv.style.cssText = 'padding:40px;text-align:center;color:var(--qpm-text-dim);';
+      loadingDiv.textContent = '⏳ Loading...';
+      contentContainer.appendChild(loadingDiv);
+
+      // Defer expensive tab rendering to prevent UI freeze
+      requestAnimationFrame(() => {
+        contentContainer.innerHTML = '';
+        if (activeTab === 'compare') {
+          contentContainer.appendChild(createCompareTab(allPets));
+        } else if (activeTab === 'team') {
+          contentContainer.appendChild(createTeamCompareTab(allPets));
+        }
+      });
+    } else {
+      // Render lightweight tabs immediately
+      if (activeTab === 'compare') {
+        contentContainer.appendChild(createCompareTab(allPets));
+      } else if (activeTab === 'team') {
+        contentContainer.appendChild(createTeamCompareTab(allPets));
+      }
     }
   };
 
@@ -2290,8 +2313,7 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
       ariesStatusMsg.style.color = 'var(--qpm-success)';
     }
 
-    // Batch selector rebuild and render into one operation
-    rebuildManualSelectors();
+    // Only render comparison rows (selectors don't need rebuilding - teams changed, not filter)
     debouncedRender();
   };
 

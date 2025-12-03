@@ -189,16 +189,31 @@ function renderContent(state: ShopRestockWindowState): void {
 
   // Summary section
   if (events.length > 0) {
-    // Prediction section
-    const predictionSection = createPredictionSection(state);
-    state.contentContainer.appendChild(predictionSection);
+    // Show loading placeholder for heavy sections
+    const loadingPlaceholder = document.createElement('div');
+    loadingPlaceholder.style.cssText = `
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--qpm-text-muted, #aaa);
+    `;
+    loadingPlaceholder.textContent = '⏳ Loading predictions and statistics...';
+    state.contentContainer.appendChild(loadingPlaceholder);
 
-    const summarySection = createSummarySection(summary);
-    state.contentContainer.appendChild(summarySection);
+    // Defer heavy rendering to next frame to prevent UI blocking
+    requestAnimationFrame(() => {
+      state.contentContainer.removeChild(loadingPlaceholder);
 
-    // Item statistics
-    const statsSection = createItemStatsSection();
-    state.contentContainer.appendChild(statsSection);
+      // Prediction section (expensive - uses cached data but still creates DOM)
+      const predictionSection = createPredictionSection(state);
+      state.contentContainer.appendChild(predictionSection);
+
+      const summarySection = createSummarySection(summary);
+      state.contentContainer.appendChild(summarySection);
+
+      // Item statistics (expensive - iterates all events)
+      const statsSection = createItemStatsSection();
+      state.contentContainer.appendChild(statsSection);
+    });
   } else {
     const emptyState = document.createElement('div');
     emptyState.style.cssText = `

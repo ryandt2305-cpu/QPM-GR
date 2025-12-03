@@ -115,62 +115,26 @@ function parseTimestamp(timestampStr: string, baseDate?: Date): number {
       if (dateParts.length !== 3 || timeParts.length !== 2) return Date.now();
 
       // Smart date format detection
-      // Discord exports can use MM/DD/YYYY (US) or DD/MM/YYYY (AU) depending on user locale
+      // Discord exports from AEST typically use DD/MM/YYYY (Australian date format)
       // Strategy:
       // 1. If first value > 12, must be DD/MM/YYYY (day can't be month)
-      // 2. If second value > 12, must be MM/DD/YYYY (month can't be day)
-      // 3. If both <= 12, try both formats and pick the one closest to current date
-      //    (shop restocks shouldn't be far in the future)
-      
+      // 2. Otherwise, assume DD/MM/YYYY (Australian standard for AEST timezone)
+
       const first = dateParts[0]!;
       const second = dateParts[1]!;
       const year = dateParts[2]!;
       let day: number;
       let month: number;
 
-      // Validate basic ranges
-      if (first < 1 || second < 1 || first > 31 || second > 12) {
-        // Check if swapping helps
-        if (second >= 1 && second <= 31 && first >= 1 && first <= 12) {
-          // Swap: first is month, second is day (MM/DD/YYYY)
-          month = first;
-          day = second;
-        } else {
-          log('⚠️ Invalid date in timestamp:', timestampStr);
-          return Date.now();
-        }
-      } else if (first > 12) {
+      if (first > 12) {
         // First value > 12, must be day (DD/MM/YYYY)
         day = first;
         month = second;
-      } else if (second > 12) {
-        // This shouldn't happen (second > 12 would fail validation above)
-        // but include for clarity: second is day (MM/DD/YYYY)
-        month = first;
-        day = second;
       } else {
-        // Both values <= 12: ambiguous!
-        // Try both interpretations and pick the one closer to current date
-        const now = Date.now();
-        
-        // Try DD/MM/YYYY
-        const ddmmTimestamp = Date.UTC(year, first - 1, second, 0, 0, 0, 0);
-        const ddmmDiff = Math.abs(ddmmTimestamp - now);
-        
-        // Try MM/DD/YYYY
-        const mmddTimestamp = Date.UTC(year, second - 1, first, 0, 0, 0, 0);
-        const mmddDiff = Math.abs(mmddTimestamp - now);
-        
-        // Pick the interpretation closer to current date
-        if (mmddDiff < ddmmDiff) {
-          // MM/DD/YYYY is closer to now
-          month = first;
-          day = second;
-        } else {
-          // DD/MM/YYYY is closer to now
-          day = first;
-          month = second;
-        }
+        // Assume DD/MM/YYYY (Australian standard for AEST exports)
+        // This is more reliable than trying to guess based on proximity to current date
+        day = first;
+        month = second;
       }
 
       // Final validation

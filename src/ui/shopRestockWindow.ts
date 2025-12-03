@@ -508,8 +508,8 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
       // Get earliest from pseudo-RNG windows (filter out past windows)
       if (prediction.nextWindows.length > 0) {
-        // Find first window that hasn't ended yet
-        const futureWindow = prediction.nextWindows.find(w => w.endTime > now);
+        // Find first window that hasn't started yet
+        const futureWindow = prediction.nextWindows.find(w => w.startTime > now);
         if (futureWindow) {
           earliestTime = futureWindow.startTime;
           latestTime = futureWindow.endTime;
@@ -521,15 +521,15 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
         const statEarliest = prediction.statisticalPrediction.certaintyRange.earliest;
         const statLatest = prediction.statisticalPrediction.certaintyRange.latest;
 
-        // Only include statistical prediction if it's in the future
-        if (statLatest > now) {
+        // Only include statistical prediction if it hasn't started yet
+        if (statEarliest > now) {
           earliestTime = earliestTime ? Math.min(earliestTime, statEarliest) : statEarliest;
           latestTime = latestTime ? Math.max(latestTime, statLatest) : statLatest;
         }
       }
 
-      // Only display if the prediction is in the future
-      if (earliestTime && latestTime && latestTime > now) {
+      // Only display if the prediction hasn't started yet
+      if (earliestTime && latestTime && earliestTime > now) {
         const earliestDate = new Date(earliestTime);
         const latestDate = new Date(latestTime);
         const earliestStr = earliestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
@@ -646,7 +646,7 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
     // Show next windows (filter out past windows)
     const now = Date.now();
-    const futureWindows = prediction.nextWindows.filter(w => w.endTime > now);
+    const futureWindows = prediction.nextWindows.filter(w => w.startTime > now);
 
     if (futureWindows.length > 0) {
       const windowsSection = document.createElement('div');

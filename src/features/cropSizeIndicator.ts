@@ -379,23 +379,20 @@ function injectCropSizeInfo(element: Element): void {
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
 
-  // CRITICAL FIX: Find the inner container by first detecting where Aries injected
+  // CRITICAL FIX: Find the inner container by detecting where Aries injected
+  // Aries Mod uses class "tm-crop-price" (from analysis of Aries source code)
   // This ensures we inject into the SAME container as Aries, allowing both to coexist
   let innerContainer: Element | null = null;
 
-  // Step 1: Try to find Aries' injected element (yellow/gold price display)
-  const ariesElement = Array.from(element.querySelectorAll('span')).find(span => {
-    const color = window.getComputedStyle(span).color;
-    // Aries uses yellow/gold color (rgb(255, 193-235, *))
-    return color.includes('rgb(255, 193') || color.includes('rgb(255, 215') ||
-           color.includes('rgb(255, 220') || color.includes('rgb(255, 235');
-  });
+  // Step 1: Try to find Aries' injected element by its marker class
+  const ariesElement = element.querySelector('span.tm-crop-price');
 
   // Step 2: If Aries is present, use ITS parent container (ensures same location)
   if (ariesElement && ariesElement.parentElement) {
     innerContainer = ariesElement.parentElement;
   } else {
-    // Step 3: Fallback to specific selectors ONLY (no broad fallback)
+    // Step 3: Fallback to the same selectors Aries uses
+    // (from Aries source: .McFlex.css-1l3zq7 or .McFlex.css-11dqzw)
     innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
                      element.querySelector('.McFlex.css-11dqzw');
   }
@@ -423,32 +420,23 @@ function startTooltipWatcher(): void {
   log('📐 Crop Size Indicator: Watching for crop tooltips');
 
   let pollingInterval: number | null = null;
-  let debounceTimer: number | null = null;
 
-  // Process tooltips - with significant delay to let Aries inject first
+  // Process tooltips - with double RAF delay to let Aries inject first
+  // Aries uses single requestAnimationFrame (~16ms), we use double (~32ms)
   const processTooltips = () => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     tooltips.forEach(tooltip => {
-      injectCropSizeInfo(tooltip);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          injectCropSizeInfo(tooltip);
+        });
+      });
     });
-  };
-
-  // Debounced processing to avoid constant re-processing
-  const debouncedProcess = () => {
-    if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
-    }
-    // Wait 300ms after last DOM change before injecting
-    // This gives Aries plenty of time to inject its content first
-    debounceTimer = window.setTimeout(() => {
-      processTooltips();
-      debounceTimer = null;
-    }, 300);
   };
 
   // Use MutationObserver to watch for crop info cards being added/changed
   const observer = new MutationObserver(() => {
-    debouncedProcess();
+    processTooltips();
   });
 
   observer.observe(document.body, {
@@ -473,14 +461,11 @@ function startTooltipWatcher(): void {
       if (pollingInterval !== null) {
         clearInterval(pollingInterval);
       }
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-      }
     }
   };
 
-  // Check for existing tooltips with delay (let Aries inject first)
-  debouncedProcess();
+  // Check for existing tooltips
+  processTooltips();
 }
 
 function stopTooltipWatcher(): void {

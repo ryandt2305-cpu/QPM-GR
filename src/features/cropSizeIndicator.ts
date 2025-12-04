@@ -234,6 +234,7 @@ function ensureSizeIndicator(
     sizeLabel = document.createElement('span');
     sizeLabel.className = SIZE_LABEL_CLASS;
     sizeLabel.style.display = 'block';
+    sizeLabel.style.textAlign = 'center';  // Center the size text
     span.appendChild(sizeLabel);
   }
 
@@ -253,6 +254,7 @@ function ensureSizeIndicator(
       journalLabel.style.fontSize = '12px';
       journalLabel.style.marginTop = '2px';
       journalLabel.style.opacity = '0.9';
+      journalLabel.style.textAlign = 'center';  // Center the emojis
       span.appendChild(journalLabel);
     }
     // Update journal emojis
@@ -487,24 +489,40 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   // Aries Mod uses class "tm-crop-price" (from Aries source code analysis)
   let innerContainer: Element | null = null;
 
+  // DEBUG: Log tooltip element info
+  log(`📐 [DEBUG] Tooltip element classes: ${element.className}`);
+  log(`📐 [DEBUG] Tooltip has .css-qnqsp4: ${element.matches('.css-qnqsp4')}`);
+  log(`📐 [DEBUG] Tooltip has .css-fsggty: ${element.matches('.css-fsggty')}`);
+
   // Try to find Aries' injected element by its marker class
   const ariesElement = element.querySelector('span.tm-crop-price');
+  log(`📐 [DEBUG] Aries element (span.tm-crop-price) found: ${!!ariesElement}`);
+
+  // DEBUG: Check what containers exist
+  const container1 = element.querySelector('.McFlex.css-1l3zq7');
+  const container2 = element.querySelector('.McFlex.css-11dqzw');
+  log(`📐 [DEBUG] Container .css-1l3zq7 found: ${!!container1}`);
+  log(`📐 [DEBUG] Container .css-11dqzw found: ${!!container2}`);
 
   if (ariesElement && ariesElement.parentElement) {
     // Aries is present - use ITS parent container (ensures same location)
     innerContainer = ariesElement.parentElement;
-    log('📐 Aries detected - injecting alongside');
+    log('📐 ✅ Aries detected - injecting alongside');
   } else {
     // Aries not present - use fallback selectors (same ones Aries uses)
     innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
                      element.querySelector('.McFlex.css-11dqzw');
-    log('📐 Aries NOT detected - injecting anyway');
+    log('📐 ⚠️ Aries NOT detected - injecting anyway');
   }
 
   if (!innerContainer) {
-    log('📐 ⚠️ No container found - cannot inject');
+    log('📐 ❌ No container found - cannot inject');
+    // DEBUG: Log all child elements to help diagnose
+    log(`📐 [DEBUG] Tooltip children: ${Array.from(element.children).map(c => c.className).join(', ')}`);
     return;
   }
+
+  log(`📐 [DEBUG] Using container: ${innerContainer.className}`);
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
@@ -535,6 +553,12 @@ function startTooltipWatcher(): void {
     // Watch for both our tooltip selector AND Aries' tooltip selector
     // Aries uses .css-qnqsp4, we historically used .McFlex.css-fsggty
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty, .css-qnqsp4');
+
+    // DEBUG: Log tooltip count and breakdown
+    const fsggtyCount = document.querySelectorAll('.McFlex.css-fsggty').length;
+    const qnqsp4Count = document.querySelectorAll('.css-qnqsp4').length;
+    log(`📐 [DEBUG] Found ${tooltips.length} tooltips (.css-fsggty: ${fsggtyCount}, .css-qnqsp4: ${qnqsp4Count})`);
+
     tooltips.forEach(tooltip => {
       let rafCount = 0;
       const delayedInject = () => {

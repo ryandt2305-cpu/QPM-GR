@@ -37,9 +37,9 @@ const VARIANT_EMOJI_MAP: Record<string, string> = {
   'Frozen': '❄️',
   'Wet': '💧',
   'Chilled': '🧊',
-  'Dawnlit': '🌅',
+  'Dawnlit': '🔆',  // Swapped with Ambershine
   'Dawncharged': '☀️',
-  'Ambershine': '🔆',
+  'Ambershine': '🌅',  // Swapped with Dawnlit
   'Ambercharged': '⚡',
   'Max Weight': '🏆',
 };
@@ -64,7 +64,19 @@ async function getUnloggedVariantEmojis(species: string): Promise<string> {
     }
 
     // Normalize species name for journal lookup
-    const normalizedSpecies = species.charAt(0).toUpperCase() + species.slice(1).toLowerCase();
+    // Handle celestial plants: moonbinder -> MoonCelestial, dawnbinder -> DawnCelestial
+    let normalizedSpecies = species.charAt(0).toUpperCase() + species.slice(1).toLowerCase();
+
+    const celestialMap: Record<string, string> = {
+      'moonbinder': 'MoonCelestial',
+      'dawnbinder': 'DawnCelestial',
+      'Moonbinder': 'MoonCelestial',
+      'Dawnbinder': 'DawnCelestial',
+    };
+
+    if (celestialMap[species]) {
+      normalizedSpecies = celestialMap[species];
+    }
 
     // Get logged variants for this species
     const speciesData = cachedJournalData.produce[normalizedSpecies];
@@ -181,6 +193,7 @@ const INJECTED_MARKER = 'data-qpm-crop-size-injected';
 function ensureSizeIndicator(
   innerContainer: Element,
   text: string,
+  journalEmojis: string = '',
   markerClass: string = 'qpm-crop-size'
 ): void {
   // Find or create the main span (reuse if exists, remove duplicates)
@@ -211,21 +224,44 @@ function ensureSizeIndicator(
   span.style.color = 'rgb(100, 181, 246)'; // Blue for size (Aries uses yellow for price)
   span.style.fontSize = '14px';
 
-  // Label class constant
-  const LABEL_CLASS = 'qpm-crop-size-label';
+  // Label class constants
+  const SIZE_LABEL_CLASS = 'qpm-crop-size-label';
+  const JOURNAL_LABEL_CLASS = 'qpm-crop-journal-label';
 
-  // Create or reuse label span (no icon needed)
-  let label = span.querySelector(`:scope > span.${CSS.escape(LABEL_CLASS)}`) as HTMLSpanElement;
-  if (!label) {
-    label = document.createElement('span');
-    label.className = LABEL_CLASS;
-    label.style.display = 'inline';
-    span.appendChild(label);
+  // Create or reuse size label span
+  let sizeLabel = span.querySelector(`:scope > span.${CSS.escape(SIZE_LABEL_CLASS)}`) as HTMLSpanElement;
+  if (!sizeLabel) {
+    sizeLabel = document.createElement('span');
+    sizeLabel.className = SIZE_LABEL_CLASS;
+    sizeLabel.style.display = 'block';
+    span.appendChild(sizeLabel);
   }
 
-  // Update label text if changed
-  if (label.textContent !== text) {
-    label.textContent = text;
+  // Update size label text if changed
+  if (sizeLabel.textContent !== text) {
+    sizeLabel.textContent = text;
+  }
+
+  // Handle journal emoji label (separate line)
+  let journalLabel = span.querySelector(`:scope > span.${CSS.escape(JOURNAL_LABEL_CLASS)}`) as HTMLSpanElement;
+  if (journalEmojis) {
+    // Create journal label if needed
+    if (!journalLabel) {
+      journalLabel = document.createElement('span');
+      journalLabel.className = JOURNAL_LABEL_CLASS;
+      journalLabel.style.display = 'block';
+      journalLabel.style.fontSize = '12px';
+      journalLabel.style.marginTop = '2px';
+      journalLabel.style.opacity = '0.9';
+      span.appendChild(journalLabel);
+    }
+    // Update journal emojis
+    if (journalLabel.textContent !== journalEmojis) {
+      journalLabel.textContent = journalEmojis;
+    }
+  } else if (journalLabel) {
+    // Remove journal label if no emojis
+    journalLabel.remove();
   }
 
   // Append to inner container if not already there
@@ -472,17 +508,14 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
-  let sizeText = `Size: ${size}`;
+  const sizeText = `Size: ${size}`;
 
-  // Add journal logging indicator (unlogged variants)
+  // Get journal logging indicator (unlogged variants) - displayed on separate line
   const unloggedEmojis = await getUnloggedVariantEmojis(normalizedCropName);
-  if (unloggedEmojis) {
-    sizeText += ` ${unloggedEmojis}`;
-  }
 
   // Use Aries-style injection: reuse span, structured DOM
   // This will display alongside Aries Mod value if present (both on separate lines)
-  ensureSizeIndicator(innerContainer, sizeText, 'qpm-crop-size');
+  ensureSizeIndicator(innerContainer, sizeText, unloggedEmojis, 'qpm-crop-size');
 }
 
 // ============================================================================
@@ -496,16 +529,17 @@ function startTooltipWatcher(): void {
 
   let pollingInterval: number | null = null;
 
-  // Process tooltips - with significant RAF delay to let Aries inject first
-  // Aries is state-driven and may take time to detect and inject
-  // We use 10 RAFs (~160ms) to ensure Aries has plenty of time
+  // Process tooltips - with RAF delay to let Aries inject first
+  // Aries uses requestAnimationFrame throttling, so 3 RAFs (~48ms) gives it time
   const processTooltips = () => {
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
+    // Watch for both our tooltip selector AND Aries' tooltip selector
+    // Aries uses .css-qnqsp4, we historically used .McFlex.css-fsggty
+    const tooltips = document.querySelectorAll('.McFlex.css-fsggty, .css-qnqsp4');
     tooltips.forEach(tooltip => {
       let rafCount = 0;
       const delayedInject = () => {
         rafCount++;
-        if (rafCount < 10) {
+        if (rafCount < 3) {
           requestAnimationFrame(delayedInject);
         } else {
           // Fire and forget async injection

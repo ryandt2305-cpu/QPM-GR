@@ -120,7 +120,7 @@ function ensureSizeIndicator(
     innerContainer.querySelectorAll(`:scope > span.${CSS.escape(markerClass)}`)
   ) as HTMLSpanElement[];
   let span: HTMLSpanElement | null = existingSpans[0] ?? null;
-  
+
   // Remove duplicates if multiple exist
   for (let i = 1; i < existingSpans.length; i++) {
     const duplicateSpan = existingSpans[i];
@@ -128,23 +128,24 @@ function ensureSizeIndicator(
       duplicateSpan.remove();
     }
   }
-  
+
   // Create if doesn't exist
   if (!span) {
     span = document.createElement('span');
     span.className = markerClass;
+    span.setAttribute('data-qpm-injected', 'true'); // Mark as our element
   }
-  
+
   // Apply main span styling (matching Aries' pattern but with different color)
   span.style.display = 'block';
   span.style.marginTop = '6px';
   span.style.fontWeight = '700';
   span.style.color = 'rgb(100, 181, 246)'; // Blue for size (Aries uses yellow for price)
   span.style.fontSize = '14px';
-  
+
   // Label class constant
   const LABEL_CLASS = 'qpm-crop-size-label';
-  
+
   // Create or reuse label span (no icon needed)
   let label = span.querySelector(`:scope > span.${CSS.escape(LABEL_CLASS)}`) as HTMLSpanElement;
   if (!label) {
@@ -153,13 +154,14 @@ function ensureSizeIndicator(
     label.style.display = 'inline';
     span.appendChild(label);
   }
-  
+
   // Update label text if changed
   if (label.textContent !== text) {
     label.textContent = text;
   }
-  
+
   // Append to inner container if not already there (Aries' pattern)
+  // Insert after any existing children (so Aries' value shows first, then our size)
   if (!span.parentElement || span.parentElement !== innerContainer) {
     innerContainer.appendChild(span);
   }
@@ -408,11 +410,17 @@ function startTooltipWatcher(): void {
 
   let pollingInterval: number | null = null;
 
-  // Process tooltips immediately - no debouncing for rapid switching
+  // Process tooltips with slight delay to allow Aries to inject first
   const processTooltips = () => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     tooltips.forEach(tooltip => {
-      injectCropSizeInfo(tooltip);
+      // Use requestAnimationFrame + setTimeout to defer injection slightly
+      // This allows Aries Mod to inject its value display first
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          injectCropSizeInfo(tooltip);
+        }, 10); // 10ms delay to let Aries finish
+      });
     });
   };
 

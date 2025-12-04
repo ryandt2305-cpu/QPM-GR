@@ -570,8 +570,7 @@ function startTooltipWatcher(): void {
   let pollingInterval: number | null = null;
 
   // Process tooltips - ONLY watch our selector to avoid interfering with Aries
-  // Aries will inject into .css-qnqsp4, we inject into .css-fsggty
-  // Both can coexist in the same tooltip if it has both classes
+  // Using polling instead of MutationObserver to avoid triggering mutation loops
   const processTooltips = () => {
     // ONLY watch for our original selector - don't interfere with Aries
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
@@ -584,31 +583,23 @@ function startTooltipWatcher(): void {
     log(`📐 [DEBUG] Aries tooltips (.css-qnqsp4): ${ariesCount}`);
 
     tooltips.forEach(tooltip => {
-      // Use slight RAF delay to let DOM settle, but don't interfere with Aries timing
-      requestAnimationFrame(() => {
-        // Fire and forget async injection
-        injectCropSizeInfo(tooltip).catch(err => {
-          log('⚠️ Error injecting crop size info:', err);
-        });
+      // Fire and forget async injection (no RAF delay needed with polling)
+      injectCropSizeInfo(tooltip).catch(err => {
+        log('⚠️ Error injecting crop size info:', err);
       });
     });
   };
 
-  // Use MutationObserver to watch for crop info cards being added/changed
-  const observer = new MutationObserver(() => {
-    processTooltips();
-  });
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    characterDataOldValue: true
-  });
+  // Use polling instead of MutationObserver to avoid interfering with Aries
+  // Poll every 200ms - frequent enough to be responsive, slow enough to not cause issues
+  pollingInterval = window.setInterval(processTooltips, 200);
 
   domObserverHandle = {
     disconnect: () => {
-      observer.disconnect();
+      if (pollingInterval !== null) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      }
     }
   };
 

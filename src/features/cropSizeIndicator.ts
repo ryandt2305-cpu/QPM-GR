@@ -498,11 +498,33 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   const ariesElement = element.querySelector('span.tm-crop-price');
   log(`📐 [DEBUG] Aries element (span.tm-crop-price) found: ${!!ariesElement}`);
 
+  // COMPREHENSIVE DEBUG: Check if Aries exists ANYWHERE in the document
+  const globalAriesElements = document.querySelectorAll('span.tm-crop-price');
+  log(`📐 [DEBUG] Global Aries elements in entire document: ${globalAriesElements.length}`);
+
+  // DEBUG: Check for any yellow-colored span (Aries uses yellow for price)
+  const allSpans = Array.from(element.querySelectorAll('span'));
+  const yellowSpans = allSpans.filter(s => {
+    const color = window.getComputedStyle(s).color;
+    return color.includes('255, 193, 7') || color.includes('rgb(255, 193, 7)');
+  });
+  log(`📐 [DEBUG] Yellow spans (potential Aries): ${yellowSpans.length}`);
+  if (yellowSpans.length > 0) {
+    yellowSpans.forEach(s => {
+      log(`📐 [DEBUG] Yellow span class: "${s.className}", text: "${s.textContent?.substring(0, 50)}"`);
+    });
+  }
+
   // DEBUG: Check what containers exist
   const container1 = element.querySelector('.McFlex.css-1l3zq7');
   const container2 = element.querySelector('.McFlex.css-11dqzw');
   log(`📐 [DEBUG] Container .css-1l3zq7 found: ${!!container1}`);
   log(`📐 [DEBUG] Container .css-11dqzw found: ${!!container2}`);
+
+  // DEBUG: Log full DOM structure of tooltip
+  if (!ariesElement) {
+    log(`📐 [DEBUG] Tooltip HTML structure:`, element.innerHTML.substring(0, 500));
+  }
 
   if (ariesElement && ariesElement.parentElement) {
     // Aries is present - use ITS parent container (ensures same location)
@@ -547,32 +569,28 @@ function startTooltipWatcher(): void {
 
   let pollingInterval: number | null = null;
 
-  // Process tooltips - with RAF delay to let Aries inject first
-  // Aries uses requestAnimationFrame throttling, so 3 RAFs (~48ms) gives it time
+  // Process tooltips - ONLY watch our selector to avoid interfering with Aries
+  // Aries will inject into .css-qnqsp4, we inject into .css-fsggty
+  // Both can coexist in the same tooltip if it has both classes
   const processTooltips = () => {
-    // Watch for both our tooltip selector AND Aries' tooltip selector
-    // Aries uses .css-qnqsp4, we historically used .McFlex.css-fsggty
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty, .css-qnqsp4');
+    // ONLY watch for our original selector - don't interfere with Aries
+    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
 
-    // DEBUG: Log tooltip count and breakdown
-    const fsggtyCount = document.querySelectorAll('.McFlex.css-fsggty').length;
-    const qnqsp4Count = document.querySelectorAll('.css-qnqsp4').length;
-    log(`📐 [DEBUG] Found ${tooltips.length} tooltips (.css-fsggty: ${fsggtyCount}, .css-qnqsp4: ${qnqsp4Count})`);
+    // DEBUG: Log tooltip count
+    log(`📐 [DEBUG] Found ${tooltips.length} tooltips (.css-fsggty)`);
+
+    // Also check if any Aries tooltips exist (for debugging)
+    const ariesCount = document.querySelectorAll('.css-qnqsp4').length;
+    log(`📐 [DEBUG] Aries tooltips (.css-qnqsp4): ${ariesCount}`);
 
     tooltips.forEach(tooltip => {
-      let rafCount = 0;
-      const delayedInject = () => {
-        rafCount++;
-        if (rafCount < 3) {
-          requestAnimationFrame(delayedInject);
-        } else {
-          // Fire and forget async injection
-          injectCropSizeInfo(tooltip).catch(err => {
-            log('⚠️ Error injecting crop size info:', err);
-          });
-        }
-      };
-      requestAnimationFrame(delayedInject);
+      // Use slight RAF delay to let DOM settle, but don't interfere with Aries timing
+      requestAnimationFrame(() => {
+        // Fire and forget async injection
+        injectCropSizeInfo(tooltip).catch(err => {
+          log('⚠️ Error injecting crop size info:', err);
+        });
+      });
     });
   };
 

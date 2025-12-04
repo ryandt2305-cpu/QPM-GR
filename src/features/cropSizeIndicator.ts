@@ -10,6 +10,7 @@ import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { getJournal, type Journal } from './journalChecker';
+import { pageWindow } from '../core/pageContext';
 
 interface CropSizeConfig {
   enabled: boolean;
@@ -48,24 +49,31 @@ const VARIANT_EMOJI_MAP: Record<string, string> = {
 // AriesMod Integration
 // ============================================================================
 
-declare global {
-  interface Window {
-    AriesMod?: {
-      services?: {
-        PetsService?: any;
-        CropsService?: any;
-        [key: string]: any;
-      };
-      [key: string]: any;
-    };
-  }
+// Type definition for AriesMod (lives on page window, not sandbox)
+interface AriesModType {
+  services?: {
+    PetsService?: any;
+    CropsService?: any;
+    StatsService?: any;
+    MiscService?: any;
+    [key: string]: any;
+  };
+  [key: string]: any;
 }
 
 /**
- * Check if AriesMod is available
+ * Check if AriesMod is available on the PAGE window (not sandbox)
  */
 function isAriesModAvailable(): boolean {
-  return typeof window.AriesMod !== 'undefined' && !!window.AriesMod;
+  const ariesMod = (pageWindow as any).AriesMod;
+  return typeof ariesMod !== 'undefined' && !!ariesMod;
+}
+
+/**
+ * Get AriesMod from page window
+ */
+function getAriesMod(): AriesModType | undefined {
+  return (pageWindow as any).AriesMod;
 }
 
 /**
@@ -78,7 +86,7 @@ function getAriesCropPrice(cropName: string): string | null {
       return null;
     }
 
-    const ariesMod = window.AriesMod as any;
+    const ariesMod = getAriesMod() as any;
 
     // Check StatsService (might have crop stats/prices)
     const statsService = ariesMod?.services?.StatsService;
@@ -889,25 +897,34 @@ function stopCropSizeIndicator(): void {
 export function initCropSizeIndicator(): void {
   loadConfig();
 
-  // Check if AriesMod is available and log what's exposed
+  // Check if AriesMod is available on PAGE window (not sandbox)
   if (isAriesModAvailable()) {
-    const services = window.AriesMod?.services || {};
-    log('📐 ✅ AriesMod detected! Available services:', Object.keys(services));
+    const ariesMod = getAriesMod();
+    const services = ariesMod?.services || {};
+    log('📐 ✅ AriesMod detected on pageWindow! Available services:', Object.keys(services));
 
     // Log methods on StatsService
     if (services.StatsService) {
-      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(services.StatsService)).filter(m => typeof (services.StatsService as any)[m] === 'function');
-      log('📐 StatsService methods:', methods);
+      try {
+        const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(services.StatsService)).filter(m => typeof (services.StatsService as any)[m] === 'function');
+        log('📐 StatsService methods:', methods);
+      } catch (e) {
+        log('📐 Could not enumerate StatsService methods');
+      }
     }
 
     // Log methods on MiscService
     if ((services as any).MiscService) {
-      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf((services as any).MiscService)).filter(m => typeof ((services as any).MiscService as any)[m] === 'function');
-      log('📐 MiscService methods:', methods);
+      try {
+        const methods = Object.getOwnPropertyNames(Object.getPrototypeOf((services as any).MiscService)).filter(m => typeof ((services as any).MiscService as any)[m] === 'function');
+        log('📐 MiscService methods:', methods);
+      } catch (e) {
+        log('📐 Could not enumerate MiscService methods');
+      }
     }
 
     // Log root properties
-    log('📐 AriesMod root properties:', Object.keys(window.AriesMod || {}));
+    log('📐 AriesMod root properties:', Object.keys(ariesMod || {}));
 
     // Check localStorage for aries_mod keys
     const ariesKeys = Object.keys(localStorage).filter(k => k.startsWith('aries_mod'));
@@ -915,7 +932,7 @@ export function initCropSizeIndicator(): void {
       log('📐 AriesMod localStorage keys:', ariesKeys);
     }
   } else {
-    log('📐 ⚠️ AriesMod not detected - crop prices will not be shown');
+    log('📐 ⚠️ AriesMod not detected on pageWindow - crop prices will not be shown');
   }
 
   if (config.enabled) {

@@ -160,8 +160,8 @@ function ensureSizeIndicator(
     label.textContent = text;
   }
 
-  // Append to inner container if not already there (Aries' pattern)
-  // Insert after any existing children (so Aries' value shows first, then our size)
+  // Append to inner container if not already there
+  // appendChild adds to the end, so if Aries injected first, it will appear above our element
   if (!span.parentElement || span.parentElement !== innerContainer) {
     innerContainer.appendChild(span);
   }
@@ -378,13 +378,27 @@ function injectCropSizeInfo(element: Element): void {
   
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
-  
-  // Find the inner container (matching Aries' selectors)
-  let innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
-                       element.querySelector('.McFlex.css-11dqzw') ||
-                       Array.from(element.querySelectorAll('.McFlex')).find(flex =>
-                         flex.className.includes('css-')
-                       );
+
+  // CRITICAL FIX: Find the inner container by first detecting where Aries injected
+  // This ensures we inject into the SAME container as Aries, allowing both to coexist
+  let innerContainer: Element | null = null;
+
+  // Step 1: Try to find Aries' injected element (yellow/gold price display)
+  const ariesElement = Array.from(element.querySelectorAll('span')).find(span => {
+    const color = window.getComputedStyle(span).color;
+    // Aries uses yellow/gold color (rgb(255, 193-235, *))
+    return color.includes('rgb(255, 193') || color.includes('rgb(255, 215') ||
+           color.includes('rgb(255, 220') || color.includes('rgb(255, 235');
+  });
+
+  // Step 2: If Aries is present, use ITS parent container (ensures same location)
+  if (ariesElement && ariesElement.parentElement) {
+    innerContainer = ariesElement.parentElement;
+  } else {
+    // Step 3: Fallback to specific selectors ONLY (no broad fallback)
+    innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
+                     element.querySelector('.McFlex.css-11dqzw');
+  }
 
   if (!innerContainer) {
     return; // Can't inject without container
@@ -410,17 +424,11 @@ function startTooltipWatcher(): void {
 
   let pollingInterval: number | null = null;
 
-  // Process tooltips with slight delay to allow Aries to inject first
+  // Process tooltips - no artificial delay needed since we detect Aries dynamically
   const processTooltips = () => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     tooltips.forEach(tooltip => {
-      // Use requestAnimationFrame + setTimeout to defer injection slightly
-      // This allows Aries Mod to inject its value display first
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          injectCropSizeInfo(tooltip);
-        }, 10); // 10ms delay to let Aries finish
-      });
+      injectCropSizeInfo(tooltip);
     });
   };
 
@@ -436,13 +444,14 @@ function startTooltipWatcher(): void {
     characterDataOldValue: true
   });
 
-  // Aggressive polling for rapid tile switching - check every 50ms
+  // Polling for tooltip updates - reduced frequency to avoid DOM thrashing
+  // The MutationObserver handles most cases; this is just a safety net
   pollingInterval = window.setInterval(() => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     if (tooltips.length > 0) {
       processTooltips();
     }
-  }, 50);
+  }, 200); // 200ms polling (reduced from 50ms to avoid interfering with Aries)
 
   domObserverHandle = { 
     disconnect: () => {

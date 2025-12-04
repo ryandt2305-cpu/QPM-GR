@@ -715,14 +715,27 @@ function startTooltipWatcher(): void {
     // ONLY watch for our original selector - don't interfere with Aries
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
 
-    // DEBUG: Log tooltip count
-    log(`📐 [DEBUG] Found ${tooltips.length} tooltips (.css-fsggty)`);
+    // Only process if tooltips are actually visible (not hidden/offscreen)
+    const visibleTooltips = Array.from(tooltips).filter(tooltip => {
+      const rect = tooltip.getBoundingClientRect();
+      // Check if tooltip has actual dimensions and is in viewport
+      return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0;
+    });
 
-    // Also check if any Aries tooltips exist (for debugging)
-    const ariesCount = document.querySelectorAll('.css-qnqsp4').length;
-    log(`📐 [DEBUG] Aries tooltips (.css-qnqsp4): ${ariesCount}`);
+    if (visibleTooltips.length === 0) {
+      // No visible tooltips, skip processing to reduce noise
+      return;
+    }
 
-    tooltips.forEach(tooltip => {
+    // DEBUG: Only log when we have visible tooltips
+    log(`📐 [DEBUG] Found ${visibleTooltips.length} visible tooltips`);
+
+    // Check for AriesMod NOW (not just at init) - it might load after us
+    if (isAriesModAvailable()) {
+      log(`📐 [DEBUG] ✅ AriesMod is available!`);
+    }
+
+    visibleTooltips.forEach(tooltip => {
       // Fire and forget async injection (no RAF delay needed with polling)
       injectCropSizeInfo(tooltip).catch(err => {
         log('⚠️ Error injecting crop size info:', err);

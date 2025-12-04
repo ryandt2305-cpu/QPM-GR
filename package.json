@@ -1,6 +1,6 @@
 {
   "name": "quinoa-pet-manager",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "description": "Quality of life tools for Magic Garden including crop tracking, mutation reminders, and inventory management",
   "main": "dist/userscript.js",
   "scripts": {

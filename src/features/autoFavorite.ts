@@ -510,39 +510,136 @@ function startAutoFavoritePolling(): void {
 
         const rawItem = item.raw as any;
         const mutations = Array.isArray(rawItem?.mutations) ? rawItem.mutations : [];
-        const abilities = Array.isArray(rawItem?.abilities) ? rawItem.abilities : [];
+        const abilities = Array.isArray(item.abilities) ? item.abilities : (Array.isArray(rawItem?.abilities) ? rawItem.abilities : []);
+        const itemType = rawItem?.itemType || item.itemType;
 
         let shouldFavorite = false;
         let reason = '';
 
-        // Check mutations
-        if (watchedMutations.length > 0 && mutations.length > 0) {
-          const matchedMutation = mutations.find((mut: string) =>
-            watchedMutations.some(watched => watched.toLowerCase() === String(mut).toLowerCase())
-          );
-          if (matchedMutation) {
+        // === PET HANDLING ===
+        if (itemType === 'Pet') {
+          // Debug logging for pet abilities
+          if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+            log(`[AUTO-FAVORITE-DEBUG] Pet detected:`, {
+              species: item.species,
+              abilitiesFromItem: item.abilities,
+              abilitiesFromRaw: rawItem?.abilities,
+              abilitiesUsed: abilities,
+              filterByAbilities: config.filterByAbilities,
+            });
+          }
+
+          // Apply advanced pet filters first (these act as filters, not triggers)
+
+          // Filter by pet species (must match if filter is active)
+          if (config.filterBySpecies && config.filterBySpecies.length > 0) {
+            const petSpecies = rawItem?.petSpecies || rawItem?.species || item.species || '';
+            if (!config.filterBySpecies.includes(petSpecies)) {
+              continue; // Skip this pet if it doesn't match species filter
+            }
             shouldFavorite = true;
-            reason = `mutation: ${matchedMutation}`;
+            reason = 'filtered species';
+          }
+
+          // Filter by ability types (must have one of the filtered abilities)
+          if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+            const hasAnyAbility = config.filterByAbilities.some(filterAbilityId =>
+              abilities.some((a: any) => {
+                const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+                const abilityLower = abilityStr.toLowerCase();
+                const filterLower = filterAbilityId.toLowerCase();
+                return abilityLower.includes(filterLower) || abilityLower === filterLower;
+              })
+            );
+            if (!hasAnyAbility) {
+              continue; // Skip this pet if it doesn't have the filtered ability
+            }
+            shouldFavorite = true;
+            reason = 'filtered ability';
+          }
+
+          // Filter by ability count (must match exact count)
+          if (config.filterByAbilityCount != null) {
+            if (abilities.length !== config.filterByAbilityCount) {
+              continue; // Skip this pet if it doesn't have the right ability count
+            }
+            if (!shouldFavorite) {
+              shouldFavorite = true;
+              reason = `${config.filterByAbilityCount} abilities`;
+            }
+          }
+
+          // Check for Rainbow/Gold Granter abilities if filter is active
+          if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+            const hasGoldMutation = mutations.includes('Gold');
+            const hasRainbowMutation = mutations.includes('Rainbow');
+            const hasGoldGranterAbility = abilities.some((a: any) => {
+              const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+              return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
+            });
+            const hasRainbowGranterAbility = abilities.some((a: any) => {
+              const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
+              return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
+            });
+
+            const hasGoldGranterFilter = config.filterByAbilities.some(abilityId =>
+              abilityId.toLowerCase().includes('goldgranter') || abilityId.toLowerCase() === 'gold granter'
+            );
+            const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId =>
+              abilityId.toLowerCase().includes('rainbowgranter') || abilityId.toLowerCase() === 'rainbow granter'
+            );
+
+            if (hasGoldGranterFilter && (hasGoldMutation || hasGoldGranterAbility)) {
+              shouldFavorite = true;
+              reason = 'Gold Granter';
+            }
+            if (hasRainbowGranterFilter && (hasRainbowMutation || hasRainbowGranterAbility)) {
+              shouldFavorite = true;
+              reason = 'Rainbow Granter';
+            }
+          }
+
+          // Legacy pet ability check (from watchedPetAbilities)
+          if (watchedPetAbilities.length > 0 && abilities.length > 0) {
+            const matchedAbility = abilities.find((ability: string) =>
+              watchedPetAbilities.some(watched => watched.toLowerCase() === String(ability).toLowerCase())
+            );
+            if (matchedAbility) {
+              shouldFavorite = true;
+              reason = `ability: ${matchedAbility}`;
+            }
           }
         }
-
-        // Check pet abilities
-        if (watchedPetAbilities.length > 0 && abilities.length > 0) {
-          const matchedAbility = abilities.find((ability: string) =>
-            watchedPetAbilities.some(watched => watched.toLowerCase() === String(ability).toLowerCase())
-          );
-          if (matchedAbility) {
+        // === CROP/PRODUCE HANDLING ===
+        else if (itemType === 'Produce') {
+          // Filter by crop name (must match if filter is active)
+          if (config.filterByCropTypes && config.filterByCropTypes.length > 0) {
+            const cropSpecies = rawItem?.species || item.species || '';
+            if (!config.filterByCropTypes.includes(cropSpecies)) {
+              continue; // Skip this crop if it doesn't match the crop name filter
+            }
             shouldFavorite = true;
-            reason = `ability: ${matchedAbility}`;
+            reason = 'filtered crop';
           }
-        }
 
-        // Check species
-        if (watchedSpecies.length > 0 && item.species) {
-          const matched = watchedSpecies.some(watched => watched.toLowerCase() === item.species!.toLowerCase());
-          if (matched) {
-            shouldFavorite = true;
-            reason = `species: ${item.species}`;
+          // Check mutations (Rainbow/Gold)
+          if (watchedMutations.length > 0 && mutations.length > 0) {
+            const matchedMutation = mutations.find((mut: string) =>
+              watchedMutations.some(watched => watched.toLowerCase() === String(mut).toLowerCase())
+            );
+            if (matchedMutation) {
+              shouldFavorite = true;
+              reason = `mutation: ${matchedMutation}`;
+            }
+          }
+
+          // Legacy species check (from watchedSpecies)
+          if (watchedSpecies.length > 0 && item.species) {
+            const matched = watchedSpecies.some(watched => watched.toLowerCase() === item.species!.toLowerCase());
+            if (matched) {
+              shouldFavorite = true;
+              reason = `species: ${item.species}`;
+            }
           }
         }
 

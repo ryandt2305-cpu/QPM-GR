@@ -2284,7 +2284,16 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
 
       if (!comparison) return '';
 
-      const formatValue = (val: number | null) => val != null ? formatCoins(val) : '—';
+      const isCropHarvestGroup = comparison.group.id === 'crop_harvest_value';
+      const formatValue = (val: number | null) => {
+        if (val == null) return '—';
+        if (isCropHarvestGroup) {
+          // Show value per proc for Crop Harvest Value group
+          return `${formatCoins(val)}/proc`;
+        }
+        // Show value per hour for other groups
+        return formatCoins(val);
+      };
       const winnerA = comparison.winner === 'A';
       const winnerB = comparison.winner === 'B';
 

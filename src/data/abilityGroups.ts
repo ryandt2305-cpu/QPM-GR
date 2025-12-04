@@ -43,37 +43,57 @@ const CROP_HARVEST_VALUE_GROUP: AbilityGroup = {
     'SellBoostIII',
     'SellBoostIV',
   ],
-  comparisonMetric: 'value_per_hour',
+  comparisonMetric: 'garden_impact',
   calculateComparableValue: (ability: AbilityStats, currentStrength: number | null): number | null => {
-    // Use garden-aware valuation if available
+    // Use garden-aware valuation for value per proc
     const gardenSnapshot = getGardenSnapshot();
     const context = buildAbilityValuationContext(gardenSnapshot);
 
-    // Try to resolve dynamic ability effect (for garden-dependent abilities)
+    // Check if ability already has calculated garden value
+    if (ability.gardenValuePerProc != null && ability.gardenValuePerProc > 0) {
+      return ability.gardenValuePerProc;
+    }
+
+    // Try to resolve dynamic ability effect (for garden-dependent abilities like Gold/Rainbow Granter)
     try {
       const dynamicEffect = resolveDynamicAbilityEffect(ability.id, context, currentStrength ?? 100);
       if (dynamicEffect && dynamicEffect.effectPerProc > 0) {
-        // Calculate value per hour: procs/hr × effect per proc
-        const procsPerHour = ability.procsPerHour ?? 0;
-        return procsPerHour * dynamicEffect.effectPerProc;
+        return dynamicEffect.effectPerProc;
       }
     } catch (e) {
-      // Fall through to default calculation
+      // Not a dynamically valued ability, continue
     }
 
-    // Fallback to ability's built-in valuePerHour or calculated value
-    if (ability.valuePerHour != null && ability.valuePerHour > 0) {
-      return ability.valuePerHour;
+    // For abilities without pre-calculated values, estimate based on garden
+    if (context.totalMatureValue > 0 && context.crops.length > 0) {
+      const avgCropValue = context.totalMatureValue / context.crops.length;
+
+      // Ability-specific calculations
+      if (ability.id === 'DoubleHarvest') {
+        // Double Harvest: value of getting one extra crop
+        return avgCropValue;
+      }
+
+      if (ability.id === 'ProduceRefund') {
+        // Crop Refund: value of one crop refunded (simplified)
+        return avgCropValue;
+      }
+
+      if (ability.id.startsWith('SellBoost')) {
+        // Sell Boost: percentage of total sale value
+        // Extract tier from ability name to determine boost %
+        const tier = ability.tier ?? 1;
+        const boostPercent = 10 + (tier - 1) * 2; // I:10%, II:12%, III:14%, IV:16%
+        return (context.totalMatureValue * boostPercent) / 100;
+      }
+
+      // Default: average crop value
+      return avgCropValue;
     }
 
-    // Calculate from procs and garden value if available
-    if (ability.gardenValuePerProc != null && ability.procsPerHour != null) {
-      return ability.gardenValuePerProc * ability.procsPerHour;
-    }
-
-    // Last resort: use effective value × procs per hour
-    if (ability.effectiveValue != null && ability.procsPerHour != null) {
-      return ability.effectiveValue * ability.procsPerHour;
+    // Last resort: use effective value if available
+    if (ability.effectiveValue != null && ability.effectiveValue > 0) {
+      return ability.effectiveValue;
     }
 
     return null;

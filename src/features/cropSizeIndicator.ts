@@ -9,6 +9,7 @@ import { onAdded } from '../utils/dom';
 import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
+import { getJournal, type Journal } from './journalChecker';
 
 interface CropSizeConfig {
   enabled: boolean;

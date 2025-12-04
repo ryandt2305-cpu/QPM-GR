@@ -12,6 +12,7 @@ import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageCon
 import { getPetMetadata } from '../data/petMetadata';
 import { getHungerDepletionTime } from '../data/petHungerDepletion';
 import { formatNumber, formatCoins } from '../utils/formatters';
+import { getAbilityGroup, compareAbilitiesInGroup, ABILITY_GROUPS, type AbilityGroup } from '../data/abilityGroups';
 
 function formatAbilityValue(ability: AbilityStats): { valueText: string; procsText: string; probText: string } {
   const probText = ability.effectiveProbability != null ? `${ability.effectiveProbability.toFixed(1)}%` : '—';
@@ -1776,8 +1777,24 @@ function createCompareTab(allPets: PetWithSource[]): HTMLElement {
   const render = () => {
     closeActiveSpriteDropdown();
     // Rebuild selects to respect ability filter
-    const allowed = (pet: PetWithSource) =>
-      !abilityFilter.trim() || pet.stats.abilities.some(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()));
+    const allowed = (pet: PetWithSource) => {
+      if (!abilityFilter.trim()) return true;
+
+      // Check if filter is for an ability group
+      if (abilityFilter.startsWith('group:')) {
+        const groupId = abilityFilter.substring(6); // Remove "group:" prefix
+        return pet.stats.abilities.some(a => {
+          const group = getAbilityGroup(a.id);
+          return group && group.id === groupId;
+        });
+      }
+
+      // Otherwise, filter by ability name
+      return pet.stats.abilities.some(a =>
+        a.name.toLowerCase().includes(abilityFilter.toLowerCase()) ||
+        (a.baseName || '').toLowerCase().includes(abilityFilter.toLowerCase())
+      );
+    };
 
     [selectA, selectB].forEach((select, idx) => {
       const valueBefore = select.value;
@@ -1828,7 +1845,24 @@ function createCompareTab(allPets: PetWithSource[]): HTMLElement {
   abilityLabel.textContent = 'Ability filter';
   const abilityNames = Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0])))).filter(Boolean).sort();
   abilitySelect.appendChild(new Option('All abilities', ''));
-  abilityNames.forEach(name => abilitySelect.appendChild(new Option(name, name ? name.toLowerCase() : '')));
+
+  // Add ability groups section
+  const groupsOptgroup = document.createElement('optgroup');
+  groupsOptgroup.label = '━━━ Ability Groups ━━━';
+  ABILITY_GROUPS.forEach(group => {
+    const option = new Option(group.displayName, `group:${group.id}`);
+    groupsOptgroup.appendChild(option);
+  });
+  abilitySelect.appendChild(groupsOptgroup);
+
+  // Add individual abilities section
+  const abilitiesOptgroup = document.createElement('optgroup');
+  abilitiesOptgroup.label = '━━━ Individual Abilities ━━━';
+  abilityNames.forEach(name => {
+    const option = new Option(name, name ? name.toLowerCase() : '');
+    abilitiesOptgroup.appendChild(option);
+  });
+  abilitySelect.appendChild(abilitiesOptgroup);
   abilitySelect.addEventListener('change', () => {
     abilityFilter = abilitySelect.value;
     render();
@@ -1993,9 +2027,25 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
 
   const pickTopAbility = (pet: PetWithSource | null) => {
     if (!pet) return null;
-    const filtered = abilityFilter.trim()
-      ? pet.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
-      : pet.stats.abilities;
+
+    let filtered = pet.stats.abilities;
+    if (abilityFilter.trim()) {
+      // Check if filter is for an ability group
+      if (abilityFilter.startsWith('group:')) {
+        const groupId = abilityFilter.substring(6);
+        filtered = pet.stats.abilities.filter(a => {
+          const group = getAbilityGroup(a.id);
+          return group && group.id === groupId;
+        });
+      } else {
+        // Otherwise, filter by ability name
+        filtered = pet.stats.abilities.filter(a =>
+          a.name.toLowerCase().includes(abilityFilter.toLowerCase()) ||
+          (a.baseName || '').toLowerCase().includes(abilityFilter.toLowerCase())
+        );
+      }
+    }
+
     return [...filtered].sort((a, b) => {
       const valueDiff = (b.valuePerHour || 0) - (a.valuePerHour || 0);
       if (Math.abs(valueDiff) > 1e-6) return valueDiff;
@@ -2007,17 +2057,35 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
   let abilityA: AbilityStats | null = null;
   let abilityB: AbilityStats | null = null;
   let sharesSameAbilityType = false;
+  let sharesSameAbilityGroup = false;
+  let matchedAbilityGroup: AbilityGroup | null = null;
+  let groupAbilityPairs: Array<{ abilityA: AbilityStats; abilityB: AbilityStats }> = [];
 
   if (isDifferentSpecies && petA && petB) {
     // Try to find matching abilities between the two pets
-    const abilitiesA = abilityFilter.trim()
-      ? petA.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
-      : petA.stats.abilities;
-    const abilitiesB = abilityFilter.trim()
-      ? petB.stats.abilities.filter(a => a.name.toLowerCase().includes(abilityFilter.trim().toLowerCase()) || (a.baseName || '').toLowerCase().includes(abilityFilter.trim().toLowerCase()))
-      : petB.stats.abilities;
+    const filterAbilities = (abilities: AbilityStats[]) => {
+      if (!abilityFilter.trim()) return abilities;
 
-    // Find matching base ability types
+      // Check if filter is for an ability group
+      if (abilityFilter.startsWith('group:')) {
+        const groupId = abilityFilter.substring(6);
+        return abilities.filter(a => {
+          const group = getAbilityGroup(a.id);
+          return group && group.id === groupId;
+        });
+      }
+
+      // Otherwise, filter by ability name
+      return abilities.filter(a =>
+        a.name.toLowerCase().includes(abilityFilter.toLowerCase()) ||
+        (a.baseName || '').toLowerCase().includes(abilityFilter.toLowerCase())
+      );
+    };
+
+    const abilitiesA = filterAbilities(petA.stats.abilities);
+    const abilitiesB = filterAbilities(petB.stats.abilities);
+
+    // Find matching base ability types (HIGHEST PRIORITY)
     let matchFound = false;
     for (const abilA of abilitiesA) {
       const baseA = getBaseAbilityName(abilA);
@@ -2037,6 +2105,35 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
         }
       }
       if (matchFound) break;
+    }
+
+    // If no exact ability type match, try ability group matching (SECOND PRIORITY)
+    if (!matchFound) {
+      // Find all ability pairs in the same group
+      for (const abilA of abilitiesA) {
+        const groupA = getAbilityGroup(abilA.id);
+        if (!groupA) continue;
+
+        for (const abilB of abilitiesB) {
+          const groupB = getAbilityGroup(abilB.id);
+          if (!groupB || groupA.id !== groupB.id) continue;
+
+          // Found abilities in the same group!
+          groupAbilityPairs.push({ abilityA: abilA, abilityB: abilB });
+
+          // Set the first match as primary for backward compatibility
+          if (!abilityA || !abilityB) {
+            abilityA = abilA;
+            abilityB = abilB;
+            matchedAbilityGroup = groupA;
+            sharesSameAbilityGroup = true;
+          }
+        }
+      }
+
+      if (groupAbilityPairs.length > 0) {
+        matchFound = true;
+      }
     }
 
     // If no match found, fall back to top abilities
@@ -2174,6 +2271,46 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
     </div>
   ` : '';
 
+  // Cross-ability group comparison
+  const crossAbilityGroupComparison = isDifferentSpecies && sharesSameAbilityGroup && matchedAbilityGroup ? (() => {
+    // Display all matching ability pairs in the group
+    const comparisonRows = groupAbilityPairs.map(pair => {
+      const comparison = compareAbilitiesInGroup(
+        pair.abilityA,
+        pair.abilityB,
+        statsA?.currentStrength ?? null,
+        statsB?.currentStrength ?? null,
+      );
+
+      if (!comparison) return '';
+
+      const formatValue = (val: number | null) => val != null ? formatCoins(val) : '—';
+      const winnerA = comparison.winner === 'A';
+      const winnerB = comparison.winner === 'B';
+
+      return `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+          <div style="padding:6px;border-radius:6px;background:rgba(143,130,255,0.08);${winnerA ? 'box-shadow:0 0 0 1px rgb(64,255,194);background:rgba(64,255,194,0.1);' : ''}">
+            <div style="font-size:10px;color:#C9F1FF;font-weight:600;">${pair.abilityA.name}</div>
+            <div style="font-size:11px;color:${winnerA ? 'rgb(64,255,194)' : '#fff'};font-weight:${winnerA ? '700' : '400'};">${formatValue(comparison.valueA)}</div>
+          </div>
+          <div style="padding:6px;border-radius:6px;background:rgba(143,130,255,0.08);${winnerB ? 'box-shadow:0 0 0 1px rgb(64,255,194);background:rgba(64,255,194,0.1);' : ''}">
+            <div style="font-size:10px;color:#F7E5FF;font-weight:600;">${pair.abilityB.name}</div>
+            <div style="font-size:11px;color:${winnerB ? 'rgb(64,255,194)' : '#fff'};font-weight:${winnerB ? '700' : '400'};">${formatValue(comparison.valueB)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div style="margin-top:8px;padding:8px;border:1px dashed rgba(100,200,255,0.5);border-radius:8px;background:rgba(100,200,255,0.05);">
+        <div style="font-size:11px;color:rgba(100,200,255,0.9);margin-bottom:6px;font-weight:600;">🔄 Cross-Ability Comparison: ${matchedAbilityGroup.displayName}</div>
+        <div style="font-size:10px;color:var(--qpm-text-dim);margin-bottom:6px;">${matchedAbilityGroup.description}</div>
+        ${comparisonRows}
+      </div>
+    `;
+  })() : '';
+
   center.innerHTML = `
     <div style="font-size: 13px; font-weight: 700; color: var(--qpm-accent);">Duel Metrics</div>
     ${compareBadge('Strength', statsA?.currentStrength, statsB?.currentStrength)}
@@ -2183,6 +2320,7 @@ function create3v3SlotRow(petA: PetWithSource | null, petB: PetWithSource | null
       <div>${renderAbilityRow(abilityB, '', probWinner === 'B' || abilityOverallWinner === 'B', procsWinner === 'B' || abilityOverallWinner === 'B', impactWinner === 'B' || abilityOverallWinner === 'B', 'right')}</div>
     </div>
     ${crossSpeciesComparisons}
+    ${crossAbilityGroupComparison}
     ${projectionBlock}
   `;
 
@@ -2430,7 +2568,22 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
         const prev = select.value;
         select.innerHTML = '';
         allPets.forEach((p, i) => {
-          if (abilityFilter && !p.stats.abilities.some(a => (a.baseName || '').toLowerCase().includes(abilityFilter.toLowerCase()) || a.name.toLowerCase().includes(abilityFilter.toLowerCase()))) return;
+          if (abilityFilter) {
+            // Check if filter is for an ability group
+            if (abilityFilter.startsWith('group:')) {
+              const groupId = abilityFilter.substring(6);
+              if (!p.stats.abilities.some(a => {
+                const group = getAbilityGroup(a.id);
+                return group && group.id === groupId;
+              })) return;
+            } else {
+              // Otherwise, filter by ability name
+              if (!p.stats.abilities.some(a =>
+                (a.baseName || '').toLowerCase().includes(abilityFilter.toLowerCase()) ||
+                a.name.toLowerCase().includes(abilityFilter.toLowerCase())
+              )) return;
+            }
+          }
           const opt = document.createElement('option');
           opt.value = i.toString();
           opt.textContent = `${p.stats.name || p.stats.species || 'Pet'} [${p.stats.currentStrength ?? '?'} STR]`;
@@ -2640,11 +2793,28 @@ function createTeamCompareTab(allPets: PetWithSource[]): HTMLElement {
   filterSelect.style.cssText = 'padding:6px 10px;border:1px solid var(--qpm-border);border-radius:6px;background:rgba(18,20,26,0.6);color:var(--qpm-text);font-size:13px;width:220px;';
   filterSelect.appendChild(new Option('All abilities', ''));
 
+  // Add ability groups section
+  const groupsOptgroup3v3 = document.createElement('optgroup');
+  groupsOptgroup3v3.label = '━━━ Ability Groups ━━━';
+  ABILITY_GROUPS.forEach(group => {
+    const option = new Option(group.displayName, `group:${group.id}`);
+    groupsOptgroup3v3.appendChild(option);
+  });
+  filterSelect.appendChild(groupsOptgroup3v3);
+
   // Cache ability names to avoid recomputing on every render - compute once at tab creation
   const abilityNames = Array.from(new Set(allPets.flatMap(p => p.stats.abilities.map(a => a.baseName || a.name.split(' ')[0]))))
     .filter((name): name is string => Boolean(name))
     .sort();
-  abilityNames.forEach(name => filterSelect.appendChild(new Option(name, name.toLowerCase())));
+
+  // Add individual abilities section
+  const abilitiesOptgroup3v3 = document.createElement('optgroup');
+  abilitiesOptgroup3v3.label = '━━━ Individual Abilities ━━━';
+  abilityNames.forEach(name => {
+    const option = new Option(name, name.toLowerCase());
+    abilitiesOptgroup3v3.appendChild(option);
+  });
+  filterSelect.appendChild(abilitiesOptgroup3v3);
   filterSelect.addEventListener('change', () => {
     abilityFilter = filterSelect.value.trim();
     rebuildManualSelectors();

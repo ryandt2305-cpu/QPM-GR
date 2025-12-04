@@ -510,7 +510,7 @@ function startAutoFavoritePolling(): void {
 
         const rawItem = item.raw as any;
         const mutations = Array.isArray(rawItem?.mutations) ? rawItem.mutations : [];
-        const abilities = Array.isArray(rawItem?.abilities) ? rawItem.abilities : [];
+        const abilities = Array.isArray(item.abilities) ? item.abilities : (Array.isArray(rawItem?.abilities) ? rawItem.abilities : []);
         const itemType = rawItem?.itemType || item.itemType;
 
         let shouldFavorite = false;
@@ -518,6 +518,17 @@ function startAutoFavoritePolling(): void {
 
         // === PET HANDLING ===
         if (itemType === 'Pet') {
+          // Debug logging for pet abilities
+          if (config.filterByAbilities && config.filterByAbilities.length > 0) {
+            log(`[AUTO-FAVORITE-DEBUG] Pet detected:`, {
+              species: item.species,
+              abilitiesFromItem: item.abilities,
+              abilitiesFromRaw: rawItem?.abilities,
+              abilitiesUsed: abilities,
+              filterByAbilities: config.filterByAbilities,
+            });
+          }
+
           // Apply advanced pet filters first (these act as filters, not triggers)
 
           // Filter by pet species (must match if filter is active)

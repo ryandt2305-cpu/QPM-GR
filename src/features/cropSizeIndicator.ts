@@ -80,40 +80,74 @@ function getAriesCropPrice(cropName: string): string | null {
 
     const ariesMod = window.AriesMod as any;
 
-    // Explore all possible locations for crop price data
-    // Log everything we find for debugging
-    const possiblePaths = [
-      { path: 'services.CropsService', value: ariesMod?.services?.CropsService },
-      { path: 'cropPrices', value: ariesMod?.cropPrices },
-      { path: 'prices', value: ariesMod?.prices },
-      { path: 'data.crops', value: ariesMod?.data?.crops },
-      { path: 'crops', value: ariesMod?.crops },
-    ];
-
-    for (const { path, value } of possiblePaths) {
-      if (value) {
-        log(`📐 [ARIES] Found data at AriesMod.${path}:`, value);
-
-        // Try direct access by crop name
-        if (value[cropName] !== undefined) {
-          const price = typeof value[cropName] === 'number' ? value[cropName] : value[cropName]?.price;
-          if (typeof price === 'number') {
-            return `${price.toLocaleString()}c`;
-          }
-        }
-
-        // Try with capitalized name
-        const capitalizedName = cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase();
-        if (value[capitalizedName] !== undefined) {
-          const price = typeof value[capitalizedName] === 'number' ? value[capitalizedName] : value[capitalizedName]?.price;
-          if (typeof price === 'number') {
-            return `${price.toLocaleString()}c`;
+    // Check StatsService (might have crop stats/prices)
+    const statsService = ariesMod?.services?.StatsService;
+    if (statsService) {
+      // Try various methods that might return crop price
+      const methods = ['getCropPrice', 'getPrice', 'getValue', 'getCropValue'];
+      for (const method of methods) {
+        if (typeof statsService[method] === 'function') {
+          try {
+            const price = statsService[method](cropName);
+            if (typeof price === 'number') {
+              log(`📐 [ARIES] Got price from StatsService.${method}(): ${price}`);
+              return `${price.toLocaleString()}c`;
+            }
+          } catch (e) {
+            // Method exists but failed, try next
           }
         }
       }
     }
 
-    log(`📐 [ARIES] No price found for crop: ${cropName}`);
+    // Check MiscService
+    const miscService = ariesMod?.services?.MiscService;
+    if (miscService) {
+      if (typeof miscService.getCropPrice === 'function') {
+        try {
+          const price = miscService.getCropPrice(cropName);
+          if (typeof price === 'number') {
+            log(`📐 [ARIES] Got price from MiscService.getCropPrice(): ${price}`);
+            return `${price.toLocaleString()}c`;
+          }
+        } catch (e) {
+          // Failed
+        }
+      }
+    }
+
+    // Check localStorage (like pet teams: aries_mod.pets.teams)
+    try {
+      const cropPricesKey = 'aries_mod.crop.prices';
+      const storedPrices = localStorage.getItem(cropPricesKey);
+      if (storedPrices) {
+        const prices = JSON.parse(storedPrices);
+        log(`📐 [ARIES] Found localStorage crop prices:`, prices);
+
+        // Try both original and capitalized names
+        const price = prices[cropName] || prices[cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase()];
+        if (typeof price === 'number') {
+          return `${price.toLocaleString()}c`;
+        }
+      }
+    } catch (e) {
+      // localStorage access failed
+    }
+
+    // Check root level properties
+    const rootPaths = ['cropPrices', 'prices', 'crops', 'data'];
+    for (const path of rootPaths) {
+      const value = ariesMod[path];
+      if (value && typeof value === 'object') {
+        const price = value[cropName] || value[cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase()];
+        if (typeof price === 'number' || typeof price?.price === 'number') {
+          const finalPrice = typeof price === 'number' ? price : price.price;
+          log(`📐 [ARIES] Found price at AriesMod.${path}: ${finalPrice}`);
+          return `${finalPrice.toLocaleString()}c`;
+        }
+      }
+    }
+
     return null;
   } catch (error) {
     log('⚠️ Error getting Aries crop price:', error);
@@ -844,8 +878,29 @@ export function initCropSizeIndicator(): void {
 
   // Check if AriesMod is available and log what's exposed
   if (isAriesModAvailable()) {
-    log('📐 ✅ AriesMod detected! Available services:', Object.keys(window.AriesMod?.services || {}));
-    log('📐 AriesMod structure:', window.AriesMod);
+    const services = window.AriesMod?.services || {};
+    log('📐 ✅ AriesMod detected! Available services:', Object.keys(services));
+
+    // Log methods on StatsService
+    if (services.StatsService) {
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(services.StatsService)).filter(m => typeof (services.StatsService as any)[m] === 'function');
+      log('📐 StatsService methods:', methods);
+    }
+
+    // Log methods on MiscService
+    if ((services as any).MiscService) {
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf((services as any).MiscService)).filter(m => typeof ((services as any).MiscService as any)[m] === 'function');
+      log('📐 MiscService methods:', methods);
+    }
+
+    // Log root properties
+    log('📐 AriesMod root properties:', Object.keys(window.AriesMod || {}));
+
+    // Check localStorage for aries_mod keys
+    const ariesKeys = Object.keys(localStorage).filter(k => k.startsWith('aries_mod'));
+    if (ariesKeys.length > 0) {
+      log('📐 AriesMod localStorage keys:', ariesKeys);
+    }
   } else {
     log('📐 ⚠️ AriesMod not detected - crop prices will not be shown');
   }

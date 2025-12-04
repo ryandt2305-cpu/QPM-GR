@@ -526,11 +526,11 @@ export function createJournalCheckerSection(): HTMLElement {
             padding-bottom: 8px;
             border-bottom: 2px solid #9C27B033;
           ">
-            🎯 Recommended Focus (Top ${Math.min(5, strategy.recommendedFocus.length)})
+            🎯 Recommended Focus (Top ${Math.min(10, strategy.recommendedFocus.length)})
           </div>
         `;
 
-        strategy.recommendedFocus.slice(0, 5).forEach(rec => {
+        strategy.recommendedFocus.slice(0, 10).forEach(rec => {
           const recCard = document.createElement('div');
           recCard.style.cssText = `
             background: linear-gradient(135deg, #1f1f1f, #1a1a1a);
@@ -668,9 +668,14 @@ export function createJournalCheckerSection(): HTMLElement {
             fruitCard.style.borderColor = '#4CAF5033';
           });
 
+          // Get sprite for the species
+          const spriteUrl = rec.type === 'produce'
+            ? getCropSpriteDataUrl(rec.species)
+            : getPetSpriteDataUrl(rec.species);
+
           fruitCard.innerHTML = `
             <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 16px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>
+              <img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />
               <div>
                 <div style="font-size: 13px; font-weight: 600; color: #fff;">${rec.species}</div>
                 <div style="font-size: 10px; color: #999;">${rec.missingVariants.join(', ')}</div>
@@ -734,6 +739,11 @@ export function createJournalCheckerSection(): HTMLElement {
             gap: 10px;
           `;
 
+          // Get sprite for the species
+          const spriteUrl = rec.type === 'produce'
+            ? getCropSpriteDataUrl(rec.species)
+            : getPetSpriteDataUrl(rec.species);
+
           stepCard.innerHTML = `
             <div style="
               background: #FF9800;
@@ -748,9 +758,10 @@ export function createJournalCheckerSection(): HTMLElement {
               font-weight: bold;
               flex-shrink: 0;
             ">${index + 1}</div>
+            <img src="${spriteUrl}" style="width: 28px; height: 28px; image-rendering: pixelated; flex-shrink: 0;" alt="${rec.species}" />
             <div style="flex: 1;">
               <div style="font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px;">
-                ${rec.type === 'produce' ? '🌿' : '🐾'} ${rec.species} (${rec.missingVariants.join(', ')})
+                ${rec.species} (${rec.missingVariants.join(', ')})
               </div>
               <div style="font-size: 10px; color: #999;">${rec.estimatedTime} • ${getDifficultyEmoji(rec.difficulty)} ${getDifficultyDescription(rec.difficulty)}</div>
             </div>
@@ -802,10 +813,15 @@ export function createJournalCheckerSection(): HTMLElement {
             margin-bottom: 8px;
           `;
 
+          // Get sprite for the species
+          const spriteUrl = rec.type === 'produce'
+            ? getCropSpriteDataUrl(rec.species)
+            : getPetSpriteDataUrl(rec.species);
+
           goalCard.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
               <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 16px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>
+                <img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />
                 <strong style="color: #fff; font-size: 13px;">${rec.species}</strong>
               </div>
               <span style="font-size: 20px;">${getDifficultyEmoji(rec.difficulty)}</span>

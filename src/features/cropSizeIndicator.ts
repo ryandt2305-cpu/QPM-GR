@@ -380,18 +380,36 @@ function injectCropSizeInfo(element: Element): void {
   // Find the inner container (matching Aries' selectors)
   let innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
                        element.querySelector('.McFlex.css-11dqzw') ||
-                       Array.from(element.querySelectorAll('.McFlex')).find(flex => 
+                       Array.from(element.querySelectorAll('.McFlex')).find(flex =>
                          flex.className.includes('css-')
                        );
-  
+
   if (!innerContainer) {
     return; // Can't inject without container
+  }
+
+  // Check if Aries mod has already injected value display
+  // Aries typically uses yellow/golden color for price display
+  const existingAriesDisplay = Array.from(innerContainer.querySelectorAll('span')).find(span => {
+    const color = window.getComputedStyle(span).color;
+    const text = span.textContent?.toLowerCase() || '';
+    // Aries uses yellow/gold color (rgb values around 255, 193-215, 7-100)
+    // and typically shows price/value information
+    return (color.includes('rgb(255, 193') || color.includes('rgb(255, 215') ||
+            color.includes('rgb(255, 220') || color.includes('rgb(255, 235')) &&
+           (text.includes('value') || text.includes('price') || text.includes('💰'));
+  });
+
+  // If Aries is present, skip our indicator to avoid conflicts
+  if (existingAriesDisplay) {
+    removeSizeIndicator(element);
+    return;
   }
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
   const sizeText = `Size: ${size}`;
-  
+
   // Use Aries-style injection: reuse span, structured DOM
   ensureSizeIndicator(innerContainer, sizeText, 'qpm-crop-size');
 }

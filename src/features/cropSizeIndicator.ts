@@ -18,7 +18,7 @@ interface CropSizeConfig {
 }
 
 const DEFAULT_CONFIG: CropSizeConfig = {
-  enabled: true,
+  enabled: false,  // DISABLED until Aries coexistence is solved
   showForGrowing: true,
   showForMature: true,
 };
@@ -591,8 +591,8 @@ function startTooltipWatcher(): void {
   };
 
   // Use polling instead of MutationObserver to avoid interfering with Aries
-  // Poll every 200ms - frequent enough to be responsive, slow enough to not cause issues
-  pollingInterval = window.setInterval(processTooltips, 200);
+  // Poll every 500ms - less aggressive to ensure no interference
+  pollingInterval = window.setInterval(processTooltips, 500);
 
   domObserverHandle = {
     disconnect: () => {

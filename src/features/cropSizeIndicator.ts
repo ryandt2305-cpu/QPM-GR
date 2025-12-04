@@ -27,6 +27,73 @@ let config: CropSizeConfig = { ...DEFAULT_CONFIG };
 let gardenUnsubscribe: (() => void) | null = null;
 let domObserverHandle: { disconnect: () => void } | null = null;
 let lastSnapshotCache: any = null;
+let cachedJournalData: Journal | null = null;
+
+// Emoji map for variants
+const VARIANT_EMOJI_MAP: Record<string, string> = {
+  'Normal': '🌱',
+  'Rainbow': '🌈',
+  'Gold': '⭐',
+  'Frozen': '❄️',
+  'Wet': '💧',
+  'Chilled': '🧊',
+  'Dawnlit': '🌅',
+  'Dawncharged': '☀️',
+  'Ambershine': '🔆',
+  'Ambercharged': '⚡',
+  'Max Weight': '🏆',
+};
+
+// ============================================================================
+// Journal Logging Check
+// ============================================================================
+
+/**
+ * Get emojis for unlogged variants of a crop species
+ * Returns empty string if all variants are logged or if journal unavailable
+ */
+async function getUnloggedVariantEmojis(species: string): Promise<string> {
+  try {
+    // Fetch journal if not cached
+    if (!cachedJournalData) {
+      cachedJournalData = await getJournal();
+    }
+
+    if (!cachedJournalData || !cachedJournalData.produce) {
+      return '';
+    }
+
+    // Normalize species name for journal lookup
+    const normalizedSpecies = species.charAt(0).toUpperCase() + species.slice(1).toLowerCase();
+
+    // Get logged variants for this species
+    const speciesData = cachedJournalData.produce[normalizedSpecies];
+    if (!speciesData) {
+      // Species not in journal yet - all variants are unlogged
+      // Return all variant emojis
+      return Object.values(VARIANT_EMOJI_MAP).join('');
+    }
+
+    const loggedVariants = new Set(
+      (speciesData.variantsLogged || []).map((v: any) =>
+        typeof v === 'string' ? v : v.variant
+      )
+    );
+
+    // Find unlogged variants
+    const unloggedEmojis: string[] = [];
+    for (const [variant, emoji] of Object.entries(VARIANT_EMOJI_MAP)) {
+      if (!loggedVariants.has(variant)) {
+        unloggedEmojis.push(emoji);
+      }
+    }
+
+    return unloggedEmojis.join('');
+  } catch (error) {
+    log('⚠️ Error checking journal for crop variants:', error);
+    return '';
+  }
+}
 
 // ============================================================================
 // Configuration
@@ -175,7 +242,7 @@ function removeSizeIndicator(element: Element): void {
   }
 }
 
-function injectCropSizeInfo(element: Element): void {
+async function injectCropSizeInfo(element: Element): Promise<void> {
   if (!config.enabled || 
       element.classList.contains('qpm-window') || 
       element.closest('.qpm-window')) {
@@ -405,7 +472,13 @@ function injectCropSizeInfo(element: Element): void {
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
-  const sizeText = `Size: ${size}`;
+  let sizeText = `Size: ${size}`;
+
+  // Add journal logging indicator (unlogged variants)
+  const unloggedEmojis = await getUnloggedVariantEmojis(normalizedCropName);
+  if (unloggedEmojis) {
+    sizeText += ` ${unloggedEmojis}`;
+  }
 
   // Use Aries-style injection: reuse span, structured DOM
   // This will display alongside Aries Mod value if present (both on separate lines)
@@ -435,7 +508,10 @@ function startTooltipWatcher(): void {
         if (rafCount < 10) {
           requestAnimationFrame(delayedInject);
         } else {
-          injectCropSizeInfo(tooltip);
+          // Fire and forget async injection
+          injectCropSizeInfo(tooltip).catch(err => {
+            log('⚠️ Error injecting crop size info:', err);
+          });
         }
       };
       requestAnimationFrame(delayedInject);

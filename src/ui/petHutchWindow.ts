@@ -97,7 +97,7 @@ async function getAllPets(): Promise<PetItem[]> {
 
 function renderPetCard(pet: PetItem): string {
   const species = pet.petSpecies || pet.species;
-  let spriteUrl: string;
+  let spriteUrl: string | null;
 
   try {
     if (pet.mutation) {
@@ -107,6 +107,11 @@ function renderPetCard(pet: PetItem): string {
     }
   } catch {
     spriteUrl = getPetSpriteDataUrl(species);
+  }
+
+  // Fallback if sprite is null
+  if (!spriteUrl) {
+    spriteUrl = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="48" height="48"%3E%3Crect fill="%23666" width="48" height="48"/%3E%3C/svg%3E';
   }
 
   const level = pet.strength || pet.level || '?';

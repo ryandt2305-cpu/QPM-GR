@@ -379,18 +379,28 @@ function injectCropSizeInfo(element: Element): void {
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
 
-  // DIAGNOSTIC: Only inject if Aries has already injected
-  // This ensures we NEVER interfere with Aries
+  // Find the inner container by detecting where Aries injected (if present)
+  // Aries Mod uses class "tm-crop-price" (from Aries source code analysis)
+  let innerContainer: Element | null = null;
+
+  // Try to find Aries' injected element by its marker class
   const ariesElement = element.querySelector('span.tm-crop-price');
 
-  if (!ariesElement || !ariesElement.parentElement) {
-    // Aries hasn't injected yet - don't inject to avoid interference
-    log('📐 Waiting for Aries to inject first (tm-crop-price not found)');
-    return;
+  if (ariesElement && ariesElement.parentElement) {
+    // Aries is present - use ITS parent container (ensures same location)
+    innerContainer = ariesElement.parentElement;
+    log('📐 Aries detected - injecting alongside');
+  } else {
+    // Aries not present - use fallback selectors (same ones Aries uses)
+    innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
+                     element.querySelector('.McFlex.css-11dqzw');
+    log('📐 Aries NOT detected - injecting anyway');
   }
 
-  // Aries is present - use ITS parent container
-  const innerContainer = ariesElement.parentElement;
+  if (!innerContainer) {
+    log('📐 ⚠️ No container found - cannot inject');
+    return;
+  }
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);

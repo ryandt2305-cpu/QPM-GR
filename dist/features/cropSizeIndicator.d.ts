@@ -3,6 +3,18 @@ interface CropSizeConfig {
     showForGrowing: boolean;
     showForMature: boolean;
 }
+declare global {
+    interface Window {
+        AriesMod?: {
+            services?: {
+                PetsService?: any;
+                CropsService?: any;
+                [key: string]: any;
+            };
+            [key: string]: any;
+        };
+    }
+}
 export declare function getCropSizeIndicatorConfig(): CropSizeConfig;
 export declare function setCropSizeIndicatorConfig(updates: Partial<CropSizeConfig>): void;
 declare function startCropSizeIndicator(): void;

@@ -18,7 +18,7 @@ interface CropSizeConfig {
 }
 
 const DEFAULT_CONFIG: CropSizeConfig = {
-  enabled: false,  // DISABLED until Aries coexistence is solved
+  enabled: true,  // Re-enabled with Aries API integration
   showForGrowing: true,
   showForMature: true,
 };
@@ -43,6 +43,83 @@ const VARIANT_EMOJI_MAP: Record<string, string> = {
   'Ambercharged': '⚡',
   'Max Weight': '🏆',
 };
+
+// ============================================================================
+// AriesMod Integration
+// ============================================================================
+
+declare global {
+  interface Window {
+    AriesMod?: {
+      services?: {
+        PetsService?: any;
+        CropsService?: any;
+        [key: string]: any;
+      };
+      [key: string]: any;
+    };
+  }
+}
+
+/**
+ * Check if AriesMod is available
+ */
+function isAriesModAvailable(): boolean {
+  return typeof window.AriesMod !== 'undefined' && !!window.AriesMod;
+}
+
+/**
+ * Get crop price from AriesMod if available
+ * Returns formatted price string or null if not available
+ */
+function getAriesCropPrice(cropName: string): string | null {
+  try {
+    if (!isAriesModAvailable()) {
+      return null;
+    }
+
+    const ariesMod = window.AriesMod as any;
+
+    // Explore all possible locations for crop price data
+    // Log everything we find for debugging
+    const possiblePaths = [
+      { path: 'services.CropsService', value: ariesMod?.services?.CropsService },
+      { path: 'cropPrices', value: ariesMod?.cropPrices },
+      { path: 'prices', value: ariesMod?.prices },
+      { path: 'data.crops', value: ariesMod?.data?.crops },
+      { path: 'crops', value: ariesMod?.crops },
+    ];
+
+    for (const { path, value } of possiblePaths) {
+      if (value) {
+        log(`📐 [ARIES] Found data at AriesMod.${path}:`, value);
+
+        // Try direct access by crop name
+        if (value[cropName] !== undefined) {
+          const price = typeof value[cropName] === 'number' ? value[cropName] : value[cropName]?.price;
+          if (typeof price === 'number') {
+            return `${price.toLocaleString()}c`;
+          }
+        }
+
+        // Try with capitalized name
+        const capitalizedName = cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase();
+        if (value[capitalizedName] !== undefined) {
+          const price = typeof value[capitalizedName] === 'number' ? value[capitalizedName] : value[capitalizedName]?.price;
+          if (typeof price === 'number') {
+            return `${price.toLocaleString()}c`;
+          }
+        }
+      }
+    }
+
+    log(`📐 [ARIES] No price found for crop: ${cropName}`);
+    return null;
+  } catch (error) {
+    log('⚠️ Error getting Aries crop price:', error);
+    return null;
+  }
+}
 
 // ============================================================================
 // Journal Logging Check
@@ -194,6 +271,7 @@ function ensureSizeIndicator(
   innerContainer: Element,
   text: string,
   journalEmojis: string = '',
+  ariesPrice: string | null = null,
   markerClass: string = 'qpm-crop-size'
 ): void {
   // Find or create the main span (reuse if exists, remove duplicates)
@@ -227,6 +305,28 @@ function ensureSizeIndicator(
   // Label class constants
   const SIZE_LABEL_CLASS = 'qpm-crop-size-label';
   const JOURNAL_LABEL_CLASS = 'qpm-crop-journal-label';
+  const ARIES_PRICE_LABEL_CLASS = 'qpm-aries-price-label';
+
+  // Create or reuse Aries price label (displayed FIRST, in yellow like Aries)
+  let ariesLabel = span.querySelector(`:scope > span.${CSS.escape(ARIES_PRICE_LABEL_CLASS)}`) as HTMLSpanElement;
+  if (ariesPrice) {
+    if (!ariesLabel) {
+      ariesLabel = document.createElement('span');
+      ariesLabel.className = ARIES_PRICE_LABEL_CLASS;
+      ariesLabel.style.display = 'block';
+      ariesLabel.style.textAlign = 'center';
+      ariesLabel.style.fontSize = '14px';
+      ariesLabel.style.fontWeight = '700';
+      ariesLabel.style.color = 'rgb(255, 193, 7)';  // Aries yellow color
+      ariesLabel.style.marginBottom = '4px';
+      span.insertBefore(ariesLabel, span.firstChild);  // Insert at top
+    }
+    if (ariesLabel.textContent !== ariesPrice) {
+      ariesLabel.textContent = ariesPrice;
+    }
+  } else if (ariesLabel) {
+    ariesLabel.remove();
+  }
 
   // Create or reuse size label span
   let sizeLabel = span.querySelector(`:scope > span.${CSS.escape(SIZE_LABEL_CLASS)}`) as HTMLSpanElement;
@@ -553,9 +653,15 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   // Get journal logging indicator (unlogged variants) - displayed on separate line
   const unloggedEmojis = await getUnloggedVariantEmojis(normalizedCropName);
 
+  // Get Aries price if available (Option B: read from AriesMod API)
+  const ariesPrice = getAriesCropPrice(normalizedCropName);
+  if (ariesPrice) {
+    log(`📐 💰 Aries price for ${normalizedCropName}: ${ariesPrice}`);
+  }
+
   // Use Aries-style injection: reuse span, structured DOM
-  // This will display alongside Aries Mod value if present (both on separate lines)
-  ensureSizeIndicator(innerContainer, sizeText, unloggedEmojis, 'qpm-crop-size');
+  // If Aries is available, display: [Aries Price (yellow)] [Size (blue)] [Journal Emojis]
+  ensureSizeIndicator(innerContainer, sizeText, unloggedEmojis, ariesPrice, 'qpm-crop-size');
 }
 
 // ============================================================================
@@ -735,6 +841,14 @@ function stopCropSizeIndicator(): void {
 
 export function initCropSizeIndicator(): void {
   loadConfig();
+
+  // Check if AriesMod is available and log what's exposed
+  if (isAriesModAvailable()) {
+    log('📐 ✅ AriesMod detected! Available services:', Object.keys(window.AriesMod?.services || {}));
+    log('📐 AriesMod structure:', window.AriesMod);
+  } else {
+    log('📐 ⚠️ AriesMod not detected - crop prices will not be shown');
+  }
 
   if (config.enabled) {
     startCropSizeIndicator();

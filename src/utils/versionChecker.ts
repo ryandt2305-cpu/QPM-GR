@@ -2,7 +2,7 @@
 // Version information (simplified - no network checks to avoid Tampermonkey prompts)
 // Tampermonkey's built-in update mechanism (@updateURL in header) handles version checking
 
-const CURRENT_VERSION = '2.0.1'; // This should match package.json version
+const CURRENT_VERSION = '2.0.2'; // This should match package.json version
 const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
 const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js';
 

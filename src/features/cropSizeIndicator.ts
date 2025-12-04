@@ -423,8 +423,9 @@ function startTooltipWatcher(): void {
   log('📐 Crop Size Indicator: Watching for crop tooltips');
 
   let pollingInterval: number | null = null;
+  let debounceTimer: number | null = null;
 
-  // Process tooltips - no artificial delay needed since we detect Aries dynamically
+  // Process tooltips - with significant delay to let Aries inject first
   const processTooltips = () => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     tooltips.forEach(tooltip => {
@@ -432,9 +433,22 @@ function startTooltipWatcher(): void {
     });
   };
 
+  // Debounced processing to avoid constant re-processing
+  const debouncedProcess = () => {
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+    // Wait 300ms after last DOM change before injecting
+    // This gives Aries plenty of time to inject its content first
+    debounceTimer = window.setTimeout(() => {
+      processTooltips();
+      debounceTimer = null;
+    }, 300);
+  };
+
   // Use MutationObserver to watch for crop info cards being added/changed
   const observer = new MutationObserver(() => {
-    processTooltips();
+    debouncedProcess();
   });
 
   observer.observe(document.body, {
@@ -453,17 +467,20 @@ function startTooltipWatcher(): void {
     }
   }, 200); // 200ms polling (reduced from 50ms to avoid interfering with Aries)
 
-  domObserverHandle = { 
+  domObserverHandle = {
     disconnect: () => {
       observer.disconnect();
       if (pollingInterval !== null) {
         clearInterval(pollingInterval);
       }
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+      }
     }
   };
-  
-  // Check for existing tooltips immediately
-  processTooltips();
+
+  // Check for existing tooltips with delay (let Aries inject first)
+  debouncedProcess();
 }
 
 function stopTooltipWatcher(): void {

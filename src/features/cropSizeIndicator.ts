@@ -379,27 +379,18 @@ function injectCropSizeInfo(element: Element): void {
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
 
-  // CRITICAL FIX: Find the inner container by detecting where Aries injected
-  // Aries Mod uses class "tm-crop-price" (from analysis of Aries source code)
-  // This ensures we inject into the SAME container as Aries, allowing both to coexist
-  let innerContainer: Element | null = null;
-
-  // Step 1: Try to find Aries' injected element by its marker class
+  // DIAGNOSTIC: Only inject if Aries has already injected
+  // This ensures we NEVER interfere with Aries
   const ariesElement = element.querySelector('span.tm-crop-price');
 
-  // Step 2: If Aries is present, use ITS parent container (ensures same location)
-  if (ariesElement && ariesElement.parentElement) {
-    innerContainer = ariesElement.parentElement;
-  } else {
-    // Step 3: Fallback to the same selectors Aries uses
-    // (from Aries source: .McFlex.css-1l3zq7 or .McFlex.css-11dqzw)
-    innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
-                     element.querySelector('.McFlex.css-11dqzw');
+  if (!ariesElement || !ariesElement.parentElement) {
+    // Aries hasn't injected yet - don't inject to avoid interference
+    log('📐 Waiting for Aries to inject first (tm-crop-price not found)');
+    return;
   }
 
-  if (!innerContainer) {
-    return; // Can't inject without container
-  }
+  // Aries is present - use ITS parent container
+  const innerContainer = ariesElement.parentElement;
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
@@ -421,16 +412,22 @@ function startTooltipWatcher(): void {
 
   let pollingInterval: number | null = null;
 
-  // Process tooltips - with double RAF delay to let Aries inject first
-  // Aries uses single requestAnimationFrame (~16ms), we use double (~32ms)
+  // Process tooltips - with significant RAF delay to let Aries inject first
+  // Aries is state-driven and may take time to detect and inject
+  // We use 10 RAFs (~160ms) to ensure Aries has plenty of time
   const processTooltips = () => {
     const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
     tooltips.forEach(tooltip => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      let rafCount = 0;
+      const delayedInject = () => {
+        rafCount++;
+        if (rafCount < 10) {
+          requestAnimationFrame(delayedInject);
+        } else {
           injectCropSizeInfo(tooltip);
-        });
-      });
+        }
+      };
+      requestAnimationFrame(delayedInject);
     });
   };
 
@@ -446,25 +443,13 @@ function startTooltipWatcher(): void {
     characterDataOldValue: true
   });
 
-  // Polling for tooltip updates - reduced frequency to avoid DOM thrashing
-  // The MutationObserver handles most cases; this is just a safety net
-  pollingInterval = window.setInterval(() => {
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
-    if (tooltips.length > 0) {
-      processTooltips();
-    }
-  }, 200); // 200ms polling (reduced from 50ms to avoid interfering with Aries)
-
   domObserverHandle = {
     disconnect: () => {
       observer.disconnect();
-      if (pollingInterval !== null) {
-        clearInterval(pollingInterval);
-      }
     }
   };
 
-  // Check for existing tooltips
+  // Initial check for existing tooltips
   processTooltips();
 }
 

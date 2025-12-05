@@ -3,6 +3,7 @@
 
 import { getCropSpriteDataUrl, getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { storage } from '../utils/storage';
+import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
 
 // Storage for user notes per species
 function getSpeciesNotes(species: string): string {
@@ -262,8 +263,8 @@ export function createJournalCheckerSection(): HTMLElement {
                 'Rainbow': { bg: v.collected ? '#9C27B0' : '#333', text: v.collected ? '#fff' : '#777' },
                 'Gold': { bg: v.collected ? '#FFB300' : '#333', text: v.collected ? '#fff' : '#777' },
                 'Frozen': { bg: v.collected ? '#00BCD4' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Wet': { bg: v.collected ? '#2196F3' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Chilled': { bg: v.collected ? '#03A9F4' : '#333', text: v.collected ? '#fff' : '#777' },
+                'Wet': { bg: v.collected ? '#4DBEFA' : '#333', text: v.collected ? '#04233A' : '#777' },
+                'Chilled': { bg: v.collected ? '#96F6FF' : '#333', text: v.collected ? '#05323D' : '#777' },
                 'Dawnlit': { bg: v.collected ? '#FF6F00' : '#333', text: v.collected ? '#fff' : '#777' },
                 'Dawnbound': { bg: v.collected ? '#FF9800' : '#333', text: v.collected ? '#fff' : '#777' },
                 'Amberlit': { bg: v.collected ? '#FFA726' : '#333', text: v.collected ? '#fff' : '#777' },
@@ -900,6 +901,65 @@ export function createJournalCheckerSection(): HTMLElement {
   });
 
   root.appendChild(categoryContainer);
+
+  // Tooltip Helper toggle (controls crop tooltip indicators)
+  const helperToggleCard = document.createElement('div');
+  helperToggleCard.style.cssText = `
+    margin: -6px 0 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid #2a2a2a;
+    background: rgba(255, 255, 255, 0.03);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  `;
+
+  const helperText = document.createElement('div');
+  helperText.innerHTML = `
+    <div style="font-size: 13px; font-weight: 600; color: #fff;">Tooltip Helper</div>
+    <div style="font-size: 11px; color: #bbb;">Show journal letters inside crop tooltips</div>
+  `;
+  helperToggleCard.appendChild(helperText);
+
+  const helperToggleButton = document.createElement('button');
+  helperToggleButton.type = 'button';
+  helperToggleButton.style.cssText = `
+    border-radius: 999px;
+    border: 2px solid #333;
+    padding: 6px 18px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 72px;
+  `;
+
+  const applyToggleState = (enabled: boolean) => {
+    helperToggleButton.textContent = enabled ? 'ON' : 'OFF';
+    helperToggleButton.style.background = enabled
+      ? 'linear-gradient(135deg, #5ad1ff, #35a8f7)'
+      : 'rgba(0, 0, 0, 0.3)';
+    helperToggleButton.style.borderColor = enabled ? '#5ad1ff' : '#333';
+    helperToggleButton.style.color = enabled ? '#00223b' : '#777';
+    helperToggleButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  };
+
+  let tooltipHelperEnabled = getCropSizeIndicatorConfig().showJournalIndicators !== false;
+  applyToggleState(tooltipHelperEnabled);
+
+  helperToggleButton.addEventListener('click', () => {
+    tooltipHelperEnabled = !tooltipHelperEnabled;
+    applyToggleState(tooltipHelperEnabled);
+    setCropSizeIndicatorConfig({ showJournalIndicators: tooltipHelperEnabled });
+  });
+
+  helperToggleCard.appendChild(helperToggleButton);
+  root.appendChild(helperToggleCard);
 
   // Results container with custom scrollbar
   const resultsContainer = document.createElement('div');

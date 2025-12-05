@@ -5,23 +5,24 @@ import { getGardenSnapshot, onGardenSnapshot } from './gardenBridge';
 import { lookupMaxScale } from '../utils/plantScales';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import { onAdded } from '../utils/dom';
+import { onAdded, onRemoved, watch } from '../utils/dom';
 import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { getJournal, type Journal } from './journalChecker';
-import { pageWindow } from '../core/pageContext';
 
 interface CropSizeConfig {
   enabled: boolean;
   showForGrowing: boolean;
   showForMature: boolean;
+  showJournalIndicators: boolean;
 }
 
 const DEFAULT_CONFIG: CropSizeConfig = {
-  enabled: true,  // Re-enabled with Aries API integration
+  enabled: true,
   showForGrowing: true,
   showForMature: true,
+  showJournalIndicators: true,
 };
 
 let config: CropSizeConfig = { ...DEFAULT_CONFIG };
@@ -30,148 +31,36 @@ let domObserverHandle: { disconnect: () => void } | null = null;
 let lastSnapshotCache: any = null;
 let cachedJournalData: Journal | null = null;
 
-// Emoji map for variants
-const VARIANT_EMOJI_MAP: Record<string, string> = {
-  'Normal': '🌱',
-  'Rainbow': '🌈',
-  'Gold': '⭐',
-  'Frozen': '❄️',
-  'Wet': '💧',
-  'Chilled': '🧊',
-  'Dawnlit': '🔆',  // Swapped with Ambershine
-  'Dawncharged': '☀️',
-  'Ambershine': '🌅',  // Swapped with Dawnlit
-  'Ambercharged': '⚡',
-  'Max Weight': '🏆',
-};
-
-// ============================================================================
-// AriesMod Integration
-// ============================================================================
-
-// Type definition for AriesMod (lives on page window, not sandbox)
-interface AriesModType {
-  services?: {
-    PetsService?: any;
-    CropsService?: any;
-    StatsService?: any;
-    MiscService?: any;
-    [key: string]: any;
-  };
-  [key: string]: any;
+interface VariantBadge {
+  matches: string[];
+  label: string;
+  color: string;
+  bold?: boolean;
 }
 
-/**
- * Check if AriesMod is available on the PAGE window (not sandbox)
- */
-function isAriesModAvailable(): boolean {
-  const ariesMod = (pageWindow as any).AriesMod;
-  return typeof ariesMod !== 'undefined' && !!ariesMod;
-}
-
-/**
- * Get AriesMod from page window
- */
-function getAriesMod(): AriesModType | undefined {
-  return (pageWindow as any).AriesMod;
-}
-
-/**
- * Get crop price from AriesMod if available
- * Returns formatted price string or null if not available
- */
-function getAriesCropPrice(cropName: string): string | null {
-  try {
-    if (!isAriesModAvailable()) {
-      return null;
-    }
-
-    const ariesMod = getAriesMod() as any;
-
-    // Check StatsService (might have crop stats/prices)
-    const statsService = ariesMod?.services?.StatsService;
-    if (statsService) {
-      // Try various methods that might return crop price
-      const methods = ['getCropPrice', 'getPrice', 'getValue', 'getCropValue'];
-      for (const method of methods) {
-        if (typeof statsService[method] === 'function') {
-          try {
-            const price = statsService[method](cropName);
-            if (typeof price === 'number') {
-              log(`📐 [ARIES] Got price from StatsService.${method}(): ${price}`);
-              return `${price.toLocaleString()}c`;
-            }
-          } catch (e) {
-            // Method exists but failed, try next
-          }
-        }
-      }
-    }
-
-    // Check MiscService
-    const miscService = ariesMod?.services?.MiscService;
-    if (miscService) {
-      if (typeof miscService.getCropPrice === 'function') {
-        try {
-          const price = miscService.getCropPrice(cropName);
-          if (typeof price === 'number') {
-            log(`📐 [ARIES] Got price from MiscService.getCropPrice(): ${price}`);
-            return `${price.toLocaleString()}c`;
-          }
-        } catch (e) {
-          // Failed
-        }
-      }
-    }
-
-    // Check localStorage (like pet teams: aries_mod.pets.teams)
-    try {
-      const cropPricesKey = 'aries_mod.crop.prices';
-      const storedPrices = localStorage.getItem(cropPricesKey);
-      if (storedPrices) {
-        const prices = JSON.parse(storedPrices);
-        log(`📐 [ARIES] Found localStorage crop prices:`, prices);
-
-        // Try both original and capitalized names
-        const price = prices[cropName] || prices[cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase()];
-        if (typeof price === 'number') {
-          return `${price.toLocaleString()}c`;
-        }
-      }
-    } catch (e) {
-      // localStorage access failed
-    }
-
-    // Check root level properties
-    const rootPaths = ['cropPrices', 'prices', 'crops', 'data'];
-    for (const path of rootPaths) {
-      const value = ariesMod[path];
-      if (value && typeof value === 'object') {
-        const price = value[cropName] || value[cropName.charAt(0).toUpperCase() + cropName.slice(1).toLowerCase()];
-        if (typeof price === 'number' || typeof price?.price === 'number') {
-          const finalPrice = typeof price === 'number' ? price : price.price;
-          log(`📐 [ARIES] Found price at AriesMod.${path}: ${finalPrice}`);
-          return `${finalPrice.toLocaleString()}c`;
-        }
-      }
-    }
-
-    return null;
-  } catch (error) {
-    log('⚠️ Error getting Aries crop price:', error);
-    return null;
-  }
-}
+// Letter/color palette inspired by the in-game journal status row
+const VARIANT_BADGES: VariantBadge[] = [
+  { matches: ['Rainbow'], label: 'R', color: '#9C27B0', bold: true },
+  { matches: ['Gold', 'Golden'], label: 'G', color: '#FFB300', bold: true },
+  { matches: ['Wet'], label: 'W', color: '#4DBEFA' },
+  { matches: ['Chilled'], label: 'C', color: '#96F6FF' },
+  { matches: ['Frozen'], label: 'F', color: '#00BCD4' },
+  { matches: ['Dawnlit'], label: 'D', color: '#FF9800' },
+  { matches: ['Dawncharged', 'Dawnbound'], label: 'D', color: '#FF9800', bold: true },
+  { matches: ['Amberlit', 'Ambershine'], label: 'A', color: '#FFA726' },
+  { matches: ['Ambercharged', 'Amberbound'], label: 'A', color: '#FFA726', bold: true },
+  { matches: ['Max Weight', 'Max'], label: 'S', color: '#BDBDBD', bold: true },
+];
 
 // ============================================================================
 // Journal Logging Check
 // ============================================================================
 
 /**
- * Get emojis for unlogged variants of a crop species
- * Returns empty string if all variants are logged or if journal unavailable
+ * Get letter badges for unlogged variants of a crop species.
+ * Returns empty array if everything is logged or if the journal is unavailable.
  */
-async function getUnloggedVariantEmojis(species: string): Promise<string> {
+async function getUnloggedVariantBadges(species: string): Promise<VariantBadge[]> {
   try {
     // Fetch journal if not cached
     if (!cachedJournalData) {
@@ -179,7 +68,7 @@ async function getUnloggedVariantEmojis(species: string): Promise<string> {
     }
 
     if (!cachedJournalData || !cachedJournalData.produce) {
-      return '';
+      return [];
     }
 
     // Normalize species name for journal lookup
@@ -198,31 +87,32 @@ async function getUnloggedVariantEmojis(species: string): Promise<string> {
     }
 
     // Get logged variants for this species
+
     const speciesData = cachedJournalData.produce[normalizedSpecies];
     if (!speciesData) {
-      // Species not in journal yet - all variants are unlogged
-      // Return all variant emojis
-      return Object.values(VARIANT_EMOJI_MAP).join('');
+      // Species not in journal yet - everything counts as unlogged.
+      return VARIANT_BADGES.map(badge => ({ ...badge }));
     }
 
     const loggedVariants = new Set(
-      (speciesData.variantsLogged || []).map((v: any) =>
-        typeof v === 'string' ? v : v.variant
-      )
+      (speciesData.variantsLogged || []).map((v: any) => {
+        const name = typeof v === 'string' ? v : v?.variant;
+        return typeof name === 'string' ? name.toLowerCase() : '';
+      }).filter(Boolean)
     );
 
-    // Find unlogged variants
-    const unloggedEmojis: string[] = [];
-    for (const [variant, emoji] of Object.entries(VARIANT_EMOJI_MAP)) {
-      if (!loggedVariants.has(variant)) {
-        unloggedEmojis.push(emoji);
+    const unloggedBadges: VariantBadge[] = [];
+    for (const badge of VARIANT_BADGES) {
+      const isLogged = badge.matches.some(matchName => loggedVariants.has(matchName.toLowerCase()));
+      if (!isLogged) {
+        unloggedBadges.push({ ...badge });
       }
     }
 
-    return unloggedEmojis.join('');
+    return unloggedBadges;
   } catch (error) {
     log('⚠️ Error checking journal for crop variants:', error);
-    return '';
+    return [];
   }
 }
 
@@ -307,119 +197,307 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
 // ============================================================================
 
 const INJECTED_MARKER = 'data-qpm-crop-size-injected';
+const TOOLTIP_STYLE_ID = 'qpm-crop-size-tooltip-style';
+const TOOLTIP_ROW_ATTR = 'data-qpm-tooltip-row';
+const JOURNAL_BADGE_ATTR = 'data-qpm-journal-badge';
+const DEFAULT_SIZE_COLOR = '#B5BCAF';
+const SIZE_ROW_CLASS = 'qpm-crop-size';
+const ARIES_ICON_MARKER = 'data-qpm-aries-icon';
+const ARIES_ROW_ATTR = 'data-aries-value-row';
+const ARIES_COIN_ATTR = 'data-aries-coin-value';
+const SIZE_VALUE_ATTR = 'data-qpm-size-value';
+const BADGE_CONTAINER_ATTR = 'data-qpm-badge-container';
+const SIZE_DIVIDER_ATTR = 'data-qpm-size-divider';
 
-// Aries-style injection: reuses existing span, structured icon + label, idempotent
-function ensureSizeIndicator(
-  innerContainer: Element,
-  text: string,
-  journalEmojis: string = '',
-  ariesPrice: string | null = null,
-  markerClass: string = 'qpm-crop-size'
-): void {
-  // Find or create the main span (reuse if exists, remove duplicates)
-  const existingSpans = Array.from(
-    innerContainer.querySelectorAll(`:scope > span.${CSS.escape(markerClass)}`)
-  ) as HTMLSpanElement[];
-  let span: HTMLSpanElement | null = existingSpans[0] ?? null;
+type TooltipRowType = 'size' | 'journal';
 
-  // Remove duplicates if multiple exist
-  for (let i = 1; i < existingSpans.length; i++) {
-    const duplicateSpan = existingSpans[i];
-    if (duplicateSpan) {
-      duplicateSpan.remove();
+function ensureTooltipStyles(): void {
+  if (document.getElementById(TOOLTIP_STYLE_ID)) {
+    return;
+  }
+
+  const style = document.createElement('style');
+  style.id = TOOLTIP_STYLE_ID;
+  style.textContent = `
+    [${TOOLTIP_ROW_ATTR}] {
+      display: block;
+      width: 100%;
+      pointer-events: none;
+    }
+
+    [${TOOLTIP_ROW_ATTR}="size"] {
+      margin-top: -2px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      line-height: 16px;
+      color: ${DEFAULT_SIZE_COLOR};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    [${JOURNAL_BADGE_ATTR}] {
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      display: inline-block;
+      margin: 0 1px;
+      min-width: 10px;
+      text-align: center;
+    }
+  `.trim();
+
+  document.head.appendChild(style);
+}
+
+function ensureTooltipRow(container: Element, type: TooltipRowType): HTMLElement {
+  ensureTooltipStyles();
+  const selector = `:scope > [${TOOLTIP_ROW_ATTR}="${type}"]`;
+  let row = container.querySelector(selector) as HTMLElement | null;
+  if (!row) {
+    row = document.createElement('span');
+    row.setAttribute(TOOLTIP_ROW_ATTR, type);
+    row.setAttribute('data-qpm-injected', 'true');
+    container.appendChild(row);
+  }
+  return row;
+}
+
+function removeTooltipRow(container: Element | null, type: TooltipRowType): void {
+  if (!container) return;
+  const selector = `:scope > [${TOOLTIP_ROW_ATTR}="${type}"]`;
+  const row = container.querySelector(selector);
+  row?.remove();
+}
+
+function createBadgeElement(badge: VariantBadge): HTMLElement {
+  const span = document.createElement('span');
+  span.setAttribute(JOURNAL_BADGE_ATTR, 'true');
+  span.textContent = badge.label;
+  span.style.color = badge.color;
+  span.style.fontWeight = badge.bold ? '800' : '600';
+  span.title = badge.matches.join(' / ');
+  return span;
+}
+
+function getWeightColorFromTooltip(element: Element): string | null {
+  const nodes = element.querySelectorAll('span, p, div, strong');
+  for (const node of Array.from(nodes)) {
+    if (!(node instanceof HTMLElement)) {
+      continue;
+    }
+
+    if (node.getAttribute('data-qpm-injected') === 'true') {
+      continue;
+    }
+
+    const text = node.textContent?.trim();
+    if (!text || text.length > 24) {
+      continue;
+    }
+
+    if (!/\bkg\b/i.test(text)) {
+      continue;
+    }
+
+    try {
+      const color = window.getComputedStyle(node).color;
+      if (color) {
+        return color;
+      }
+    } catch {
+      // Ignore errors from detached nodes
     }
   }
 
-  // Create if doesn't exist
-  if (!span) {
-    span = document.createElement('span');
-    span.className = markerClass;
-    span.setAttribute('data-qpm-injected', 'true'); // Mark as our element
+  return null;
+}
+
+function normalizeSizeColor(weightColor: string | null): string {
+  if (!weightColor) {
+    return DEFAULT_SIZE_COLOR;
   }
 
-  // Apply main span styling (matching Aries' pattern but with different color)
-  span.style.display = 'block';
-  span.style.marginTop = '6px';
-  span.style.fontWeight = '700';
-  span.style.color = 'rgb(100, 181, 246)'; // Blue for size (Aries uses yellow for price)
-  span.style.fontSize = '14px';
+  const normalized = weightColor.trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_SIZE_COLOR;
+  }
 
-  // Label class constants
-  const SIZE_LABEL_CLASS = 'qpm-crop-size-label';
-  const JOURNAL_LABEL_CLASS = 'qpm-crop-journal-label';
-  const ARIES_PRICE_LABEL_CLASS = 'qpm-aries-price-label';
+  if (normalized === '#fff' || normalized === '#ffffff') {
+    return DEFAULT_SIZE_COLOR;
+  }
 
-  // Create or reuse Aries price label (displayed FIRST, in yellow like Aries)
-  let ariesLabel = span.querySelector(`:scope > span.${CSS.escape(ARIES_PRICE_LABEL_CLASS)}`) as HTMLSpanElement;
-  if (ariesPrice) {
-    if (!ariesLabel) {
-      ariesLabel = document.createElement('span');
-      ariesLabel.className = ARIES_PRICE_LABEL_CLASS;
-      ariesLabel.style.display = 'block';
-      ariesLabel.style.textAlign = 'center';
-      ariesLabel.style.fontSize = '14px';
-      ariesLabel.style.fontWeight = '700';
-      ariesLabel.style.color = 'rgb(255, 193, 7)';  // Aries yellow color
-      ariesLabel.style.marginBottom = '4px';
-      span.insertBefore(ariesLabel, span.firstChild);  // Insert at top
+  if (normalized.startsWith('rgb')) {
+    const rgbMatch = normalized.match(/rgb[a]?\(([^)]+)\)/);
+    if (rgbMatch) {
+      const components = rgbMatch[1];
+      if (!components) {
+        return DEFAULT_SIZE_COLOR;
+      }
+      const parts = components.split(',').map(part => parseFloat(part.trim()));
+      const [r, g, b] = parts;
+      if (r === 255 && g === 255 && b === 255) {
+        return DEFAULT_SIZE_COLOR;
+      }
     }
-    if (ariesLabel.textContent !== ariesPrice) {
-      ariesLabel.textContent = ariesPrice;
+  }
+
+  return weightColor;
+}
+
+function ensureSizeIndicator(container: Element, sizeValue: number, badges: VariantBadge[], sizeColor: string): void {
+  ensureTooltipStyles();
+
+  const ariesRow = getAriesValueRow(container);
+  const sizeRow = ensureTooltipRow(container, 'size');
+  sizeRow.classList.add(SIZE_ROW_CLASS);
+  sizeRow.style.color = sizeColor;
+  sizeRow.style.marginTop = ariesRow ? '2px' : '0px';
+
+  let sizeValueEl = sizeRow.querySelector(`:scope > span[${SIZE_VALUE_ATTR}]`) as HTMLElement | null;
+  if (!sizeValueEl) {
+    sizeValueEl = document.createElement('span');
+    sizeValueEl.setAttribute(SIZE_VALUE_ATTR, 'true');
+    sizeRow.appendChild(sizeValueEl);
+  }
+  sizeValueEl.textContent = `${sizeValue}`;
+  sizeValueEl.style.flex = '0 1 auto';
+  sizeValueEl.style.textAlign = 'left';
+
+  let badgeContainer = sizeRow.querySelector(`:scope > span[${BADGE_CONTAINER_ATTR}]`) as HTMLElement | null;
+  if (!badgeContainer) {
+    badgeContainer = document.createElement('span');
+    badgeContainer.setAttribute(BADGE_CONTAINER_ATTR, 'true');
+    badgeContainer.style.display = 'inline-flex';
+    badgeContainer.style.gap = '4px';
+    badgeContainer.style.textAlign = 'right';
+    sizeRow.appendChild(badgeContainer);
+  }
+
+  let divider = sizeRow.querySelector(`:scope > span[${SIZE_DIVIDER_ATTR}]`) as HTMLElement | null;
+  if (!divider) {
+    divider = document.createElement('span');
+    divider.setAttribute(SIZE_DIVIDER_ATTR, 'true');
+    divider.textContent = '|';
+    divider.style.opacity = '0.6';
+    divider.style.margin = '0 6px';
+    divider.style.flex = '0 0 auto';
+    sizeRow.appendChild(divider);
+  }
+
+  sizeRow.append(sizeValueEl, divider, badgeContainer);
+
+  if (badges.length > 0) {
+    const nodes = badges.map(badge => createBadgeElement(badge));
+    badgeContainer.replaceChildren(...nodes);
+    badgeContainer.style.visibility = 'visible';
+    divider.style.display = 'inline-block';
+    sizeRow.style.justifyContent = 'center';
+  } else {
+    badgeContainer.replaceChildren();
+    badgeContainer.style.visibility = 'hidden';
+    divider.style.display = 'none';
+    sizeRow.style.justifyContent = 'center';
+  }
+
+  positionIndicatorRow(container, sizeRow, ariesRow);
+}
+
+function positionIndicatorRow(container: Element, sizeRow: HTMLElement, ariesRow: HTMLElement | null): void {
+  if (ariesRow && ariesRow.parentElement === container) {
+    if (sizeRow.previousElementSibling !== ariesRow) {
+      ariesRow.insertAdjacentElement('afterend', sizeRow);
     }
-  } else if (ariesLabel) {
-    ariesLabel.remove();
-  }
-
-  // Create or reuse size label span
-  let sizeLabel = span.querySelector(`:scope > span.${CSS.escape(SIZE_LABEL_CLASS)}`) as HTMLSpanElement;
-  if (!sizeLabel) {
-    sizeLabel = document.createElement('span');
-    sizeLabel.className = SIZE_LABEL_CLASS;
-    sizeLabel.style.display = 'block';
-    sizeLabel.style.textAlign = 'center';  // Center the size text
-    span.appendChild(sizeLabel);
-  }
-
-  // Update size label text if changed
-  if (sizeLabel.textContent !== text) {
-    sizeLabel.textContent = text;
-  }
-
-  // Handle journal emoji label (separate line)
-  let journalLabel = span.querySelector(`:scope > span.${CSS.escape(JOURNAL_LABEL_CLASS)}`) as HTMLSpanElement;
-  if (journalEmojis) {
-    // Create journal label if needed
-    if (!journalLabel) {
-      journalLabel = document.createElement('span');
-      journalLabel.className = JOURNAL_LABEL_CLASS;
-      journalLabel.style.display = 'block';
-      journalLabel.style.fontSize = '12px';
-      journalLabel.style.marginTop = '2px';
-      journalLabel.style.opacity = '0.9';
-      journalLabel.style.textAlign = 'center';  // Center the emojis
-      span.appendChild(journalLabel);
-    }
-    // Update journal emojis
-    if (journalLabel.textContent !== journalEmojis) {
-      journalLabel.textContent = journalEmojis;
-    }
-  } else if (journalLabel) {
-    // Remove journal label if no emojis
-    journalLabel.remove();
-  }
-
-  // Append to inner container if not already there
-  // appendChild adds to the end, so if Aries injected first, it will appear above our element
-  if (!span.parentElement || span.parentElement !== innerContainer) {
-    innerContainer.appendChild(span);
+  } else if (sizeRow.parentElement !== container) {
+    container.appendChild(sizeRow);
   }
 }
 
-function removeSizeIndicator(element: Element): void {
-  const existing = element.querySelector('.qpm-crop-size');
-  if (existing) {
-    existing.remove();
+function getAriesValueRow(container: Element): HTMLElement | null {
+  const icon = container.querySelector(`[${ARIES_ICON_MARKER}]`);
+  if (icon) {
+    const row = icon.parentElement as HTMLElement | null;
+    if (row) {
+      row.setAttribute(ARIES_ROW_ATTR, 'true');
+      ensureAriesRowMargins(row);
+      return row;
+    }
   }
+  const taggedRow = container.querySelector(`[${ARIES_ROW_ATTR}]`) as HTMLElement | null;
+  if (taggedRow) {
+    ensureAriesRowMargins(taggedRow);
+    return taggedRow;
+  }
+  const coinRow = container.querySelector(`[${ARIES_COIN_ATTR}]`)?.parentElement as HTMLElement | null;
+  if (coinRow) {
+    coinRow.setAttribute(ARIES_ROW_ATTR, 'true');
+    ensureAriesRowMargins(coinRow);
+    return coinRow;
+  }
+  return null;
+}
+
+function normalizeAriesValueIcons(container: Element): void {
+  const icons = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
+  for (const icon of icons) {
+    if (!icon || icon.dataset.qpmAriesNormalized === 'true') {
+      continue;
+    }
+
+    const { width, height, pointerEvents, userSelect } = icon.style;
+    if (width !== '18px' || height !== '18px') {
+      continue;
+    }
+    if (pointerEvents !== 'none' || userSelect !== 'none') {
+      continue;
+    }
+
+    const span = document.createElement('span');
+    span.className = icon.className;
+    span.setAttribute('aria-hidden', icon.getAttribute('aria-hidden') ?? 'true');
+    span.setAttribute(ARIES_ICON_MARKER, 'true');
+    span.setAttribute('style', icon.getAttribute('style') ?? '');
+    span.style.backgroundSize = 'contain';
+    span.style.backgroundRepeat = 'no-repeat';
+    span.style.backgroundPosition = 'center';
+    span.style.backgroundImage = `url("${icon.src}")`;
+
+    const parent = icon.parentElement as HTMLElement | null;
+    icon.dataset.qpmAriesNormalized = 'true';
+    icon.replaceWith(span);
+    if (parent) {
+      parent.setAttribute(ARIES_ROW_ATTR, 'true');
+      ensureAriesRowMargins(parent);
+      const coinValue = parent.querySelector('span, strong');
+      if (coinValue) {
+        (coinValue as HTMLElement).setAttribute(ARIES_COIN_ATTR, 'true');
+      }
+    }
+
+    const sizeRow = container.querySelector(`:scope > [${TOOLTIP_ROW_ATTR}="size"]`) as HTMLElement | null;
+    if (sizeRow) {
+      positionIndicatorRow(container, sizeRow, parent);
+    }
+  }
+}
+
+function ensureAriesRowMargins(row: HTMLElement): void {
+  row.style.marginTop = '2px';
+  row.style.marginBottom = '0';
+  row.style.paddingTop = '0';
+  const value = row.querySelector('span, strong');
+  if (value) {
+    const valueEl = value as HTMLElement;
+    valueEl.style.display = 'inline-flex';
+    valueEl.style.alignItems = 'center';
+    valueEl.setAttribute(ARIES_COIN_ATTR, 'true');
+  }
+}
+
+function removeSizeIndicator(container: Element | null): void {
+  removeTooltipRow(container, 'size');
+  removeTooltipRow(container, 'journal');
 }
 
 async function injectCropSizeInfo(element: Element): Promise<void> {
@@ -444,10 +522,14 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     return;
   }
 
+  const tooltipContent = (cropNameElement.closest('.chakra-stack') as Element | null) 
+    ?? (cropNameElement.parentElement as Element | null)
+    ?? element;
+
   const cropName = cropNameElement.textContent?.trim();
   
   if (!cropName) {
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
     return;
   }
   
@@ -481,7 +563,7 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   
   if (!isKnownCrop) {
     // Not a crop - remove any existing indicator
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
     return;
   }
   
@@ -610,7 +692,7 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   
   // Remove old indicator before processing new one
   if (lastProcessed) {
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
   }
   
   // Check if we should show this crop based on maturity
@@ -627,145 +709,87 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
 
-  // Find the inner container by detecting where Aries injected (if present)
-  // Aries Mod uses class "tm-crop-price" (from Aries source code analysis)
-  let innerContainer: Element | null = null;
-
-  // DEBUG: Log tooltip element info
-  log(`📐 [DEBUG] Tooltip element classes: ${element.className}`);
-  log(`📐 [DEBUG] Tooltip has .css-qnqsp4: ${element.matches('.css-qnqsp4')}`);
-  log(`📐 [DEBUG] Tooltip has .css-fsggty: ${element.matches('.css-fsggty')}`);
-
-  // Try to find Aries' injected element by its marker class
-  const ariesElement = element.querySelector('span.tm-crop-price');
-  log(`📐 [DEBUG] Aries element (span.tm-crop-price) found: ${!!ariesElement}`);
-
-  // COMPREHENSIVE DEBUG: Check if Aries exists ANYWHERE in the document
-  const globalAriesElements = document.querySelectorAll('span.tm-crop-price');
-  log(`📐 [DEBUG] Global Aries elements in entire document: ${globalAriesElements.length}`);
-
-  // DEBUG: Check for any yellow-colored span (Aries uses yellow for price)
-  const allSpans = Array.from(element.querySelectorAll('span'));
-  const yellowSpans = allSpans.filter(s => {
-    const color = window.getComputedStyle(s).color;
-    return color.includes('255, 193, 7') || color.includes('rgb(255, 193, 7)');
-  });
-  log(`📐 [DEBUG] Yellow spans (potential Aries): ${yellowSpans.length}`);
-  if (yellowSpans.length > 0) {
-    yellowSpans.forEach(s => {
-      log(`📐 [DEBUG] Yellow span class: "${s.className}", text: "${s.textContent?.substring(0, 50)}"`);
-    });
-  }
-
-  // DEBUG: Check what containers exist
-  const container1 = element.querySelector('.McFlex.css-1l3zq7');
-  const container2 = element.querySelector('.McFlex.css-11dqzw');
-  log(`📐 [DEBUG] Container .css-1l3zq7 found: ${!!container1}`);
-  log(`📐 [DEBUG] Container .css-11dqzw found: ${!!container2}`);
-
-  // DEBUG: Log full DOM structure of tooltip
-  if (!ariesElement) {
-    log(`📐 [DEBUG] Tooltip HTML structure:`, element.innerHTML.substring(0, 500));
-  }
-
-  if (ariesElement && ariesElement.parentElement) {
-    // Aries is present - use ITS parent container (ensures same location)
-    innerContainer = ariesElement.parentElement;
-    log('📐 ✅ Aries detected - injecting alongside');
-  } else {
-    // Aries not present - use fallback selectors (same ones Aries uses)
-    innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
-                     element.querySelector('.McFlex.css-11dqzw');
-    log('📐 ⚠️ Aries NOT detected - injecting anyway');
-  }
-
-  if (!innerContainer) {
-    log('📐 ❌ No container found - cannot inject');
-    // DEBUG: Log all child elements to help diagnose
-    log(`📐 [DEBUG] Tooltip children: ${Array.from(element.children).map(c => c.className).join(', ')}`);
-    return;
-  }
-
-  log(`📐 [DEBUG] Using container: ${innerContainer.className}`);
-
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
-  const sizeText = `Size: ${size}`;
 
-  // Get journal logging indicator (unlogged variants) - displayed on separate line
-  const unloggedEmojis = await getUnloggedVariantEmojis(normalizedCropName);
+  // Get journal logging indicator (unlogged variants) when enabled
+  const unloggedBadges = config.showJournalIndicators
+    ? await getUnloggedVariantBadges(normalizedCropName)
+    : [];
+  const weightColor = normalizeSizeColor(getWeightColorFromTooltip(element));
 
-  // Get Aries price if available (Option B: read from AriesMod API)
-  const ariesPrice = getAriesCropPrice(normalizedCropName);
-  if (ariesPrice) {
-    log(`📐 💰 Aries price for ${normalizedCropName}: ${ariesPrice}`);
-  }
-
-  // Use Aries-style injection: reuse span, structured DOM
-  // If Aries is available, display: [Aries Price (yellow)] [Size (blue)] [Journal Emojis]
-  ensureSizeIndicator(innerContainer, sizeText, unloggedEmojis, ariesPrice, 'qpm-crop-size');
+  ensureSizeIndicator(tooltipContent, size, unloggedBadges, weightColor);
+  normalizeAriesValueIcons(tooltipContent);
 }
 
 // ============================================================================
 // DOM Observation
 // ============================================================================
 
+const TOOLTIP_SELECTOR = '.McFlex.css-fsggty';
+const tooltipWatchers = new Map<Element, { disconnect: () => void }>();
+
+function attachTooltipWatcher(tooltip: Element): void {
+  if (tooltipWatchers.has(tooltip)) {
+    return;
+  }
+
+  let rafId: number | null = null;
+
+  const runInjection = () => {
+    rafId = null;
+    injectCropSizeInfo(tooltip).catch(error => {
+      log('⚠️ Error injecting crop size info:', error);
+    });
+  };
+
+  const scheduleInjection = () => {
+    if (rafId !== null) return;
+    rafId = window.requestAnimationFrame(runInjection);
+  };
+
+  // Initial run
+  runInjection();
+
+  const observerHandle = watch(tooltip, () => {
+    scheduleInjection();
+  });
+
+  tooltipWatchers.set(tooltip, {
+    disconnect: () => {
+      observerHandle.disconnect();
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    }
+  });
+}
+
+function detachTooltipWatcher(tooltip: Element): void {
+  const handle = tooltipWatchers.get(tooltip);
+  if (handle) {
+    handle.disconnect();
+    tooltipWatchers.delete(tooltip);
+  }
+}
+
 function startTooltipWatcher(): void {
   if (domObserverHandle) return;
 
   log('📐 Crop Size Indicator: Watching for crop tooltips');
 
-  let pollingInterval: number | null = null;
-
-  // Process tooltips - ONLY watch our selector to avoid interfering with Aries
-  // Using polling instead of MutationObserver to avoid triggering mutation loops
-  const processTooltips = () => {
-    // ONLY watch for our original selector - don't interfere with Aries
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
-
-    // Only process if tooltips are actually visible (not hidden/offscreen)
-    const visibleTooltips = Array.from(tooltips).filter(tooltip => {
-      const rect = tooltip.getBoundingClientRect();
-      // Check if tooltip has actual dimensions and is in viewport
-      return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0;
-    });
-
-    if (visibleTooltips.length === 0) {
-      // No visible tooltips, skip processing to reduce noise
-      return;
-    }
-
-    // DEBUG: Only log when we have visible tooltips
-    log(`📐 [DEBUG] Found ${visibleTooltips.length} visible tooltips`);
-
-    // Check for AriesMod NOW (not just at init) - it might load after us
-    if (isAriesModAvailable()) {
-      log(`📐 [DEBUG] ✅ AriesMod is available!`);
-    }
-
-    visibleTooltips.forEach(tooltip => {
-      // Fire and forget async injection (no RAF delay needed with polling)
-      injectCropSizeInfo(tooltip).catch(err => {
-        log('⚠️ Error injecting crop size info:', err);
-      });
-    });
-  };
-
-  // Use polling instead of MutationObserver to avoid interfering with Aries
-  // Poll every 500ms - less aggressive to ensure no interference
-  pollingInterval = window.setInterval(processTooltips, 500);
+  const addedHandle = onAdded(TOOLTIP_SELECTOR, attachTooltipWatcher);
+  const removedHandle = onRemoved(TOOLTIP_SELECTOR, detachTooltipWatcher);
 
   domObserverHandle = {
     disconnect: () => {
-      if (pollingInterval !== null) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
+      addedHandle.disconnect();
+      removedHandle.disconnect();
+      tooltipWatchers.forEach(handle => handle.disconnect());
+      tooltipWatchers.clear();
     }
   };
-
-  // Initial check for existing tooltips
-  processTooltips();
 }
 
 function stopTooltipWatcher(): void {
@@ -896,44 +920,6 @@ function stopCropSizeIndicator(): void {
 
 export function initCropSizeIndicator(): void {
   loadConfig();
-
-  // Check if AriesMod is available on PAGE window (not sandbox)
-  if (isAriesModAvailable()) {
-    const ariesMod = getAriesMod();
-    const services = ariesMod?.services || {};
-    log('📐 ✅ AriesMod detected on pageWindow! Available services:', Object.keys(services));
-
-    // Log methods on StatsService
-    if (services.StatsService) {
-      try {
-        const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(services.StatsService)).filter(m => typeof (services.StatsService as any)[m] === 'function');
-        log('📐 StatsService methods:', methods);
-      } catch (e) {
-        log('📐 Could not enumerate StatsService methods');
-      }
-    }
-
-    // Log methods on MiscService
-    if ((services as any).MiscService) {
-      try {
-        const methods = Object.getOwnPropertyNames(Object.getPrototypeOf((services as any).MiscService)).filter(m => typeof ((services as any).MiscService as any)[m] === 'function');
-        log('📐 MiscService methods:', methods);
-      } catch (e) {
-        log('📐 Could not enumerate MiscService methods');
-      }
-    }
-
-    // Log root properties
-    log('📐 AriesMod root properties:', Object.keys(ariesMod || {}));
-
-    // Check localStorage for aries_mod keys
-    const ariesKeys = Object.keys(localStorage).filter(k => k.startsWith('aries_mod'));
-    if (ariesKeys.length > 0) {
-      log('📐 AriesMod localStorage keys:', ariesKeys);
-    }
-  } else {
-    log('📐 ⚠️ AriesMod not detected on pageWindow - crop prices will not be shown');
-  }
 
   if (config.enabled) {
     startCropSizeIndicator();

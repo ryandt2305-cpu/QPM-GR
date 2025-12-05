@@ -5,27 +5,116 @@ import { getGardenSnapshot, onGardenSnapshot } from './gardenBridge';
 import { lookupMaxScale } from '../utils/plantScales';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import { onAdded } from '../utils/dom';
+import { onAdded, onRemoved, watch } from '../utils/dom';
 import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
+import { getJournal, type Journal } from './journalChecker';
 
 interface CropSizeConfig {
   enabled: boolean;
   showForGrowing: boolean;
   showForMature: boolean;
+  showJournalIndicators: boolean;
 }
 
 const DEFAULT_CONFIG: CropSizeConfig = {
   enabled: true,
   showForGrowing: true,
   showForMature: true,
+  showJournalIndicators: true,
 };
 
 let config: CropSizeConfig = { ...DEFAULT_CONFIG };
 let gardenUnsubscribe: (() => void) | null = null;
 let domObserverHandle: { disconnect: () => void } | null = null;
 let lastSnapshotCache: any = null;
+let cachedJournalData: Journal | null = null;
+
+interface VariantBadge {
+  matches: string[];
+  label: string;
+  color: string;
+  bold?: boolean;
+}
+
+// Letter/color palette inspired by the in-game journal status row
+const VARIANT_BADGES: VariantBadge[] = [
+  { matches: ['Rainbow'], label: 'R', color: '#9C27B0', bold: true },
+  { matches: ['Gold', 'Golden'], label: 'G', color: '#FFB300', bold: true },
+  { matches: ['Wet'], label: 'W', color: '#4DBEFA' },
+  { matches: ['Chilled'], label: 'C', color: '#96F6FF' },
+  { matches: ['Frozen'], label: 'F', color: '#00BCD4' },
+  { matches: ['Dawnlit'], label: 'D', color: '#FF9800' },
+  { matches: ['Dawncharged', 'Dawnbound'], label: 'D', color: '#FF9800', bold: true },
+  { matches: ['Amberlit', 'Ambershine'], label: 'A', color: '#FFA726' },
+  { matches: ['Ambercharged', 'Amberbound'], label: 'A', color: '#FFA726', bold: true },
+  { matches: ['Max Weight', 'Max'], label: 'S', color: '#BDBDBD', bold: true },
+];
+
+// ============================================================================
+// Journal Logging Check
+// ============================================================================
+
+/**
+ * Get letter badges for unlogged variants of a crop species.
+ * Returns empty array if everything is logged or if the journal is unavailable.
+ */
+async function getUnloggedVariantBadges(species: string): Promise<VariantBadge[]> {
+  try {
+    // Fetch journal if not cached
+    if (!cachedJournalData) {
+      cachedJournalData = await getJournal();
+    }
+
+    if (!cachedJournalData || !cachedJournalData.produce) {
+      return [];
+    }
+
+    // Normalize species name for journal lookup
+    // Handle celestial plants: moonbinder -> MoonCelestial, dawnbinder -> DawnCelestial
+    let normalizedSpecies = species.charAt(0).toUpperCase() + species.slice(1).toLowerCase();
+
+    const celestialMap: Record<string, string> = {
+      'moonbinder': 'MoonCelestial',
+      'dawnbinder': 'DawnCelestial',
+      'Moonbinder': 'MoonCelestial',
+      'Dawnbinder': 'DawnCelestial',
+    };
+
+    if (celestialMap[species]) {
+      normalizedSpecies = celestialMap[species];
+    }
+
+    // Get logged variants for this species
+
+    const speciesData = cachedJournalData.produce[normalizedSpecies];
+    if (!speciesData) {
+      // Species not in journal yet - everything counts as unlogged.
+      return VARIANT_BADGES.map(badge => ({ ...badge }));
+    }
+
+    const loggedVariants = new Set(
+      (speciesData.variantsLogged || []).map((v: any) => {
+        const name = typeof v === 'string' ? v : v?.variant;
+        return typeof name === 'string' ? name.toLowerCase() : '';
+      }).filter(Boolean)
+    );
+
+    const unloggedBadges: VariantBadge[] = [];
+    for (const badge of VARIANT_BADGES) {
+      const isLogged = badge.matches.some(matchName => loggedVariants.has(matchName.toLowerCase()));
+      if (!isLogged) {
+        unloggedBadges.push({ ...badge });
+      }
+    }
+
+    return unloggedBadges;
+  } catch (error) {
+    log('⚠️ Error checking journal for crop variants:', error);
+    return [];
+  }
+}
 
 // ============================================================================
 // Configuration
@@ -108,71 +197,310 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
 // ============================================================================
 
 const INJECTED_MARKER = 'data-qpm-crop-size-injected';
+const TOOLTIP_STYLE_ID = 'qpm-crop-size-tooltip-style';
+const TOOLTIP_ROW_ATTR = 'data-qpm-tooltip-row';
+const JOURNAL_BADGE_ATTR = 'data-qpm-journal-badge';
+const DEFAULT_SIZE_COLOR = '#B5BCAF';
+const SIZE_ROW_CLASS = 'qpm-crop-size';
+const ARIES_ICON_MARKER = 'data-qpm-aries-icon';
+const ARIES_ROW_ATTR = 'data-aries-value-row';
+const ARIES_COIN_ATTR = 'data-aries-coin-value';
+const SIZE_VALUE_ATTR = 'data-qpm-size-value';
+const BADGE_CONTAINER_ATTR = 'data-qpm-badge-container';
+const SIZE_DIVIDER_ATTR = 'data-qpm-size-divider';
 
-// Aries-style injection: reuses existing span, structured icon + label, idempotent
-function ensureSizeIndicator(
-  innerContainer: Element,
-  text: string,
-  markerClass: string = 'qpm-crop-size'
-): void {
-  // Find or create the main span (reuse if exists, remove duplicates)
-  const existingSpans = Array.from(
-    innerContainer.querySelectorAll(`:scope > span.${CSS.escape(markerClass)}`)
-  ) as HTMLSpanElement[];
-  let span: HTMLSpanElement | null = existingSpans[0] ?? null;
-  
-  // Remove duplicates if multiple exist
-  for (let i = 1; i < existingSpans.length; i++) {
-    const duplicateSpan = existingSpans[i];
-    if (duplicateSpan) {
-      duplicateSpan.remove();
+type TooltipRowType = 'size' | 'journal';
+
+function ensureTooltipStyles(): void {
+  if (document.getElementById(TOOLTIP_STYLE_ID)) {
+    return;
+  }
+
+  const style = document.createElement('style');
+  style.id = TOOLTIP_STYLE_ID;
+  style.textContent = `
+    [${TOOLTIP_ROW_ATTR}] {
+      display: block;
+      width: 100%;
+      pointer-events: none;
+    }
+
+    [${TOOLTIP_ROW_ATTR}="size"] {
+      margin-top: -2px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      line-height: 16px;
+      color: ${DEFAULT_SIZE_COLOR};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    [${JOURNAL_BADGE_ATTR}] {
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      display: inline-block;
+      margin: 0 1px;
+      min-width: 10px;
+      text-align: center;
+    }
+  `.trim();
+
+  document.head.appendChild(style);
+}
+
+function ensureTooltipRow(container: Element, type: TooltipRowType): HTMLElement {
+  ensureTooltipStyles();
+  const selector = `:scope > [${TOOLTIP_ROW_ATTR}="${type}"]`;
+  let row = container.querySelector(selector) as HTMLElement | null;
+  if (!row) {
+    row = document.createElement('span');
+    row.setAttribute(TOOLTIP_ROW_ATTR, type);
+    row.setAttribute('data-qpm-injected', 'true');
+    container.appendChild(row);
+  }
+  return row;
+}
+
+function removeTooltipRow(container: Element | null, type: TooltipRowType): void {
+  if (!container) return;
+  const selector = `:scope > [${TOOLTIP_ROW_ATTR}="${type}"]`;
+  const row = container.querySelector(selector);
+  row?.remove();
+}
+
+function createBadgeElement(badge: VariantBadge): HTMLElement {
+  const span = document.createElement('span');
+  span.setAttribute(JOURNAL_BADGE_ATTR, 'true');
+  span.textContent = badge.label;
+  span.style.color = badge.color;
+  span.style.fontWeight = badge.bold ? '800' : '600';
+  span.title = badge.matches.join(' / ');
+  return span;
+}
+
+function getWeightColorFromTooltip(element: Element): string | null {
+  const nodes = element.querySelectorAll('span, p, div, strong');
+  for (const node of Array.from(nodes)) {
+    if (!(node instanceof HTMLElement)) {
+      continue;
+    }
+
+    if (node.getAttribute('data-qpm-injected') === 'true') {
+      continue;
+    }
+
+    const text = node.textContent?.trim();
+    if (!text || text.length > 24) {
+      continue;
+    }
+
+    if (!/\bkg\b/i.test(text)) {
+      continue;
+    }
+
+    try {
+      const color = window.getComputedStyle(node).color;
+      if (color) {
+        return color;
+      }
+    } catch {
+      // Ignore errors from detached nodes
     }
   }
-  
-  // Create if doesn't exist
-  if (!span) {
-    span = document.createElement('span');
-    span.className = markerClass;
+
+  return null;
+}
+
+function normalizeSizeColor(weightColor: string | null): string {
+  if (!weightColor) {
+    return DEFAULT_SIZE_COLOR;
   }
-  
-  // Apply main span styling (matching Aries' pattern but with different color)
-  span.style.display = 'block';
-  span.style.marginTop = '6px';
-  span.style.fontWeight = '700';
-  span.style.color = 'rgb(100, 181, 246)'; // Blue for size (Aries uses yellow for price)
-  span.style.fontSize = '14px';
-  
-  // Label class constant
-  const LABEL_CLASS = 'qpm-crop-size-label';
-  
-  // Create or reuse label span (no icon needed)
-  let label = span.querySelector(`:scope > span.${CSS.escape(LABEL_CLASS)}`) as HTMLSpanElement;
-  if (!label) {
-    label = document.createElement('span');
-    label.className = LABEL_CLASS;
-    label.style.display = 'inline';
-    span.appendChild(label);
+
+  const normalized = weightColor.trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_SIZE_COLOR;
   }
-  
-  // Update label text if changed
-  if (label.textContent !== text) {
-    label.textContent = text;
+
+  if (normalized === '#fff' || normalized === '#ffffff') {
+    return DEFAULT_SIZE_COLOR;
   }
-  
-  // Append to inner container if not already there (Aries' pattern)
-  if (!span.parentElement || span.parentElement !== innerContainer) {
-    innerContainer.appendChild(span);
+
+  if (normalized.startsWith('rgb')) {
+    const rgbMatch = normalized.match(/rgb[a]?\(([^)]+)\)/);
+    if (rgbMatch) {
+      const components = rgbMatch[1];
+      if (!components) {
+        return DEFAULT_SIZE_COLOR;
+      }
+      const parts = components.split(',').map(part => parseFloat(part.trim()));
+      const [r, g, b] = parts;
+      if (r === 255 && g === 255 && b === 255) {
+        return DEFAULT_SIZE_COLOR;
+      }
+    }
+  }
+
+  return weightColor;
+}
+
+function ensureSizeIndicator(container: Element, sizeValue: number, badges: VariantBadge[], sizeColor: string): void {
+  ensureTooltipStyles();
+
+  const ariesRow = getAriesValueRow(container);
+  const sizeRow = ensureTooltipRow(container, 'size');
+  sizeRow.classList.add(SIZE_ROW_CLASS);
+  sizeRow.style.color = sizeColor;
+  sizeRow.style.marginTop = ariesRow ? '2px' : '0px';
+
+  let sizeValueEl = sizeRow.querySelector(`:scope > span[${SIZE_VALUE_ATTR}]`) as HTMLElement | null;
+  if (!sizeValueEl) {
+    sizeValueEl = document.createElement('span');
+    sizeValueEl.setAttribute(SIZE_VALUE_ATTR, 'true');
+    sizeRow.appendChild(sizeValueEl);
+  }
+  sizeValueEl.textContent = `${sizeValue}`;
+  sizeValueEl.style.flex = '0 1 auto';
+  sizeValueEl.style.textAlign = 'left';
+
+  let badgeContainer = sizeRow.querySelector(`:scope > span[${BADGE_CONTAINER_ATTR}]`) as HTMLElement | null;
+  if (!badgeContainer) {
+    badgeContainer = document.createElement('span');
+    badgeContainer.setAttribute(BADGE_CONTAINER_ATTR, 'true');
+    badgeContainer.style.display = 'inline-flex';
+    badgeContainer.style.gap = '4px';
+    badgeContainer.style.textAlign = 'right';
+    sizeRow.appendChild(badgeContainer);
+  }
+
+  let divider = sizeRow.querySelector(`:scope > span[${SIZE_DIVIDER_ATTR}]`) as HTMLElement | null;
+  if (!divider) {
+    divider = document.createElement('span');
+    divider.setAttribute(SIZE_DIVIDER_ATTR, 'true');
+    divider.textContent = '|';
+    divider.style.opacity = '0.6';
+    divider.style.margin = '0 6px';
+    divider.style.flex = '0 0 auto';
+    sizeRow.appendChild(divider);
+  }
+
+  sizeRow.append(sizeValueEl, divider, badgeContainer);
+
+  if (badges.length > 0) {
+    const nodes = badges.map(badge => createBadgeElement(badge));
+    badgeContainer.replaceChildren(...nodes);
+    badgeContainer.style.visibility = 'visible';
+    divider.style.display = 'inline-block';
+    sizeRow.style.justifyContent = 'center';
+  } else {
+    badgeContainer.replaceChildren();
+    badgeContainer.style.visibility = 'hidden';
+    divider.style.display = 'none';
+    sizeRow.style.justifyContent = 'center';
+  }
+
+  positionIndicatorRow(container, sizeRow, ariesRow);
+}
+
+function positionIndicatorRow(container: Element, sizeRow: HTMLElement, ariesRow: HTMLElement | null): void {
+  if (ariesRow && ariesRow.parentElement === container) {
+    if (sizeRow.previousElementSibling !== ariesRow) {
+      ariesRow.insertAdjacentElement('afterend', sizeRow);
+    }
+  } else if (sizeRow.parentElement !== container) {
+    container.appendChild(sizeRow);
   }
 }
 
-function removeSizeIndicator(element: Element): void {
-  const existing = element.querySelector('.qpm-crop-size');
-  if (existing) {
-    existing.remove();
+function getAriesValueRow(container: Element): HTMLElement | null {
+  const icon = container.querySelector(`[${ARIES_ICON_MARKER}]`);
+  if (icon) {
+    const row = icon.parentElement as HTMLElement | null;
+    if (row) {
+      row.setAttribute(ARIES_ROW_ATTR, 'true');
+      ensureAriesRowMargins(row);
+      return row;
+    }
+  }
+  const taggedRow = container.querySelector(`[${ARIES_ROW_ATTR}]`) as HTMLElement | null;
+  if (taggedRow) {
+    ensureAriesRowMargins(taggedRow);
+    return taggedRow;
+  }
+  const coinRow = container.querySelector(`[${ARIES_COIN_ATTR}]`)?.parentElement as HTMLElement | null;
+  if (coinRow) {
+    coinRow.setAttribute(ARIES_ROW_ATTR, 'true');
+    ensureAriesRowMargins(coinRow);
+    return coinRow;
+  }
+  return null;
+}
+
+function normalizeAriesValueIcons(container: Element): void {
+  const icons = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
+  for (const icon of icons) {
+    if (!icon || icon.dataset.qpmAriesNormalized === 'true') {
+      continue;
+    }
+
+    const { width, height, pointerEvents, userSelect } = icon.style;
+    if (width !== '18px' || height !== '18px') {
+      continue;
+    }
+    if (pointerEvents !== 'none' || userSelect !== 'none') {
+      continue;
+    }
+
+    const span = document.createElement('span');
+    span.className = icon.className;
+    span.setAttribute('aria-hidden', icon.getAttribute('aria-hidden') ?? 'true');
+    span.setAttribute(ARIES_ICON_MARKER, 'true');
+    span.setAttribute('style', icon.getAttribute('style') ?? '');
+    span.style.backgroundSize = 'contain';
+    span.style.backgroundRepeat = 'no-repeat';
+    span.style.backgroundPosition = 'center';
+    span.style.backgroundImage = `url("${icon.src}")`;
+
+    const parent = icon.parentElement as HTMLElement | null;
+    icon.dataset.qpmAriesNormalized = 'true';
+    icon.replaceWith(span);
+    if (parent) {
+      parent.setAttribute(ARIES_ROW_ATTR, 'true');
+      ensureAriesRowMargins(parent);
+      const coinValue = parent.querySelector('span, strong');
+      if (coinValue) {
+        (coinValue as HTMLElement).setAttribute(ARIES_COIN_ATTR, 'true');
+      }
+    }
+
+    const sizeRow = container.querySelector(`:scope > [${TOOLTIP_ROW_ATTR}="size"]`) as HTMLElement | null;
+    if (sizeRow) {
+      positionIndicatorRow(container, sizeRow, parent);
+    }
   }
 }
 
-function injectCropSizeInfo(element: Element): void {
+function ensureAriesRowMargins(row: HTMLElement): void {
+  row.style.marginTop = '2px';
+  row.style.marginBottom = '0';
+  row.style.paddingTop = '0';
+  const value = row.querySelector('span, strong');
+  if (value) {
+    const valueEl = value as HTMLElement;
+    valueEl.style.display = 'inline-flex';
+    valueEl.style.alignItems = 'center';
+    valueEl.setAttribute(ARIES_COIN_ATTR, 'true');
+  }
+}
+
+function removeSizeIndicator(container: Element | null): void {
+  removeTooltipRow(container, 'size');
+  removeTooltipRow(container, 'journal');
+}
+
+async function injectCropSizeInfo(element: Element): Promise<void> {
   if (!config.enabled || 
       element.classList.contains('qpm-window') || 
       element.closest('.qpm-window')) {
@@ -194,10 +522,14 @@ function injectCropSizeInfo(element: Element): void {
     return;
   }
 
+  const tooltipContent = (cropNameElement.closest('.chakra-stack') as Element | null) 
+    ?? (cropNameElement.parentElement as Element | null)
+    ?? element;
+
   const cropName = cropNameElement.textContent?.trim();
   
   if (!cropName) {
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
     return;
   }
   
@@ -231,7 +563,7 @@ function injectCropSizeInfo(element: Element): void {
   
   if (!isKnownCrop) {
     // Not a crop - remove any existing indicator
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
     return;
   }
   
@@ -360,7 +692,7 @@ function injectCropSizeInfo(element: Element): void {
   
   // Remove old indicator before processing new one
   if (lastProcessed) {
-    removeSizeIndicator(element);
+    removeSizeIndicator(tooltipContent);
   }
   
   // Check if we should show this crop based on maturity
@@ -376,76 +708,88 @@ function injectCropSizeInfo(element: Element): void {
   
   // Mark what we processed
   element.setAttribute(INJECTED_MARKER, contentId);
-  
-  // Find the inner container (matching Aries' selectors)
-  let innerContainer = element.querySelector('.McFlex.css-1l3zq7') ||
-                       element.querySelector('.McFlex.css-11dqzw') ||
-                       Array.from(element.querySelectorAll('.McFlex')).find(flex => 
-                         flex.className.includes('css-')
-                       );
-  
-  if (!innerContainer) {
-    return; // Can't inject without container
-  }
 
   // Format the size text - floor to show accurate size (game rounds internally)
   const size = Math.floor(sizeInfo.sizePercent);
-  const sizeText = `Size: ${size}`;
-  
-  // Use Aries-style injection: reuse span, structured DOM
-  ensureSizeIndicator(innerContainer, sizeText, 'qpm-crop-size');
+
+  // Get journal logging indicator (unlogged variants) when enabled
+  const unloggedBadges = config.showJournalIndicators
+    ? await getUnloggedVariantBadges(normalizedCropName)
+    : [];
+  const weightColor = normalizeSizeColor(getWeightColorFromTooltip(element));
+
+  ensureSizeIndicator(tooltipContent, size, unloggedBadges, weightColor);
+  normalizeAriesValueIcons(tooltipContent);
 }
 
 // ============================================================================
 // DOM Observation
 // ============================================================================
 
+const TOOLTIP_SELECTOR = '.McFlex.css-fsggty';
+const tooltipWatchers = new Map<Element, { disconnect: () => void }>();
+
+function attachTooltipWatcher(tooltip: Element): void {
+  if (tooltipWatchers.has(tooltip)) {
+    return;
+  }
+
+  let rafId: number | null = null;
+
+  const runInjection = () => {
+    rafId = null;
+    injectCropSizeInfo(tooltip).catch(error => {
+      log('⚠️ Error injecting crop size info:', error);
+    });
+  };
+
+  const scheduleInjection = () => {
+    if (rafId !== null) return;
+    rafId = window.requestAnimationFrame(runInjection);
+  };
+
+  // Initial run
+  runInjection();
+
+  const observerHandle = watch(tooltip, () => {
+    scheduleInjection();
+  });
+
+  tooltipWatchers.set(tooltip, {
+    disconnect: () => {
+      observerHandle.disconnect();
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    }
+  });
+}
+
+function detachTooltipWatcher(tooltip: Element): void {
+  const handle = tooltipWatchers.get(tooltip);
+  if (handle) {
+    handle.disconnect();
+    tooltipWatchers.delete(tooltip);
+  }
+}
+
 function startTooltipWatcher(): void {
   if (domObserverHandle) return;
 
   log('📐 Crop Size Indicator: Watching for crop tooltips');
 
-  let pollingInterval: number | null = null;
+  const addedHandle = onAdded(TOOLTIP_SELECTOR, attachTooltipWatcher);
+  const removedHandle = onRemoved(TOOLTIP_SELECTOR, detachTooltipWatcher);
 
-  // Process tooltips immediately - no debouncing for rapid switching
-  const processTooltips = () => {
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
-    tooltips.forEach(tooltip => {
-      injectCropSizeInfo(tooltip);
-    });
-  };
-
-  // Use MutationObserver to watch for crop info cards being added/changed
-  const observer = new MutationObserver(() => {
-    processTooltips();
-  });
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    characterDataOldValue: true
-  });
-
-  // Aggressive polling for rapid tile switching - check every 50ms
-  pollingInterval = window.setInterval(() => {
-    const tooltips = document.querySelectorAll('.McFlex.css-fsggty');
-    if (tooltips.length > 0) {
-      processTooltips();
-    }
-  }, 50);
-
-  domObserverHandle = { 
+  domObserverHandle = {
     disconnect: () => {
-      observer.disconnect();
-      if (pollingInterval !== null) {
-        clearInterval(pollingInterval);
-      }
+      addedHandle.disconnect();
+      removedHandle.disconnect();
+      tooltipWatchers.forEach(handle => handle.disconnect());
+      tooltipWatchers.clear();
     }
   };
-  
-  // Check for existing tooltips immediately
-  processTooltips();
 }
 
 function stopTooltipWatcher(): void {

@@ -24,6 +24,7 @@ import { initPublicRooms } from './features/publicRooms';
 import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets } from './utils/spriteExtractor';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
+import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 

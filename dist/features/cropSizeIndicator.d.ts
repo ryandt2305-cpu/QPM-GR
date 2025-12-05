@@ -2,6 +2,7 @@ interface CropSizeConfig {
     enabled: boolean;
     showForGrowing: boolean;
     showForMature: boolean;
+    showJournalIndicators: boolean;
 }
 export declare function getCropSizeIndicatorConfig(): CropSizeConfig;
 export declare function setCropSizeIndicatorConfig(updates: Partial<CropSizeConfig>): void;

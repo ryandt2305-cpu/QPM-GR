@@ -1,10 +1,46 @@
-// src/utils/versionChecker.ts
-// Lightweight live version checker for the userscript header
-
 const CURRENT_VERSION = '2.2.3'; // This should match package.json version
 export const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
-export const UPDATE_URL = 'https://github.com/ryandt2305-cpu/QPM-GR/raw/refs/heads/master/dist/QPM.user.js';
+export const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+type GmXhr = (input: {
+  method: 'GET';
+  url: string;
+  headers?: Record<string, string>;
+  onload: (response: { responseText: string; status: number }) => void;
+  onerror: (error: unknown) => void;
+}) => void;
+
+const getGmXhr = (): GmXhr | undefined => {
+  const globalAny = globalThis as any;
+  return globalAny.GM_xmlhttpRequest || globalAny.GM?.xmlHttpRequest;
+};
+
+// Use GM_xmlhttpRequest when available to bypass CORS in userscript sandbox.
+const fetchText = async (url: string): Promise<string> => {
+  const gmXhr = getGmXhr();
+  if (gmXhr) {
+    return new Promise((resolve, reject) => {
+      gmXhr({
+        method: 'GET',
+        url,
+        headers: { 'Cache-Control': 'no-cache' },
+        onload: (response) => {
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response.responseText);
+          } else {
+            reject(new Error(`GM request failed with status ${response.status}`));
+          }
+        },
+        onerror: (error) => reject(error),
+      });
+    });
+  }
+
+  const res = await fetch(url, { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+};
 
 export type VersionStatus = 'current' | 'outdated' | 'checking' | 'error';
 
@@ -54,9 +90,7 @@ function compareSemver(a: string, b: string): number {
 
 async function fetchRemoteVersion(): Promise<string | null> {
   try {
-    const res = await fetch(UPDATE_URL, { cache: 'no-cache' });
-    if (!res.ok) return null;
-    const text = await res.text();
+    const text = await fetchText(UPDATE_URL);
     const headerMatch = text.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
     if (headerMatch?.[1]) return headerMatch[1];
     const constMatch = text.match(/const\s+CURRENT_VERSION\s*=\s*['"]([0-9.]+)['"]/);
@@ -75,7 +109,7 @@ export function getVersionInfo(): VersionInfo {
 }
 
 /**
- * Register callback for version changes (no-op in simplified version)
+ * Register callback for version changes
  */
 export function onVersionChange(callback: (info: VersionInfo) => void): () => void {
   listeners.add(callback);
@@ -98,7 +132,7 @@ export function getCurrentVersion(): string {
 }
 
 /**
- * Check for updates (no-op - returns current version only)
+ * Check for updates and update cached status
  */
 export async function checkForUpdates(_force = false): Promise<VersionInfo> {
   cached = { ...cached, status: 'checking' };

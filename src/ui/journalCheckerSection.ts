@@ -4,6 +4,7 @@
 import { getCropSpriteDataUrl, getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
+import { getVariantChipColors } from '../data/variantBadges';
 
 // Storage for user notes per species
 function getSpeciesNotes(species: string): string {
@@ -258,29 +259,15 @@ export function createJournalCheckerSection(): HTMLElement {
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             ${variants.map(v => {
-              const variantColors = {
-                'Normal': { bg: v.collected ? '#42A5F5' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Rainbow': { bg: v.collected ? '#9C27B0' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Gold': { bg: v.collected ? '#FFB300' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Frozen': { bg: v.collected ? '#00BCD4' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Wet': { bg: v.collected ? '#4DBEFA' : '#333', text: v.collected ? '#04233A' : '#777' },
-                'Chilled': { bg: v.collected ? '#96F6FF' : '#333', text: v.collected ? '#05323D' : '#777' },
-                'Dawnlit': { bg: v.collected ? '#FF6F00' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Dawnbound': { bg: v.collected ? '#FF9800' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Amberlit': { bg: v.collected ? '#FFA726' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Amberbound': { bg: v.collected ? '#FFB74D' : '#333', text: v.collected ? '#fff' : '#777' },
-                'Max': { bg: v.collected ? '#E91E63' : '#333', text: v.collected ? '#fff' : '#777' }
-              };
-              const colors = variantColors[v.variant as keyof typeof variantColors] || { bg: v.collected ? '#4CAF50' : '#333', text: v.collected ? '#fff' : '#777' };
-
+              const chip = getVariantChipColors(v.variant, v.collected);
               return `
                 <span style="
                   padding: 6px 12px;
                   border-radius: 6px;
                   font-size: 12px;
-                  background: ${colors.bg};
-                  color: ${colors.text};
-                  font-weight: ${v.collected ? '600' : '400'};
+                  background: ${chip.bg};
+                  color: ${chip.text};
+                  font-weight: ${chip.weight};
                   transition: all 0.2s;
                   ${v.collected ? 'box-shadow: 0 2px 4px rgba(0,0,0,0.2);' : ''}
                 ">${v.collected ? '✓ ' : ''}${v.variant}</span>
@@ -443,22 +430,15 @@ export function createJournalCheckerSection(): HTMLElement {
               </div>
               <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 ${variants.map(v => {
-                  const variantColors = {
-                    'Normal': { bg: v.collected ? '#42A5F5' : '#333', text: v.collected ? '#fff' : '#777' },
-                    'Rainbow': { bg: v.collected ? '#9C27B0' : '#333', text: v.collected ? '#fff' : '#777' },
-                    'Gold': { bg: v.collected ? '#FFB300' : '#333', text: v.collected ? '#fff' : '#777' },
-                    'Max': { bg: v.collected ? '#E91E63' : '#333', text: v.collected ? '#fff' : '#777' }
-                  };
-                  const colors = variantColors[v.variant as keyof typeof variantColors] || { bg: v.collected ? '#42A5F5' : '#333', text: v.collected ? '#fff' : '#777' };
-
+                  const chip = getVariantChipColors(v.variant, v.collected);
                   return `
                     <span style="
                       padding: 6px 12px;
                       border-radius: 6px;
                       font-size: 12px;
-                      background: ${colors.bg};
-                      color: ${colors.text};
-                      font-weight: ${v.collected ? '600' : '400'};
+                      background: ${chip.bg};
+                      color: ${chip.text};
+                      font-weight: ${chip.weight};
                       ${v.collected ? 'box-shadow: 0 2px 4px rgba(0,0,0,0.2);' : ''}
                     ">${v.collected ? '✓ ' : ''}${v.variant}</span>
                   `;
@@ -753,14 +733,15 @@ export function createJournalCheckerSection(): HTMLElement {
               height: 24px;
               border-radius: 50%;
               display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 11px;
+              const variantColors = {
+                'Normal': { bg: v.collected ? '#FFFFFF' : '#333', text: v.collected ? '#111' : '#777' },
+                'Rainbow': { bg: v.collected ? 'linear-gradient(120deg, #ff8a80, #ffd180, #80d8ff, #b388ff)' : '#333', text: v.collected ? '#111' : '#777' },
               font-weight: bold;
               flex-shrink: 0;
             ">${index + 1}</div>
             <img src="${spriteUrl}" style="width: 28px; height: 28px; image-rendering: pixelated; flex-shrink: 0;" alt="${rec.species}" />
-            <div style="flex: 1;">
+                  'Dawnlit': { bg: v.collected ? '#a463ff' : '#333', text: v.collected ? '#fff' : '#777' },
+                  'Dawncharged': { bg: v.collected ? '#7e00fc' : '#333', text: v.collected ? '#fff' : '#777' },
               <div style="font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px;">
                 ${rec.species} (${rec.missingVariants.join(', ')})
               </div>

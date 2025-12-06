@@ -1,958 +1,193 @@
-/**
- * Public Rooms Feature
- *
- * Firebase-based public room discovery and management system
- * Allows users to create, browse, and join public rooms
- *
- * Credits:
- * - Public Rooms system powered by https://roomy.umm12many.net/
- * - Firebase infrastructure and room discovery backend
- */
-
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import { FIREBASE_CONFIG } from '../config/firebase.config';
 import type {
-  FirebaseConfig,
-  FirebaseApp,
-  FirebaseAuth,
-  FirebaseDatabase,
-  FirebaseUser,
-  RoomData,
-  RoomsMap,
   PublicRoomsConfig,
   PublicRoomsState,
-  AuthStateCallback,
+  RoomsMap,
+  PlayerFilter,
+  SortOption,
   RoomsUpdateCallback,
   ErrorCallback,
-  PlayerFilter,
-  SortOption
+  Room,
+  RoomSearchResult,
+  PlayerRoomResult,
+  PlayerView,
 } from '../types/publicRooms';
+import {
+  fetchAvailableRooms,
+  searchRoomsByPlayerName as supabaseSearchRooms,
+  searchPlayersByName as supabaseSearchPlayers,
+  fetchPlayerView as supabaseFetchPlayerView,
+} from '../services/supabaseRooms';
 
-// Declare unsafeWindow for userscript environments
-declare const unsafeWindow: Window & typeof globalThis | undefined;
+type ConnectionStatus = PublicRoomsState['connectionStatus'];
 
-/**
- * Get the appropriate window object that has Firebase SDK
- * This handles both sandboxed (Tampermonkey with @grant) and non-sandboxed contexts
- */
-function getFirebaseWindow(): (Window & typeof globalThis) | null {
-  // Try unsafeWindow first (for sandboxed userscript environments)
-  if (typeof unsafeWindow !== 'undefined' && (unsafeWindow as any).firebase) {
-    log('📦 Found Firebase in unsafeWindow');
-    return unsafeWindow;
-  }
-  
-  // Try regular window (for non-sandboxed or @inject-into page)
-  if (typeof window !== 'undefined' && (window as any).firebase) {
-    log('📦 Found Firebase in window');
-    return window;
-  }
-  
-  // Firebase not found in either context
-  return null;
-}
+const DEFAULT_CONFIG: PublicRoomsConfig = {
+  refreshIntervalSeconds: 0,
+};
 
-/**
- * Get Firebase SDK from the appropriate window context
- * Exported for use in UI components
- */
-export function getFirebaseSDK(): typeof window.firebase | null {
-  const firebaseWindow = getFirebaseWindow();
-  if (firebaseWindow) {
-    return (firebaseWindow as any).firebase;
-  }
-  return null;
-}
+const MIN_REFRESH_SECONDS = 0;
+const MAX_REFRESH_SECONDS = 0;
 
-// Private state
-let app: FirebaseApp | null = null;
-let auth: FirebaseAuth | null = null;
-let database: FirebaseDatabase | null = null;
-
+let config: PublicRoomsConfig = { ...DEFAULT_CONFIG };
 let state: PublicRoomsState = {
-  currentUser: null,
-  currentUserId: null,
-  currentRoomCode: null,
-  isAuthReady: false,
-  isFirebaseReady: false,
   connectionStatus: 'connecting',
   allRooms: {},
   currentSearchTerm: '',
   currentPlayerFilter: 'all',
-  currentSortBy: 'players-desc' // Default to Most Players
+  currentSortBy: 'players-desc',
+  lastUpdatedAt: null,
 };
 
-let config: PublicRoomsConfig = {
-  refreshIntervalSeconds: 30,
-  playerCountIntervalMinutes: 5
-};
-
-// Intervals
-let autoRefreshInterval: number | null = null;
-let playerCountUpdateInterval: number | null = null;
-let backgroundPlayerCountInterval: number | null = null;
-
-// Retry configuration
-const FIREBASE_SDK_MAX_RETRIES = 5;
-const FIREBASE_SDK_RETRY_DELAY_MS = 2000;
-const FIREBASE_INIT_MAX_RETRIES = 3;
-const FIREBASE_INIT_RETRY_DELAY_MS = 3000;
-const FETCH_ROOMS_TIMEOUT_MS = 30000; // Increased to 30s for slower connections
-const FETCH_ROOMS_MAX_RETRIES = 5; // Increased from 3 to 5 retries
-const FETCH_ROOMS_BASE_DELAY_MS = 1500; // Base delay for exponential backoff (1.5s, 3s, 6s, 12s)
-
-// REST API configuration - fallback for slow connections
-const REST_API_TIMEOUT_MS = 60000; // 60s timeout for REST API (more lenient for slow connections)
-const REST_API_URL = `${FIREBASE_CONFIG.databaseURL}/rooms.json`;
-
-// Custom error class for timeout errors (more reliable than string matching)
-class FetchTimeoutError extends Error {
-  constructor(message = 'Fetch timeout') {
-    super(message);
-    this.name = 'FetchTimeoutError';
-  }
-}
-
-let initRetryTimer: number | null = null;
-let sdkCheckRetryCount = 0;
-let initRetryCount = 0;
-let isFetchingRooms = false; // Flag to prevent concurrent fetches
-let isFirebaseConnected = false; // Track actual Firebase connection status
-let connectionListener: (() => void) | null = null; // Cleanup function for connection listener
-
-// Callbacks
-let authStateCallback: AuthStateCallback | null = null;
+let filteredRooms: RoomsMap = {};
+let initStarted = false;
 let roomsUpdateCallback: RoomsUpdateCallback | null = null;
 let errorCallback: ErrorCallback | null = null;
-let connectionStatusCallback: ((status: 'connecting' | 'connected' | 'failed' | 'retrying') => void) | null = null;
+let connectionStatusCallback: ((status: ConnectionStatus) => void) | null = null;
 
-/**
- * Wait for Firebase SDK to be available with retry logic
- * Checks both window and unsafeWindow for sandboxed environments
- */
-async function waitForFirebaseSDK(): Promise<boolean> {
-  sdkCheckRetryCount = 0;
-
-  while (sdkCheckRetryCount < FIREBASE_SDK_MAX_RETRIES) {
-    const firebase = getFirebaseSDK();
-    if (firebase) {
-      log('✅ Firebase SDK is available');
-      return true;
-    }
-
-    sdkCheckRetryCount++;
-    log(`⏳ Firebase SDK not available in window or unsafeWindow, retry ${sdkCheckRetryCount}/${FIREBASE_SDK_MAX_RETRIES}...`);
-    state.connectionStatus = 'retrying';
-    connectionStatusCallback?.('retrying');
-
-    await new Promise(resolve => setTimeout(resolve, FIREBASE_SDK_RETRY_DELAY_MS));
-  }
-
-  log('❌ Firebase SDK not available after max retries');
-  return false;
+function loadConfig(): void {
+  const saved = storage.get('publicRooms:refreshInterval', DEFAULT_CONFIG.refreshIntervalSeconds);
+  config.refreshIntervalSeconds = clampRefreshInterval(saved);
 }
 
-/**
- * Initialize Firebase SDK with retry logic
- */
-async function initializeFirebase(): Promise<boolean> {
-  initRetryCount = 0;
-
-  while (initRetryCount < FIREBASE_INIT_MAX_RETRIES) {
-    try {
-      // First ensure SDK is available (checks both window and unsafeWindow)
-      let firebase = getFirebaseSDK();
-      if (!firebase) {
-        const sdkAvailable = await waitForFirebaseSDK();
-        if (!sdkAvailable) {
-          state.connectionStatus = 'failed';
-          connectionStatusCallback?.('failed');
-          return false;
-        }
-        firebase = getFirebaseSDK();
-      }
-
-      if (!firebase) {
-        throw new Error('Firebase SDK not available after wait');
-      }
-
-      // Initialize Firebase app
-      if (!firebase.apps.length) {
-        app = firebase.initializeApp(FIREBASE_CONFIG);
-      } else {
-        app = firebase.app();
-      }
-
-      auth = firebase.auth();
-      database = firebase.database();
-
-      // Set up persistent connection listener
-      // This monitors the actual connection state to Firebase servers
-      const connectedRef = database.ref('.info/connected');
-      
-      // Remove any existing listener
-      if (connectionListener) {
-        connectionListener();
-        connectionListener = null;
-      }
-
-      // Set up connection state monitoring
-      connectedRef.on('value', (snapshot: any) => {
-        const connected = snapshot.val() === true;
-        isFirebaseConnected = connected;
-        
-        if (connected) {
-          log('✅ Firebase Realtime Database connected');
-          // If we just reconnected and had a failed fetch, retry it
-          // Check isFetchingRooms to avoid concurrent fetches
-          if ((state.connectionStatus === 'failed' || state.connectionStatus === 'retrying') && !isFetchingRooms) {
-            state.connectionStatus = 'connected';
-            connectionStatusCallback?.('connected');
-            // Trigger a fresh fetch when connection is restored
-            fetchRooms();
-          }
-        } else {
-          log('⚠️ Firebase Realtime Database disconnected');
-          // Don't immediately set to failed - Firebase will auto-reconnect
-        }
-      }, (error: Error) => {
-        log('❌ Connection listener error:', error.message);
-        isFirebaseConnected = false;
-      });
-
-      // Store cleanup function
-      connectionListener = () => {
-        connectedRef.off('value');
-      };
-
-      // Wait briefly for initial connection
-      log('🔄 Waiting for database connection...');
-      await new Promise<void>((resolve) => {
-        let checkInterval: number | null = null;
-        
-        const cleanup = () => {
-          if (checkInterval !== null) {
-            clearInterval(checkInterval);
-            checkInterval = null;
-          }
-        };
-        
-        const timeout = setTimeout(() => {
-          log('⏳ Initial connection wait timed out, proceeding...');
-          cleanup();
-          resolve();
-        }, 5000);
-
-        // Check if already connected
-        if (isFirebaseConnected) {
-          clearTimeout(timeout);
-          cleanup();
-          resolve();
-          return;
-        }
-
-        // Wait for connection event
-        checkInterval = window.setInterval(() => {
-          if (isFirebaseConnected) {
-            clearTimeout(timeout);
-            cleanup();
-            resolve();
-          }
-        }, 100);
-      });
-
-      state.isFirebaseReady = true;
-      state.connectionStatus = 'connected';
-      connectionStatusCallback?.('connected');
-      log('✅ Firebase initialized for Public Rooms');
-
-      // Setup auth state listener (optional - kept for backwards compatibility)
-      auth.onAuthStateChanged((user: FirebaseUser | null) => {
-        state.isAuthReady = true;
-        state.currentUser = user;
-        state.currentUserId = user?.uid || null;
-
-        log(user ? `✅ User signed in: ${user.email}` : '👤 User signed out (viewing anonymously)');
-
-        if (authStateCallback) {
-          authStateCallback(user);
-        }
-      });
-
-      // Start features immediately - no auth required
-      startAutoRefresh();
-      fetchRooms();
-
-      return true;
-    } catch (error) {
-      initRetryCount++;
-      log(`❌ Firebase initialization failed (attempt ${initRetryCount}/${FIREBASE_INIT_MAX_RETRIES}):`, error);
-
-      if (initRetryCount < FIREBASE_INIT_MAX_RETRIES) {
-        state.connectionStatus = 'retrying';
-        connectionStatusCallback?.('retrying');
-        log(`⏳ Retrying Firebase initialization in ${FIREBASE_INIT_RETRY_DELAY_MS / 1000}s...`);
-        await new Promise(resolve => setTimeout(resolve, FIREBASE_INIT_RETRY_DELAY_MS));
-      }
-    }
-  }
-
-  state.connectionStatus = 'failed';
-  connectionStatusCallback?.('failed');
-  return false;
-}
-
-/**
- * Retry Firebase initialization (can be called manually from UI)
- */
-export async function retryFirebaseInit(): Promise<boolean> {
-  log('🔄 Manual retry of Firebase initialization...');
-  state.connectionStatus = 'connecting';
-  connectionStatusCallback?.('connecting');
-
-  // Reset retry counts for manual retry
-  sdkCheckRetryCount = 0;
-  initRetryCount = 0;
-
-  return initializeFirebase();
-}
-
-/**
- * Extract current room code from URL
- */
-function extractRoomCode(): string | null {
-  const urlMatch = window.location.pathname.match(/\/r\/([^/]+)/);
-  return urlMatch && urlMatch[1] ? urlMatch[1].toUpperCase() : null;
-}
-
-/**
- * Get current player count from game state
- */
-function getCurrentPlayerCount(): number {
-  try {
-    const roomConnection = (window as any).MagicCircle_RoomConnection;
-    if (roomConnection?.lastRoomStateJsonable) {
-      const userSlots = roomConnection.lastRoomStateJsonable.child.data.userSlots;
-      if (Array.isArray(userSlots)) {
-        return userSlots.filter((slot: any) => slot !== null && slot !== undefined).length;
-      }
-    }
-  } catch (error) {
-    log('⚠️ Error getting player count:', error);
-  }
+function clampRefreshInterval(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_CONFIG.refreshIntervalSeconds;
+  if (value <= 0) return 0;
+  // Auto-refresh is disabled; clamp to 0.
   return 0;
 }
 
-/**
- * Filter and sort rooms based on current criteria
- */
+function updateConnectionStatus(status: ConnectionStatus): void {
+  if (state.connectionStatus === status) return;
+  state.connectionStatus = status;
+  connectionStatusCallback?.(status);
+}
+
+function emitError(message: string): void {
+  errorCallback?.(message);
+}
+
 function filterAndSortRooms(rooms: RoomsMap): RoomsMap {
-  if (!rooms) return {};
+  const entries = Object.entries(rooms || {});
+  if (entries.length === 0) return {};
 
-  let roomsArray = Object.keys(rooms).map(code => ({
-    code,
-    ...rooms[code]
-  }));
+  const search = state.currentSearchTerm.trim().toLowerCase();
 
-  // Apply search filter
-  if (state.currentSearchTerm) {
-    const searchLower = state.currentSearchTerm.toLowerCase();
-    roomsArray = roomsArray.filter(room => {
-      const nameMatch = room.originalRoomName?.toLowerCase().includes(searchLower);
-      const codeMatch = room.code.toLowerCase().includes(searchLower);
-      const tagsMatch = room.tags?.some(tag => tag.toLowerCase().includes(searchLower));
-      return nameMatch || codeMatch || tagsMatch;
-    });
-  }
+  const filtered = entries.filter(([code, room]) => {
+    const playerCount = room.playersCount || 0;
+    if (state.currentPlayerFilter !== 'all') {
+      if (state.currentPlayerFilter === 'empty' && playerCount !== 0) return false;
+      if (state.currentPlayerFilter === 'low' && (playerCount < 1 || playerCount > 2)) return false;
+      if (state.currentPlayerFilter === 'medium' && (playerCount < 3 || playerCount > 4)) return false;
+      if (state.currentPlayerFilter === 'high' && playerCount < 5) return false;
+    }
 
-  // Apply player count filter
-  if (state.currentPlayerFilter !== 'all') {
-    roomsArray = roomsArray.filter(room => {
-      const count = room.playerCount || 0;
-      switch (state.currentPlayerFilter) {
-        case 'empty': return count === 0;
-        case 'low': return count >= 1 && count <= 2;
-        case 'medium': return count >= 3 && count <= 4;
-        case 'high': return count >= 5 && count <= 6;
-        default: return true;
-      }
-    });
-  }
+    if (!search) return true;
+    const codeMatch = code.toLowerCase().includes(search);
+    const slotMatch = room.userSlots?.some(slot => slot.name?.toLowerCase().includes(search));
+    return codeMatch || Boolean(slotMatch);
+  });
 
-  // Apply sorting
-  roomsArray.sort((a, b) => {
+  filtered.sort(([, a], [, b]) => {
     switch (state.currentSortBy) {
       case 'name':
-        return (a.originalRoomName || a.code).toLowerCase()
-          .localeCompare((b.originalRoomName || b.code).toLowerCase());
-      case 'players-desc':
-        return (b.playerCount || 0) - (a.playerCount || 0);
+        return a.id.localeCompare(b.id);
       case 'players-asc':
-        return (a.playerCount || 0) - (b.playerCount || 0);
-      case 'creator':
-        return (a.creator || 'Unknown').toLowerCase()
-          .localeCompare((b.creator || 'Unknown').toLowerCase());
+        return (a.playersCount || 0) - (b.playersCount || 0);
+      case 'players-desc':
       default:
-        return 0;
+        return (b.playersCount || 0) - (a.playersCount || 0);
     }
   });
 
-  // Convert back to object
-  const filtered: RoomsMap = {};
-  roomsArray.forEach(room => {
-    const { code, ...data } = room;
-    // Ensure all required RoomData properties are present
-    filtered[code] = {
-      originalRoomName: data.originalRoomName || code,
-      creatorUid: data.creatorUid || '',
-      creator: data.creator || 'Unknown',
-      tags: data.tags || [],
-      playerCount: data.playerCount || 0
-    };
-  });
-
-  return filtered;
+  return filtered.reduce<RoomsMap>((acc, [code, room]) => {
+    acc[code] = room;
+    return acc;
+  }, {});
 }
 
-/**
- * Validate that a value looks like a RoomsMap (object with room data)
- */
-function isValidRoomsMap(data: unknown): data is RoomsMap {
-  if (data === null || data === undefined) return true; // Empty is valid
-  if (typeof data !== 'object') return false;
-  
-  // Check a few entries to verify structure
-  const entries = Object.entries(data as Record<string, unknown>);
-  if (entries.length === 0) return true; // Empty object is valid
-  
-  // Validate first entry has expected room data shape
-  const firstEntry = entries[0];
-  if (!firstEntry) return true; // Should not happen but be safe
-  
-  const firstRoom = firstEntry[1];
-  if (typeof firstRoom !== 'object' || firstRoom === null) return false;
-  
-  const room = firstRoom as Record<string, unknown>;
-  // Room should have at least originalRoomName or creator (flexible validation)
-  return typeof room.originalRoomName === 'string' || typeof room.creator === 'string';
-}
-
-/**
- * Fetch rooms using Firebase REST API (fallback for slow connections)
- * This is a simpler HTTP-based approach that doesn't require the Firebase SDK
- * to be fully initialized or maintain a WebSocket connection.
- * 
- * The REST API is the same endpoint that the roomy.umm12many.net website uses,
- * which is why users with slow connections can access the website but not the SDK-based fetch.
- */
-async function fetchRoomsViaRestApi(): Promise<RoomsMap | null> {
-  log('📡 Attempting to fetch rooms via REST API fallback...');
-  
-  // Validate URL is properly formed
-  if (!REST_API_URL || !REST_API_URL.startsWith('https://')) {
-    log('❌ REST API URL is not properly configured');
-    return null;
+function applyRoomsSnapshot(rooms: Room[]): void {
+  const mapped: RoomsMap = {};
+  for (const room of rooms) {
+    mapped[room.id] = room;
   }
-  
-  try {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), REST_API_TIMEOUT_MS);
-    
-    const response = await fetch(REST_API_URL, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: {
-        'Accept': 'application/json'
-      }
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      log(`❌ REST API fetch failed with status: ${response.status}`);
-      return null;
-    }
-    
-    const data = await response.json();
-    
-    // Validate the response structure
-    if (!isValidRoomsMap(data)) {
-      log('❌ REST API returned unexpected data format');
-      return null;
-    }
-    
-    const rooms = data || {};
-    log(`✅ REST API fetch successful: ${Object.keys(rooms).length} rooms`);
-    return rooms;
-  } catch (error) {
-    if (error instanceof Error) {
-      // Check for abort (timeout) using the error name which is more reliable
-      if (error.name === 'AbortError') {
-        log('⏱️ REST API fetch timed out');
-      } else {
-        log(`❌ REST API fetch error: ${error.message}`);
-      }
-    } else {
-      log('❌ REST API fetch error: Unknown error');
-    }
-    return null;
-  }
+  state.allRooms = mapped;
+  state.lastUpdatedAt = new Date().toISOString();
+  filteredRooms = filterAndSortRooms(state.allRooms);
+  roomsUpdateCallback?.({ ...filteredRooms });
 }
 
-/**
- * Fetch all rooms from Firebase with timeout and retry logic
- */
-export async function fetchRooms(retryCount = 0): Promise<void> {
-  // Prevent concurrent fetches - if already fetching, skip this call
-  if (isFetchingRooms && retryCount === 0) {
-    log('⏳ Fetch already in progress, skipping duplicate request');
+function scheduleRefresh(): void {
+  // Auto-refresh disabled by requirement.
+}
+
+async function fetchRoomsInternal(): Promise<void> {
+  updateConnectionStatus('connecting');
+  const rooms = await fetchAvailableRooms(200);
+  if (!rooms || rooms.length === 0) {
+    updateConnectionStatus('retrying');
     return;
   }
+  applyRoomsSnapshot(rooms);
+  updateConnectionStatus('connected');
+}
 
-  // Mark fetch as in progress for new fetch requests
-  if (retryCount === 0) {
-    isFetchingRooms = true;
-  }
+// ---------------- Public API ----------------
 
-  // Helper to reset fetching flag only on final exit
-  const resetFetchingFlag = () => {
-    if (retryCount === 0 || retryCount >= FETCH_ROOMS_MAX_RETRIES - 1) {
-      isFetchingRooms = false;
-    }
-  };
+export async function initPublicRooms(): Promise<void> {
+  if (initStarted) return;
+  initStarted = true;
+  loadConfig();
+  await fetchRoomsInternal();
+}
 
-  // Helper to process and display rooms
-  const processRooms = (rooms: RoomsMap) => {
-    state.allRooms = rooms;
-    const filteredRooms = filterAndSortRooms(state.allRooms);
-    if (roomsUpdateCallback) {
-      roomsUpdateCallback(filteredRooms);
-    }
-    log(`✅ Fetched ${Object.keys(state.allRooms).length} rooms`);
-    isFetchingRooms = false;
-  };
-
+export async function fetchRooms(): Promise<void> {
   try {
-    // If database isn't ready, try REST API first (better for slow connections)
-    if (!database) {
-      log('⚠️ Database not initialized, trying REST API fallback first...');
-      
-      const restRooms = await fetchRoomsViaRestApi();
-      if (restRooms !== null) {
-        // REST API succeeded - use the data
-        processRooms(restRooms);
-        
-        // Try to initialize Firebase in the background for future use
-        if (!state.isFirebaseReady) {
-          initializeFirebase().catch(() => {
-            log('⚠️ Background Firebase initialization failed, will continue using REST API');
-          });
-        }
-        return;
-      }
-      
-      // REST API failed, try to initialize Firebase SDK
-      log('⚠️ REST API fallback failed, attempting Firebase SDK initialization...');
-      if (!state.isFirebaseReady) {
-        const success = await initializeFirebase();
-        if (!success) {
-          log('❌ Cannot fetch rooms - both REST API and Firebase initialization failed');
-          if (errorCallback) {
-            errorCallback('Unable to connect. Both REST API and Firebase are unavailable. Click refresh to retry.');
-          }
-          isFetchingRooms = false;
-          return;
-        }
-      }
-      
-      if (!database) {
-        log('❌ Database still not available after initialization');
-        if (errorCallback) {
-          errorCallback('Database connection failed. Click refresh to retry.');
-        }
-        isFetchingRooms = false;
-        return;
-      }
-    }
-
-    log(`📡 Fetching rooms via SDK... (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES})`);
-    
-    // Create a timeout promise with cleanup
-    let timeoutId: number;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = window.setTimeout(() => reject(new FetchTimeoutError()), FETCH_ROOMS_TIMEOUT_MS);
-    });
-
-    // Race between fetch and timeout
-    const snapshot = await Promise.race([
-      database.ref('rooms/').once('value'),
-      timeoutPromise
-    ]).finally(() => {
-      // Clear the timeout to prevent memory leaks
-      clearTimeout(timeoutId);
-    });
-    
-    processRooms(snapshot.val() || {});
+    await fetchRoomsInternal();
   } catch (error) {
-    const isTimeout = error instanceof FetchTimeoutError;
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    log(`❌ Error fetching rooms via SDK (attempt ${retryCount + 1}/${FETCH_ROOMS_MAX_RETRIES}): ${errorMessage}`);
-    
-    // On first failure or timeout, try REST API as fallback before retrying SDK
-    if (retryCount === 0 || isTimeout) {
-      log('🔄 SDK fetch failed, trying REST API fallback...');
-      const restRooms = await fetchRoomsViaRestApi();
-      if (restRooms !== null) {
-        processRooms(restRooms);
-        return;
-      }
-      log('⚠️ REST API fallback also failed');
-    }
-    
-    // Retry logic with exponential backoff - only for network/timeout errors
-    if (retryCount < FETCH_ROOMS_MAX_RETRIES - 1) {
-      // Calculate delay with exponential backoff: 1.5s, 3s, 6s, 12s, etc.
-      const delay = FETCH_ROOMS_BASE_DELAY_MS * Math.pow(2, retryCount);
-      log(`⏳ Retrying in ${delay / 1000}s... (exponential backoff)`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return fetchRooms(retryCount + 1);
-    }
-    
-    // Max retries reached - try one final REST API attempt
-    log('❌ Max SDK retries reached, attempting final REST API fallback...');
-    const finalRestAttempt = await fetchRoomsViaRestApi();
-    if (finalRestAttempt !== null) {
-      processRooms(finalRestAttempt);
-      return;
-    }
-    
-    // All attempts failed
-    log('❌ All fetch attempts failed (SDK and REST API)');
-    if (errorCallback) {
-      errorCallback('Failed to fetch rooms. Please check your connection and click refresh to try again.');
-    }
-    isFetchingRooms = false;
+    log('⚠️ fetchRooms failed:', error);
+    updateConnectionStatus('retrying');
+    emitError('Unable to refresh rooms');
   }
 }
 
-/**
- * Apply current filters without refetching from database
- */
-export function applyFilters(): void {
-  const filteredRooms = filterAndSortRooms(state.allRooms);
-  if (roomsUpdateCallback) {
-    roomsUpdateCallback(filteredRooms);
-  }
-}
-
-/**
- * Update player count for current room (authenticated)
- */
-async function updatePlayerCount(): Promise<void> {
-  if (!state.currentRoomCode || !state.currentUserId || !database) return;
-
-  try {
-    const snapshot = await database.ref('rooms/' + state.currentRoomCode).once('value');
-    const room = snapshot.val();
-
-    if (room && room.creatorUid === state.currentUserId) {
-      const playerCount = getCurrentPlayerCount();
-      await database.ref('rooms/' + state.currentRoomCode + '/playerCount').set(playerCount);
-      log(`✅ Player count updated: ${playerCount}`);
-    }
-  } catch (error) {
-    log('⚠️ Error updating player count:', error);
-  }
-}
-
-/**
- * Update player count anonymously (works even when not logged in)
- */
-async function updatePlayerCountAnonymous(): Promise<void> {
-  if (!state.currentRoomCode || !database || !state.isFirebaseReady) return;
-
-  try {
-    const snapshot = await database.ref('rooms/' + state.currentRoomCode).once('value');
-    const room = snapshot.val();
-
-    if (room) {
-      const playerCount = getCurrentPlayerCount();
-      await database.ref('rooms/' + state.currentRoomCode + '/playerCount').set(playerCount);
-      log(`✅ Background player count updated: ${playerCount}`);
-    }
-  } catch (error) {
-    log('⚠️ Error in background player count update:', error);
-  }
-}
-
-/**
- * Start auto-refresh interval
- */
-function startAutoRefresh(): void {
-  if (autoRefreshInterval) {
-    clearInterval(autoRefreshInterval);
-  }
-
-  if (config.refreshIntervalSeconds > 0) {
-    autoRefreshInterval = window.setInterval(fetchRooms, config.refreshIntervalSeconds * 1000);
-    log(`✅ Auto-refresh started: ${config.refreshIntervalSeconds}s`);
-  }
-}
-
-/**
- * Start player count updater (authenticated)
- */
-function startPlayerCountUpdater(): void {
-  if (playerCountUpdateInterval) {
-    clearInterval(playerCountUpdateInterval);
-  }
-
-  if (config.playerCountIntervalMinutes > 0) {
-    playerCountUpdateInterval = window.setInterval(
-      updatePlayerCount,
-      config.playerCountIntervalMinutes * 60 * 1000
-    );
-    log(`✅ Player count updater started: ${config.playerCountIntervalMinutes}m`);
-  }
-}
-
-/**
- * Start background player count updater (anonymous)
- */
-function startBackgroundPlayerCountUpdater(): void {
-  if (backgroundPlayerCountInterval) {
-    clearInterval(backgroundPlayerCountInterval);
-  }
-
-  if (state.currentRoomCode && state.isFirebaseReady) {
-    // Immediate update
-    updatePlayerCountAnonymous();
-
-    // Set interval (2 minutes)
-    backgroundPlayerCountInterval = window.setInterval(updatePlayerCountAnonymous, 2 * 60 * 1000);
-    log(`✅ Background player count updater started for room: ${state.currentRoomCode}`);
-  }
-}
-
-/**
- * Sign in with email and password
- */
-export async function signIn(email: string, password: string): Promise<void> {
-  if (!auth) throw new Error('Auth not initialized');
-
-  try {
-    await auth.signInWithEmailAndPassword(email, password);
-    log('✅ Signed in successfully');
-  } catch (error: any) {
-    log('❌ Sign in failed:', error);
-    throw new Error(error.message || 'Sign in failed');
-  }
-}
-
-/**
- * Sign in with Google OAuth
- */
-export async function signInWithGoogle(): Promise<void> {
-  const firebase = getFirebaseSDK();
-  if (!auth || !firebase) {
-    throw new Error('Auth not initialized');
-  }
-
-  try {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    await auth.signInWithPopup(provider);
-    log('✅ Signed in with Google successfully');
-  } catch (error: any) {
-    log('❌ Google sign in failed:', error);
-    throw new Error(error.message || 'Google sign in failed');
-  }
-}
-
-/**
- * Sign in with GitHub OAuth
- */
-export async function signInWithGitHub(): Promise<void> {
-  const firebase = getFirebaseSDK();
-  if (!auth || !firebase) {
-    throw new Error('Auth not initialized');
-  }
-
-  try {
-    const provider = new firebase.auth.GithubAuthProvider();
-    await auth.signInWithPopup(provider);
-    log('✅ Signed in with GitHub successfully');
-  } catch (error: any) {
-    log('❌ GitHub sign in failed:', error);
-    throw new Error(error.message || 'GitHub sign in failed');
-  }
-}
-
-/**
- * Create new account
- */
-export async function createAccount(email: string, password: string): Promise<void> {
-  if (!auth) throw new Error('Auth not initialized');
-
-  try {
-    await auth.createUserWithEmailAndPassword(email, password);
-    log('✅ Account created successfully');
-  } catch (error: any) {
-    log('❌ Account creation failed:', error);
-    throw new Error(error.message || 'Account creation failed');
-  }
-}
-
-/**
- * Sign out
- */
-export async function signOut(): Promise<void> {
-  if (!auth) throw new Error('Auth not initialized');
-
-  try {
-    await auth.signOut();
-    log('✅ Signed out successfully');
-  } catch (error: any) {
-    log('❌ Sign out failed:', error);
-    throw new Error(error.message || 'Sign out failed');
-  }
-}
-
-/**
- * Create/update public room
- */
-export async function createPublicRoom(tags: string[]): Promise<void> {
-  if (!database || !state.currentUserId || !state.currentRoomCode) {
-    throw new Error('Not authenticated or no room code');
-  }
-
-  try {
-    const displayName = auth?.currentUser?.displayName || auth?.currentUser?.email?.split('@')[0] || 'Unknown';
-    const playerCount = getCurrentPlayerCount();
-
-    const roomData: RoomData = {
-      originalRoomName: state.currentRoomCode,
-      creatorUid: state.currentUserId,
-      creator: displayName,
-      tags,
-      playerCount
-    };
-
-    await database.ref('rooms/' + state.currentRoomCode.toUpperCase()).set(roomData);
-    log(`✅ Room ${state.currentRoomCode} made public`);
-
-    startPlayerCountUpdater();
-    fetchRooms();
-  } catch (error: any) {
-    log('❌ Failed to create public room:', error);
-    throw new Error(error.message || 'Failed to create room');
-  }
-}
-
-/**
- * Delete public room
- */
-export async function deletePublicRoom(roomCode?: string): Promise<void> {
-  const targetRoom = roomCode || state.currentRoomCode;
-  if (!database || !state.currentUserId || !targetRoom) {
-    throw new Error('Not authenticated or no room code');
-  }
-
-  try {
-    const snapshot = await database.ref('rooms/' + targetRoom).once('value');
-    const room = snapshot.val();
-
-    if (room && room.creatorUid === state.currentUserId) {
-      await database.ref('rooms/' + targetRoom).remove();
-      log(`✅ Room ${targetRoom} deleted`);
-
-      if (playerCountUpdateInterval) {
-        clearInterval(playerCountUpdateInterval);
-      }
-
-      fetchRooms();
-    } else {
-      throw new Error('Not authorized to delete this room');
-    }
-  } catch (error: any) {
-    log('❌ Failed to delete room:', error);
-    throw new Error(error.message || 'Failed to delete room');
-  }
-}
-
-/**
- * Check if current room is public
- */
-export async function isCurrentRoomPublic(): Promise<boolean> {
-  if (!database || !state.currentRoomCode) return false;
-
-  try {
-    const snapshot = await database.ref('rooms/' + state.currentRoomCode).once('value');
-    const room = snapshot.val();
-    return room && room.creatorUid === state.currentUserId;
-  } catch (error) {
-    log('⚠️ Error checking room status:', error);
-    return false;
-  }
-}
-
-/**
- * Get current room data
- */
-export async function getCurrentRoomData(): Promise<RoomData | null> {
-  if (!database || !state.currentRoomCode) return null;
-
-  try {
-    const snapshot = await database.ref('rooms/' + state.currentRoomCode).once('value');
-    return snapshot.val();
-  } catch (error) {
-    log('⚠️ Error getting room data:', error);
-    return null;
-  }
-}
-
-// Configuration API
 export function setRefreshInterval(seconds: number): void {
-  config.refreshIntervalSeconds = seconds;
-  storage.set('publicRooms:refreshInterval', seconds);
-  startAutoRefresh();
-}
-
-export function setPlayerCountInterval(minutes: number): void {
-  config.playerCountIntervalMinutes = minutes;
-  storage.set('publicRooms:playerCountInterval', minutes);
-  startPlayerCountUpdater();
+  config.refreshIntervalSeconds = clampRefreshInterval(seconds);
+  storage.set('publicRooms:refreshInterval', config.refreshIntervalSeconds);
 }
 
 export function setSearchTerm(term: string): void {
   state.currentSearchTerm = term;
-  applyFilters();
+  filteredRooms = filterAndSortRooms(state.allRooms);
+  roomsUpdateCallback?.({ ...filteredRooms });
 }
 
 export function setPlayerFilter(filter: PlayerFilter): void {
   state.currentPlayerFilter = filter;
-  applyFilters();
+  filteredRooms = filterAndSortRooms(state.allRooms);
+  roomsUpdateCallback?.({ ...filteredRooms });
 }
 
 export function setSortBy(sort: SortOption): void {
   state.currentSortBy = sort;
-  applyFilters();
-}
-
-// Callback registration
-export function setAuthStateCallback(callback: AuthStateCallback): void {
-  authStateCallback = callback;
+  filteredRooms = filterAndSortRooms(state.allRooms);
+  roomsUpdateCallback?.({ ...filteredRooms });
 }
 
 export function setRoomsUpdateCallback(callback: RoomsUpdateCallback): void {
   roomsUpdateCallback = callback;
+  callback({ ...filteredRooms });
 }
 
 export function setErrorCallback(callback: ErrorCallback): void {
   errorCallback = callback;
 }
 
-// State getters
+export function setConnectionStatusCallback(callback: (status: ConnectionStatus) => void): void {
+  connectionStatusCallback = callback;
+  callback(state.connectionStatus);
+}
+
 export function getState(): Readonly<PublicRoomsState> {
   return { ...state };
 }
@@ -961,56 +196,15 @@ export function getConfig(): Readonly<PublicRoomsConfig> {
   return { ...config };
 }
 
-export function getCurrentUser(): FirebaseUser | null {
-  return state.currentUser;
+// Pass-through searches and player lookups
+export async function searchRoomsByPlayerName(query: string): Promise<RoomSearchResult[]> {
+  return supabaseSearchRooms(query, { limitRooms: 200, minQueryLength: 2 });
 }
 
-export function isAuthenticated(): boolean {
-  return state.currentUser !== null;
+export async function searchPlayersByName(query: string): Promise<PlayerRoomResult[]> {
+  return supabaseSearchPlayers(query, { limitRooms: 200, minQueryLength: 2 });
 }
 
-/**
- * Load configuration from storage
- */
-function loadConfig(): void {
-  config.refreshIntervalSeconds = storage.get('publicRooms:refreshInterval', 30);
-  config.playerCountIntervalMinutes = storage.get('publicRooms:playerCountInterval', 5);
-  log('✅ Public Rooms config loaded');
-}
-
-/**
- * Set connection status callback
- */
-export function setConnectionStatusCallback(callback: (status: 'connecting' | 'connected' | 'failed' | 'retrying') => void): void {
-  connectionStatusCallback = callback;
-}
-
-/**
- * Initialize Public Rooms feature
- */
-export async function initPublicRooms(): Promise<void> {
-  log('🌐 Initializing Public Rooms...');
-
-  // Load config
-  loadConfig();
-
-  // Extract current room code early
-  state.currentRoomCode = extractRoomCode();
-  if (state.currentRoomCode) {
-    log(`📍 Current room: ${state.currentRoomCode}`);
-  }
-
-  // Initialize Firebase (async with retry)
-  const success = await initializeFirebase();
-  if (!success) {
-    log('❌ Failed to initialize Firebase after retries');
-    // Don't return - the UI can still show and allow manual retry
-  }
-
-  // Start background player count updater if in a room and Firebase is ready
-  if (state.currentRoomCode && state.isFirebaseReady) {
-    startBackgroundPlayerCountUpdater();
-  }
-
-  log('✅ Public Rooms initialization complete');
+export async function fetchPlayerView(playerId: string): Promise<PlayerView | null> {
+  return supabaseFetchPlayerView(playerId);
 }

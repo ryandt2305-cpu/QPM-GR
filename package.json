@@ -22,6 +22,7 @@
     "vite-plugin-dts": "^4.5.4"
   },
   "dependencies": {
+    "firebase": "^11.0.1",
     "git": "^0.1.5",
     "jsdom": "^27.2.0",
     "jszip": "^3.10.1"

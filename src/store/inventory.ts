@@ -36,7 +36,9 @@ let initializing = false;
 function normalizeInventoryItem(raw: any): InventoryItem | null {
   if (!raw || typeof raw !== 'object') return null;
 
-  const id = String(raw.id ?? raw.itemId ?? '');
+  // Some seed entries do not have an id; fall back to species/name to keep them for Seed Hoarder.
+  const fallbackId = raw.species ?? raw.name ?? raw.displayName ?? raw.itemId ?? raw.id;
+  const id = String(fallbackId ?? '').trim();
   if (!id) return null;
 
   return {

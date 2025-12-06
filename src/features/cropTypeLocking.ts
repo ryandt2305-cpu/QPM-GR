@@ -34,6 +34,12 @@ const CROP_LOCK_STYLE_ID = 'qpm-crop-lock-styles';
 // Use the items container, NOT the filter buttons grid
 const USER_INVENTORY_SELECTOR = '.McFlex.css-1cyjil4';
 
+const DEBUG_INVENTORY_LOGS = false;
+const dbg = (...args: unknown[]): void => {
+  if (!DEBUG_INVENTORY_LOGS) return;
+  console.log(...args);
+};
+
 const INVENTORY_ID_ATTRS = [
   'data-tm-inventory-id',
   'data-inventory-id',
@@ -551,16 +557,16 @@ export function startCropTypeLocking(): void {
   
   // Watch for inventory panel opens
   onAdded(INVENTORY_PANEL_SELECTOR, (panel) => {
-    console.log('🔍 Panel detected with selector:', INVENTORY_PANEL_SELECTOR);
-    console.log('Panel element:', panel);
-    console.log('Panel classes:', panel.className);
-    console.log('Panel role:', panel.getAttribute('role'));
-    console.log('Panel text preview:', panel.textContent?.substring(0, 100));
+    dbg('🔍 Panel detected with selector:', INVENTORY_PANEL_SELECTOR);
+    dbg('Panel element:', panel);
+    dbg('Panel classes:', panel.className);
+    dbg('Panel role:', panel.getAttribute('role'));
+    dbg('Panel text preview:', panel.textContent?.substring(0, 100));
     
     if (isVisible(panel)) {
       // Check if this is actually an inventory panel, not a shop
       const isInventory = isInventoryPanel(panel);
-      console.log('Is inventory panel?', isInventory);
+      dbg('Is inventory panel?', isInventory);
       
       if (isInventory) {
         log('🎒 Inventory panel detected, adding crop lock buttons...');
@@ -569,23 +575,21 @@ export function startCropTypeLocking(): void {
         log('🛒 Shop panel detected, ignoring for crop locking');
       }
     } else {
-      console.log('Panel not visible, skipping');
+      dbg('Panel not visible, skipping');
     }
   });
   
   // Watch for user's specific inventory structure
   onAdded(USER_INVENTORY_SELECTOR, (grid) => {
-    console.log('🔍 User inventory grid detected:', grid);
-    console.log('Grid classes:', grid.className);
-    console.log('Grid text preview:', grid.textContent?.substring(0, 100));
-    
+    dbg('🔍 User inventory grid detected:', grid);
+    dbg('Grid classes:', grid.className);
     // Look for the parent container of this grid
     let parent = grid.parentElement;
     while (parent) {
       if (parent.getAttribute('role') === 'dialog' || 
           parent.classList.contains('chakra-modal__content') ||
           parent.hasAttribute('aria-modal')) {
-        console.log('🎒 Found inventory modal for user grid:', parent);
+        dbg('🎒 Found inventory modal for user grid:', parent);
         setTimeout(() => enhanceInventoryPanel(parent as HTMLElement), 200);
         break;
       }
@@ -595,28 +599,20 @@ export function startCropTypeLocking(): void {
   
   // Also watch for any modal that appears (broader detection)
   onAdded('[role="dialog"]', (dialog) => {
-    console.log('🔍 Any dialog detected:', dialog);
-    console.log('Dialog classes:', dialog.className);
-    console.log('Dialog text preview:', dialog.textContent?.substring(0, 200));
-    
     // Check if this could be an inventory
     const text = dialog.textContent?.toLowerCase() || '';
     if (text.includes('inventory') || text.includes('my items') || text.includes('backpack')) {
-      console.log('🎒 This dialog might be inventory! Trying to enhance...');
+      dbg('🎒 This dialog might be inventory! Trying to enhance...');
       setTimeout(() => enhanceInventoryPanel(dialog as HTMLElement), 100);
     }
   });
   
   // Watch for any chakra modal
   onAdded('.chakra-modal__content', (modal) => {
-    console.log('🔍 Chakra modal detected:', modal);
-    console.log('Modal classes:', modal.className);
-    console.log('Modal text preview:', modal.textContent?.substring(0, 200));
-    
     // Check if this could be an inventory
     const text = modal.textContent?.toLowerCase() || '';
     if (text.includes('inventory') || text.includes('my items') || text.includes('backpack')) {
-      console.log('🎒 This chakra modal might be inventory! Trying to enhance...');
+      dbg('🎒 This chakra modal might be inventory! Trying to enhance...');
       setTimeout(() => enhanceInventoryPanel(modal as HTMLElement), 100);
     }
   });
@@ -629,18 +625,13 @@ export function startCropTypeLocking(): void {
           const element = node as Element;
           const text = element.textContent?.toLowerCase() || '';
           if (text.includes('inventory') || text.includes('my items')) {
-            console.log('🔍 Element with inventory text detected:', element);
-            console.log('Element tag:', element.tagName);
-            console.log('Element classes:', element.className);
-            console.log('Element text preview:', text.substring(0, 200));
-            
             // Try to find a parent modal or dialog
             let parent = element.parentElement;
             while (parent) {
               if (parent.getAttribute('role') === 'dialog' || 
                   parent.classList.contains('chakra-modal__content') ||
                   parent.hasAttribute('aria-modal')) {
-                console.log('🎒 Found parent modal for inventory element:', parent);
+                dbg('🎒 Found parent modal for inventory element:', parent);
                 setTimeout(() => enhanceInventoryPanel(parent as HTMLElement), 100);
                 break;
               }
@@ -1873,17 +1864,17 @@ export function setCropTypeLocked(species: string, locked: boolean): void {
 
 export function initCropTypeLocking(): void {
   if (!config.enabled) {
-    console.log('Crop type locking is disabled');
+    dbg('Crop type locking is disabled');
     return;
   }
 
-  console.log('Initializing crop type locking...');
+  dbg('Initializing crop type locking...');
   injectCropLockStyles();
 
   // Watch for inventory panels (modal dialogs)
   onAdded(INVENTORY_PANEL_SELECTOR, (panel: Element) => {
     const panelElement = panel as HTMLElement;
-    console.log('Panel detected:', {
+    dbg('Panel detected:', {
       className: panelElement.className,
       role: panelElement.getAttribute('role'),
       hasInventoryKeywords: isInventoryPanel(panelElement)
@@ -1891,11 +1882,11 @@ export function initCropTypeLocking(): void {
     
     // Only process if it's actually an inventory panel (not shop)
     if (!isInventoryPanel(panelElement)) {
-      console.log('❌ Detected shop panel, not inventory. Skipping.');
+      dbg('❌ Detected shop panel, not inventory. Skipping.');
       return;
     }
     
-    console.log('✅ Confirmed inventory panel, enhancing...');
+    dbg('✅ Confirmed inventory panel, enhancing...');
     
     // Wait a bit for content to load, then enhance
     setTimeout(() => {
@@ -1903,5 +1894,5 @@ export function initCropTypeLocking(): void {
     }, 100);
   });
 
-  console.log('Crop type locking initialized ✅');
+  dbg('Crop type locking initialized ✅');
 }

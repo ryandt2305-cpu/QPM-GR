@@ -10,6 +10,7 @@ import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { getJournal, type Journal } from './journalChecker';
+import { VARIANT_BADGES } from '../data/variantBadges';
 
 interface CropSizeConfig {
   enabled: boolean;
@@ -31,26 +32,7 @@ let domObserverHandle: { disconnect: () => void } | null = null;
 let lastSnapshotCache: any = null;
 let cachedJournalData: Journal | null = null;
 
-interface VariantBadge {
-  matches: string[];
-  label: string;
-  color: string;
-  bold?: boolean;
-}
-
-// Letter/color palette inspired by the in-game journal status row
-const VARIANT_BADGES: VariantBadge[] = [
-  { matches: ['Rainbow'], label: 'R', color: '#9C27B0', bold: true },
-  { matches: ['Gold', 'Golden'], label: 'G', color: '#FFB300', bold: true },
-  { matches: ['Wet'], label: 'W', color: '#4DBEFA' },
-  { matches: ['Chilled'], label: 'C', color: '#96F6FF' },
-  { matches: ['Frozen'], label: 'F', color: '#00BCD4' },
-  { matches: ['Dawnlit'], label: 'D', color: '#FF9800' },
-  { matches: ['Dawncharged', 'Dawnbound'], label: 'D', color: '#FF9800', bold: true },
-  { matches: ['Amberlit', 'Ambershine'], label: 'A', color: '#FFA726' },
-  { matches: ['Ambercharged', 'Amberbound'], label: 'A', color: '#FFA726', bold: true },
-  { matches: ['Max Weight', 'Max'], label: 'S', color: '#BDBDBD', bold: true },
-];
+import type { VariantBadge } from '../data/variantBadges';
 
 // ============================================================================
 // Journal Logging Check
@@ -275,7 +257,20 @@ function createBadgeElement(badge: VariantBadge): HTMLElement {
   const span = document.createElement('span');
   span.setAttribute(JOURNAL_BADGE_ATTR, 'true');
   span.textContent = badge.label;
-  span.style.color = badge.color;
+  if (badge.gradient) {
+    span.style.backgroundImage = badge.gradient;
+    span.style.color = 'transparent';
+    span.style.backgroundClip = 'text';
+    span.style.setProperty('-webkit-background-clip', 'text');
+    span.style.setProperty('-webkit-text-fill-color', 'transparent');
+  } else if (badge.color) {
+    span.style.color = badge.color;
+  } else {
+    span.style.color = '#FFFFFF';
+  }
+  // Force badge legibility so it doesn't inherit tooltip/weight colors
+  span.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.35)';
+  span.style.setProperty('color', span.style.color || '#FFFFFF', 'important');
   span.style.fontWeight = badge.bold ? '800' : '600';
   span.title = badge.matches.join(' / ');
   return span;

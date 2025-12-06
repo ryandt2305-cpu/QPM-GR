@@ -1,97 +1,73 @@
 /**
- * TypeScript definitions for Public Rooms feature
+ * TypeScript definitions for Public Rooms feature (Supabase-backed)
  */
-export interface FirebaseConfig {
-    apiKey: string;
-    authDomain: string;
-    databaseURL: string;
-    projectId: string;
-    storageBucket: string;
-    messagingSenderId: string;
-    appId: string;
-    measurementId: string;
+export interface RoomUserSlot {
+    name: string;
+    avatarUrl: string | null;
 }
-export interface FirebaseUser {
-    uid: string;
-    email: string | null;
-    displayName: string | null;
+export interface Room {
+    id: string;
+    isPrivate: boolean;
+    playersCount: number;
+    lastUpdatedAt: string;
+    lastUpdatedByPlayerId: string | null;
+    userSlots?: RoomUserSlot[];
 }
-export interface FirebaseAuthProvider {
+export interface RoomSearchResult {
+    room: Room;
+    matchedSlots: RoomUserSlot[];
 }
-export interface FirebaseAuth {
-    currentUser: FirebaseUser | null;
-    signInWithEmailAndPassword(email: string, password: string): Promise<any>;
-    createUserWithEmailAndPassword(email: string, password: string): Promise<any>;
-    signInWithPopup(provider: FirebaseAuthProvider): Promise<any>;
-    signOut(): Promise<void>;
-    onAuthStateChanged(callback: (user: FirebaseUser | null) => void): void;
-    GoogleAuthProvider: new () => FirebaseAuthProvider;
-    GithubAuthProvider: new () => FirebaseAuthProvider;
+export interface PlayerRoomResult {
+    playerName: string;
+    avatarUrl: string | null;
+    roomId: string;
+    roomPlayersCount: number;
 }
-export interface FirebaseDatabaseReference {
-    set(value: any): Promise<void>;
-    once(eventType: string): Promise<FirebaseDatabaseSnapshot>;
-    on(eventType: string, callback: (snapshot: FirebaseDatabaseSnapshot) => void, errorCallback?: (error: Error) => void): void;
-    off(eventType?: string): void;
-    remove(): Promise<void>;
+export interface PlayerPrivacyPayload {
+    allowProfile: boolean;
+    allowGarden: boolean;
+    allowInventory: boolean;
+    allowStats: boolean;
+    allowActivity: boolean;
+    allowJournal: boolean;
+    allowRoom: boolean;
 }
-export interface FirebaseDatabaseSnapshot {
-    val(): any;
+export interface PlayerViewState {
+    garden: unknown | null;
+    inventory: unknown | null;
+    stats: Record<string, any> | null;
+    activityLog: any[] | null;
+    journal: any | null;
+    activityLogs?: any[] | null;
 }
-export interface FirebaseDatabase {
-    ref(path: string): FirebaseDatabaseReference;
-}
-export interface FirebaseApp {
-    auth(): FirebaseAuth;
-    database(): FirebaseDatabase;
-}
-export interface RoomData {
-    originalRoomName: string;
-    creatorUid: string;
-    creator: string;
-    tags: string[];
-    playerCount: number;
-}
-export interface RoomDataWithCode extends RoomData {
-    code: string;
+export interface PlayerView {
+    playerId: string;
+    playerName: string | null;
+    avatarUrl: string | null;
+    coins: number | null;
+    room: any | null;
+    hasModInstalled: boolean;
+    isOnline: boolean;
+    lastEventAt: string | null;
+    privacy: PlayerPrivacyPayload;
+    state: PlayerViewState;
 }
 export interface RoomsMap {
-    [roomCode: string]: RoomData;
+    [roomId: string]: Room;
 }
 export interface PublicRoomsConfig {
     refreshIntervalSeconds: number;
-    playerCountIntervalMinutes: number;
 }
 export interface PublicRoomsState {
-    currentUser: FirebaseUser | null;
-    currentUserId: string | null;
-    currentRoomCode: string | null;
-    isAuthReady: boolean;
-    isFirebaseReady: boolean;
     connectionStatus: 'connecting' | 'connected' | 'failed' | 'retrying';
     allRooms: RoomsMap;
     currentSearchTerm: string;
     currentPlayerFilter: 'all' | 'empty' | 'low' | 'medium' | 'high';
-    currentSortBy: 'name' | 'players-desc' | 'players-asc' | 'creator';
+    currentSortBy: 'name' | 'players-desc' | 'players-asc';
+    lastUpdatedAt: string | null;
 }
 export type PlayerFilter = 'all' | 'empty' | 'low' | 'medium' | 'high';
-export type SortOption = 'name' | 'players-desc' | 'players-asc' | 'creator';
-export type AuthStateCallback = (user: FirebaseUser | null) => void;
+export type SortOption = 'name' | 'players-desc' | 'players-asc';
 export type RoomsUpdateCallback = (rooms: RoomsMap) => void;
 export type ErrorCallback = (error: string) => void;
-declare global {
-    interface Window {
-        firebase?: {
-            apps: any[];
-            app: () => FirebaseApp;
-            initializeApp: (config: FirebaseConfig) => FirebaseApp;
-            auth: {
-                (): FirebaseAuth;
-                GoogleAuthProvider: new () => FirebaseAuthProvider;
-                GithubAuthProvider: new () => FirebaseAuthProvider;
-            };
-            database: () => FirebaseDatabase;
-        };
-    }
-}
 //# sourceMappingURL=publicRooms.d.ts.map

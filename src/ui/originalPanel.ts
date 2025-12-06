@@ -32,7 +32,7 @@ import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
-import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
+import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, UPDATE_URL, GITHUB_URL, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 
 export interface UIState {
   panel: HTMLElement | null;
@@ -1942,9 +1942,9 @@ function ensurePanelStyles(): void {
   }
 
   .qpm-version-bubble[data-status="outdated"] {
-    background: rgba(255, 193, 7, 0.2);
-    color: #FFC107;
-    border: 1px solid rgba(255, 193, 7, 0.4);
+    background: rgba(244, 67, 54, 0.18);
+    color: #F44336;
+    border: 1px solid rgba(244, 67, 54, 0.55);
     animation: pulse-warning 2s ease-in-out infinite;
   }
 
@@ -3765,10 +3765,47 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   // Create version bubble
   const versionBubble = document.createElement('div');
   versionBubble.className = 'qpm-version-bubble';
-  versionBubble.dataset.status = 'current';
+  versionBubble.dataset.status = 'checking';
   versionBubble.textContent = `v${getCurrentVersion()}`;
-  versionBubble.title = `QPM v${getCurrentVersion()}\nUpdates are handled by Tampermonkey`;
-  versionBubble.style.cursor = 'default';
+  versionBubble.title = 'Checking for updates...';
+  versionBubble.style.cursor = 'pointer';
+
+  const renderVersionInfo = (info: VersionInfo): void => {
+    const statusMap: Record<VersionStatus, 'up-to-date' | 'outdated' | 'checking' | 'error'> = {
+      current: 'up-to-date',
+      outdated: 'outdated',
+      checking: 'checking',
+      error: 'error',
+    };
+
+    versionBubble.dataset.status = statusMap[info.status];
+
+    if (info.status === 'outdated' && info.latest) {
+      versionBubble.textContent = `v${info.current} → v${info.latest}`;
+      versionBubble.title = `Update available! Current: v${info.current}\nLatest: v${info.latest}\nClick to open the latest userscript.`;
+    } else if (info.status === 'error') {
+      versionBubble.textContent = `v${info.current}`;
+      versionBubble.title = 'Version check failed. Click to open the repo.';
+    } else if (info.status === 'checking') {
+      versionBubble.textContent = `v${info.current}`;
+      versionBubble.title = 'Checking for updates...';
+    } else {
+      versionBubble.textContent = `v${info.current}`;
+      versionBubble.title = `QPM v${info.current}\nUp to date.`;
+    }
+  };
+
+  versionBubble.addEventListener('click', () => {
+    const info = getVersionInfo();
+    if (info.status === 'outdated') {
+      window.open(UPDATE_URL, '_blank');
+    } else {
+      window.open(GITHUB_URL, '_blank');
+    }
+  });
+
+  onVersionChange(renderVersionInfo);
+  startVersionChecker();
 
   const collapseButton = document.createElement('button');
   collapseButton.type = 'button';

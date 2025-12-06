@@ -23,6 +23,7 @@
 // @grant        GM_listValues
 // @connect      pquktqrngyxkvrgtfygp.supabase.co
 // @connect      supabase.co
+// @connect      raw.githubusercontent.com
 // @grant        unsafeWindow
 // ==/UserScript==
 

@@ -1,46 +1,93 @@
 // src/utils/versionChecker.ts
-// Version information (simplified - no network checks to avoid Tampermonkey prompts)
-// Tampermonkey's built-in update mechanism (@updateURL in header) handles version checking
+// Lightweight live version checker for the userscript header
 
 const CURRENT_VERSION = '2.2.3'; // This should match package.json version
-const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
-const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js';
+export const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
+export const UPDATE_URL = 'https://github.com/ryandt2305-cpu/QPM-GR/raw/refs/heads/master/dist/QPM.user.js';
+const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
-export type VersionStatus = 'current' | 'unknown';
+export type VersionStatus = 'current' | 'outdated' | 'checking' | 'error';
 
 export interface VersionInfo {
   current: string;
   latest: string | null;
   status: VersionStatus;
   updateUrl: string;
+  checkedAt: number | null;
+}
+
+let cached: VersionInfo = {
+  current: CURRENT_VERSION,
+  latest: null,
+  status: 'checking',
+  updateUrl: UPDATE_URL,
+  checkedAt: null,
+};
+
+const listeners = new Set<(info: VersionInfo) => void>();
+let started = false;
+let timer: number | null = null;
+
+function emit(): void {
+  listeners.forEach((cb) => {
+    try {
+      cb(cached);
+    } catch (error) {
+      console.error('[QPM] Version listener error', error);
+    }
+  });
+}
+
+function compareSemver(a: string, b: string): number {
+  const toNums = (v: string) => v.split('.').map((p) => Number.parseInt(p, 10) || 0);
+  const aa = toNums(a);
+  const bb = toNums(b);
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = aa[i] ?? 0;
+    const y = bb[i] ?? 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+async function fetchRemoteVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(UPDATE_URL, { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const headerMatch = text.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
+    if (headerMatch?.[1]) return headerMatch[1];
+    const constMatch = text.match(/const\s+CURRENT_VERSION\s*=\s*['"]([0-9.]+)['"]/);
+    if (constMatch?.[1]) return constMatch[1];
+  } catch (error) {
+    console.error('[QPM] Version fetch failed', error);
+  }
+  return null;
 }
 
 /**
  * Get current version info (no network checks)
  */
 export function getVersionInfo(): VersionInfo {
-  return {
-    current: CURRENT_VERSION,
-    latest: null,
-    status: 'current',
-    updateUrl: UPDATE_URL,
-  };
+  return { ...cached };
 }
 
 /**
  * Register callback for version changes (no-op in simplified version)
  */
-export function onVersionChange(_callback: (info: VersionInfo) => void): void {
-  // No-op: We don't do network-based version checking anymore
-  // Tampermonkey handles updates via @updateURL
+export function onVersionChange(callback: (info: VersionInfo) => void): () => void {
+  listeners.add(callback);
+  callback(getVersionInfo());
+  return () => listeners.delete(callback);
 }
 
-/**
- * Start version checker (no-op in simplified version)
- */
 export function startVersionChecker(): void {
-  // No-op: Tampermonkey handles updates via @updateURL in userscript header
-  console.log(`[QPM] Version ${CURRENT_VERSION} - Updates handled by Tampermonkey`);
+  if (started) return;
+  started = true;
+  void checkForUpdates(true);
+  timer = window.setInterval(() => void checkForUpdates(false), CHECK_INTERVAL_MS);
 }
 
 /**
@@ -54,5 +101,32 @@ export function getCurrentVersion(): string {
  * Check for updates (no-op - returns current version only)
  */
 export async function checkForUpdates(_force = false): Promise<VersionInfo> {
+  cached = { ...cached, status: 'checking' };
+  emit();
+
+  const latest = await fetchRemoteVersion();
+  const now = Date.now();
+
+  if (!latest) {
+    cached = {
+      ...cached,
+      latest: cached.latest,
+      status: 'error',
+      checkedAt: now,
+    };
+    emit();
+    return getVersionInfo();
+  }
+
+  const cmp = compareSemver(latest, CURRENT_VERSION);
+  const status: VersionStatus = cmp > 0 ? 'outdated' : 'current';
+  cached = {
+    current: CURRENT_VERSION,
+    latest,
+    status,
+    updateUrl: UPDATE_URL,
+    checkedAt: now,
+  };
+  emit();
   return getVersionInfo();
 }

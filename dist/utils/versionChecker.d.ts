@@ -1,5 +1,5 @@
 export declare const GITHUB_URL = "https://github.com/ryandt2305-cpu/QPM-GR";
-export declare const UPDATE_URL = "https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js";
+export declare const UPDATE_URL = "https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/main/dist/QPM.user.js";
 export type VersionStatus = 'current' | 'outdated' | 'checking' | 'error';
 export interface VersionInfo {
     current: string;

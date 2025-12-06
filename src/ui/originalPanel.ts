@@ -3763,12 +3763,14 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   titleText.textContent = '🍖 Quinoa Pet Manager';
 
   // Create version bubble
-  const versionBubble = document.createElement('div');
+  const versionBubble = document.createElement('a');
   versionBubble.className = 'qpm-version-bubble';
   versionBubble.dataset.status = 'checking';
   versionBubble.textContent = `v${getCurrentVersion()}`;
   versionBubble.title = 'Checking for updates...';
   versionBubble.style.cursor = 'pointer';
+  versionBubble.target = '_blank';
+  versionBubble.rel = 'noopener noreferrer';
 
   const renderVersionInfo = (info: VersionInfo): void => {
     const statusMap: Record<VersionStatus, 'up-to-date' | 'outdated' | 'checking' | 'error'> = {
@@ -3795,13 +3797,30 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   };
 
-  versionBubble.addEventListener('click', () => {
-    const info = getVersionInfo();
-    if (info.status === 'outdated') {
-      window.open(UPDATE_URL, '_blank');
-    } else {
-      window.open(GITHUB_URL, '_blank');
+  const versionClickUrl = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
+  versionBubble.href = versionClickUrl;
+
+  const openVersionLink = (): void => {
+    const gmOpen = (globalThis as any).GM_openInTab || (globalThis as any).GM?.openInTab;
+    if (typeof gmOpen === 'function') {
+      try {
+        gmOpen(versionClickUrl, { active: true, insert: true, setParent: true });
+        return;
+      } catch (error) {
+        console.warn('[QPM] GM_openInTab failed, falling back', error);
+      }
     }
+
+    const win = window.open(versionClickUrl, '_blank', 'noopener,noreferrer');
+    if (!win) {
+      window.location.href = versionClickUrl;
+    }
+  };
+
+  versionBubble.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openVersionLink();
   });
 
   onVersionChange(renderVersionInfo);
@@ -4249,6 +4268,9 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     const target = event.target as HTMLElement | null;
     if (target && target.closest('[data-qpm-collapse-button]')) {
       return;
+    }
+    if (target && target.closest('.qpm-version-bubble')) {
+      return; // let version bubble handle its own click/navigation
     }
     if (!event.isPrimary) return;
     if (event.pointerType === 'mouse') {

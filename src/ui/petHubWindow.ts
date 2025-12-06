@@ -589,8 +589,59 @@ function notifyAriesListeners(): void {
   }
 }
 
+function getAriesModServiceCandidate(): AriesPetsService | null {
+  const mod = (pageWindow as any).AriesMod ?? (window as any).AriesMod ?? readSharedGlobal<any>('AriesMod');
+  const svc = mod?.services?.PetsService as AriesPetsService | undefined;
+  if (svc && typeof svc.getTeams === 'function' && (svc as any).enabled !== false) {
+    log('[Aries] ✅ Found PetsService via AriesMod.services.PetsService');
+    return svc;
+  }
+  return null;
+}
+
+function extractTeamsFromAriesState(state: any): any[] {
+  if (!state || typeof state !== 'object') return [];
+  const petsSection = (state as any).pets ?? (state as any).pet ?? state;
+  const teamsValue = petsSection?.teams ?? petsSection?.presets ?? petsSection?.petTeams ?? petsSection?.petTeam;
+  if (Array.isArray(teamsValue)) return teamsValue;
+  if (teamsValue && typeof teamsValue === 'object') return Object.values(teamsValue);
+  return [];
+}
+
+function tryParseJsonLocalStorage(key: string): any | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function tryCreateAriesModStateService(): AriesPetsService | null {
+  const sources = [
+    (pageWindow as any).aries_mod,
+    (window as any).aries_mod,
+    readSharedGlobal<any>('aries_mod'),
+    tryParseJsonLocalStorage('aries_mod'),
+  ];
+
+  for (const state of sources) {
+    const teams = extractTeamsFromAriesState(state);
+    if (!teams.length) continue;
+    const getTeams = () => normalizeAriesTeams(extractTeamsFromAriesState(state));
+    log('[Aries] ✅ Found teams via aries_mod state');
+    return { getTeams } satisfies AriesPetsService;
+  }
+
+  return null;
+}
+
 function getAriesPetsService(): AriesPetsService | null {
   let candidate: AriesPetsService | undefined;
+
+  const ariesModService = getAriesModServiceCandidate();
+  if (ariesModService) return ariesModService;
 
   // Try pageWindow.PetsService
   candidate = (pageWindow as typeof window & { PetsService?: AriesPetsService }).PetsService;
@@ -633,6 +684,9 @@ function getAriesPetsService(): AriesPetsService | null {
       return candidate;
     }
   }
+
+  const ariesModStateService = tryCreateAriesModStateService();
+  if (ariesModStateService) return ariesModStateService;
 
   // Fallback: Try reading from localStorage if Aries stores teams there
   // NOTE: Aries userscripts don't appear in DOM (Tampermonkey isolation) and don't expose globals.

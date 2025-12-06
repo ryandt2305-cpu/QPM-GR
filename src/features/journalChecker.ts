@@ -5,6 +5,12 @@
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
 
+const JOURNAL_DEBUG_LOGS = false;
+const jdbg = (...args: unknown[]): void => {
+  if (!JOURNAL_DEBUG_LOGS) return;
+  log(...(args as [any, ...any[]]));
+};
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -207,17 +213,17 @@ async function fetchJournalFromState(): Promise<Journal | null> {
       return null;
     }
 
-    log(`[JOURNAL-DEBUG] Current player ID: ${playerId}`);
+    jdbg(`[JOURNAL-DEBUG] Current player ID: ${playerId}`);
 
     // Find slot for current player
     const slots = state?.child?.data?.userSlots || [];
-    log(`[JOURNAL-DEBUG] Found ${Array.isArray(slots) ? slots.length : Object.keys(slots || {}).length} slots (isArray: ${Array.isArray(slots)})`);
+    jdbg(`[JOURNAL-DEBUG] Found ${Array.isArray(slots) ? slots.length : Object.keys(slots || {}).length} slots (isArray: ${Array.isArray(slots)})`);
 
     let playerSlot: any = null;
 
     if (Array.isArray(slots)) {
       playerSlot = slots.find((s: any) => String(s?.playerId) === String(playerId));
-      log(`[JOURNAL-DEBUG] Searched array slots, found match: ${!!playerSlot}`);
+      jdbg(`[JOURNAL-DEBUG] Searched array slots, found match: ${!!playerSlot}`);
     } else if (slots && typeof slots === 'object') {
       // userSlots might be an object with numeric keys
       for (const slot of Object.values(slots)) {
@@ -226,12 +232,12 @@ async function fetchJournalFromState(): Promise<Journal | null> {
           break;
         }
       }
-      log(`[JOURNAL-DEBUG] Searched object slots, found match: ${!!playerSlot}`);
+      jdbg(`[JOURNAL-DEBUG] Searched object slots, found match: ${!!playerSlot}`);
     }
 
     if (!playerSlot) {
       log('⚠️ Player slot not found');
-      log(`[JOURNAL-DEBUG] Available slot player IDs: ${Array.isArray(slots) ? slots.map((s: any) => s?.playerId).join(', ') : Object.values(slots || {}).map((s: any) => (s as any)?.playerId).join(', ')}`);
+      jdbg(`[JOURNAL-DEBUG] Available slot player IDs: ${Array.isArray(slots) ? slots.map((s: any) => s?.playerId).join(', ') : Object.values(slots || {}).map((s: any) => (s as any)?.playerId).join(', ')}`);
       return null;
     }
 
@@ -239,17 +245,17 @@ async function fetchJournalFromState(): Promise<Journal | null> {
     const journal = playerSlot?.data?.journal || playerSlot?.journal;
     if (!journal || typeof journal !== 'object') {
       log('ℹ️ No journal data found for player');
-      log(`[JOURNAL-DEBUG] Player slot structure: ${JSON.stringify(Object.keys(playerSlot || {}))}`);
-      log(`[JOURNAL-DEBUG] Player slot.data structure: ${JSON.stringify(Object.keys(playerSlot?.data || {}))}`);
+      jdbg(`[JOURNAL-DEBUG] Player slot structure: ${JSON.stringify(Object.keys(playerSlot || {}))}`);
+      jdbg(`[JOURNAL-DEBUG] Player slot.data structure: ${JSON.stringify(Object.keys(playerSlot?.data || {}))}`);
       return { produce: {}, pets: {} };
     }
 
-    log(`[JOURNAL-DEBUG] Found journal with keys: ${JSON.stringify(Object.keys(journal))}`);
+    jdbg(`[JOURNAL-DEBUG] Found journal with keys: ${JSON.stringify(Object.keys(journal))}`);
     if (journal.produce) {
-      log(`[JOURNAL-DEBUG] Produce species: ${JSON.stringify(Object.keys(journal.produce))}`);
+      jdbg(`[JOURNAL-DEBUG] Produce species: ${JSON.stringify(Object.keys(journal.produce))}`);
     }
     if (journal.pets) {
-      log(`[JOURNAL-DEBUG] Pet species: ${JSON.stringify(Object.keys(journal.pets))}`);
+      jdbg(`[JOURNAL-DEBUG] Pet species: ${JSON.stringify(Object.keys(journal.pets))}`);
     }
 
     return normalizeJournal(journal);

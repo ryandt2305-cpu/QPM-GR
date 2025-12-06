@@ -3,6 +3,12 @@ node_modules/
 
 # Build output
 
+# Supabase-sensitive sources and compiled outputs
+src/services/supabaseRooms.ts
+src/features/publicRooms/
+dist/services/
+dist/features/publicRooms/
+
 # Environment variables
 .env
 .env.local

@@ -3887,6 +3887,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       'pet-hub': 'rgba(103, 58, 183, 0.28)',       // Deep Purple
       'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
       'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
+      'achievements': 'rgba(255, 215, 64, 0.28)',  // Gold
       'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
       'journal-checker': 'rgba(121, 85, 72, 0.28)', // Brown
       'guide': 'rgba(96, 125, 139, 0.28)',         // Blue Grey
@@ -3928,6 +3929,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   registerTab('pet-hub', 'Pet Hub', '🐾', []);
   registerTab('public-rooms', 'Public Rooms', '🌐', []);
   registerTab('crop-boost', 'Crop Boosts', '🌱', []);
+  registerTab('achievements', 'Achievements', '🏆', []);
   registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
   registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
   registerTab('guide', 'Guide', '📖', [guideSection]);
@@ -4032,6 +4034,23 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     });
     cropBoostButton.replaceWith(newCropBoostButton);
     tabButtons.set('crop-boost', newCropBoostButton);
+  }
+
+  const achievementsButton = tabButtons.get('achievements');
+  if (achievementsButton) {
+    const newAchievementsButton = achievementsButton.cloneNode(true) as HTMLButtonElement;
+    newAchievementsButton.dataset.windowId = 'achievements';
+    newAchievementsButton.addEventListener('click', () => {
+      const renderAchievementsWindow = async (root: HTMLElement) => {
+        const { createAchievementsWindow } = await import('./achievementsWindow');
+        const state = createAchievementsWindow();
+        state.root.dataset.achievementsRoot = 'true';
+        root.appendChild(state.root);
+      };
+      toggleWindow('achievements', '🏆 Achievements', renderAchievementsWindow, undefined, '90vh');
+    });
+    achievementsButton.replaceWith(newAchievementsButton);
+    tabButtons.set('achievements', newAchievementsButton);
   }
 
   const turtleButton = tabButtons.get('turtle');

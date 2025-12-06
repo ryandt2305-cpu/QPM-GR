@@ -20,11 +20,14 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js
 // @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js
 // @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js
+// @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
+// @connect      pquktqrngyxkvrgtfygp.supabase.co
+// @connect      supabase.co
 // @grant        unsafeWindow
 // ==/UserScript==
 

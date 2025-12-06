@@ -14,7 +14,7 @@ import { initializeXpTracker } from './store/xpTracker';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeAutoFavorite } from './features/autoFavorite';
 import { getActivePetsDebug } from './store/pets';
-import { startInventoryStore } from './store/inventory';
+import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
@@ -23,8 +23,12 @@ import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
 import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets } from './utils/spriteExtractor';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
+import { toggleWindow } from './ui/modalWindow';
+import { exposeAriesBridge } from './integrations/ariesBridge';
+import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
@@ -760,6 +764,209 @@ const QPM_DEBUG_API = {
     console.log('• Click the "🔄 Refresh" button in the Aries section');
     console.log('• Check console for detection logs');
   },
+
+  toggleBadgePreview: async (force?: boolean) => {
+    try {
+      const { toggleBadgePreview } = await import('./ui/achievementsWindow');
+      const result = toggleBadgePreview(force);
+      log(`QPM badge preview ${result ? 'enabled' : 'disabled'}${force === undefined ? '' : ` (forced ${force})`}`);
+      return result;
+    } catch (error) {
+      console.error('Failed to toggle badge preview', error);
+      return null;
+    }
+  },
+
+  // Debug helpers (inventory + seeds + rainbow + Pet Hub)
+  debugInventoryAtoms: async (labels: string[] = ['myInventoryAtom', 'myCropInventoryAtom', 'seedInventoryAtom']) => {
+    const cache = (window as any).__qpmJotaiAtomCache__;
+    const store = (window as any).__qpmJotaiStore__;
+    console.log('Atom cache present:', !!cache, 'Store present:', !!store);
+    const found: Array<{ label: string; hasValue: boolean }> = [];
+    labels.forEach((label) => {
+      const atom = getAtomByLabel(label);
+      if (atom) {
+        const hasValue = !!cache?.has?.(atom);
+        found.push({ label, hasValue });
+      }
+    });
+    console.table(found);
+
+    for (const label of labels) {
+      const atom = getAtomByLabel(label);
+      if (!atom) continue;
+      try {
+        const value = await readAtomValue<any>(atom);
+        console.log(`Value for ${label}:`, value);
+      } catch (error) {
+        console.error(`Failed reading ${label}`, error);
+      }
+    }
+    return found;
+  },
+
+  scanSeeds: async () => {
+    const direct = await readInventoryDirect();
+    const cached = getInventoryItems();
+
+    const pickQty = (item: any): number | null => {
+      const raw = item?.raw ?? {};
+      const candidates: Array<unknown> = [
+        item.quantity,
+        item.count,
+        item.amount,
+        item.stackSize,
+        item.qty,
+        item.owned,
+        item.quantityOwned,
+        raw.quantity,
+        raw.count,
+        raw.amount,
+        raw.stackSize,
+        raw.qty,
+        raw.owned,
+        raw.quantityOwned,
+      ];
+      for (const c of candidates) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return null;
+    };
+
+    const isSeed = (item: any): boolean => {
+      const raw = item?.raw ?? {};
+      const textFields: Array<unknown> = [
+        item.itemType,
+        item.name,
+        item.displayName,
+        item.id,
+        item.species,
+        raw.itemType,
+        raw.type,
+        raw.category,
+        raw.subType,
+        raw.itemCategory,
+        raw.itemSubType,
+        raw.kind,
+      ];
+      if (textFields.some((f) => `${f ?? ''}`.toLowerCase().includes('seed'))) return true;
+      const tagFields: Array<unknown> = [raw.tags, raw.tagList, raw.itemTags, raw.labels];
+      for (const t of tagFields) {
+        if (Array.isArray(t) && t.some((v) => `${v ?? ''}`.toLowerCase().includes('seed'))) return true;
+      }
+      return raw.isSeed === true;
+    };
+
+    const scan = (items: any[]) => {
+      const seeds = [] as Array<{ id: string; qty: number; name?: string | null }>;
+      let max = 0;
+      for (const item of items) {
+        if (!isSeed(item)) continue;
+        const qty = pickQty(item);
+        if (!Number.isFinite(qty) || (qty as number) <= 0) continue;
+        const id = String(item.id ?? item.itemId ?? item.species ?? item.name ?? 'unknown');
+        seeds.push({ id, qty: qty as number, name: item.displayName ?? item.name ?? null });
+        max = Math.max(max, qty as number);
+      }
+      seeds.sort((a, b) => b.qty - a.qty);
+      return { max, seeds };
+    };
+
+    const directScan = scan(direct?.items ?? []);
+    const cachedScan = scan(cached);
+
+    console.log('Seed scan (direct atom read): max', directScan.max, directScan.seeds.slice(0, 10));
+    console.log('Seed scan (cached store): max', cachedScan.max, cachedScan.seeds.slice(0, 10));
+    return { directScan, cachedScan };
+  },
+
+  auditRainbowPets: async () => {
+    const readPetAtom = async (label: string): Promise<any[] | null> => {
+      const atom = getAtomByLabel(label);
+      if (!atom) return null;
+      try {
+        const value = await readAtomValue<any>(atom);
+        if (Array.isArray(value)) return value;
+        if (value && Array.isArray((value as any).items)) return (value as any).items;
+      } catch (error) {
+        console.error(`Failed to read ${label}`, error);
+      }
+      return null;
+    };
+
+    const petAtoms = ['myPetInventoryAtom', 'myPetHutchPetItemsAtom'];
+    const results: Record<string, any[]> = {};
+
+    const isRainbow = (item: any) => {
+      const raw = item?.raw ?? {};
+      const textFields: Array<unknown> = [
+        item.rarity,
+        item.petRarity,
+        item.rarityName,
+        item.quality,
+        item.variant,
+        item.mutation,
+        item.name,
+        item.petVariant,
+        raw.rarity,
+        raw.petRarity,
+        raw.rarityName,
+        raw.quality,
+        raw.variant,
+        raw.mutation,
+        raw.name,
+      ];
+      if (textFields.some((f) => `${f ?? ''}`.toLowerCase().includes('rainbow'))) return true;
+      return item.isRainbow === true || raw.isRainbow === true;
+    };
+
+    for (const label of petAtoms) {
+      const items = await readPetAtom(label);
+      if (!items) continue;
+      const hits = [] as Array<{ id: string; targetScale?: number | null; fields: unknown[] }>;
+      items.forEach((it: any, idx: number) => {
+        const raw = it?.raw ?? {};
+        if (isRainbow(it)) {
+          hits.push({
+            id: String(it.id ?? it.itemId ?? `idx-${idx}`),
+            targetScale: Number(it.targetScale ?? raw.targetScale ?? null) || null,
+            fields: [it.rarity, it.petRarity, it.rarityName, it.quality, it.variant, it.mutation, it.name, it.petVariant, raw.rarity, raw.petRarity, raw.rarityName, raw.quality, raw.variant, raw.mutation, raw.name],
+          });
+        }
+      });
+      results[label] = hits;
+      console.log(`Rainbow hits for ${label}:`, hits);
+    }
+    return results;
+  },
+
+  openPetHub3v3: async () => {
+    try {
+      // Prefer clicking the existing Pet Hub button so the window opens in the normal QPM chrome
+      const btn = document.querySelector('button[data-window-id="pet-hub"]') as HTMLButtonElement | null;
+      if (btn) {
+        btn.click();
+        setTimeout(() => {
+          const tab = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('3v3 Compare')) as HTMLButtonElement | undefined;
+          tab?.click();
+        }, 300);
+        return true;
+      }
+
+      // Fallback: open via toggleWindow so it still mounts inside the QPM window system
+      const render = (root: HTMLElement) => import('./ui/petHubWindow').then(({ renderPetHubWindow }) => renderPetHubWindow(root));
+      toggleWindow('pet-hub', '🐾 Pet Hub', render, '1600px', '92vh');
+      setTimeout(() => {
+        const tab = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('3v3 Compare')) as HTMLButtonElement | undefined;
+        tab?.click();
+      }, 400);
+      return true;
+    } catch (error) {
+      console.error('Failed to open Pet Hub 3v3', error);
+      return false;
+    }
+  },
 };
 
 shareGlobal('QPM', QPM_DEBUG_API);
@@ -768,13 +975,6 @@ const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : w
 (globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
 (globalDebugTarget as any).QPM = QPM_DEBUG_API;
 log('✅ QPM debug API registered');
-log('   • QPM.debugPets() - Debug active pets');
-log('   • QPM.testPetData() - Get detailed stats for all active pets');
-log('   • QPM.testComparePets(0, 1) - Compare two pets side-by-side');
-log('   • QPM.testAbilityDefinitions() - List all ability definitions');
-log('   • QPM.debugAriesIntegration() - Check Aries mod detection status');
-log('   ? QPM.showPetSpriteGrid() - Overlay pet sprite sheet with tile numbers');
-log('   ? QPM_DEBUG_API.showAllSpriteSheets() - Overlay all loaded sprite sheets');
 
 // Load configuration similar to original
 const LS_KEY = 'quinoa-pet-manager';
@@ -918,6 +1118,8 @@ async function initialize(): Promise<void> {
   initializeXpTracker();
   initializeMutationValueTracking();
   initializeAutoFavorite();
+  initializeAchievements();
+  exposeAriesBridge();
   await startInventoryStore();
 
   // Initialize features

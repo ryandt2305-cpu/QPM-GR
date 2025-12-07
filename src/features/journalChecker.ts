@@ -11,6 +11,22 @@ const jdbg = (...args: unknown[]): void => {
   log(...(args as [any, ...any[]]));
 };
 
+const normalizeKey = (value: string): string => (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Alias mappings for produce keys that may differ between in-game journal and catalog
+const PRODUCE_KEY_ALIASES: Record<string, string[]> = {
+  cacaobean: ['cacao', 'cacao bean', 'cacao fruit', 'cacaofruit', 'cocoa', 'cocoabean'],
+};
+
+const resolveProduceKey = (raw: string): string => {
+  const key = normalizeKey(raw);
+  for (const [canonical, aliases] of Object.entries(PRODUCE_KEY_ALIASES)) {
+    if (key === canonical) return canonical;
+    if (aliases.some((alias) => normalizeKey(alias) === key)) return canonical;
+  }
+  return key;
+};
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -276,9 +292,15 @@ function normalizeJournal(raw: any): Journal {
       Object.entries(raw.produce).map(([species, data]) => [
         species,
         {
-          variantsLogged: Array.isArray((data as any)?.variantsLogged)
-            ? (data as any).variantsLogged
-            : [],
+          variantsLogged: (() => {
+            const entry = data as any;
+            if (Array.isArray(entry?.variantsLogged)) return entry.variantsLogged;
+            if (Array.isArray(entry?.variants)) {
+              // Some payloads store variants as plain strings
+              return entry.variants.map((v: any) => (typeof v === 'string' ? { variant: v } : v));
+            }
+            return [] as ProduceVariantLog[];
+          })(),
         },
       ])
     );
@@ -289,12 +311,22 @@ function normalizeJournal(raw: any): Journal {
       Object.entries(raw.pets).map(([species, data]) => [
         species,
         {
-          variantsLogged: Array.isArray((data as any)?.variantsLogged)
-            ? (data as any).variantsLogged
-            : [],
-          abilitiesLogged: Array.isArray((data as any)?.abilitiesLogged)
-            ? (data as any).abilitiesLogged
-            : [],
+          variantsLogged: (() => {
+            const entry = data as any;
+            if (Array.isArray(entry?.variantsLogged)) return entry.variantsLogged;
+            if (Array.isArray(entry?.variants)) {
+              return entry.variants.map((v: any) => (typeof v === 'string' ? { variant: v } : v));
+            }
+            return [] as PetVariantLog[];
+          })(),
+          abilitiesLogged: (() => {
+            const entry = data as any;
+            if (Array.isArray(entry?.abilitiesLogged)) return entry.abilitiesLogged;
+            if (Array.isArray(entry?.abilities)) {
+              return entry.abilities.map((a: any) => (typeof a === 'string' ? { ability: a } : a));
+            }
+            return [] as PetAbilityLog[];
+          })(),
         },
       ])
     );
@@ -333,14 +365,24 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
     pets: [],
   };
 
+  const produceLogByKey = new Map<string, SpeciesProduceLog>();
+  Object.entries(journal.produce ?? {}).forEach(([species, data]) => {
+    produceLogByKey.set(resolveProduceKey(species), data);
+  });
+
+  const petLogByKey = new Map<string, SpeciesPetLog>();
+  Object.entries(journal.pets ?? {}).forEach(([species, data]) => {
+    petLogByKey.set(normalizeKey(species), data);
+  });
+
   // Process produce
   for (const [species, possibleVariants] of Object.entries(PRODUCE_CATALOG)) {
-    const speciesLog = journal.produce?.[species];
+    const speciesLog = produceLogByKey.get(resolveProduceKey(species));
     const loggedVariants = new Map<string, number>();
 
     if (speciesLog?.variantsLogged) {
       for (const log of speciesLog.variantsLogged) {
-        loggedVariants.set(log.variant, log.createdAt || 0);
+        loggedVariants.set(normalizeKey(log.variant), log.createdAt || 0);
       }
     }
 
@@ -348,20 +390,20 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       species,
       variants: possibleVariants.map((variant) => ({
         variant,
-        collected: loggedVariants.has(variant),
-        collectedAt: loggedVariants.get(variant),
+        collected: loggedVariants.has(normalizeKey(variant)),
+        collectedAt: loggedVariants.get(normalizeKey(variant)),
       })),
     });
   }
 
   // Process pets (variants only, no abilities)
   for (const [species, possibleVariants] of Object.entries(PET_CATALOG)) {
-    const speciesLog = journal.pets?.[species];
+    const speciesLog = petLogByKey.get(normalizeKey(species));
     const loggedVariants = new Map<string, number>();
 
     if (speciesLog?.variantsLogged) {
       for (const log of speciesLog.variantsLogged) {
-        loggedVariants.set(log.variant, log.createdAt || 0);
+        loggedVariants.set(normalizeKey(log.variant), log.createdAt || 0);
       }
     }
 
@@ -369,8 +411,8 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       species,
       variants: possibleVariants.map((variant) => ({
         variant,
-        collected: loggedVariants.has(variant),
-        collectedAt: loggedVariants.get(variant),
+        collected: loggedVariants.has(normalizeKey(variant)),
+        collectedAt: loggedVariants.get(normalizeKey(variant)),
       })),
     });
   }

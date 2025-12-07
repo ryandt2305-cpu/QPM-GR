@@ -31,6 +31,9 @@ export interface AchievementSnapshot {
     journalProduceTotal: number | null;
     journalPetCompleted: number | null;
     journalPetTotal: number | null;
+    journalProduceSpeciesCompleted: number | null;
+    journalPetSpeciesCompleted: number | null;
+    journalProduceMaxWeightCompleted: number | null;
     coinBalance: number | null;
     lastCurrencyTransaction: unknown;
     cropEarnings: number | null;
@@ -41,6 +44,14 @@ export interface AchievementSnapshot {
     abilityCounts: Record<string, number>;
     abilityLastProc: Record<string, number | null>;
     boostPetsActive: number | null;
+    abilityUnique5m: number | null;
+    abilityUnique30s: number | null;
+    mutationEvents30m: number | null;
+    mutatedHarvests: number | null;
+    weatherSeenKinds: Set<string> | null;
+    activePetsWithFourAbilities: number | null;
+    saleUnique60s: number | null;
+    saleUnique10m: number | null;
 }
 export declare function getAchievementDefinitions(): AchievementDefinition[];
 export declare function getAchievementProgress(): Map<string, AchievementProgress>;

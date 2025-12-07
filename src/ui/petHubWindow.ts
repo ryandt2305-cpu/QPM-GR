@@ -6,7 +6,7 @@ import { getAtomByLabel, readAtomValue, findAtomsByLabel } from '../core/jotaiBr
 import { getDetailedPetStats, type DetailedPetStats, type AbilityStats } from '../utils/petDataTester';
 import { getSpeciesXpPerLevel, getSpeciesMaxScale, calculateMaxStrength } from '../store/xpTracker';
 import { getInventoryItems } from '../store/inventory';
-import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
+import { getPetSpriteDataUrl, loadTrackedSpriteSheets } from '../utils/spriteExtractor';
 import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petMutationRenderer';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
 import { getPetMetadata } from '../data/petMetadata';
@@ -318,6 +318,28 @@ const spriteHydrationQueue = new Set<HTMLElement>();
 let spriteDescriptorCounter = 0;
 let spriteHydrationScheduled = false;
 const SPRITE_HYDRATION_FRAME_BUDGET_MS = 12;
+const SPRITE_HYDRATION_MAX_PER_FRAME = 4;
+let spriteIntersectionObserver: IntersectionObserver | null = null;
+
+function ensureSpriteObserver(): void {
+  if (spriteIntersectionObserver || typeof window === 'undefined' || !('IntersectionObserver' in window)) {
+    return;
+  }
+  spriteIntersectionObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const el = entry.target as HTMLElement;
+      if (entry.isIntersecting) {
+        spriteIntersectionObserver?.unobserve(el);
+        queueSpriteHydration(el);
+      }
+    }
+  }, { rootMargin: '64px' });
+}
+
+function queueSpriteHydration(node: HTMLElement): void {
+  spriteHydrationQueue.add(node);
+  scheduleSpriteHydration();
+}
 
 function registerSpriteDescriptor(stats: DetailedPetStats): string {
   const id = `sprite-${++spriteDescriptorCounter}`;
@@ -333,12 +355,19 @@ function registerSpriteDescriptor(stats: DetailedPetStats): string {
 function hydrateSpritesWithin(root: ParentNode | null): void {
   if (!root) return;
   const nodes = root.querySelectorAll<HTMLElement>('[data-pet-sprite-id]');
-  nodes.forEach(node => {
-    if (node.dataset.petSpriteHydrated === '1') return;
-    if (!node.dataset.petSpriteId) return;
-    spriteHydrationQueue.add(node);
-  });
-  if (spriteHydrationQueue.size) {
+  if (!nodes.length) return;
+  ensureSpriteObserver();
+  const observer = spriteIntersectionObserver;
+  for (const node of nodes) {
+    if (node.dataset.petSpriteHydrated === '1') continue;
+    if (!node.dataset.petSpriteId) continue;
+    if (observer) {
+      observer.observe(node);
+    } else {
+      spriteHydrationQueue.add(node);
+    }
+  }
+  if (!observer && spriteHydrationQueue.size) {
     scheduleSpriteHydration();
   }
 }
@@ -360,10 +389,12 @@ function processSpriteHydrationQueue(): void {
     return;
   }
   const start = performance.now();
+  let hydratedThisFrame = 0;
   for (const node of Array.from(spriteHydrationQueue)) {
     spriteHydrationQueue.delete(node);
     hydrateSpriteNode(node);
-    if (performance.now() - start >= SPRITE_HYDRATION_FRAME_BUDGET_MS) {
+    hydratedThisFrame += 1;
+    if (hydratedThisFrame >= SPRITE_HYDRATION_MAX_PER_FRAME || performance.now() - start >= SPRITE_HYDRATION_FRAME_BUDGET_MS) {
       break;
     }
   }
@@ -414,6 +445,8 @@ function resetSpriteHydrationState(): void {
   spriteHydrationQueue.clear();
   spriteDescriptorCounter = 0;
   spriteHydrationScheduled = false;
+  spriteIntersectionObserver?.disconnect();
+  spriteIntersectionObserver = null;
 }
 
 function getCachedSprite(pet: PetWithSource): string | null {
@@ -1544,6 +1577,11 @@ export function renderPetHubWindow(root: HTMLElement): void {
     padding: 0;
     min-height: 400px;
   `;
+
+  // Warm sprite sheets in the background (non-blocking) to reduce first-load jank
+  void loadTrackedSpriteSheets(2, 'pets').catch((error) => {
+    log('⚠️ Pet Hub: sprite sheet warmup failed', error);
+  });
 
   root.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--qpm-text-dim);">Loading pets...</div>';
 

@@ -619,6 +619,9 @@ class SpriteExtractor {
       'fava bean': 36,
       'favabean': 36, // alias
       'cacao': 37,
+      'cacao bean': 37, // alias
+      'cacao fruit': 37, // alias
+      'cacaofruit': 37, // alias
       'cacaobean': 37, // alias
       'lychee': 39,
       
@@ -783,17 +786,42 @@ export async function loadTrackedSpriteSheets(
   return loaded;
 }
 
+export function listTrackedSpriteResources(category: SpriteCategory | 'all' = 'all'):
+  Array<{ url: string; sources: string[]; lastSeen: number; category: SpriteCategory }>
+{
+  return getTrackedSpriteResources(category);
+}
+
 /**
  * Get crop sprite as data URL for use in CSS background-image
  */
+const PET_SPRITE_URL_CACHE = new Map<string, string>();
+const CROP_SPRITE_URL_CACHE = new Map<string, string>();
+const MUTATION_OVERLAY_CACHE = new Map<string, string>();
+const CACHE_LIMIT = 256; // Keep memory bounded while avoiding repeated toDataURL churn
+
+function setBoundedCache(cache: Map<string, string>, key: string, value: string): void {
+  if (!cache.has(key) && cache.size >= CACHE_LIMIT) {
+    const firstKey = cache.keys().next().value as string | undefined;
+    if (firstKey) cache.delete(firstKey);
+  }
+  cache.set(key, value);
+}
+
 export function getCropSpriteDataUrl(species: string): string | null {
-  const canvas = spriteExtractor.getCropSprite(species);
+  const normalized = species.toLowerCase();
+  const cached = CROP_SPRITE_URL_CACHE.get(normalized);
+  if (cached) return cached;
+
+  const canvas = spriteExtractor.getCropSprite(normalized);
   if (!canvas) return null;
 
   try {
-    return canvas.toDataURL('image/png');
+    const url = canvas.toDataURL('image/png');
+    setBoundedCache(CROP_SPRITE_URL_CACHE, normalized, url);
+    return url;
   } catch (e) {
-    log(`⚠️ Failed to convert sprite to data URL for ${species}`, e);
+    log(`⚠️ Failed to convert sprite to data URL for ${normalized}`, e);
     return null;
   }
 }
@@ -805,13 +833,19 @@ export function getCropSpriteDataUrl(species: string): string | null {
  * Get pet sprite as data URL for use in CSS background-image
  */
 export function getPetSpriteDataUrl(species: string): string | null {
-  const canvas = spriteExtractor.getPetSprite(species);
+  const normalized = species.toLowerCase();
+  const cached = PET_SPRITE_URL_CACHE.get(normalized);
+  if (cached) return cached;
+
+  const canvas = spriteExtractor.getPetSprite(normalized);
   if (!canvas) return null;
 
   try {
-    return canvas.toDataURL('image/png');
+    const url = canvas.toDataURL('image/png');
+    setBoundedCache(PET_SPRITE_URL_CACHE, normalized, url);
+    return url;
   } catch (e) {
-    log(`�s��,? Failed to convert pet sprite to data URL for ${species}`, e);
+    log(`⚠️ Failed to convert pet sprite to data URL for ${normalized}`, e);
     return null;
   }
 }
@@ -824,12 +858,18 @@ export function getPetSpriteCanvas(species: string): HTMLCanvasElement | null {
  * Get mutation overlay sprite as data URL
  */
 export function getMutationOverlayDataUrl(mutation: string): string | null {
-  const canvas = spriteExtractor.getMutationOverlay(mutation);
+  const normalized = mutation.toLowerCase();
+  const cached = MUTATION_OVERLAY_CACHE.get(normalized);
+  if (cached) return cached;
+
+  const canvas = spriteExtractor.getMutationOverlay(normalized);
   if (!canvas) return null;
   try {
-    return canvas.toDataURL('image/png');
+    const url = canvas.toDataURL('image/png');
+    setBoundedCache(MUTATION_OVERLAY_CACHE, normalized, url);
+    return url;
   } catch (e) {
-    log(`�s��,? Failed to convert mutation overlay for ${mutation}`, e);
+    log(`⚠️ Failed to convert mutation overlay for ${normalized}`, e);
     return null;
   }
 }
@@ -957,10 +997,6 @@ export function renderAllSpriteSheetsOverlay(maxTilesPerSheet = 80): void {
     return;
   }
   sheetNames.forEach(name => renderSpriteGridOverlay(name, maxTilesPerSheet));
-}
-
-export function listTrackedSpriteResources(category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') {
-  return getTrackedSpriteResources(category === 'all' ? 'all' : category);
 }
 
 /**

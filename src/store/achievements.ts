@@ -70,6 +70,13 @@ export interface AchievementSnapshot {
   activePetsWithFourAbilities: number | null;
   saleUnique60s: number | null;
   saleUnique10m: number | null;
+  roomJoinCount: number | null;
+  roomMinutes: number | null;
+  lastRoomPlayers: number | null;
+  sellBurstCoins: number | null;
+  sellBurstAlone: boolean | null;
+  instantFeedsUsed: number | null;
+  weatherEventsLastHour: number | null;
   // Future: activity log/events + coin balance + per-species counters + rolling windows
 }
 
@@ -102,6 +109,19 @@ let cropLogUnsubscribe: (() => void) | null = null;
 let liveStatsUnsubscribe: (() => void) | null = null;
 let ariesStatsUnsubscribe: (() => void) | null = null;
 let sellWindowStarted = false;
+
+let roomJoinCount = 0;
+let roomMinutes = 0;
+let lastRoomId: string | null = null;
+let lastRoomSeenAt: number | null = null;
+let lastRoomPlayers = 0;
+let lastRoomIsPrivate = false;
+let lastCoinBalanceFromLogs: number | null = null;
+let sellBurstCoins = 0;
+let sellBurstAlone = false;
+let instantFeedsUsed = 0;
+let lastWeatherKind: string | null = null;
+const weatherEvents: Array<{ kind: string; timestamp: number }> = [];
 
 let loggedLiveShape = false;
 let loggedAriesShape = false;
@@ -149,7 +169,14 @@ function subscribeAriesStats(): void {
   try {
     const svc = (pageWindow as any)?.AriesMod?.services?.StatsService;
     if (svc && typeof svc.subscribe === 'function') {
-      const unsub = svc.subscribe(() => scheduleEvaluate());
+      const unsub = svc.subscribe((value: any) => {
+        try {
+          handleRoomSnapshot(value);
+        } catch (error) {
+          log('⚠️ Achievements: Aries room snapshot handler failed', error);
+        }
+        scheduleEvaluate();
+      });
       if (typeof unsub === 'function') {
         ariesStatsUnsubscribe = unsub;
       }
@@ -159,11 +186,24 @@ function subscribeAriesStats(): void {
   }
 }
 
-async function trySubscribeAtom(label: string, setter: (fn: () => void) => void): Promise<void> {
+async function trySubscribeAtom(
+  label: string,
+  setter: (fn: () => void) => void,
+  handler?: (value: unknown) => void,
+): Promise<void> {
   const atom = getAtomByLabel(label);
   if (!atom) return;
   try {
-    const unsub = await subscribeAtom(atom, () => scheduleEvaluate());
+    const unsub = await subscribeAtom(atom, (value: unknown) => {
+      if (handler) {
+        try {
+          handler(value);
+        } catch (error) {
+          log(`⚠️ Achievements: handler for ${label} failed`, error);
+        }
+      }
+      scheduleEvaluate();
+    });
     setter(unsub);
   } catch (error) {
     log(`⚠️ Achievements: failed to subscribe to ${label}`, error);
@@ -192,6 +232,95 @@ function loadPersisted(): void {
     }
   } catch (error) {
     log('⚠️ Achievements: failed to load persisted state', error);
+  }
+}
+
+function pruneWeatherEvents(now: number): void {
+  const cutoff = now - 60 * 60 * 1000;
+  while (weatherEvents.length) {
+    const first = weatherEvents[0];
+    if (!first || first.timestamp >= cutoff) break;
+    weatherEvents.shift();
+  }
+}
+
+function logWeatherEvent(kind: string | null | undefined, now: number): void {
+  const normalized = `${kind ?? ''}`.trim().toLowerCase();
+  if (!normalized) return;
+  if (normalized === lastWeatherKind) return;
+  lastWeatherKind = normalized;
+  weatherEvents.push({ kind: normalized, timestamp: now });
+  pruneWeatherEvents(now);
+}
+
+function handleRoomFromLog(payload: any, now: number): void {
+  const room = payload?.room;
+  if (!room || typeof room !== 'object') return;
+  const roomId = String(room.id ?? '').trim();
+  if (!roomId) return;
+  const isPrivate = room.isPrivate === true;
+  const players = Number(room.playersCount ?? lastRoomPlayers ?? 0);
+
+  if (lastRoomSeenAt != null && lastRoomId && roomId === lastRoomId) {
+    const deltaMs = now - lastRoomSeenAt;
+    if (deltaMs > 0) roomMinutes += deltaMs / 60000;
+  }
+
+  if (roomId !== lastRoomId) {
+    if (!isPrivate) {
+      roomJoinCount += 1;
+    }
+    lastRoomId = roomId;
+  }
+
+  lastRoomSeenAt = now;
+  lastRoomPlayers = Number.isFinite(players) && players > 0 ? players : lastRoomPlayers;
+  lastRoomIsPrivate = isPrivate;
+}
+
+function handleCoinsFromLog(payload: any): void {
+  const coinsCandidates: Array<unknown> = [
+    payload?.coins,
+    payload?.state?.coins,
+    payload?.state?.player?.coins,
+    payload?.state?.stats?.player?.coins,
+    payload?.player?.coins,
+  ];
+  const coins = coinsCandidates.map((v) => Number(v)).find((v) => Number.isFinite(v));
+  if (!Number.isFinite(coins as number)) return;
+  if (lastCoinBalanceFromLogs != null) {
+    const delta = (coins as number) - lastCoinBalanceFromLogs;
+    if (delta > 0) {
+      sellBurstCoins = delta;
+      sellBurstAlone = !lastRoomIsPrivate && (lastRoomPlayers || 0) <= 1;
+    }
+  }
+  lastCoinBalanceFromLogs = coins as number;
+}
+
+function handleLogPayload(payload: any): void {
+  const now = Date.now();
+  handleRoomFromLog(payload, now);
+  handleCoinsFromLog(payload);
+  const currentWeather = payload?.state?.weather?.activeKind ?? payload?.state?.weather?.current ?? null;
+  if (currentWeather) logWeatherEvent(currentWeather, now);
+}
+
+function handleRoomSnapshot(source: any): void {
+  const now = Date.now();
+  if (!source || typeof source !== 'object') return;
+  const room = (source as any).room ?? (source as any).currentRoom ?? null;
+  if (room && typeof room === 'object') {
+    handleRoomFromLog({ room }, now);
+  }
+  handleCoinsFromLog(source);
+}
+
+export function recordInstantFeedUse(count = 1): void {
+  const inc = Number(count);
+  if (Number.isFinite(inc) && inc > 0) {
+    instantFeedsUsed += inc;
+    scheduleEvaluate();
   }
 }
 
@@ -1890,6 +2019,781 @@ function ensureDefinitions(): void {
       icon: '💠',
       hiddenTargetUntil: 'abilities:empowered-harvest-10000',
     },
+
+    // Public rooms & selling
+    {
+      id: 'rooms:socialite-10',
+      title: 'Room Socialite I',
+      description: 'Join 10 public rooms.',
+      category: 'streaks',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-40',
+      title: 'Room Socialite II',
+      description: 'Join 40 public rooms.',
+      category: 'streaks',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 40,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-120',
+      title: 'Room Socialite III',
+      description: 'Join 120 public rooms.',
+      category: 'streaks',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 120,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-300',
+      title: 'Room Socialite IV',
+      description: 'Join 300 public rooms.',
+      category: 'streaks',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 300,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-750',
+      title: 'Room Socialite V',
+      description: 'Join 750 public rooms.',
+      category: 'streaks',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 750,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-2500',
+      title: 'Room Socialite VI',
+      description: 'Join 2,500 public rooms.',
+      category: 'streaks',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 2_500,
+      icon: '🪩',
+    },
+    {
+      id: 'rooms:socialite-10000',
+      title: 'Room Socialite VII',
+      description: 'Join 10,000 public rooms.',
+      category: 'streaks',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 10_000,
+      icon: '🪩',
+      hiddenTargetUntil: 'rooms:socialite-2500',
+    },
+
+    {
+      id: 'rooms:anchor-60',
+      title: 'Room Anchor I',
+      description: 'Spend 60 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'common',
+      visibility: 'public',
+      target: 60,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-300',
+      title: 'Room Anchor II',
+      description: 'Spend 300 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 300,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-1000',
+      title: 'Room Anchor III',
+      description: 'Spend 1,000 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 1_000,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-3000',
+      title: 'Room Anchor IV',
+      description: 'Spend 3,000 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 3_000,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-7500',
+      title: 'Room Anchor V',
+      description: 'Spend 7,500 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 7_500,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-15000',
+      title: 'Room Anchor VI',
+      description: 'Spend 15,000 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 15_000,
+      icon: '⚓',
+    },
+    {
+      id: 'rooms:anchor-50000',
+      title: 'Room Anchor VII',
+      description: 'Spend 50,000 minutes in public rooms.',
+      category: 'streaks',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 50_000,
+      icon: '⚓',
+      hiddenTargetUntil: 'rooms:anchor-15000',
+    },
+
+    {
+      id: 'shop:sell-burst-1000000',
+      title: 'Sell Burst I',
+      description: 'Earn 1,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'common',
+      visibility: 'public',
+      target: 1_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-5000000',
+      title: 'Sell Burst II',
+      description: 'Earn 5,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 5_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-50000000',
+      title: 'Sell Burst III',
+      description: 'Earn 50,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 50_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-250000000',
+      title: 'Sell Burst IV',
+      description: 'Earn 250,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 250_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-1000000000',
+      title: 'Sell Burst V',
+      description: 'Earn 1,000,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 1_000_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-1000000000000',
+      title: 'Sell Burst VI',
+      description: 'Earn 1,000,000,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 1_000_000_000_000,
+      icon: '💰',
+    },
+    {
+      id: 'shop:sell-burst-5000000000000',
+      title: 'Sell Burst VII',
+      description: 'Earn 5,000,000,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 5_000_000_000_000,
+      icon: '💰',
+      hiddenTargetUntil: 'shop:sell-burst-1000000000000',
+    },
+
+    {
+      id: 'garden:mutation-appraiser-10000000',
+      title: 'Mutation Appraiser I',
+      description: 'Track 10,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-50000000',
+      title: 'Mutation Appraiser II',
+      description: 'Track 50,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 50_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-500000000',
+      title: 'Mutation Appraiser III',
+      description: 'Track 500,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 500_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-25000000000',
+      title: 'Mutation Appraiser IV',
+      description: 'Track 25,000,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 25_000_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-100000000000',
+      title: 'Mutation Appraiser V',
+      description: 'Track 100,000,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 100_000_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-500000000000',
+      title: 'Mutation Appraiser VI',
+      description: 'Track 500,000,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 500_000_000_000,
+      icon: '🧫',
+    },
+    {
+      id: 'garden:mutation-appraiser-1000000000000',
+      title: 'Mutation Appraiser VII',
+      description: 'Track 1,000,000,000,000 coins of mutation value.',
+      category: 'garden',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 1_000_000_000_000,
+      icon: '🧫',
+      hiddenTargetUntil: 'garden:mutation-appraiser-500000000000',
+    },
+
+    {
+      id: 'garden:boosted-operation-100',
+      title: 'Boosted Operation I',
+      description: 'Track 100 crop boost procs.',
+      category: 'garden',
+      rarity: 'common',
+      visibility: 'public',
+      target: 100,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-600',
+      title: 'Boosted Operation II',
+      description: 'Track 600 crop boost procs.',
+      category: 'garden',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 600,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-2000',
+      title: 'Boosted Operation III',
+      description: 'Track 2,000 crop boost procs.',
+      category: 'garden',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 2_000,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-6000',
+      title: 'Boosted Operation IV',
+      description: 'Track 6,000 crop boost procs.',
+      category: 'garden',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 6_000,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-15000',
+      title: 'Boosted Operation V',
+      description: 'Track 15,000 crop boost procs.',
+      category: 'garden',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 15_000,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-35000',
+      title: 'Boosted Operation VI',
+      description: 'Track 35,000 crop boost procs.',
+      category: 'garden',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 35_000,
+      icon: '⚙️',
+    },
+    {
+      id: 'garden:boosted-operation-100000',
+      title: 'Boosted Operation VII',
+      description: 'Track 100,000 crop boost procs.',
+      category: 'garden',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 100_000,
+      icon: '⚙️',
+      hiddenTargetUntil: 'garden:boosted-operation-35000',
+    },
+
+    {
+      id: 'pets:chow-line-80',
+      title: 'Pet Chow Line I',
+      description: 'Use 80 instant feeds.',
+      category: 'pets',
+      rarity: 'common',
+      visibility: 'public',
+      target: 80,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-240',
+      title: 'Pet Chow Line II',
+      description: 'Use 240 instant feeds.',
+      category: 'pets',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 240,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-720',
+      title: 'Pet Chow Line III',
+      description: 'Use 720 instant feeds.',
+      category: 'pets',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 720,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-1850',
+      title: 'Pet Chow Line IV',
+      description: 'Use 1,850 instant feeds.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1_850,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-5000',
+      title: 'Pet Chow Line V',
+      description: 'Use 5,000 instant feeds.',
+      category: 'pets',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-15000',
+      title: 'Pet Chow Line VI',
+      description: 'Use 15,000 instant feeds.',
+      category: 'pets',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 15_000,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-50000',
+      title: 'Pet Chow Line VII',
+      description: 'Use 50,000 instant feeds.',
+      category: 'pets',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 50_000,
+      icon: '🍖',
+      hiddenTargetUntil: 'pets:chow-line-15000',
+    },
+
+    {
+      id: 'weather:dawnsmith-10',
+      title: 'Dawnsmith I',
+      description: 'Harvest 10 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-40',
+      title: 'Dawnsmith II',
+      description: 'Harvest 40 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 40,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-250',
+      title: 'Dawnsmith III',
+      description: 'Harvest 250 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 250,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-1000',
+      title: 'Dawnsmith IV',
+      description: 'Harvest 1,000 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1_000,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-5000',
+      title: 'Dawnsmith V',
+      description: 'Harvest 5,000 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-12000',
+      title: 'Dawnsmith VI',
+      description: 'Harvest 12,000 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 12_000,
+      icon: '🌅',
+    },
+    {
+      id: 'weather:dawnsmith-250000',
+      title: 'Dawnsmith VII',
+      description: 'Harvest 250,000 crops during Dawn moon.',
+      category: 'weather',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 250_000,
+      icon: '🌅',
+      hiddenTargetUntil: 'weather:dawnsmith-12000',
+    },
+
+    {
+      id: 'weather:amberforge-10',
+      title: 'Amberforge I',
+      description: 'Harvest 10 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-40',
+      title: 'Amberforge II',
+      description: 'Harvest 40 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 40,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-250',
+      title: 'Amberforge III',
+      description: 'Harvest 250 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 250,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-1000',
+      title: 'Amberforge IV',
+      description: 'Harvest 1,000 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1_000,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-5000',
+      title: 'Amberforge V',
+      description: 'Harvest 5,000 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-12000',
+      title: 'Amberforge VI',
+      description: 'Harvest 12,000 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 12_000,
+      icon: '🟠',
+    },
+    {
+      id: 'weather:amberforge-250000',
+      title: 'Amberforge VII',
+      description: 'Harvest 250,000 crops during Amber moon.',
+      category: 'weather',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 250_000,
+      icon: '🟠',
+      hiddenTargetUntil: 'weather:amberforge-12000',
+    },
+
+    {
+      id: 'weather:fresh-freeze-harvest-10',
+      title: 'Fresh Freeze I',
+      description: 'Harvest 10 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-40',
+      title: 'Fresh Freeze II',
+      description: 'Harvest 40 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 40,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-250',
+      title: 'Fresh Freeze III',
+      description: 'Harvest 250 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 250,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-1000',
+      title: 'Fresh Freeze IV',
+      description: 'Harvest 1,000 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1_000,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-5000',
+      title: 'Fresh Freeze V',
+      description: 'Harvest 5,000 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-12000',
+      title: 'Fresh Freeze VI',
+      description: 'Harvest 12,000 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 12_000,
+      icon: '🧊',
+    },
+    {
+      id: 'weather:fresh-freeze-harvest-250000',
+      title: 'Fresh Freeze VII',
+      description: 'Harvest 250,000 Frozen variants during snow.',
+      category: 'weather',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 250_000,
+      icon: '🧊',
+      hiddenTargetUntil: 'weather:fresh-freeze-harvest-12000',
+    },
+
+    // New one-time achievements
+    {
+      id: 'onetime:first-contact',
+      title: 'First Contact',
+      description: 'Join your first public room session.',
+      category: 'streaks',
+      rarity: 'common',
+      visibility: 'public',
+      target: 1,
+      icon: '🛰️',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:marathoner',
+      title: 'Marathoner',
+      description: 'Stay in a single room session for 60 minutes.',
+      category: 'streaks',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 60,
+      icon: '⏳',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:market-buzz-25000000',
+      title: 'Market Buzz',
+      description: 'Earn 25,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 25_000_000,
+      icon: '📈',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:market-shock-250000000000',
+      title: 'Market Shock',
+      description: 'Earn 250,000,000,000 coins in a single sell-all.',
+      category: 'shop',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 250_000_000_000,
+      icon: '📉',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:perfect-storm',
+      title: 'Perfect Storm',
+      description: 'Log three different weather events in one hour.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 3,
+      icon: '🌪️',
+      oneTime: true,
+      tags: ['window'],
+    },
+    {
+      id: 'onetime:rainbow-weather',
+      title: 'Rainbow Weather',
+      description: 'Trigger a rainbow pet ability during rain or snow.',
+      category: 'abilities',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1,
+      icon: '🌈',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:goldsmith',
+      title: 'Goldsmith',
+      description: 'Trigger a gold pet ability during Dawn moon.',
+      category: 'abilities',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1,
+      icon: '🥇',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:crystal-clear',
+      title: 'Crystal Clear',
+      description: 'Harvest a Frozen variant while snow is active.',
+      category: 'weather',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 1,
+      icon: '🔮',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:quiet-profit-50000000',
+      title: 'Quiet Profit',
+      description: 'Earn 50,000,000 coins from a sell-all while alone in a room.',
+      category: 'shop',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 50_000_000,
+      icon: '🤫',
+      oneTime: true,
+    },
+    {
+      id: 'onetime:dawn-double',
+      title: 'Dawn Double',
+      description: 'Hatch a rainbow pet and harvest a max-size crop during the same Dawn moon.',
+      category: 'weather',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 1,
+      icon: '🌅',
+      oneTime: true,
+      tags: ['window'],
+    },
+    {
+      id: 'onetime:amber-artisan',
+      title: 'Amber Artisan',
+      description: 'Hatch a gold pet and sell 100,000,000+ coins in one action during the same Amber moon.',
+      category: 'weather',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 1,
+      icon: '🟠',
+      oneTime: true,
+      tags: ['window'],
+    },
   ];
 }
 
@@ -1913,6 +2817,7 @@ export function getAchievementSnapshot(): AchievementSnapshot | null {
   }
 
 async function buildSnapshot(): Promise<AchievementSnapshot> {
+  const snapshotNow = Date.now();
   const stats = getStatsSnapshot();
     const invItems = getInventoryItems();
 
@@ -1933,6 +2838,13 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   let mutatedHarvests: number | null = null;
   let weatherSeenKinds: Set<string> | null = null;
   let activePetsWithFourAbilities: number | null = null;
+  let weatherEventsLastHour: number | null = null;
+  let roomJoinCountSnap: number | null = null;
+  let roomMinutesSnap: number | null = null;
+  let lastRoomPlayersSnap: number | null = null;
+  let sellBurstCoinsSnap: number | null = null;
+  let sellBurstAloneSnap: boolean | null = null;
+  let instantFeedsUsedSnap: number | null = null;
 
   try {
     const coinAtom = getAtomByLabel('myCoinsCountAtom');
@@ -2081,7 +2993,7 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
 
   try {
     const abilityHistory = getAbilityHistorySnapshot();
-    const now = Date.now();
+    const now = snapshotNow;
     const abilityEvents: Array<{ abilityId: string; performedAt: number }> = [];
     const mutationAbilityIds = new Set(['GoldGranter', 'RainbowGranter', 'ProduceScaleBoost', 'ProduceScaleBoostII']);
     abilityHistory.forEach((history) => {
@@ -2556,6 +3468,7 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   try {
     const ariesStats = await fetchAriesStats();
     if (ariesStats) {
+      handleRoomSnapshot(ariesStats);
       applyExternalStats(ariesStats);
       if (!loggedAriesShape && ariesStats && typeof ariesStats === 'object') {
         loggedAriesShape = true;
@@ -2610,6 +3523,14 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
       if (active) seen.add(String(active).toLowerCase());
       weatherSeenKinds = seen;
     }
+    if (stats?.weather?.activeKind) {
+      logWeatherEvent(stats.weather.activeKind, snapshotNow);
+    }
+    pruneWeatherEvents(snapshotNow);
+    if (weatherEvents.length) {
+      const uniq = new Set(weatherEvents.map((evt) => evt.kind));
+      weatherEventsLastHour = uniq.size;
+    }
   } catch (error) {
     log('⚠️ Achievements: weather seen scan failed', error);
   }
@@ -2632,6 +3553,13 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   }
 
   const saleCounts = getSaleWindowCounts();
+
+  roomJoinCountSnap = roomJoinCount;
+  roomMinutesSnap = Math.floor(roomMinutes);
+  lastRoomPlayersSnap = lastRoomPlayers || null;
+  sellBurstCoinsSnap = sellBurstCoins || null;
+  sellBurstAloneSnap = sellBurstAlone;
+  instantFeedsUsedSnap = instantFeedsUsed || null;
 
   const snapshot: AchievementSnapshot = {
     stats,
@@ -2669,6 +3597,13 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     activePetsWithFourAbilities,
     saleUnique60s: saleCounts.unique60s,
     saleUnique10m: saleCounts.unique10m,
+    roomJoinCount: roomJoinCountSnap,
+    roomMinutes: roomMinutesSnap,
+    lastRoomPlayers: lastRoomPlayersSnap,
+    sellBurstCoins: sellBurstCoinsSnap,
+    sellBurstAlone: sellBurstAloneSnap,
+    instantFeedsUsed: instantFeedsUsedSnap,
+    weatherEventsLastHour,
   };
   dbgAch('ℹ️ Achievements snapshot', {
     planted: stats.garden.totalPlanted,
@@ -2700,6 +3635,12 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
   const activePetsWithFourAbilities = snap.activePetsWithFourAbilities ?? 0;
   const saleUnique60s = snap.saleUnique60s ?? 0;
   const saleUnique10m = snap.saleUnique10m ?? 0;
+  const roomJoinCount = snap.roomJoinCount ?? 0;
+  const roomMinutes = snap.roomMinutes ?? 0;
+  const sellBurstCoins = snap.sellBurstCoins ?? 0;
+  const sellBurstAlone = snap.sellBurstAlone ?? false;
+  const instantFeedsUsed = snap.instantFeedsUsed ?? 0;
+  const weatherEventsLastHour = snap.weatherEventsLastHour ?? 0;
   defs.forEach((def) => {
     const existing = state.progress.get(def.id) ?? {
       id: def.id,
@@ -2746,6 +3687,16 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           current = saleUnique60s;
         } else if (def.id === 'onetime:market-maker') {
           current = saleUnique10m;
+        } else if (def.id.startsWith('rooms:socialite-')) {
+          current = roomJoinCount;
+        } else if (def.id.startsWith('rooms:anchor-')) {
+          current = roomMinutes;
+        } else if (def.id.startsWith('shop:sell-burst-')) {
+          current = sellBurstCoins;
+        } else if (def.id === 'onetime:market-buzz-25000000' || def.id === 'onetime:market-shock-250000000000') {
+          current = sellBurstCoins;
+        } else if (def.id === 'onetime:quiet-profit-50000000') {
+          current = sellBurstAlone ? sellBurstCoins : 0;
         } else if (def.id.startsWith('collection:produce-')) {
           current = snap.journalProduceCompleted ?? existing.current;
         } else if (def.id.startsWith('collection:pets-')) {
@@ -2809,12 +3760,16 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           current = abilityUnique30s;
         } else if (def.id === 'onetime:abilities:crit-crafter') {
           current = (abilityCounts['GoldGranter'] ?? 0) + (abilityCounts['RainbowGranter'] ?? 0);
+        } else if (def.id.startsWith('pets:chow-line-')) {
+          current = instantFeedsUsed;
         } else if (def.id.startsWith('garden:mutation-harvester-')) {
           current = mutatedHarvests;
         } else if (def.id.startsWith('garden:giant-grower-')) {
           current = snap.journalProduceMaxWeightCompleted ?? existing.current;
         } else if (def.id.startsWith('abilities:empowered-harvest-')) {
           current = (abilityCounts['GoldGranter'] ?? 0) + (abilityCounts['RainbowGranter'] ?? 0);
+        } else if (def.id === 'onetime:perfect-storm') {
+          current = weatherEventsLastHour;
         } else {
           current = existing.current;
         }
@@ -2906,7 +3861,7 @@ export function initializeAchievements(): void {
   // Activity logs (for reconciliation/backfill when local hooks miss events)
   void trySubscribeAtom('newLogsAtom', (fn) => {
     activityLogUnsubscribe = fn;
-  });
+  }, handleLogPayload);
   void trySubscribeAtom('newCropLogsFromSellingAtom', (fn) => {
     cropLogUnsubscribe = fn;
   });

@@ -258,6 +258,7 @@ export interface AchievementsWindowState {
 }
 
 const SPRITE_SIZE = 28;
+const ACHIEVEMENT_SPRITE_SIZE = 34; // slightly larger for list sprites without scaling badges/one-times
 
 const SHEET_URLS: Record<string, string> = {
   items: 'https://magicgarden.gg/version/436ff68/assets/tiles/items.png',
@@ -423,6 +424,11 @@ function createLayeredSprite(layers: HTMLElement[], size: number = SPRITE_SIZE):
   layers.forEach((layer) => {
     layer.style.position = 'absolute';
     layer.style.inset = '0';
+    layer.style.width = '100%';
+    layer.style.height = '100%';
+    if (!layer.style.backgroundSize) layer.style.backgroundSize = 'contain';
+    if (!layer.style.backgroundRepeat) layer.style.backgroundRepeat = 'no-repeat';
+    if (!layer.style.backgroundPosition) layer.style.backgroundPosition = 'center';
     wrapper.appendChild(layer);
   });
   hydrateAchievementSpritesWithin(wrapper);
@@ -436,7 +442,7 @@ function createRainbowMaskedTile(sheet: string, index: number, size: number = SP
   const baseUrl = getTileDataUrl(sheet, index);
   if (!base || !baseUrl) return { element: base, url: baseUrl };
   const rainbowOverlay = document.createElement('div');
-  rainbowOverlay.style.cssText = `position:absolute; inset:0; background: linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9); mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; opacity: 0.9; mix-blend-mode: screen;`;
+  rainbowOverlay.style.cssText = `position:absolute; inset:0; background: linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9); mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; mask-position: center; -webkit-mask-position: center; opacity: 0.9; mix-blend-mode: screen;`;
   const layered = createLayeredSprite([base, rainbowOverlay], size);
   return { element: layered ?? base, url: baseUrl };
 }
@@ -445,7 +451,7 @@ function createRainbowMaskedFromUrl(baseUrl: string, size: number = SPRITE_SIZE)
   const base = document.createElement('div');
   base.style.cssText = `position:absolute; inset:0; background: url(${baseUrl}) center/contain no-repeat; image-rendering: pixelated;`;
   const rainbowOverlay = document.createElement('div');
-  rainbowOverlay.style.cssText = `position:absolute; inset:0; background: linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9); mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; opacity: 0.9; mix-blend-mode: screen;`;
+  rainbowOverlay.style.cssText = `position:absolute; inset:0; background: linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9); mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; mask-position: center; -webkit-mask-position: center; opacity: 0.9; mix-blend-mode: screen;`;
   const layered = createLayeredSprite([base, rainbowOverlay], size);
   return { element: layered, url: baseUrl };
 }
@@ -490,7 +496,7 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
       return { element, url: petLayer.url ?? cropUrl };
     },
     'onetime:eating-good': () => tile('pets', 6),
-    'onetime:all-i-see-is-money': () => createRainbowMaskedTile('pets', 4, SPRITE_SIZE),
+    'onetime:all-i-see-is-money': () => createRainbowPetSprite('capybara', 4),
     'onetime:money-cant-buy-happiness': () => {
       const baseUrl = getTileDataUrl('pets', 10) ?? getTileDataUrl('items', 10);
       if (baseUrl) return createRainbowMaskedFromUrl(baseUrl, SPRITE_SIZE);
@@ -514,9 +520,10 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
       const layers = [normal.element, gold.element, rainbow.element].filter((el): el is HTMLElement => !!el);
       if (layers.length) {
         layers.forEach((layer, idx) => {
-          const offset = (idx - 1) * 6;
-          layer.style.transform = `translate(${offset}px, ${Math.abs(offset) / 2}px)`;
-          layer.style.opacity = '0.9';
+          const offsetX = (idx - 1) * 6;
+          const offsetY = idx === 1 ? -4 : 2;
+          layer.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+          layer.style.opacity = '0.95';
         });
         return { element: createLayeredSprite(layers, SPRITE_SIZE) ?? null, url: normal.url ?? gold.url ?? rainbow.url };
       }
@@ -529,7 +536,15 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
     'onetime:market-maker': () => tile('items', 10),
     'onetime:fire-sale': () => tile('animations', 16),
     'onetime:abilities:crit-crafter': () => tile('mutations', 1),
-    'onetime:clutch-hatch': () => tile('items', 7),
+    'onetime:clutch-hatch': () => {
+      const timer = createTileSpriteElement('items', 7, Math.round(SPRITE_SIZE * 0.55));
+      const egg = createMutatedPetSpriteElement('bunny', 'gold', Math.round(SPRITE_SIZE * 0.98)) ?? createTileSpriteElement('pets', 13, SPRITE_SIZE);
+      if (timer) timer.style.transform = 'translate(14px, -14px)';
+      const layers = [egg, timer].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : egg;
+      const url = getPetSpriteDataUrl('bunny') ?? getTileDataUrl('pets', 13) ?? getTileDataUrl('items', 7);
+      return { element, url } satisfies ResolvedSprite;
+    },
   };
 
   const special = specialById[def.id];
@@ -555,6 +570,198 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
     'weather:fresh-frozen': () => tile('animations', 19),
     'weather:early-bird': () => tile('animations', 49),
     'weather:night-owl': () => tile('animations', 39),
+    'rooms:socialite': () => createRainbowMaskedTile('animations', 49, SPRITE_SIZE),
+    'rooms:anchor': () => {
+      const anchor = createTileSpriteElement('items', 11, SPRITE_SIZE);
+      const glow = createTileSpriteElement('animations', 39, Math.round(SPRITE_SIZE * 0.9));
+      if (glow) glow.style.opacity = '0.65';
+      const layers = [glow, anchor].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : anchor;
+      const url = getTileDataUrl('items', 11) ?? getTileDataUrl('animations', 39);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'shop:sell-burst': () => {
+      const coins = createTileSpriteElement('items', 10, SPRITE_SIZE);
+      const burst = createTileSpriteElement('animations', 16, Math.round(SPRITE_SIZE * 1.05));
+      if (burst) burst.style.opacity = '0.8';
+      const layers = [burst, coins].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : coins;
+      const url = getTileDataUrl('items', 10) ?? getTileDataUrl('animations', 16);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'garden:mutation-appraiser': () => {
+      const mutation = createTileSpriteElement('mutations', 1, SPRITE_SIZE);
+      const coins = createTileSpriteElement('items', 10, Math.round(SPRITE_SIZE * 0.82));
+      if (coins) coins.style.opacity = '0.82';
+      const layers = [mutation, coins].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : mutation;
+      const url = getTileDataUrl('mutations', 1) ?? getTileDataUrl('items', 10);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'garden:boosted-operation': () => {
+      const gear = createTileSpriteElement('items', 13, SPRITE_SIZE);
+      const overlay = createTileSpriteElement('mutations', 2, Math.round(SPRITE_SIZE * 0.9));
+      if (overlay) {
+        overlay.style.opacity = '0.75';
+        overlay.style.mixBlendMode = 'screen';
+      }
+      const layers = [gear, overlay].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : gear;
+      const url = getTileDataUrl('items', 13) ?? getTileDataUrl('mutations', 2);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'pets:chow-line': () => {
+      const petLayer = pet('bunny');
+      const food = createTileSpriteElement('plants', 51, Math.round(SPRITE_SIZE * 0.95));
+      if (food) food.style.transform = 'translate(-6px, 6px)';
+      const petEl = petLayer.element;
+      if (petEl) petEl.style.transform = 'translate(6px, -4px)';
+      const layers = [food, petEl].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : petEl;
+      const url = petLayer.url ?? getTileDataUrl('plants', 51);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'weather:dawnsmith': () => {
+      const dawn = createTileSpriteElement('animations', 49, SPRITE_SIZE);
+      const crop = createTileSpriteElement('plants', 30, Math.round(SPRITE_SIZE * 0.7));
+      if (crop) crop.style.transform = 'translate(2px, 8px)';
+      const layers = [dawn, crop].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : dawn;
+      const url = getTileDataUrl('animations', 49) ?? getTileDataUrl('plants', 30);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'weather:amberforge': () => {
+      const amber = createTileSpriteElement('animations', 39, SPRITE_SIZE);
+      const crop = createTileSpriteElement('plants', 14, Math.round(SPRITE_SIZE * 0.7));
+      if (crop) crop.style.transform = 'translate(2px, 8px)';
+      const layers = [amber, crop].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : amber;
+      const url = getTileDataUrl('animations', 39) ?? getTileDataUrl('plants', 14);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'weather:fresh-freeze-harvest': () => {
+      const frost = createTileSpriteElement('animations', 19, SPRITE_SIZE);
+      const crop = createTileSpriteElement('plants', 30, Math.round(SPRITE_SIZE * 0.72));
+      if (crop) crop.style.transform = 'translate(2px, 8px)';
+      const layers = [frost, crop].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : frost;
+      const url = getTileDataUrl('animations', 19) ?? getTileDataUrl('plants', 30);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:first-contact': () => {
+      const badge = createRainbowMaskedTile('items', 24, SPRITE_SIZE);
+      if (badge.element) return badge;
+      const base = createTileSpriteElement('items', 24, SPRITE_SIZE);
+      const url = getTileDataUrl('items', 24);
+      return { element: base, url } satisfies ResolvedSprite;
+    },
+    'onetime:marathoner': () => {
+      const timer = createTileSpriteElement('items', 7, SPRITE_SIZE);
+      const clock = createTileSpriteElement('items', 11, Math.round(SPRITE_SIZE * 0.9));
+      if (clock) clock.style.opacity = '0.8';
+      const layers = [timer, clock].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : timer;
+      const url = getTileDataUrl('items', 7) ?? getTileDataUrl('items', 11);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:market-buzz': () => {
+      const coins = createTileSpriteElement('items', 10, SPRITE_SIZE);
+      const spark = createTileSpriteElement('items', 13, Math.round(SPRITE_SIZE * 0.82));
+      if (spark) {
+        spark.style.mixBlendMode = 'screen';
+        spark.style.opacity = '0.9';
+      }
+      const layers = [spark, coins].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : coins;
+      const url = getTileDataUrl('items', 10) ?? getTileDataUrl('items', 13);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:market-shock': () => {
+      const coins = createTileSpriteElement('items', 10, SPRITE_SIZE);
+      const shock = createTileSpriteElement('animations', 16, Math.round(SPRITE_SIZE * 0.95));
+      if (shock) shock.style.opacity = '0.88';
+      const layers = [shock, coins].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : coins;
+      const url = getTileDataUrl('items', 10) ?? getTileDataUrl('animations', 16);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:perfect-storm': () => {
+      const dawn = createTileSpriteElement('animations', 49, Math.round(SPRITE_SIZE * 0.9));
+      const amber = createTileSpriteElement('animations', 39, Math.round(SPRITE_SIZE * 0.82));
+      const frost = createTileSpriteElement('animations', 19, Math.round(SPRITE_SIZE * 0.78));
+      if (amber) amber.style.opacity = '0.82';
+      if (frost) frost.style.opacity = '0.82';
+      if (amber) amber.style.transform = 'translate(-6px, 4px)';
+      if (frost) frost.style.transform = 'translate(6px, -4px)';
+      const layers = [dawn, amber, frost].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : dawn;
+      const url = getTileDataUrl('animations', 49) ?? getTileDataUrl('animations', 39) ?? getTileDataUrl('animations', 19);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:rainbow-weather': () => {
+      const petLayer = createRainbowPetSprite('peacock', 29);
+      const weather = createTileSpriteElement('animations', 19, Math.round(SPRITE_SIZE * 0.78));
+      if (weather) weather.style.opacity = '0.78';
+      if (weather) weather.style.transform = 'translate(-6px, -6px)';
+      const layers = [petLayer.element, weather].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : petLayer.element;
+      const url = petLayer.url ?? getTileDataUrl('animations', 19);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:goldsmith': () => {
+      const goldie = pet('capybara', 'gold');
+      const dawn = createTileSpriteElement('animations', 49, Math.round(SPRITE_SIZE * 0.8));
+      if (dawn) dawn.style.opacity = '0.8';
+      if (dawn) dawn.style.transform = 'translate(-6px, -6px)';
+      const layers = [goldie.element, dawn].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : goldie.element;
+      const url = goldie.url ?? getTileDataUrl('animations', 49);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:crystal-clear': () => {
+      const frost = createTileSpriteElement('animations', 19, SPRITE_SIZE);
+      const shard = createTileSpriteElement('mutations', 0, Math.round(SPRITE_SIZE * 0.8));
+      if (shard) shard.style.opacity = '0.85';
+      const layers = [frost, shard].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : frost;
+      const url = getTileDataUrl('animations', 19) ?? getTileDataUrl('mutations', 0);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:quiet-profit': () => {
+      const coins = createTileSpriteElement('items', 10, SPRITE_SIZE);
+      const baseUrl = getTileDataUrl('items', 10);
+      let hush: HTMLElement | null = null;
+      if (baseUrl) {
+        hush = document.createElement('div');
+        hush.style.cssText = `position:absolute; inset:0; background: linear-gradient(145deg, rgba(20,20,30,0.65), rgba(30,30,40,0.4)); mix-blend-mode: multiply; mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; mask-position: center; -webkit-mask-position: center;`;
+      }
+      const layers = [coins, hush].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : coins;
+      const url = getTileDataUrl('items', 10);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:dawn-double': () => {
+      const petLayer = createRainbowPetSprite('peacock', 29);
+      const crop = createTileSpriteElement('plants', 30, Math.round(SPRITE_SIZE * 0.75));
+      if (crop) crop.style.transform = 'translate(-4px, 10px)';
+      const dawn = createTileSpriteElement('animations', 49, Math.round(SPRITE_SIZE * 0.92));
+      if (dawn) dawn.style.opacity = '0.7';
+      const layers = [dawn, petLayer.element, crop].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : petLayer.element;
+      const url = petLayer.url ?? getTileDataUrl('plants', 30) ?? getTileDataUrl('animations', 49);
+      return { element, url } satisfies ResolvedSprite;
+    },
+    'onetime:amber-artisan': () => {
+      const goldie = pet('capybara', 'gold');
+      const coins = createTileSpriteElement('items', 10, Math.round(SPRITE_SIZE * 0.75));
+      if (coins) coins.style.transform = 'translate(10px, 10px)';
+      const amber = createTileSpriteElement('animations', 39, Math.round(SPRITE_SIZE * 0.92));
+      if (amber) amber.style.opacity = '0.7';
+      const layers = [amber, goldie.element, coins].filter((el): el is HTMLElement => !!el);
+      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : goldie.element;
+      const url = goldie.url ?? getTileDataUrl('items', 10) ?? getTileDataUrl('animations', 39);
+      return { element, url } satisfies ResolvedSprite;
+    },
   };
   const handler = mapping[base] ?? (def.category === 'weather' ? () => tile('animations', 9) : undefined);
   return handler ? handler() : { element: null, url: null };
@@ -570,7 +777,7 @@ function pickSprite(def: AchievementDefinition): HTMLElement | null {
 
 function createMaskedOverlay(baseUrl: string, overlayUrl: string, size: number): HTMLElement {
   const layer = document.createElement('div');
-  layer.style.cssText = `position:absolute; inset:0; background: url(${overlayUrl}) center/contain no-repeat; mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;`;
+  layer.style.cssText = `position:absolute; inset:0; background: url(${overlayUrl}) center/contain no-repeat; mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; mask-position: center; -webkit-mask-position: center;`;
   return layer;
 }
 
@@ -589,25 +796,19 @@ function buildBadgeSprite(def: AchievementDefinition, rarity: AchievementRarity,
     base.style.cssText = `position:absolute; inset:0; background: url(${url}) center/contain no-repeat; image-rendering: pixelated;`;
     wrapper.appendChild(base);
   } else {
-    const fallback = document.createElement('div');
-    fallback.textContent = def.icon ?? '★';
-    const gradient = rarity === 'celestial'
-      ? 'linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9)'
-      : 'rgba(255,255,255,0.06)';
-    const color = rarity === 'celestial' ? 'transparent' : '#fff';
-    fallback.style.cssText = `
-      position: absolute;
-      inset: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: ${Math.max(14, Math.round(size * 0.6))}px;
-      color: ${color};
-      background: ${gradient};
-      border-radius: 10px;
-      ${rarity === 'celestial' ? 'background-clip: text; -webkit-background-clip: text; text-shadow: 0 0 6px rgba(0,0,0,0.35);' : ''}
-    `;
-    wrapper.appendChild(fallback);
+    // Sprite-first fallback to avoid emoji icons
+    const fallback = createTileSpriteElement('items', 10, size) ?? createTileSpriteElement('items', 0, size);
+    if (fallback) {
+      wrapper.appendChild(fallback);
+      hydrateAchievementSpritesWithin(wrapper);
+    } else {
+      const gradient = rarity === 'celestial'
+        ? 'linear-gradient(135deg, #ff1744, #ff9100, #ffea00, #00e676, #2979ff, #d500f9)'
+        : 'rgba(255,255,255,0.06)';
+      const fill = document.createElement('div');
+      fill.style.cssText = `position:absolute; inset:0; border-radius: 10px; background:${gradient};`;
+      wrapper.appendChild(fill);
+    }
   }
 
   const baseUrl = url ?? null;
@@ -619,7 +820,7 @@ function buildBadgeSprite(def: AchievementDefinition, rarity: AchievementRarity,
       ? 'linear-gradient(135deg, #ff6ec7, #ffd166, #6ec8ff, #b37bff)'
       : rarityStyles[rarity].bar;
     const shineOpacity = rarity === 'legendary' ? 0.5 : rarity === 'mythical' ? 0.5 : rarity === 'divine' ? 0.6 : rarity === 'celestial' ? 0.8 : 0.65;
-    shine.style.cssText = `position:absolute; inset:0; background:${shineBg}; mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; opacity: ${shineOpacity}; mix-blend-mode: screen;`;
+    shine.style.cssText = `position:absolute; inset:0; background:${shineBg}; mask-image: url(${baseUrl}); -webkit-mask-image: url(${baseUrl}); mask-size: contain; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; mask-position: center; -webkit-mask-position: center; opacity: ${shineOpacity}; mix-blend-mode: screen;`;
     wrapper.appendChild(shine);
   }
 
@@ -635,6 +836,8 @@ function buildBadgeSprite(def: AchievementDefinition, rarity: AchievementRarity,
       -webkit-mask-size: contain;
       mask-repeat: no-repeat;
       -webkit-mask-repeat: no-repeat;
+      mask-position: center;
+      -webkit-mask-position: center;
       opacity: 0.92;
       mix-blend-mode: screen;
       filter: saturate(1.05);
@@ -758,6 +961,10 @@ function createGroupCard(group: GroupedAchievement, progress: Map<string, any>, 
   const firstEntry = group.entries[0];
   const sprite = firstEntry ? pickSprite(firstEntry) : null;
   if (sprite) {
+    sprite.style.width = `${ACHIEVEMENT_SPRITE_SIZE}px`;
+    sprite.style.height = `${ACHIEVEMENT_SPRITE_SIZE}px`;
+    sprite.style.flexShrink = '0';
+    sprite.style.marginRight = '6px';
     title.prepend(sprite);
   }
   title.append(titleText);

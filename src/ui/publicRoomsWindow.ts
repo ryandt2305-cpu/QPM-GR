@@ -1,12 +1,10 @@
 import {
   fetchRooms,
-  getConfig,
   getState,
   initPublicRooms,
   setConnectionStatusCallback,
   setErrorCallback,
   setPlayerFilter,
-  setRefreshInterval,
   setRoomsUpdateCallback,
   setSearchTerm,
   setSortBy,
@@ -41,8 +39,6 @@ function setRoomStatPills(totalRooms: number, visibleRooms: number): void {
 function createAppContainer(): HTMLElement {
   const container = document.createElement('div');
   container.id = 'pr-app';
-
-  const config = getConfig();
 
   container.innerHTML = `
     <div style="padding: 20px;">
@@ -107,17 +103,7 @@ function createAppContainer(): HTMLElement {
         <h4 style="color: #FF9800; margin-bottom: 12px; font-size: 15px; display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 18px;">⚙️</span> Settings
         </h4>
-        <div>
-          <label style="color: #FF9800; font-size: 12px; display: block; margin-bottom: 6px; font-weight: 600;">🔄 Room Refresh:</label>
-          <select id="pr-refresh-interval" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 152, 0, 0.4); color: #fff; border-radius: 6px; font-size: 13px; cursor: pointer;">
-            <option value="15" ${config.refreshIntervalSeconds === 15 ? 'selected' : ''}>15 seconds</option>
-            <option value="30" ${config.refreshIntervalSeconds === 30 ? 'selected' : ''}>30 seconds</option>
-            <option value="60" ${config.refreshIntervalSeconds === 60 ? 'selected' : ''}>1 minute</option>
-            <option value="90" ${config.refreshIntervalSeconds === 90 ? 'selected' : ''}>1.5 minutes</option>
-            <option value="120" ${config.refreshIntervalSeconds === 120 ? 'selected' : ''}>2 minutes</option>
-            <option value="0" ${config.refreshIntervalSeconds === 0 ? 'selected' : ''}>Never</option>
-          </select>
-        </div>
+        <div style="color: #f6c56a; font-size: 12px; font-weight: 700;">Auto-refresh disabled to reduce server load. Use Refresh to fetch latest.</div>
       </div>
     </div>
   `;
@@ -384,7 +370,6 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
   const searchInput = document.getElementById('pr-search-input') as HTMLInputElement | null;
   const playerFilter = document.getElementById('pr-player-filter') as HTMLSelectElement | null;
   const sortBy = document.getElementById('pr-sort-by') as HTMLSelectElement | null;
-  const refreshInterval = document.getElementById('pr-refresh-interval') as HTMLSelectElement | null;
   const refreshBtn = document.getElementById('pr-refresh-btn');
 
   if (searchInput) {
@@ -405,12 +390,6 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
 
   sortBy?.addEventListener('change', (e) => {
     setSortBy((e.target as HTMLSelectElement).value as any);
-  });
-
-  refreshInterval?.addEventListener('change', (e) => {
-    const value = parseInt((e.target as HTMLSelectElement).value, 10);
-    setRefreshInterval(value);
-    showToast(`Refresh interval set to ${value > 0 ? `${value}s` : 'never'}`, 'success');
   });
 
   refreshBtn?.addEventListener('click', () => {

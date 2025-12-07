@@ -52,7 +52,15 @@ export interface AchievementSnapshot {
     activePetsWithFourAbilities: number | null;
     saleUnique60s: number | null;
     saleUnique10m: number | null;
+    roomJoinCount: number | null;
+    roomMinutes: number | null;
+    lastRoomPlayers: number | null;
+    sellBurstCoins: number | null;
+    sellBurstAlone: boolean | null;
+    instantFeedsUsed: number | null;
+    weatherEventsLastHour: number | null;
 }
+export declare function recordInstantFeedUse(count?: number): void;
 export declare function getAchievementDefinitions(): AchievementDefinition[];
 export declare function getAchievementProgress(): Map<string, AchievementProgress>;
 export declare function subscribeToAchievements(cb: (progress: Map<string, AchievementProgress>) => void): () => void;

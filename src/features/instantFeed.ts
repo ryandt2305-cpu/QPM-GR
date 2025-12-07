@@ -4,6 +4,7 @@
 import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getActivePetInfos, type ActivePetInfo } from '../store/pets';
+import { recordInstantFeedUse } from '../store/achievements';
 import { readInventoryDirect, type InventoryItem } from '../store/inventory';
 import { selectFoodForPet, type InventorySnapshot } from './petFoodRules';
 
@@ -198,6 +199,7 @@ export async function feedPetInstantly(
     }
 
     log(`✅ Fed ${pet.name || pet.species || 'pet'} with ${crop.species || 'food'}`);
+    recordInstantFeedUse(1);
     return {
       success: true,
       petName: pet.name,
@@ -244,6 +246,7 @@ export async function feedPetByIds(
     }
 
     log(`✅ Fed pet ${petId} with crop ${cropId}`);
+    recordInstantFeedUse(1);
     return {
       success: true,
       petName: pet?.name ?? null,

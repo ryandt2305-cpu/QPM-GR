@@ -1,0 +1,1 @@
+{"version":3,"file":"saleWindow.d.ts","sourceRoot":"","sources":["../../src/store/saleWindow.ts"],"names":[],"mappings":"AAiBA,KAAK,gBAAgB,GAAG;IACtB,SAAS,EAAE,MAAM,CAAC;IAClB,SAAS,EAAE,MAAM,CAAC;CACnB,CAAC;AA8DF,wBAAgB,mBAAmB,CAAC,GAAG,GAAE,MAAmB,GAAG,gBAAgB,CAiB9E;AAED,wBAAsB,uBAAuB,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,OAAO,CAAC,IAAI,CAAC,CAuBjF;AAED,wBAAgB,sBAAsB,IAAI,IAAI,CAW7C"}

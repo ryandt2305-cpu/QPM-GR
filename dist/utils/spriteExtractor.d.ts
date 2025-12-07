@@ -68,9 +68,12 @@ declare class SpriteExtractor {
 }
 export declare const spriteExtractor: SpriteExtractor;
 export declare function loadTrackedSpriteSheets(maxSheets?: number, category?: SpriteCategory | 'all'): Promise<string[]>;
-/**
- * Get crop sprite as data URL for use in CSS background-image
- */
+export declare function listTrackedSpriteResources(category?: SpriteCategory | 'all'): Array<{
+    url: string;
+    sources: string[];
+    lastSeen: number;
+    category: SpriteCategory;
+}>;
 export declare function getCropSpriteDataUrl(species: string): string | null;
 /**
  * Create a sprite element for rendering in UI
@@ -90,12 +93,6 @@ export declare function createSpriteElement(species: string, size?: number): HTM
  */
 export declare function renderSpriteGridOverlay(sheetName?: string, maxTiles?: number): void;
 export declare function renderAllSpriteSheetsOverlay(maxTilesPerSheet?: number): void;
-export declare function listTrackedSpriteResources(category?: 'plants' | 'pets' | 'unknown' | 'all'): {
-    url: string;
-    sources: string[];
-    lastSeen: number;
-    category: SpriteCategory;
-}[];
 /**
  * Scan Pixi texture cache for pet sprite sheets
  * Console command: window.inspectPetSprites()

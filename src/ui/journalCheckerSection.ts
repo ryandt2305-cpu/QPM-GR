@@ -6,6 +6,16 @@ import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
 import { getVariantChipColors } from '../data/variantBadges';
 
+// Shop layout order (produce section follows this sequence)
+const SHOP_LAYOUT_ORDER = [
+  'Daffodil', 'Orange Tulip', 'Sunflower', 'Lily', 'Starweaver', 'Chrysanthemum', 'Aloe', 'Cactus', 'Bamboo',
+  'Blueberry', 'Banana', 'Strawberry', 'Grape', 'Watermelon', 'Lemon', 'Apple',
+  'Pepper', 'Tomato', 'Carrot', 'Pumpkin', 'Corn', 'Fava Bean', 'Cacao Bean', 'Lychee',
+  'Coconut', 'Passion Fruit', 'Dragon Fruit', 'Mushroom', "Burro's Tail", 'Echeveria', 'Delphinium',
+  'Dawnbinder', 'Moonbinder', 'Camellia', 'Squash',
+];
+const SHOP_LAYOUT_INDEX = new Map(SHOP_LAYOUT_ORDER.map((name, idx) => [name.toLowerCase().replace(/[^a-z0-9]/g, ''), idx]));
+
 // Storage for user notes per species
 function getSpeciesNotes(species: string): string {
   const notes = storage.get<Record<string, string>>('journal:notes', {});
@@ -153,7 +163,16 @@ export function createJournalCheckerSection(): HTMLElement {
     resultsContainer.innerHTML = '';
 
     if (selectedCategory === 'produce') {
-      for (const species of summary.produce) {
+      const orderedProduce = summary.produce.slice().sort((a, b) => {
+        const aKey = a.species.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const bKey = b.species.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const aIdx = SHOP_LAYOUT_INDEX.has(aKey) ? SHOP_LAYOUT_INDEX.get(aKey)! : Number.MAX_SAFE_INTEGER;
+        const bIdx = SHOP_LAYOUT_INDEX.has(bKey) ? SHOP_LAYOUT_INDEX.get(bKey)! : Number.MAX_SAFE_INTEGER;
+        if (aIdx !== bIdx) return aIdx - bIdx;
+        return a.species.localeCompare(b.species);
+      });
+
+      for (const species of orderedProduce) {
         const variants = showMissingOnly
           ? species.variants.filter(v => !v.collected)
           : species.variants;

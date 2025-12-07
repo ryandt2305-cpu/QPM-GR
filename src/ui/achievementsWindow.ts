@@ -3,7 +3,7 @@
 
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { getAchievementDefinitions, getAchievementProgress, subscribeToAchievements, triggerAchievementRecompute, getAchievementSnapshot, type AchievementDefinition, type AchievementRarity } from '../store/achievements';
-import { createSpriteElement, getPetSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
+import { createSpriteElement, getPetSpriteDataUrl, loadTrackedSpriteSheets, spriteExtractor, listTrackedSpriteResources } from '../utils/spriteExtractor';
 import { getMutationSpriteDataUrl } from '../utils/petMutationRenderer';
 import { log } from '../utils/logger';
 type FilterStatus = 'all' | 'in-progress' | 'completed';
@@ -16,6 +16,17 @@ type GroupedAchievement = {
 
 let debugShowAllBadges = false;
 let lastWindowState: AchievementsWindowState | null = null;
+
+// Sprite hydration (lazy apply to reduce upfront work on low-end devices)
+const achievementSpriteRegistry = new Map<string, () => string | null>();
+const achievementSpriteQueue = new Set<HTMLElement>();
+let achievementSpriteCounter = 0;
+let achievementSpriteHydrationScheduled = false;
+const ACHIEVEMENT_SPRITE_FRAME_BUDGET_MS = 12;
+const ACHIEVEMENT_SPRITE_MAX_PER_FRAME = 4;
+let achievementSpriteObserver: IntersectionObserver | null = null;
+const ACHIEVEMENT_SPRITE_IDLE_WARM_LIMIT = 32;
+let achievementSpriteIdleScheduled = false;
 
 const rarityOrder: AchievementRarity[] = ['common', 'uncommon', 'rare', 'legendary', 'mythical', 'divine', 'celestial'];
 const rarityRank = rarityOrder.reduce<Record<AchievementRarity, number>>((acc, rarity, idx) => {
@@ -46,6 +57,131 @@ function formatTargetLabel(target: number): string {
   if (abs >= 1e6) return `${trim(abs / 1e6)}M`;
   if (abs >= 1e3) return `${trim(abs / 1e3)}K`;
   return target.toLocaleString();
+}
+
+function ensureAchievementSpriteObserver(): void {
+  if (achievementSpriteObserver || typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
+  achievementSpriteObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const el = entry.target as HTMLElement;
+      achievementSpriteObserver?.unobserve(el);
+      queueAchievementSpriteHydration(el);
+    }
+  }, { rootMargin: '128px 0px 256px 0px' });
+}
+
+function queueAchievementSpriteHydration(node: HTMLElement): void {
+  achievementSpriteQueue.add(node);
+  scheduleAchievementSpriteHydration();
+}
+
+function scheduleAchievementSpriteIdleWarmup(): void {
+  if (achievementSpriteIdleScheduled) return;
+  achievementSpriteIdleScheduled = true;
+  const idle = (window as any).requestIdleCallback as ((cb: IdleRequestCallback, opts?: { timeout?: number }) => number) | undefined;
+  const runner = () => {
+    achievementSpriteIdleScheduled = false;
+    warmupAchievementSprites();
+  };
+  if (typeof idle === 'function') {
+    idle(runner, { timeout: 500 });
+  } else {
+    setTimeout(runner, 32);
+  }
+}
+
+function scheduleAchievementSpriteHydration(): void {
+  if (achievementSpriteHydrationScheduled) return;
+  achievementSpriteHydrationScheduled = true;
+  const raf = typeof window !== 'undefined' ? window.requestAnimationFrame : null;
+  if (typeof raf === 'function') {
+    raf(processAchievementSpriteQueue);
+  } else {
+    setTimeout(processAchievementSpriteQueue, 16);
+  }
+}
+
+function processAchievementSpriteQueue(): void {
+  achievementSpriteHydrationScheduled = false;
+  if (!achievementSpriteQueue.size) return;
+  const start = performance.now();
+  let hydrated = 0;
+  for (const node of Array.from(achievementSpriteQueue)) {
+    achievementSpriteQueue.delete(node);
+    hydrateAchievementSprite(node);
+    hydrated += 1;
+    if (hydrated >= ACHIEVEMENT_SPRITE_MAX_PER_FRAME || performance.now() - start >= ACHIEVEMENT_SPRITE_FRAME_BUDGET_MS) {
+      break;
+    }
+  }
+  if (achievementSpriteQueue.size) {
+    scheduleAchievementSpriteHydration();
+  }
+}
+
+function warmupAchievementSprites(): void {
+  if (!achievementSpriteQueue.size) return;
+  let warmed = 0;
+  const start = performance.now();
+  for (const node of Array.from(achievementSpriteQueue)) {
+    achievementSpriteQueue.delete(node);
+    hydrateAchievementSprite(node);
+    warmed += 1;
+    if (warmed >= ACHIEVEMENT_SPRITE_IDLE_WARM_LIMIT || performance.now() - start >= ACHIEVEMENT_SPRITE_FRAME_BUDGET_MS * 2) {
+      break;
+    }
+  }
+  if (achievementSpriteQueue.size) {
+    scheduleAchievementSpriteIdleWarmup();
+  }
+}
+
+function hydrateAchievementSprite(node: HTMLElement): void {
+  const id = node.dataset.achievementSpriteId;
+  if (!id) return;
+  const resolver = achievementSpriteRegistry.get(id);
+  if (!resolver) {
+    node.removeAttribute('data-achievement-sprite-id');
+    return;
+  }
+  const url = resolver();
+  if (url) {
+    node.style.backgroundImage = `url(${url})`;
+  }
+  node.dataset.achievementSpriteHydrated = '1';
+  node.removeAttribute('data-achievement-sprite-id');
+  achievementSpriteRegistry.delete(id);
+}
+
+function registerAchievementSprite(node: HTMLElement, resolver: () => string | null): void {
+  const id = `ach-sprite-${++achievementSpriteCounter}`;
+  achievementSpriteRegistry.set(id, resolver);
+  node.dataset.achievementSpriteId = id;
+  ensureAchievementSpriteObserver();
+  const observer = achievementSpriteObserver;
+  if (observer) {
+    observer.observe(node);
+  } else {
+    queueAchievementSpriteHydration(node);
+  }
+  scheduleAchievementSpriteIdleWarmup();
+}
+
+function hydrateAchievementSpritesWithin(root: ParentNode | null): void {
+  if (!root) return;
+  ensureAchievementSpriteObserver();
+  const observer = achievementSpriteObserver;
+  const nodes = root.querySelectorAll<HTMLElement>('[data-achievement-sprite-id]');
+  nodes.forEach((node) => {
+    if (node.dataset.achievementSpriteHydrated === '1') return;
+    if (observer) {
+      observer.observe(node);
+    } else {
+      queueAchievementSpriteHydration(node as HTMLElement);
+    }
+  });
+  scheduleAchievementSpriteIdleWarmup();
 }
 
 function describeAchievement(def: AchievementDefinition, options: { hideTarget?: boolean } = {}): string {
@@ -134,17 +270,79 @@ const SHEET_URLS: Record<string, string> = {
 
 const requestedSheets = new Set<string>();
 const tileUrlCache = new Map<string, string | null>();
+const sheetUrlOverrides = new Map<string, string>();
+let primeSheetsPromise: Promise<void> | null = null;
+
+function inferSheetNameFromUrl(url: string): string | null {
+  const lowered = url.toLowerCase();
+  if (lowered.includes('/tiles/items.png')) return 'items';
+  if (lowered.includes('/tiles/animations.png')) return 'animations';
+  if (lowered.includes('/tiles/seeds.png')) return 'seeds';
+  if (lowered.includes('/tiles/plants.png')) return 'plants';
+  if (lowered.includes('/tiles/mutations.png')) return 'mutations';
+  if (lowered.includes('/tiles/pets.png')) return 'pets';
+  return null;
+}
+
+function resolveSheetUrl(sheet: string): string | null {
+  const cached = sheetUrlOverrides.get(sheet);
+  if (cached) return cached;
+
+  const tracked = listTrackedSpriteResources('all').find((entry) => entry.url.toLowerCase().includes(`/tiles/${sheet}.png`));
+  if (tracked) {
+    sheetUrlOverrides.set(sheet, tracked.url);
+    return tracked.url;
+  }
+
+  const url = SHEET_URLS[sheet];
+  if (url) {
+    sheetUrlOverrides.set(sheet, url);
+    return url;
+  }
+  return null;
+}
+
+async function primeAchievementSheets(): Promise<void> {
+  if (primeSheetsPromise) return primeSheetsPromise;
+
+  primeSheetsPromise = (async () => {
+    try {
+      const loaded = await loadTrackedSpriteSheets(6, 'all');
+      loaded.forEach((url) => {
+        const inferred = inferSheetNameFromUrl(url);
+        if (inferred && !sheetUrlOverrides.has(inferred)) {
+          sheetUrlOverrides.set(inferred, url);
+        }
+      });
+    } catch (error) {
+      log('⚠️ Failed to load tracked sprite sheets for achievements', error);
+    }
+
+    Object.entries(SHEET_URLS).forEach(([sheet, url]) => {
+      if (!sheetUrlOverrides.has(sheet)) {
+        sheetUrlOverrides.set(sheet, url);
+      }
+      if (!requestedSheets.has(sheet)) {
+        requestedSheets.add(sheet);
+        void spriteExtractor.loadSheetFromUrl(sheetUrlOverrides.get(sheet) ?? url, sheet).catch(() => requestedSheets.delete(sheet));
+      }
+    });
+  })();
+
+  try {
+    await primeSheetsPromise;
+  } finally {
+    primeSheetsPromise = null;
+  }
+}
 
 function ensureSheetTile(sheet: string, index: number): HTMLCanvasElement | null {
   const direct = spriteExtractor.getTile(sheet, index);
   if (direct) return direct;
-
-  const url = SHEET_URLS[sheet];
-  if (url) {
-    if (!requestedSheets.has(sheet)) {
-      requestedSheets.add(sheet);
-      void spriteExtractor.loadSheetFromUrl(url, sheet).catch(() => requestedSheets.delete(sheet));
-    }
+  const url = resolveSheetUrl(sheet);
+  if (url && !requestedSheets.has(sheet)) {
+    requestedSheets.add(sheet);
+    void spriteExtractor.loadSheetFromUrl(url, sheet).catch(() => requestedSheets.delete(sheet));
   }
   return spriteExtractor.getTile(sheet, index);
 }
@@ -152,7 +350,6 @@ function ensureSheetTile(sheet: string, index: number): HTMLCanvasElement | null
 function createTileSpriteElement(sheet: string, index: number, size: number = SPRITE_SIZE): HTMLElement | null {
   const tile = ensureSheetTile(sheet, index);
   if (!tile) return null;
-  const url = tile.toDataURL('image/png');
   const div = document.createElement('div');
   div.style.cssText = `
     width: ${size}px;
@@ -165,12 +362,7 @@ function createTileSpriteElement(sheet: string, index: number, size: number = SP
     image-rendering: -moz-crisp-edges;
     image-rendering: crisp-edges;
   `;
-  try {
-    div.style.backgroundImage = `url(${url})`;
-  } catch (error) {
-    log('⚠️ Failed to build tile sprite element', error);
-    return null;
-  }
+  registerAchievementSprite(div, () => getTileDataUrl(sheet, index));
   return div;
 }
 
@@ -191,9 +383,6 @@ function getTileDataUrl(sheet: string, index: number): string | null {
 
 function createPetSpriteElement(species: string, options?: { size?: number }): HTMLElement | null {
   const size = options?.size ?? SPRITE_SIZE;
-  const petUrl = getPetSpriteDataUrl(species);
-  if (!petUrl) return null;
-
   const div = document.createElement('div');
   div.style.cssText = `
     width: ${size}px;
@@ -206,14 +395,11 @@ function createPetSpriteElement(species: string, options?: { size?: number }): H
     image-rendering: -moz-crisp-edges;
     image-rendering: crisp-edges;
   `;
-  div.style.backgroundImage = `url(${petUrl})`;
+  registerAchievementSprite(div, () => getPetSpriteDataUrl(species));
   return div;
 }
 
 function createMutatedPetSpriteElement(species: string, mutation: 'gold' | 'rainbow', size: number = SPRITE_SIZE): HTMLElement | null {
-  const mutated = getMutationSpriteDataUrl(species, mutation);
-  const url = mutated ?? getPetSpriteDataUrl(species);
-  if (!url) return null;
   const div = document.createElement('div');
   div.style.cssText = `
     width: ${size}px;
@@ -226,7 +412,7 @@ function createMutatedPetSpriteElement(species: string, mutation: 'gold' | 'rain
     image-rendering: -moz-crisp-edges;
     image-rendering: crisp-edges;
   `;
-  div.style.backgroundImage = `url(${url})`;
+  registerAchievementSprite(div, () => getMutationSpriteDataUrl(species, mutation) ?? getPetSpriteDataUrl(species));
   return div;
 }
 
@@ -239,6 +425,7 @@ function createLayeredSprite(layers: HTMLElement[], size: number = SPRITE_SIZE):
     layer.style.inset = '0';
     wrapper.appendChild(layer);
   });
+  hydrateAchievementSpritesWithin(wrapper);
   return wrapper;
 }
 
@@ -316,6 +503,33 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
     'onetime:what-is-money': () => tile('items', 0),
     'onetime:what-is-grass': () => tile('items', 0),
     'onetime:god-tier-research': () => tile('animations', 92),
+    'onetime:perfect-produce': () => tile('plants', 14),
+    'onetime:perfect-symmetry': () => pet('peacock', 'gold'),
+    'onetime:mutation-marathon': () => tile('mutations', 3),
+    'onetime:all-weathered': () => tile('animations', 19),
+    'onetime:triple-hatch': () => {
+      const normal = pet('bunny');
+      const gold = pet('capybara', 'gold');
+      const rainbow = pet('peacock', 'rainbow');
+      const layers = [normal.element, gold.element, rainbow.element].filter((el): el is HTMLElement => !!el);
+      if (layers.length) {
+        layers.forEach((layer, idx) => {
+          const offset = (idx - 1) * 6;
+          layer.style.transform = `translate(${offset}px, ${Math.abs(offset) / 2}px)`;
+          layer.style.opacity = '0.9';
+        });
+        return { element: createLayeredSprite(layers, SPRITE_SIZE) ?? null, url: normal.url ?? gold.url ?? rainbow.url };
+      }
+      return tile('items', 1);
+    },
+    'onetime:These-Exist!?': () => createRainbowMaskedTile('pets', 15, SPRITE_SIZE),
+    'onetime:loyal-companion': () => pet('turtle'),
+    'onetime:ability-synergy': () => tile('items', 13),
+    'onetime:combo-caster': () => tile('animations', 49),
+    'onetime:market-maker': () => tile('items', 10),
+    'onetime:fire-sale': () => tile('animations', 16),
+    'onetime:abilities:crit-crafter': () => tile('mutations', 1),
+    'onetime:clutch-hatch': () => tile('items', 7),
   };
 
   const special = specialById[def.id];
@@ -331,6 +545,11 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
     'pets:rainbow': () => pet('peacock', 'rainbow'),
     'economy:crop-earner': () => tile('items', 10),
     'abilities:proc': () => tile('items', 13),
+    'abilities:empowered-harvest': () => tile('mutations', 2),
+    'garden:mutation-harvester': () => tile('mutations', 0),
+    'garden:giant-grower': () => tile('plants', 30),
+    'pets:trainer': () => pet('goat'),
+    'streaks:diligent-gardener': () => tile('items', 11),
     'collection:produce': () => tile('items', 24),
     'collection:pets': () => tile('items', 25),
     'weather:fresh-frozen': () => tile('animations', 19),
@@ -342,7 +561,11 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
 }
 
 function pickSprite(def: AchievementDefinition): HTMLElement | null {
-  return resolveSprite(def).element;
+  const el = resolveSprite(def).element;
+  if (el) {
+    hydrateAchievementSpritesWithin(el);
+  }
+  return el;
 }
 
 function createMaskedOverlay(baseUrl: string, overlayUrl: string, size: number): HTMLElement {
@@ -360,6 +583,7 @@ function buildBadgeSprite(def: AchievementDefinition, rarity: AchievementRarity,
     element.style.width = `${size}px`;
     element.style.height = `${size}px`;
     wrapper.appendChild(element);
+    hydrateAchievementSpritesWithin(wrapper);
   } else if (url) {
     const base = document.createElement('div');
     base.style.cssText = `position:absolute; inset:0; background: url(${url}) center/contain no-repeat; image-rendering: pixelated;`;
@@ -935,6 +1159,8 @@ function renderOneTime(state: AchievementsWindowState, defsOverride?: Achievemen
 }
 
 export function createAchievementsWindow(): AchievementsWindowState {
+  void primeAchievementSheets();
+
   const root = document.createElement('div');
   root.dataset.achievementsRoot = 'true';
   root.style.cssText = 'display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: min(1100px, 100%); max-width: 100%;';
@@ -1183,12 +1409,14 @@ export function createAchievementsWindow(): AchievementsWindowState {
     if (state.activeTab === 'badges') {
       renderBadges(state, defsCache);
     }
+    hydrateAchievementSpritesWithin(state.root);
   });
   // Kick an explicit recompute to ensure snapshot freshness when window opens
   try { triggerAchievementRecompute(); } catch (error) { log('⚠️ Achievements recompute failed', error); }
 
   render();
   renderOneTime(state, oneTimeDefs);
+  hydrateAchievementSpritesWithin(state.root);
   return state;
 }
 

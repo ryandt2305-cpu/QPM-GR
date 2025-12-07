@@ -8,9 +8,11 @@ import { notify } from '../core/notifications';
 import { getInventoryItems, readInventoryDirect } from './inventory';
 import { startAbilityTriggerStore, getAbilityHistorySnapshot } from './abilityLogs';
 import { startPetInfoStore, getActivePetInfos } from './pets';
-import { getJournal, getJournalStats } from '../features/journalChecker';
+import { getJournal, getJournalStats, getJournalSummary } from '../features/journalChecker';
 import { pageWindow } from '../core/pageContext';
 import { getAtomByLabel, readAtomValue, subscribeAtom, findAtomsByLabel } from '../core/jotaiBridge';
+import { getMutationSummary } from './mutationSummary';
+import { getSaleWindowCounts, startSellWindowTracking } from './saleWindow';
 
 export type AchievementRarity = 'common' | 'uncommon' | 'rare' | 'legendary' | 'mythical' | 'divine' | 'celestial';
 
@@ -47,6 +49,9 @@ export interface AchievementSnapshot {
   journalProduceTotal: number | null;
   journalPetCompleted: number | null;
   journalPetTotal: number | null;
+  journalProduceSpeciesCompleted: number | null;
+  journalPetSpeciesCompleted: number | null;
+  journalProduceMaxWeightCompleted: number | null;
   coinBalance: number | null;
   lastCurrencyTransaction: unknown;
   cropEarnings: number | null;
@@ -57,6 +62,14 @@ export interface AchievementSnapshot {
   abilityCounts: Record<string, number>;
   abilityLastProc: Record<string, number | null>;
   boostPetsActive: number | null;
+  abilityUnique5m: number | null;
+  abilityUnique30s: number | null;
+  mutationEvents30m: number | null;
+  mutatedHarvests: number | null;
+  weatherSeenKinds: Set<string> | null;
+  activePetsWithFourAbilities: number | null;
+  saleUnique60s: number | null;
+  saleUnique10m: number | null;
   // Future: activity log/events + coin balance + per-species counters + rolling windows
 }
 
@@ -88,6 +101,7 @@ let activityLogUnsubscribe: (() => void) | null = null;
 let cropLogUnsubscribe: (() => void) | null = null;
 let liveStatsUnsubscribe: (() => void) | null = null;
 let ariesStatsUnsubscribe: (() => void) | null = null;
+let sellWindowStarted = false;
 
 let loggedLiveShape = false;
 let loggedAriesShape = false;
@@ -1036,41 +1050,41 @@ function ensureDefinitions(): void {
     {
       id: 'garden:seed-hoarder-5000',
       title: 'Seed Hoarder IV',
-      description: 'Hold 5,000 seeds of a single type.',
+      description: 'Hold 7,500 seeds of a single type.',
       category: 'garden',
       rarity: 'legendary',
       visibility: 'public',
-      target: 5_000,
+      target: 7_500,
       icon: '🌱',
     },
     {
       id: 'garden:seed-hoarder-15000',
       title: 'Seed Hoarder V',
-      description: 'Hold 15,000 seeds of a single type.',
-      category: 'garden',
-      rarity: 'mythical',
-      visibility: 'public',
-      target: 15_000,
-      icon: '🌱',
-    },
-    {
-      id: 'garden:seed-hoarder-35000',
-      title: 'Seed Hoarder VI',
       description: 'Hold 35,000 seeds of a single type.',
       category: 'garden',
-      rarity: 'divine',
+      rarity: 'mythical',
       visibility: 'public',
       target: 35_000,
       icon: '🌱',
     },
     {
+      id: 'garden:seed-hoarder-35000',
+      title: 'Seed Hoarder VI',
+      description: 'Hold 100,000 seeds of a single type.',
+      category: 'garden',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 100_000,
+      icon: '🌱',
+    },
+    {
       id: 'garden:seed-hoarder-80000',
       title: 'Seed Hoarder VII',
-      description: 'Hold 80,000 seeds of a single type.',
+      description: 'Hold 750,000 seeds of a single type.',
       category: 'garden',
       rarity: 'celestial',
       visibility: 'public',
-      target: 80_000,
+      target: 750_000,
       icon: '🌱',
       hiddenTargetUntil: 'garden:seed-hoarder-35000',
     },
@@ -1351,6 +1365,531 @@ function ensureDefinitions(): void {
       icon: '📔',
       hiddenTargetUntil: 'collection:produce-325',
     },
+
+    // New one-time: perfect journal completions
+    {
+      id: 'onetime:perfect-produce',
+      title: 'Perfect Produce',
+      description: 'Complete every variant for any single crop.',
+      category: 'collection',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 1,
+      icon: '🥕',
+      oneTime: true,
+      tags: ['per-species', 'journal', 'variant'],
+    },
+    {
+      id: 'onetime:perfect-symmetry',
+      title: 'Perfect Symmetry',
+      description: 'Complete all variants for any pet species.',
+      category: 'collection',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 1,
+      icon: '🐾',
+      oneTime: true,
+      tags: ['per-species', 'journal', 'variant'],
+    },
+
+    // New one-time: time/concurrency challenges
+    {
+      id: 'onetime:mutation-marathon',
+      title: 'Mutation Marathon',
+      description: 'Trigger 10 mutations within 30 minutes.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 10,
+      icon: '🌦️',
+      oneTime: true,
+      tags: ['window', 'mutations'],
+    },
+    {
+      id: 'onetime:all-weathered',
+      title: 'All-Weathered',
+      description: 'See Dawn, Amber, and Snow in a single session.',
+      category: 'weather',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 3,
+      icon: '⛈️',
+      oneTime: true,
+      tags: ['weather', 'session'],
+    },
+    {
+      id: 'onetime:triple-hatch',
+      title: 'Triple Hatch',
+      description: 'Hatch Gold, Rainbow, and Normal pets within 30 minutes.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 3,
+      icon: '🥚',
+      oneTime: true,
+      tags: ['window', 'hatch'],
+    },
+    {
+      id: 'onetime:These-Exist!?',
+      title: 'These-Exist!?',
+      description: 'Hatch a pet with 4 abilities.',
+      category: 'pets',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 1,
+      icon: '❔',
+      oneTime: true,
+      tags: ['hatch'],
+    },
+    {
+      id: 'onetime:loyal-companion',
+      title: 'Loyal Companion',
+      description: 'Keep one pet active for 6+ hours in a single day.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1,
+      icon: '🕰️',
+      oneTime: true,
+      tags: ['session', 'pet-active'],
+    },
+    {
+      id: 'onetime:ability-synergy',
+      title: 'Ability Synergy',
+      description: 'Trigger 5 different abilities within 5 minutes.',
+      category: 'abilities',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 5,
+      icon: '🧩',
+      oneTime: true,
+      tags: ['window', 'abilities'],
+    },
+    {
+      id: 'onetime:combo-caster',
+      title: 'Combo Caster',
+      description: 'Trigger 3 different abilities inside 30 seconds.',
+      category: 'abilities',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 3,
+      icon: '⚡',
+      oneTime: true,
+      tags: ['window', 'abilities'],
+    },
+    {
+      id: 'onetime:market-maker',
+      title: 'Market Maker',
+      description: 'Sell 10 different crop types within 10 minutes.',
+      category: 'shop',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 10,
+      icon: '🛒',
+      oneTime: true,
+      tags: ['sell', 'window'],
+    },
+    {
+      id: 'onetime:fire-sale',
+      title: 'Fire Sale',
+      description: 'Sell 5 different crop types within 60 seconds.',
+      category: 'shop',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 5,
+      icon: '🔥',
+      oneTime: true,
+      tags: ['sell', 'window'],
+    },
+    {
+      id: 'onetime:abilities:crit-crafter',
+      title: 'Crit Crafter',
+      description: 'Apply Rainbow or Gold-granting abilities to 1,000 crops total.',
+      category: 'abilities',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 1_000,
+      icon: '🌈',
+      oneTime: true,
+      tags: ['abilities', 'value'],
+    },
+    {
+      id: 'onetime:clutch-hatch',
+      title: 'Clutch Hatch',
+      description: 'Hatch a Gold or Rainbow pet within 2 minutes of egg purchase.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1,
+      icon: '⏱️',
+      oneTime: true,
+      tags: ['hatch', 'window'],
+    },
+
+    // Rarity-tiered: mutation harvest
+    {
+      id: 'garden:mutation-harvester-100',
+      title: 'Mutation Harvester I',
+      description: 'Harvest 100 mutated crops.',
+      category: 'garden',
+      rarity: 'common',
+      visibility: 'public',
+      target: 100,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-1000',
+      title: 'Mutation Harvester II',
+      description: 'Harvest 1,000 mutated crops.',
+      category: 'garden',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 1_000,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-2500',
+      title: 'Mutation Harvester III',
+      description: 'Harvest 2,500 mutated crops.',
+      category: 'garden',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 2_500,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-7500',
+      title: 'Mutation Harvester IV',
+      description: 'Harvest 7,500 mutated crops.',
+      category: 'garden',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 7_500,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-15000',
+      title: 'Mutation Harvester V',
+      description: 'Harvest 15,000 mutated crops.',
+      category: 'garden',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 15_000,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-50000',
+      title: 'Mutation Harvester VI',
+      description: 'Harvest 50,000 mutated crops.',
+      category: 'garden',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 50_000,
+      icon: '🧬',
+    },
+    {
+      id: 'garden:mutation-harvester-125000',
+      title: 'Mutation Harvester VII',
+      description: 'Harvest 125,000 mutated crops.',
+      category: 'garden',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 125_000,
+      icon: '🧬',
+      hiddenTargetUntil: 'garden:mutation-harvester-50000',
+    },
+
+    // Rarity-tiered: giant grower
+    {
+      id: 'garden:giant-grower-1',
+      title: 'Giant Grower I',
+      description: 'Achieve max weight on 1 crop.',
+      category: 'garden',
+      rarity: 'common',
+      visibility: 'public',
+      target: 1,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-3',
+      title: 'Giant Grower II',
+      description: 'Achieve max weight on 3 crops.',
+      category: 'garden',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 3,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-7',
+      title: 'Giant Grower III',
+      description: 'Achieve max weight on 7 crops.',
+      category: 'garden',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 7,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-10',
+      title: 'Giant Grower IV',
+      description: 'Achieve max weight on 10 crops.',
+      category: 'garden',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 10,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-15',
+      title: 'Giant Grower V',
+      description: 'Achieve max weight on 15 crops.',
+      category: 'garden',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 15,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-25',
+      title: 'Giant Grower VI',
+      description: 'Achieve max weight on 25 crops.',
+      category: 'garden',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 25,
+      icon: '🌳',
+    },
+    {
+      id: 'garden:giant-grower-35',
+      title: 'Giant Grower VII',
+      description: 'Achieve max weight on 35 crops.',
+      category: 'garden',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 35,
+      icon: '🌳',
+      hiddenTargetUntil: 'garden:giant-grower-25',
+    },
+
+    // Rarity-tiered: trainer (levels)
+    {
+      id: 'pets:trainer-50',
+      title: 'Trainer I',
+      description: 'Gain 50 pet levels total.',
+      category: 'pets',
+      rarity: 'common',
+      visibility: 'public',
+      target: 50,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-200',
+      title: 'Trainer II',
+      description: 'Gain 200 pet levels total.',
+      category: 'pets',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 200,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-800',
+      title: 'Trainer III',
+      description: 'Gain 800 pet levels total.',
+      category: 'pets',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 800,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-2000',
+      title: 'Trainer IV',
+      description: 'Gain 2,000 pet levels total.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 2_000,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-5000',
+      title: 'Trainer V',
+      description: 'Gain 5,000 pet levels total.',
+      category: 'pets',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-10000',
+      title: 'Trainer VI',
+      description: 'Gain 10,000 pet levels total.',
+      category: 'pets',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 10_000,
+      icon: '🎓',
+    },
+    {
+      id: 'pets:trainer-50000',
+      title: 'Trainer VII',
+      description: 'Gain 50,000 pet levels total.',
+      category: 'pets',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 50_000,
+      icon: '🎓',
+      hiddenTargetUntil: 'pets:trainer-10000',
+    },
+
+    // Rarity-tiered: diligent gardener (streak)
+    {
+      id: 'streaks:diligent-gardener-3',
+      title: 'Diligent Gardener I',
+      description: 'Keep a 3-day garden streak.',
+      category: 'streaks',
+      rarity: 'common',
+      visibility: 'public',
+      target: 3,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-7',
+      title: 'Diligent Gardener II',
+      description: 'Keep a 7-day garden streak.',
+      category: 'streaks',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 7,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-14',
+      title: 'Diligent Gardener III',
+      description: 'Keep a 14-day garden streak.',
+      category: 'streaks',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 14,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-30',
+      title: 'Diligent Gardener IV',
+      description: 'Keep a 30-day garden streak.',
+      category: 'streaks',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 30,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-80',
+      title: 'Diligent Gardener V',
+      description: 'Keep an 80-day garden streak.',
+      category: 'streaks',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 80,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-180',
+      title: 'Diligent Gardener VI',
+      description: 'Keep a 180-day garden streak.',
+      category: 'streaks',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 180,
+      icon: '📅',
+    },
+    {
+      id: 'streaks:diligent-gardener-365',
+      title: 'Diligent Gardener VII',
+      description: 'Keep a 365-day garden streak.',
+      category: 'streaks',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 365,
+      icon: '📅',
+      hiddenTargetUntil: 'streaks:diligent-gardener-180',
+    },
+
+    // Rarity-tiered: empowered harvest (rainbow/gold applied crops)
+    {
+      id: 'abilities:empowered-harvest-10',
+      title: 'Empowered Harvest I',
+      description: 'Apply Rainbow/Gold-granting abilities to 10 crops.',
+      category: 'abilities',
+      rarity: 'common',
+      visibility: 'public',
+      target: 10,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-50',
+      title: 'Empowered Harvest II',
+      description: 'Apply Rainbow/Gold-granting abilities to 50 crops.',
+      category: 'abilities',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 50,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-500',
+      title: 'Empowered Harvest III',
+      description: 'Apply Rainbow/Gold-granting abilities to 500 crops.',
+      category: 'abilities',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 500,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-2500',
+      title: 'Empowered Harvest IV',
+      description: 'Apply Rainbow/Gold-granting abilities to 2,500 crops.',
+      category: 'abilities',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 2_500,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-5000',
+      title: 'Empowered Harvest V',
+      description: 'Apply Rainbow/Gold-granting abilities to 5,000 crops.',
+      category: 'abilities',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-10000',
+      title: 'Empowered Harvest VI',
+      description: 'Apply Rainbow/Gold-granting abilities to 10,000 crops.',
+      category: 'abilities',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 10_000,
+      icon: '💠',
+    },
+    {
+      id: 'abilities:empowered-harvest-50000',
+      title: 'Empowered Harvest VII',
+      description: 'Apply Rainbow/Gold-granting abilities to 50,000 crops.',
+      category: 'abilities',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 50_000,
+      icon: '💠',
+      hiddenTargetUntil: 'abilities:empowered-harvest-10000',
+    },
   ];
 }
 
@@ -1388,6 +1927,12 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   const abilityCounts: Record<string, number> = {};
   const abilityLastProc: Record<string, number | null> = {};
   let boostPetsActive: number | null = null;
+  let abilityUnique5m: number | null = null;
+  let abilityUnique30s: number | null = null;
+  let mutationEvents30m: number | null = null;
+  let mutatedHarvests: number | null = null;
+  let weatherSeenKinds: Set<string> | null = null;
+  let activePetsWithFourAbilities: number | null = null;
 
   try {
     const coinAtom = getAtomByLabel('myCoinsCountAtom');
@@ -1536,13 +2081,45 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
 
   try {
     const abilityHistory = getAbilityHistorySnapshot();
+    const now = Date.now();
+    const abilityEvents: Array<{ abilityId: string; performedAt: number }> = [];
+    const mutationAbilityIds = new Set(['GoldGranter', 'RainbowGranter', 'ProduceScaleBoost', 'ProduceScaleBoostII']);
     abilityHistory.forEach((history) => {
       const { abilityId, events, lastPerformedAt } = history;
       abilityCounts[abilityId] = (abilityCounts[abilityId] ?? 0) + events.length;
       const last = events.length ? Math.max(...events.map((e) => e.performedAt)) : lastPerformedAt ?? null;
       const prev = abilityLastProc[abilityId];
       abilityLastProc[abilityId] = prev == null ? last : Math.max(prev, last ?? 0);
+
+      events.forEach((event) => {
+        if (!event) return;
+        const performedAt = Number(event.performedAt ?? 0);
+        if (!Number.isFinite(performedAt) || performedAt <= 0) return;
+        abilityEvents.push({ abilityId, performedAt });
+      });
     });
+
+    if (abilityEvents.length) {
+      const cutoff5m = now - 5 * 60 * 1000;
+      const cutoff30s = now - 30 * 1000;
+      const cutoff30m = now - 30 * 60 * 1000;
+
+      const unique5m = new Set<string>();
+      const unique30s = new Set<string>();
+      let mutationWindowCount = 0;
+
+      abilityEvents.forEach(({ abilityId, performedAt }) => {
+        if (performedAt >= cutoff5m) unique5m.add(abilityId);
+        if (performedAt >= cutoff30s) unique30s.add(abilityId);
+        if (performedAt >= cutoff30m && mutationAbilityIds.has(abilityId)) {
+          mutationWindowCount += 1;
+        }
+      });
+
+      abilityUnique5m = unique5m.size;
+      abilityUnique30s = unique30s.size;
+      mutationEvents30m = mutationWindowCount;
+    }
 
     // Aries backfill (if available) for up to 500 logged events
     if (Object.keys(abilityCounts).length === 0) {
@@ -1695,6 +2272,11 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     if (activePets?.length) {
       const boostCount = activePets.filter((pet) => pet.abilities?.some((a) => a === 'ProduceScaleBoost' || a === 'ProduceScaleBoostII')).length;
       boostPetsActive = boostCount;
+
+      const countFourAbilities = activePets.filter((pet) => Array.isArray(pet.abilities) && pet.abilities.length >= 4).length;
+      if (countFourAbilities > 0) {
+        activePetsWithFourAbilities = countFourAbilities;
+      }
     }
   } catch (error) {
     log('⚠️ Achievements: boost pet scan failed', error);
@@ -1715,6 +2297,9 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   let journalProduceTotal: number | null = null;
   let journalPetCompleted: number | null = null;
   let journalPetTotal: number | null = null;
+  let journalProduceSpeciesCompleted: number | null = null;
+  let journalPetSpeciesCompleted: number | null = null;
+  let journalProduceMaxWeightCompleted: number | null = null;
   try {
     // Prefer journal checker tracker (variant-based) for progress; fall back to raw journal entries
     const trackerStats = await getJournalStats();
@@ -1746,6 +2331,32 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
           journalPetCompletion = Math.round((completed / petEntries.length) * 100);
         }
       }
+    }
+
+    try {
+      const summary = await getJournalSummary();
+      if (summary?.produce?.length) {
+        let fullProduce = 0;
+        let maxWeightCollected = 0;
+        summary.produce.forEach((entry) => {
+          const collectedAll = entry.variants.every((variant) => variant.collected);
+          if (collectedAll) fullProduce += 1;
+          const hasMaxWeight = entry.variants.some((variant) => variant.collected && /max\s*weight/i.test(variant.variant));
+          if (hasMaxWeight) maxWeightCollected += 1;
+        });
+        journalProduceSpeciesCompleted = fullProduce;
+        journalProduceMaxWeightCompleted = maxWeightCollected;
+      }
+      if (summary?.pets?.length) {
+        let fullPets = 0;
+        summary.pets.forEach((entry) => {
+          const collectedAll = entry.variants.every((variant) => variant.collected);
+          if (collectedAll) fullPets += 1;
+        });
+        journalPetSpeciesCompleted = fullPets;
+      }
+    } catch (error) {
+      log('⚠️ Achievements: journal summary scan failed', error);
     }
   } catch (error) {
     log('⚠️ Achievements: journal snapshot failed', error);
@@ -1986,6 +2597,42 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     log('⚠️ Achievements: Aries stats merge failed', error);
   }
 
+  try {
+    if (stats?.weather?.timeByKind) {
+      const seen = new Set<string>();
+      Object.entries(stats.weather.timeByKind).forEach(([kind, value]) => {
+        const n = Number(value ?? 0);
+        if (Number.isFinite(n) && n > 0) {
+          seen.add(kind.toLowerCase());
+        }
+      });
+      const active = stats.weather.activeKind;
+      if (active) seen.add(String(active).toLowerCase());
+      weatherSeenKinds = seen;
+    }
+  } catch (error) {
+    log('⚠️ Achievements: weather seen scan failed', error);
+  }
+
+  try {
+    const mutationSummary = getMutationSummary();
+    if (mutationSummary) {
+      const primary = mutationSummary;
+      const mutatedFromEligible = Math.max(0, (primary.overallTrackedPlantCount ?? 0) - (primary.overallEligiblePlantCount ?? 0));
+      const mutatedFromLunar = Math.max(0, primary.lunar?.mutatedPlantCount ?? 0);
+      const mutatedFromTotals = Math.max(mutatedFromEligible, mutatedFromLunar, primary.lunar?.mutatedFruitCount ?? 0);
+
+      const candidates = [mutatedFromEligible, mutatedFromLunar, mutatedFromTotals].filter((v) => Number.isFinite(v));
+      if (candidates.length) {
+        mutatedHarvests = Math.max(...(candidates as number[]));
+      }
+    }
+  } catch (error) {
+    log('⚠️ Achievements: mutation summary scan failed', error);
+  }
+
+  const saleCounts = getSaleWindowCounts();
+
   const snapshot: AchievementSnapshot = {
     stats,
     inventoryCount: invItems.length,
@@ -1996,6 +2643,9 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     journalProduceTotal,
     journalPetCompleted,
     journalPetTotal,
+    journalProduceSpeciesCompleted,
+    journalPetSpeciesCompleted,
+    journalProduceMaxWeightCompleted,
     coinBalance,
     lastCurrencyTransaction,
     cropEarnings,
@@ -2011,6 +2661,14 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     abilityCounts,
     abilityLastProc,
     boostPetsActive,
+    abilityUnique5m,
+    abilityUnique30s,
+    mutationEvents30m,
+    mutatedHarvests,
+    weatherSeenKinds,
+    activePetsWithFourAbilities,
+    saleUnique60s: saleCounts.unique60s,
+    saleUnique10m: saleCounts.unique10m,
   };
   dbgAch('ℹ️ Achievements snapshot', {
     planted: stats.garden.totalPlanted,
@@ -2034,6 +2692,14 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
   const now = Date.now();
   const abilityCounts = snap.abilityCounts ?? {};
   const abilityLastProc = snap.abilityLastProc ?? {};
+  const abilityUnique5m = snap.abilityUnique5m ?? 0;
+  const abilityUnique30s = snap.abilityUnique30s ?? 0;
+  const mutationEvents30m = snap.mutationEvents30m ?? 0;
+  const mutatedHarvests = snap.mutatedHarvests ?? 0;
+  const weatherSeen = snap.weatherSeenKinds ?? null;
+  const activePetsWithFourAbilities = snap.activePetsWithFourAbilities ?? 0;
+  const saleUnique60s = snap.saleUnique60s ?? 0;
+  const saleUnique10m = snap.saleUnique10m ?? 0;
   defs.forEach((def) => {
     const existing = state.progress.get(def.id) ?? {
       id: def.id,
@@ -2076,6 +2742,10 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           current = weatherByKind.dawn ?? 0;
         } else if (def.id.startsWith('weather:night-owl-')) {
           current = weatherByKind.ambermoon ?? 0;
+        } else if (def.id === 'onetime:fire-sale') {
+          current = saleUnique60s;
+        } else if (def.id === 'onetime:market-maker') {
+          current = saleUnique10m;
         } else if (def.id.startsWith('collection:produce-')) {
           current = snap.journalProduceCompleted ?? existing.current;
         } else if (def.id.startsWith('collection:pets-')) {
@@ -2096,6 +2766,27 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           if (ineligibleNow) {
             current = target;
           }
+        } else if (def.id === 'onetime:perfect-produce') {
+          const fullSpecies = snap.journalProduceSpeciesCompleted ?? 0;
+          current = fullSpecies > 0 ? target : 0;
+        } else if (def.id === 'onetime:perfect-symmetry') {
+          const fullPets = snap.journalPetSpeciesCompleted ?? 0;
+          current = fullPets > 0 ? target : 0;
+        } else if (def.id === 'onetime:mutation-marathon') {
+          current = mutationEvents30m;
+        } else if (def.id === 'onetime:all-weathered') {
+          if (weatherSeen && weatherSeen.size > 0) {
+            const hasDawn = Array.from(weatherSeen).some((kind) => kind.includes('dawn'));
+            const hasAmber = Array.from(weatherSeen).some((kind) => kind.includes('amber'));
+            const hasSnow = Array.from(weatherSeen).some((kind) => kind.includes('snow') || kind.includes('frost'));
+            current = hasDawn && hasAmber && hasSnow ? target : 0;
+          } else {
+            current = existing.current;
+          }
+        } else if (def.id === 'onetime:triple-hatch') {
+          current = existing.current;
+        } else if (def.id === 'onetime:These-Exist!?') {
+          current = activePetsWithFourAbilities > 0 ? target : 0;
         } else if (def.id === 'onetime:this-is-only-the-beginning') {
           current = abilityCounts['ProduceEater'] ?? 0;
           if (current > 0) current = target;
@@ -2112,6 +2803,18 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           const elapsed = lastBoost > 0 ? now - lastBoost : Number.POSITIVE_INFINITY;
           const twelveHours = 12 * 60 * 60 * 1000;
           current = boostCount >= 3 && elapsed >= twelveHours ? target : 0;
+        } else if (def.id === 'onetime:ability-synergy') {
+          current = abilityUnique5m;
+        } else if (def.id === 'onetime:combo-caster') {
+          current = abilityUnique30s;
+        } else if (def.id === 'onetime:abilities:crit-crafter') {
+          current = (abilityCounts['GoldGranter'] ?? 0) + (abilityCounts['RainbowGranter'] ?? 0);
+        } else if (def.id.startsWith('garden:mutation-harvester-')) {
+          current = mutatedHarvests;
+        } else if (def.id.startsWith('garden:giant-grower-')) {
+          current = snap.journalProduceMaxWeightCompleted ?? existing.current;
+        } else if (def.id.startsWith('abilities:empowered-harvest-')) {
+          current = (abilityCounts['GoldGranter'] ?? 0) + (abilityCounts['RainbowGranter'] ?? 0);
         } else {
           current = existing.current;
         }
@@ -2174,6 +2877,13 @@ export function initializeAchievements(): void {
   // Start live ability and pet trackers used by achievement evaluation
   void startAbilityTriggerStore().catch((error) => log('⚠️ Achievements: ability trigger store start failed', error));
   void startPetInfoStore().catch((error) => log('⚠️ Achievements: pet info store start failed', error));
+  if (!sellWindowStarted) {
+    sellWindowStarted = true;
+    void startSellWindowTracking(() => scheduleEvaluate()).catch((error) => {
+      log('⚠️ Achievements: sell window tracker failed to start', error);
+      sellWindowStarted = false;
+    });
+  }
 
   // Kick off initial evaluation after stats/inventory load
   scheduleEvaluate();

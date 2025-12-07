@@ -15,6 +15,7 @@ import { initializeMutationValueTracking } from './features/mutationValueTrackin
 import { initializeAutoFavorite } from './features/autoFavorite';
 import { getActivePetsDebug } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
+import { startSellSnapshotWatcher } from './store/sellSnapshot';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
 import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
@@ -1121,6 +1122,7 @@ async function initialize(): Promise<void> {
   initializeAchievements();
   exposeAriesBridge();
   await startInventoryStore();
+  await startSellSnapshotWatcher();
 
   // Initialize features
   startCropTypeLocking();

@@ -1,4 +1,4 @@
-const CURRENT_VERSION = '2.2.9'; // This should match package.json version
+const CURRENT_VERSION = '2.3.0'; // This should match package.json version
 export const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
 export const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes

@@ -374,8 +374,14 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
 
   if (searchInput) {
     let timeout: number | null = null;
-    const prevent = (e: Event): void => e.stopPropagation();
-    (['keydown', 'keyup', 'keypress'] as const).forEach(evt => searchInput.addEventListener(evt, prevent));
+    const swallowKey = (e: Event): void => {
+      e.stopPropagation();
+      // Prevent the game canvas from stealing focus/keys while typing
+      if (typeof (e as any).stopImmediatePropagation === 'function') {
+        (e as any).stopImmediatePropagation();
+      }
+    };
+    (['keydown', 'keyup', 'keypress'] as const).forEach(evt => searchInput.addEventListener(evt, swallowKey, true));
     searchInput.addEventListener('input', (e) => {
       if (timeout) window.clearTimeout(timeout);
       timeout = window.setTimeout(() => {

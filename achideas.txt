@@ -1,0 +1,62 @@
+Pure Luck:
+Hatch x Rainbow pets
+
+Seed Hoarder:
+Have X amount of seed in your inventory
+
+
+ONE TIME ONLY ACHIEVEMENTS (new section)
+This is only the beginning: Crop Eater ate your first crop
+YUMMY! *cries in crop eater*: Crop Eater ate your first Celestial (starweaver fruit, moonbinder bulb, dawnbinder bulb)
+Eating Good :( :Fed pet produce worth over 500M
+All I see is money: Only have gold or rainbow pets in your inventory and hutch
+Gamblers Fallacy: Go 48hr time without Crop Size Boost(ProduceScaleBoost) proc with at least 3 crop size boost I pets (track total time AT LEAST the specific crop boost I/II pets are out for)
+Money cant buy happiness: Open 1000 eggs OR reach 1B crop value sold (whichever first) with no rainbow pet
+Rich: Reach 50B coin balance
+Baller status: Reach 1T coin balance
+GOD-TIER RESEARCH: Complete both sections of the journal
+
+ 
+with money cant buy happiness: if the user is over 1000 eggs total hatched and over 1B crop value sold, mark as N/A (sort of completed but don't award the badge)
+change Gilded Guardian name to "Gold Digger"
+Instead of overlaying badges with the sprite, remove the overlay sprite and mask them shiny with their rarity colour, don't apply if they are gold pets or if they are below legendary!!!
+Ensure Common, Uncommon and Rare are displaying normal pet variants (not gold)
+Yummy!*cries in crop eater* needs to be changed to Crop eater at a celestial (same with logic)
+This is only the beginning needs to be change to Crop Eater ate a crop (same with logic)
+values are showing "Reach 50BB coin balance." there should only be one B
+Add new one time achievement: Who's Bill Gates? - Reach 10T coin balance.
+Add new one time achievement: What is money?? - Reach 100T coin balance.
+Add new one time achievement: What is grass... - Reach 1Q coin balance.
+Gamblers fallacy needs to be changed from 1h to 12 hour accumulated with them active
+
+Badges are weirdly stacked, ensure they are all on the same line and fit the window
+
+ensure all are tracking and let me know what they track
+
+
+
+Badges need to display their description
+In Progress and Completed button filters need fixing rewrite current functions:
+
+In Progress: Rarity value/goal previous to it must be "Completed" (only exception to this is if its common rarity), current is "In Progress" (meaning the badge for that rarity has not been completed) so that makes it in progress. ONLY DISPLAY those that are classed as In Progress under the rules i just stated.
+
+Completed: the rarity value has been achieved and badge has been awarded. ONLY DISPLAY THOSE ACHIEVEMENTS that are classed as Completed under the rules i just stated
+
+All: display all, just like it already does
+
+Categories Filter needs a dark background, no contrast on white text so is very hard to see
+
+One-Time achievements needs badges and for them to be displayed in Badges tab
+
+Sprites arent loading in One-time tab (also this tab needs button filters like the Achievements tab - All, In Progress, Completed)
+
+Achievements NEED to have better descriptions, just describing their functions. Plant 2.5k plants, Use 15k Watering Cans, Hatch 15k Eggs, Hatch 10 Gold Pets, Hatch 10 Rainbow pets, Trigger 5k Pet Ability Procs. exactly like that (i didnt use an example for all achievement descriptions but you get the philosiphy, make sure it matches the logic for it)
+
+In Badges, abbreviate long numbers: M, B, T, Q
+
+
+
+The celestial rainbow overlay/masking needs to be changed. it looks mostly white. however its applied to the pets in Pet Hub, we need to copy for celestials rainbow masking on all the Celestial Achievement sprites to keep the silohuetts and have the rainbow overlay looking like how its applied to pets
+
+
+change harvest hand to "Harvester"

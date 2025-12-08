@@ -2,6 +2,7 @@ type SpriteCategory = 'plants' | 'pets' | 'unknown';
 declare class SpriteExtractor {
     private sheets;
     private tiles;
+    private tallComposites;
     private initialized;
     private scanInterval;
     /**
@@ -34,6 +35,7 @@ declare class SpriteExtractor {
      * Get crop sprite by species name
      */
     getCropSprite(species: string): HTMLCanvasElement | null;
+    private getTallComposite;
     /**
      * Map crop species to sprite index
      * Based on actual game's plants.png sprite sheet (10x6 grid = 60 tiles, 256px each)

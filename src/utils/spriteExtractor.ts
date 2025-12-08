@@ -39,6 +39,7 @@ const PET_URL_HINT = /(pet|animal|creature|mob)/i;
 const PLANT_URL_HINT = /(plant|crop|tile)/i;
 
 const DEFAULT_PLANT_SHEET_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/plants.png';
+const DEFAULT_TALL_PLANT_SHEET_URL = 'https://magicgarden.gg/version/436ff68/assets/tiles/tallplants.png';
 const DEFAULT_PET_SHEET_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/pets.png';
 const DEFAULT_MUTATION_OVERLAYS_URL = 'https://magicgarden.gg/version/19aaa98/assets/tiles/mutation-overlays.png';
 
@@ -256,6 +257,7 @@ interface SpriteTile {
 class SpriteExtractor {
   private sheets = new Map<string, SpriteSheet>();
   private tiles = new Map<string, SpriteTile>();
+  private tallComposites = new Map<string, HTMLCanvasElement>();
   private initialized = false;
   private scanInterval: number | null = null;
 
@@ -299,8 +301,9 @@ class SpriteExtractor {
     // Wait for game to load assets
     await new Promise(r => setTimeout(r, 3000));
     
-    // Find plants, pets, and mutation overlay sheets from network resources
+    // Find plants, tall plants, pets, and mutation overlay sheets from network resources
     let plantsUrl: string | null = null;
+    let tallPlantsUrl: string | null = null;
     let petsUrl: string | null = null;
     let mutationOverlayUrl: string | null = null;
     
@@ -311,6 +314,10 @@ class SpriteExtractor {
       const plantsResource = resources.find(r => r.name.includes('/assets/tiles/plants.png'));
       if (plantsResource) {
         plantsUrl = plantsResource.name;
+      }
+      const tallPlantsResource = resources.find(r => r.name.toLowerCase().includes('/assets/tiles/tallplants.png'));
+      if (tallPlantsResource) {
+        tallPlantsUrl = tallPlantsResource.name;
       }
       const petsResource = resources.find(r => r.name.toLowerCase().includes('/assets/tiles/pets.png'));
       if (petsResource) {
@@ -326,6 +333,16 @@ class SpriteExtractor {
       // Fallback: construct URL from base
       plantsUrl = DEFAULT_PLANT_SHEET_URL;
       log('  Using default plants.png URL');
+    }
+    if (!tallPlantsUrl && plantsUrl) {
+      const candidate = plantsUrl.replace(/plants\.png(?:\?.*)?$/i, 'tallplants.png');
+      if (candidate !== plantsUrl) {
+        tallPlantsUrl = candidate;
+      }
+    }
+    if (!tallPlantsUrl) {
+      tallPlantsUrl = DEFAULT_TALL_PLANT_SHEET_URL;
+      log('  Using default tallplants.png URL');
     }
     if (!petsUrl) {
       petsUrl = DEFAULT_PET_SHEET_URL;
@@ -344,6 +361,14 @@ class SpriteExtractor {
       this.processSheet('plants', img);
     } catch (error) {
       log('�s��,? Failed to load plants.png', error);
+    }
+
+    try {
+      const tallImg = await loadImageElement(tallPlantsUrl);
+      log(`�o. Loaded tallplants.png (${tallImg.width}x${tallImg.height})`);
+      this.processSheet('tallplants', tallImg);
+    } catch (error) {
+      log('⚠️ Failed to load tallplants.png', error);
     }
 
     try {
@@ -423,6 +448,7 @@ class SpriteExtractor {
     // Extract meaningful name from Pixi texture key
     // Examples: "prod-plants-v2" or "assets/plants.png"
     const lower = key.toLowerCase();
+    if (lower.includes('tallplant')) return 'tallplants';
     if (lower.includes('prod-plants')) return 'prod-plants';
     if (lower.includes('plant')) return 'plants';
     if (lower.includes('crop')) return 'crops';
@@ -569,10 +595,23 @@ class SpriteExtractor {
   getCropSprite(species: string): HTMLCanvasElement | null {
     // Try common plant sheet names
     const sheetNames = ['plants', 'allplants', 'plant', 'crops', 'prod-plants', 'prod-plants-v2'];
+    const tallSheetNames = ['tallplants'];
+    const tallTiles: Record<string, number[]> = {
+      bamboo: [0, 1, 12, 13],
+      cactus: [24, 25, 36, 37],
+    };
     
     // Species to index mapping (will need to be expanded based on game data)
     const speciesIndex = this.getCropSpriteIndex(species.toLowerCase());
     if (speciesIndex === null) return null;
+
+    const tallIndices = tallTiles[species.toLowerCase()];
+    if (Array.isArray(tallIndices)) {
+      for (const sheetName of tallSheetNames) {
+        const tile = this.getTallComposite(sheetName, tallIndices);
+        if (tile) return tile;
+      }
+    }
 
     for (const sheetName of sheetNames) {
       const tile = this.getTile(sheetName, speciesIndex);
@@ -580,6 +619,36 @@ class SpriteExtractor {
     }
 
     return null;
+  }
+
+  private getTallComposite(sheetName: string, indices: number[]): HTMLCanvasElement | null {
+    const key = `${sheetName}-${indices.join('-')}`;
+    if (this.tallComposites.has(key)) {
+      return this.tallComposites.get(key)!;
+    }
+
+    const sheet = this.sheets.get(sheetName);
+    if (!sheet || !sheet.loaded) return null;
+
+    const tiles = indices.map(index => this.getTile(sheetName, index));
+    if (tiles.some(tile => !tile)) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = sheet.tileSize * 2;
+    canvas.height = sheet.tileSize * 2;
+
+    const ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+
+    // Indices are ordered [top-left, top-right, bottom-left, bottom-right]
+    ctx.drawImage(tiles[0]!, 0, 0);
+    ctx.drawImage(tiles[1]!, sheet.tileSize, 0);
+    ctx.drawImage(tiles[2]!, 0, sheet.tileSize);
+    ctx.drawImage(tiles[3]!, sheet.tileSize, sheet.tileSize);
+
+    this.tallComposites.set(key, canvas);
+    return canvas;
   }
 
   /**
@@ -618,6 +687,8 @@ class SpriteExtractor {
       'corn': 35,
       'fava bean': 36,
       'favabean': 36, // alias
+      'fava bean pod': 36, // alias
+      'favabeanpod': 36, // alias
       'cacao': 37,
       'cacao bean': 37, // alias
       'cacao fruit': 37, // alias

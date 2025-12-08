@@ -32,6 +32,27 @@ let domObserverHandle: { disconnect: () => void } | null = null;
 let lastSnapshotCache: any = null;
 let cachedJournalData: Journal | null = null;
 
+const normalizeSpeciesKey = (value: string): string => (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const SPECIES_KEY_ALIASES: Record<string, string[]> = {
+  cacaobean: ['cacao', 'cacao bean', 'cacao fruit', 'cocoabean', 'cocoa bean'],
+  dragonfruit: ['dragon fruit'],
+  favabean: ['fava bean', 'fava-bean', 'fava', 'fava bean pod', 'fava pod'],
+  burrostail: ["burro's tail", 'burros tail', 'burro tail'],
+  passionfruit: ['passion fruit', 'passion-fruit', 'passionfruit'],
+  dawncelestial: ['dawnbinder', 'dawn binder'],
+  mooncelestial: ['moonbinder', 'moon binder'],
+};
+
+const resolveSpeciesKey = (raw: string): string => {
+  const key = normalizeSpeciesKey(raw);
+  for (const [canonical, aliases] of Object.entries(SPECIES_KEY_ALIASES)) {
+    if (key === canonical) return canonical;
+    if (aliases.some((alias) => normalizeSpeciesKey(alias) === key)) return canonical;
+  }
+  return key;
+};
+
 import type { VariantBadge } from '../data/variantBadges';
 
 // ============================================================================
@@ -54,23 +75,23 @@ async function getUnloggedVariantBadges(species: string): Promise<VariantBadge[]
     }
 
     // Normalize species name for journal lookup
-    // Handle celestial plants: moonbinder -> MoonCelestial, dawnbinder -> DawnCelestial
-    let normalizedSpecies = species.charAt(0).toUpperCase() + species.slice(1).toLowerCase();
-
-    const celestialMap: Record<string, string> = {
-      'moonbinder': 'MoonCelestial',
-      'dawnbinder': 'DawnCelestial',
-      'Moonbinder': 'MoonCelestial',
-      'Dawnbinder': 'DawnCelestial',
-    };
-
-    if (celestialMap[species]) {
-      normalizedSpecies = celestialMap[species];
+    const produceByKey = new Map<string, NonNullable<Journal['produce']>[string]>();
+    for (const [name, data] of Object.entries(cachedJournalData.produce)) {
+      produceByKey.set(resolveSpeciesKey(name), data as any);
     }
 
-    // Get logged variants for this species
+    let speciesKey = resolveSpeciesKey(species);
+    // Handle celestial plants: moonbinder -> MoonCelestial, dawnbinder -> DawnCelestial
+    const celestialMap: Record<string, string> = {
+      moonbinder: 'mooncelestial',
+      dawnbinder: 'dawncelestial',
+    };
+    const remap = celestialMap[speciesKey];
+    if (remap) {
+      speciesKey = resolveSpeciesKey(remap);
+    }
 
-    const speciesData = cachedJournalData.produce[normalizedSpecies];
+    const speciesData = produceByKey.get(speciesKey);
     if (!speciesData) {
       // Species not in journal yet - everything counts as unlogged.
       return VARIANT_BADGES.map(badge => ({ ...badge }));
@@ -388,12 +409,30 @@ function ensureSizeIndicator(container: Element, sizeValue: number, badges: Vari
     badgeContainer.replaceChildren(...nodes);
     badgeContainer.style.visibility = 'visible';
     divider.style.display = 'inline-block';
-    sizeRow.style.justifyContent = 'center';
+
+    // For long badge strings (many variants), wrap to a second line to avoid tooltip overflow
+    const shouldWrap = badges.length > 8;
+    sizeRow.style.flexWrap = shouldWrap ? 'wrap' : 'nowrap';
+    sizeRow.style.rowGap = shouldWrap ? '2px' : '0';
+    badgeContainer.style.flexWrap = shouldWrap ? 'wrap' : 'nowrap';
+    badgeContainer.style.maxWidth = shouldWrap ? '220px' : '';
+    badgeContainer.style.justifyContent = shouldWrap ? 'center' : '';
+    badgeContainer.style.alignItems = 'center';
+    badgeContainer.style.width = shouldWrap ? '100%' : 'auto';
+    badgeContainer.style.textAlign = shouldWrap ? 'center' : 'right';
   } else {
     badgeContainer.replaceChildren();
     badgeContainer.style.visibility = 'hidden';
     divider.style.display = 'none';
     sizeRow.style.justifyContent = 'center';
+    sizeRow.style.flexWrap = 'nowrap';
+    sizeRow.style.rowGap = '0';
+    badgeContainer.style.flexWrap = 'nowrap';
+    badgeContainer.style.maxWidth = '';
+    badgeContainer.style.justifyContent = '';
+    badgeContainer.style.alignItems = '';
+    badgeContainer.style.width = 'auto';
+    badgeContainer.style.textAlign = 'right';
   }
 
   positionIndicatorRow(container, sizeRow, ariesRow);
@@ -537,6 +576,17 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     'dawnbinder bulb': 'dawnbinder',
     'moonbinder bulb': 'moonbinder',
     'starweaver fruit': 'starweaver',
+    'dragon fruit': 'dragonfruit',
+    "burro's tail": 'burrostail',
+    'burros tail': 'burrostail',
+    'fava bean': 'favabean',
+    'passionfruit': 'passionfruit',
+    'fava bean pod': 'favabean',
+    'fava pod': 'favabean',
+    'passion fruit': 'passionfruit',
+    'cacao bean': 'cacaobean',
+    'cacao': 'cacaobean',
+    'cocoa bean': 'cacaobean',
     // Multi-harvest fruit names
     'lychee fruit': 'lychee',
     'strawberry': 'strawberry',

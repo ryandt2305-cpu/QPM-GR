@@ -16,6 +16,10 @@ const normalizeKey = (value: string): string => (value ?? '').toLowerCase().repl
 // Alias mappings for produce keys that may differ between in-game journal and catalog
 const PRODUCE_KEY_ALIASES: Record<string, string[]> = {
   cacaobean: ['cacao', 'cacao bean', 'cacao fruit', 'cacaofruit', 'cocoa', 'cocoabean'],
+  favabean: ['fava bean', 'fava bean pod', 'favabeanpod', 'fava pod', 'favapod'],
+  passionfruit: ['passion fruit'],
+  dragonfruit: ['dragon fruit'],
+  burrostail: ["burro's tail", 'burros tail'],
 };
 
 const resolveProduceKey = (raw: string): string => {

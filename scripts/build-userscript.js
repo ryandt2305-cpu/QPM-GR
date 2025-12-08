@@ -33,7 +33,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // ==/UserScript==
 
 (function() {
-'use strict';
+// @version      2.2.9
 
 `;
 

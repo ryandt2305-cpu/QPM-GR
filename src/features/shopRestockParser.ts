@@ -13,7 +13,7 @@ const ITEM_CATEGORIES = {
   crops: [
     'Carrot', 'Strawberry', 'Aloe', 'Delphinium', 'Blueberry', 'Apple',
     'Tulip', 'Tomato', 'Corn', 'Camellia', 'Squash', 'Mushroom',
-    'Banana', 'Grape', 'Coconut', 'Lychee', 'Bamboo'
+    'Banana', 'Grape', 'Coconut', 'Lychee', 'Bamboo', 'Dragon Fruit', 'Fava Bean'
   ],
   seeds: [
     // Basic seeds
@@ -22,18 +22,25 @@ const ITEM_CATEGORIES = {
     'Echeveria', 'Coconut', 'Banana', 'Lily', 'Camellia', 'Squash',
     "Burro's Tail", 'Mushroom', 'Cactus', 'Bamboo', 'Chrysanthemum',
     'Grape', 'Pepper', 'Lemon', 'Passion Fruit', 'Dragon Fruit',
-    'Lychee', 'Sunflower', 'Starweaver', 'Dawnbinder', 'Moonbinder'
+    'Lychee', 'Sunflower', 'Starweaver', 'Dawnbinder', 'Moonbinder',
+    'Fava Bean', 'Cacao Bean'
   ],
 };
+
+function normalizeItemName(itemName: string): string {
+  // Normalize curly apostrophes and trim whitespace for matching
+    return itemName.replace(/[\u2018\u2019]/g, "'").trim();
+}
 
 /**
  * Determine item type
  */
 function getItemType(itemName: string): 'seed' | 'crop' | 'egg' | 'weather' | 'unknown' {
-  if (ITEM_CATEGORIES.weather.includes(itemName)) return 'weather';
-  if (ITEM_CATEGORIES.eggs.some(e => itemName.includes(e))) return 'egg';
-  if (ITEM_CATEGORIES.crops.includes(itemName)) return 'crop';
-  if (ITEM_CATEGORIES.seeds.includes(itemName)) return 'seed';
+  const normalized = normalizeItemName(itemName);
+  if (ITEM_CATEGORIES.weather.includes(normalized)) return 'weather';
+  if (ITEM_CATEGORIES.eggs.some(e => normalized.includes(e))) return 'egg';
+  if (ITEM_CATEGORIES.crops.includes(normalized)) return 'crop';
+  if (ITEM_CATEGORIES.seeds.includes(normalized)) return 'seed';
   return 'unknown';
 }
 
@@ -215,7 +222,7 @@ function parseItems(content: string): RestockItem[] {
     const mentionMatch = part.match(/@([^@]+?)(?:\s+(\d+))?$/);
 
     if (mentionMatch && mentionMatch[1]) {
-      const itemName = mentionMatch[1].trim();
+      const itemName = normalizeItemName(mentionMatch[1]);
 
       // Only track seeds and eggs
       if (!shouldTrackItem(itemName)) {
@@ -243,13 +250,76 @@ function generateRestockId(timestamp: number, items: RestockItem[]): string {
   return `${timestamp}-${btoa(itemsHash).substring(0, 8)}`;
 }
 
+interface SerializedRestockEvent {
+  id?: string;
+  timestamp: number;
+  dateString?: string;
+  items: Array<{ name: string; quantity: number; type?: RestockItem['type'] }>;
+  source?: RestockEvent['source'];
+}
+
+function normalizeSerializedEvent(event: SerializedRestockEvent): RestockEvent | null {
+  if (!event || typeof event.timestamp !== 'number' || !Array.isArray(event.items)) return null;
+
+  const normalizedItems: RestockItem[] = event.items
+    .map((item) => ({
+      name: normalizeItemName(item.name),
+      quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+      type: item.type ?? getItemType(item.name),
+    }))
+    .filter((item) => shouldTrackItem(item.name));
+
+  if (normalizedItems.length === 0) return null;
+
+  const id = event.id || generateRestockId(event.timestamp, normalizedItems);
+
+  return {
+    id,
+    timestamp: event.timestamp,
+    dateString: event.dateString || new Date(event.timestamp).toISOString(),
+    items: normalizedItems,
+    source: event.source || 'manual',
+  };
+}
+
+function parseEmbeddedJson(doc: Document): RestockEvent[] | null {
+  const script = doc.getElementById('qpm-restock-data');
+  if (!script) return null;
+
+  try {
+    const raw = script.textContent || '[]';
+    const payload = JSON.parse(raw) as { events?: SerializedRestockEvent[] } | SerializedRestockEvent[];
+    const eventsArray = Array.isArray((payload as any)?.events) ? (payload as any).events : Array.isArray(payload) ? payload : [];
+    const normalized: RestockEvent[] = [];
+
+    for (const evt of eventsArray) {
+      const parsed = normalizeSerializedEvent(evt);
+      if (parsed) normalized.push(parsed);
+    }
+
+    if (normalized.length > 0) {
+      log(`✅ Parsed ${normalized.length} restock events from embedded JSON payload`);
+      return normalized;
+    }
+  } catch (error) {
+    log('⚠️ Failed to parse embedded restock JSON payload', error);
+  }
+
+  return null;
+}
+
 /**
  * Parse Discord HTML export to extract restock events (chunked for performance)
  */
 export async function parseDiscordHtml(htmlContent: string): Promise<RestockEvent[]> {
-  const events: RestockEvent[] = [];
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
+
+  // Prefer embedded JSON payloads from QPM exports (lossless and timezone-safe)
+  const embedded = parseEmbeddedJson(doc);
+  if (embedded) return embedded;
+
+  const events: RestockEvent[] = [];
 
   // Find all message groups from Magic Shopkeeper
   const messageGroups = Array.from(doc.querySelectorAll('.chatlog__message-group'));
@@ -346,14 +416,38 @@ export async function parseDiscordHtml(htmlContent: string): Promise<RestockEven
 /**
  * Parse Discord HTML from a file
  */
-export async function parseDiscordHtmlFile(file: File): Promise<RestockEvent[]> {
+function parseRestockJsonContent(jsonText: string): RestockEvent[] {
+  try {
+    const payload = JSON.parse(jsonText) as { events?: SerializedRestockEvent[] } | SerializedRestockEvent[];
+    const eventsArray = Array.isArray((payload as any)?.events) ? (payload as any).events : Array.isArray(payload) ? payload : [];
+    const normalized: RestockEvent[] = [];
+    for (const evt of eventsArray) {
+      const parsed = normalizeSerializedEvent(evt);
+      if (parsed) normalized.push(parsed);
+    }
+    log(`✅ Parsed ${normalized.length} restock events from JSON payload`);
+    return normalized;
+  } catch (error) {
+    log('⚠️ Failed to parse restock JSON content', error);
+    return [];
+  }
+}
+
+export async function parseRestockFile(file: File): Promise<RestockEvent[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
-        const htmlContent = e.target?.result as string;
-        const events = parseDiscordHtml(htmlContent);
+        const content = (e.target?.result as string) ?? '';
+        const isJson = file.name.toLowerCase().endsWith('.json') || file.type.includes('json') || content.trim().startsWith('{') || content.trim().startsWith('[');
+
+        if (isJson) {
+          resolve(parseRestockJsonContent(content));
+          return;
+        }
+
+        const events = await parseDiscordHtml(content);
         resolve(events);
       } catch (error) {
         reject(error);

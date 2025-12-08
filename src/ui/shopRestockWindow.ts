@@ -27,7 +27,7 @@ import {
   disableLiveTracking,
   isLiveTrackingEnabled,
 } from '../features/shopRestockLiveTracker';
-import { parseDiscordHtmlFile } from '../features/shopRestockParser';
+import { parseRestockFile } from '../features/shopRestockParser';
 import { log } from '../utils/logger';
 
 export interface ShopRestockWindowState {
@@ -309,6 +309,54 @@ function createLiveTrackingSection(): HTMLElement {
   section.appendChild(toggleBtn);
 
   return section;
+}
+
+function buildRestockPayload(events: ReturnType<typeof getAllRestockEvents>) {
+  return {
+    version: '2025-12-08',
+    exportedAt: Date.now(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    events: events.map((event) => ({
+      id: event.id,
+      timestamp: event.timestamp,
+      dateString: event.dateString,
+      source: event.source,
+      items: event.items.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        type: item.type,
+      })),
+    })),
+  };
+}
+
+function serializePayload(payload: unknown): string {
+  // Replace < to avoid breaking the script tag when embedded in HTML
+  return JSON.stringify(payload).replace(/</g, '\\u003c');
+}
+
+function formatExportDate(timestamp: number): { full: string; time: string } {
+  const date = new Date(timestamp);
+  const full = date
+    .toLocaleString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .replace(',', '');
+
+  const time = date.toLocaleTimeString('en-AU', {
+    timeZone: 'Australia/Sydney',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  return { full, time };
 }
 
 /**
@@ -895,17 +943,17 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
     color: var(--qpm-text-muted, #aaa);
     line-height: 1.5;
   `;
-  description.textContent = 'Upload a Discord HTML export from the restock channel to import historical data.';
+  description.textContent = 'Upload a Discord HTML export from the restock channel to import historical data. You can also import the smaller JSON export.';
   section.appendChild(description);
 
   // File input
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
-  fileInput.accept = '.html';
+  fileInput.accept = '.html,.json';
   fileInput.style.display = 'none';
 
   const uploadBtn = document.createElement('button');
-  uploadBtn.textContent = '📁 Choose HTML File';
+  uploadBtn.textContent = '📁 Choose File';
   uploadBtn.style.cssText = `
     padding: 8px 16px;
     background: var(--qpm-accent, #4CAF50);
@@ -928,20 +976,20 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
     uploadBtn.textContent = '⏳ Parsing...';
 
     try {
-      const events = await parseDiscordHtmlFile(file);
+      const events = await parseRestockFile(file);
       addRestockEvents(events);
 
       uploadBtn.textContent = `✅ Imported ${events.length} restocks`;
       setTimeout(() => {
         uploadBtn.disabled = false;
-        uploadBtn.textContent = '📁 Choose HTML File';
+        uploadBtn.textContent = '📁 Choose File';
       }, 3000);
     } catch (error) {
       log('❌ Failed to parse Discord HTML:', error);
       uploadBtn.textContent = '❌ Import failed';
       setTimeout(() => {
         uploadBtn.disabled = false;
-        uploadBtn.textContent = '📁 Choose HTML File';
+        uploadBtn.textContent = '📁 Choose File';
       }, 3000);
     }
   };
@@ -972,6 +1020,24 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
       exportRestockDataAsHtml();
     };
     buttonContainer.appendChild(exportBtn);
+
+    // Export JSON button (smaller payload for sharing)
+    const exportJsonBtn = document.createElement('button');
+    exportJsonBtn.textContent = '📦 Export JSON (small)';
+    exportJsonBtn.style.cssText = `
+      padding: 8px 16px;
+      background: rgba(66, 165, 245, 0.08);
+      color: #42A5F5;
+      border: 1px solid rgba(66, 165, 245, 0.6);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    `;
+    exportJsonBtn.onclick = () => {
+      exportRestockDataAsJson();
+    };
+    buttonContainer.appendChild(exportJsonBtn);
 
     // Clear data button
     const clearBtn = document.createElement('button');
@@ -1284,6 +1350,9 @@ function exportRestockDataAsHtml(): void {
   // Sort events by timestamp
   const sortedEvents = [...events].sort((a, b) => a.timestamp - b.timestamp);
 
+  // Build JSON payload for lossless import
+  const payload = buildRestockPayload(sortedEvents);
+
   // Generate HTML
   const html = `<!DOCTYPE html>
 <html>
@@ -1308,24 +1377,7 @@ function exportRestockDataAsHtml(): void {
   <div class="chatlog__message-group">
     <div class="chatlog__author">Magic Shopkeeper</div>
 ${sortedEvents.map(event => {
-  const date = new Date(event.timestamp);
-
-  // Use user's locale for date formatting (instead of hardcoded en-GB)
-  const dateStr = date.toLocaleString(undefined, {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  }).replace(',', '');
-
-  // Use user's locale for time formatting (instead of hardcoded en-US)
-  const timeStr = date.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
+  const { full: dateStr, time: timeStr } = formatExportDate(event.timestamp);
 
   const itemsText = event.items.map(item => {
     return item.quantity > 0 ? `@${item.name} ${item.quantity}` : `@${item.name}`;
@@ -1338,6 +1390,7 @@ ${sortedEvents.map(event => {
     </div>`;
 }).join('\n')}
   </div>
+  <script id="qpm-restock-data" type="application/json">${serializePayload(payload)}</script>
 </body>
 </html>`;
 
@@ -1351,6 +1404,25 @@ ${sortedEvents.map(event => {
   URL.revokeObjectURL(url);
 
   log(`✅ Exported ${events.length} restock events to HTML`);
+}
+
+function exportRestockDataAsJson(): void {
+  const events = getAllRestockEvents();
+  if (events.length === 0) {
+    log('⚠️ No restock data to export');
+    return;
+  }
+
+  const payload = buildRestockPayload([...events].sort((a, b) => a.timestamp - b.timestamp));
+  const blob = new Blob([serializePayload(payload)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `qpm-shop-restock-export-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  log(`✅ Exported ${events.length} restock events to JSON`);
 }
 
 /**

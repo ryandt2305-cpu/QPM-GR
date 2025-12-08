@@ -7,14 +7,47 @@ import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../featu
 import { getVariantChipColors } from '../data/variantBadges';
 
 // Shop layout order (produce section follows this sequence)
+// Shop layout order (top -> bottom) as requested
 const SHOP_LAYOUT_ORDER = [
-  'Daffodil', 'Orange Tulip', 'Sunflower', 'Lily', 'Starweaver', 'Chrysanthemum', 'Aloe', 'Cactus', 'Bamboo',
-  'Blueberry', 'Banana', 'Strawberry', 'Grape', 'Watermelon', 'Lemon', 'Apple',
-  'Pepper', 'Tomato', 'Carrot', 'Pumpkin', 'Corn', 'Fava Bean', 'Cacao Bean', 'Lychee',
-  'Coconut', 'Passion Fruit', 'Dragon Fruit', 'Mushroom', "Burro's Tail", 'Echeveria', 'Delphinium',
-  'Dawnbinder', 'Moonbinder', 'Camellia', 'Squash',
+  'Carrot',
+  'Strawberry',
+  'Aloe',
+  'Fava Bean',
+  'Delphinium',
+  'Blueberry',
+  'Apple',
+  'Orange Tulip', // Tulip in shop; catalog uses OrangeTulip
+  'Tomato',
+  'Daffodil',
+  'Corn',
+  'Watermelon',
+  'Pumpkin',
+  'Echeveria',
+  'Coconut',
+  'Banana',
+  'Lily',
+  'Camellia',
+  "Burro's Tail",
+  'Mushroom',
+  'Cactus',
+  'Bamboo',
+  'Chrysanthemum',
+  'Grape',
+  'Pepper',
+  'Lemon',
+  'Passion Fruit',
+  'Dragon Fruit',
+  'Squash',
+  'Cacao Bean',
+  'Lychee',
+  'Sunflower',
+  'Starweaver',
+  'Dawnbinder',
+  'Moonbinder',
 ];
 const SHOP_LAYOUT_INDEX = new Map(SHOP_LAYOUT_ORDER.map((name, idx) => [name.toLowerCase().replace(/[^a-z0-9]/g, ''), idx]));
+
+const TALL_SPECIES = new Set(['cactus', 'bamboo']);
 
 // Storage for user notes per species
 function getSpeciesNotes(species: string): string {
@@ -222,6 +255,7 @@ export function createJournalCheckerSection(): HTMLElement {
         // Get sprite
         const speciesKey = species.species.toLowerCase().replace(/\s+/g, '');
         const spriteDataUrl = getCropSpriteDataUrl(speciesKey) || getCropSpriteDataUrl(species.species.toLowerCase());
+        const isTall = TALL_SPECIES.has(speciesKey.replace(/[^a-z0-9]/g, ''));
         const isComplete = percentage === 100;
         
         speciesCard.innerHTML = `
@@ -229,11 +263,11 @@ export function createJournalCheckerSection(): HTMLElement {
             ${spriteDataUrl ? `
               <div style="
                 width: 64px;
-                height: 64px;
+                height: ${isTall ? '92px' : '64px'};
                 background-image: url(${spriteDataUrl});
-                background-size: contain;
+                background-size: ${isTall ? 'auto 96%' : 'contain'};
                 background-repeat: no-repeat;
-                background-position: center;
+                background-position: center bottom;
                 border-radius: 8px;
                 border: 2px solid ${isComplete ? '#8BC34A' : '#444'};
                 flex-shrink: 0;

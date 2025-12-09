@@ -1117,7 +1117,7 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
   if (journal) {
     const petsJournal = journal.pets || {};
     const produceJournal = journal.produce || {};
-    
+
     // Count unique species (pets) and variants (produce)
     let petsDiscovered = 0;
     Object.keys(petsJournal).forEach(species => {
@@ -1126,7 +1126,7 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
         petsDiscovered++;
       }
     });
-    
+
     // Count produce variants across all species
     let produceVariantsDiscovered = 0;
     Object.keys(produceJournal).forEach(species => {
@@ -1135,20 +1135,62 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
         produceVariantsDiscovered += entry.variantsLogged.length;
       }
     });
-    
+
     const totalPets = 60; // Correct total from game
     const totalProduceVariants = 385; // Correct total from game (11 variants per crop × 35 crops)
     const petsPct = Math.min(100, (petsDiscovered / totalPets) * 100);
     const producePct = Math.min(100, (produceVariantsDiscovered / totalProduceVariants) * 100);
-    
+
     // Check if journal is expanded (default to collapsed)
     const isJournalExpanded = storage.get<boolean>('player-inspector:journal-expanded', false);
-    
+    const activeJournalTab = storage.get<string>('player-inspector:journal-tab', 'crops');
+
+    // Generate per-crop progress rows
+    const cropRows = Object.entries(produceJournal)
+      .filter(([_, entry]) => entry && (entry as any).variantsLogged?.length > 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([species, entry]) => {
+        const variantsLogged = (entry as any).variantsLogged?.length || 0;
+        const totalVariants = 11; // Each crop has 11 variants
+        const pct = Math.min(100, (variantsLogged / totalVariants) * 100);
+        return `
+          <div class="pr-journal-detail-row">
+            <span class="pr-journal-species">${friendlyName(species)}</span>
+            <span class="pr-journal-variants">${variantsLogged}/11</span>
+            <div class="pr-progress-bar-mini">
+              <div class="pr-progress-fill-mini" style="width:${pct}%;background:${pct === 100 ? 'linear-gradient(90deg, #FFD700, #FFA500)' : 'linear-gradient(90deg, #4CAF50, #2E7D32)'}"></div>
+            </div>
+          </div>
+        `;
+      }).join('') || '<div class="pr-pane-placeholder">No crops logged yet</div>';
+
+    // Generate per-pet progress rows
+    const petRows = Object.entries(petsJournal)
+      .filter(([_, entry]) => entry && ((entry as any).variantsLogged?.length > 0 || (entry as any).abilitiesLogged?.length > 0))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([species, entry]) => {
+        const abilitiesLogged = (entry as any).abilitiesLogged?.length || 0;
+        const variantsLogged = (entry as any).variantsLogged?.length || 0;
+        const totalAbilities = 3; // Most pets have up to 3 abilities
+        const totalVariants = 3; // Base, Gold, Rainbow
+        const abilityPct = Math.min(100, (abilitiesLogged / totalAbilities) * 100);
+        const variantPct = Math.min(100, (variantsLogged / totalVariants) * 100);
+        return `
+          <div class="pr-journal-detail-row">
+            <span class="pr-journal-species">${friendlyName(species)}</span>
+            <span class="pr-journal-variants">${abilitiesLogged}/${totalAbilities} abilities, ${variantsLogged}/${totalVariants} variants</span>
+            <div class="pr-progress-bar-mini">
+              <div class="pr-progress-fill-mini" style="width:${abilityPct}%;background:${abilityPct === 100 ? 'linear-gradient(90deg, #a78bfa, #7c3aed)' : 'linear-gradient(90deg, #FF7043, #FF5722)'}"></div>
+            </div>
+          </div>
+        `;
+      }).join('') || '<div class="pr-pane-placeholder">No pets logged yet</div>';
+
     journalHtml = `
       <div class="pr-section pr-section-animated" data-expandable-section="journal">
         <div class="pr-section-head" style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;" onclick="
           const section = this.closest('[data-expandable-section]');
-          const content = section.querySelector('.pr-journal-progress');
+          const content = section.querySelector('.pr-journal-container');
           const arrow = this.querySelector('.pr-expand-arrow');
           const isExpanded = content.style.display !== 'none';
           content.style.display = isExpanded ? 'none' : 'block';
@@ -1158,26 +1200,57 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
           <span>📖 Journal Progress</span>
           <span class="pr-expand-arrow" style="font-size: 12px; transition: transform 0.2s;">${isJournalExpanded ? '▼' : '▶'}</span>
         </div>
-        <div class="pr-journal-progress" style="display: ${isJournalExpanded ? 'block' : 'none'};">
-          <div class="pr-journal-item">
-            <div class="pr-journal-header">
-              <span>🐾 Pets Discovered</span>
-              <span class="pr-journal-count">${petsDiscovered} / ${totalPets}</span>
+        <div class="pr-journal-container" style="display: ${isJournalExpanded ? 'block' : 'none'};">
+          <!-- Original Progress Bars -->
+          <div class="pr-journal-progress">
+            <div class="pr-journal-item">
+              <div class="pr-journal-header">
+                <span>🐾 Pets Discovered</span>
+                <span class="pr-journal-count">${petsDiscovered} / ${totalPets}</span>
+              </div>
+              <div class="pr-progress-bar">
+                <div class="pr-progress-fill pr-progress-animated" style="width:${petsPct}%;background:${petsPct === 100 ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)' : 'linear-gradient(90deg, #FF7043, #FF5722)'};${petsPct === 100 ? 'animation: qpm-rainbow-progress 3s linear infinite; background-size: 200% 100%;' : ''}"></div>
+              </div>
+              <div class="pr-progress-pct">${petsPct.toFixed(1)}%</div>
             </div>
-            <div class="pr-progress-bar">
-              <div class="pr-progress-fill pr-progress-animated" style="width:${petsPct}%;background:${petsPct === 100 ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)' : 'linear-gradient(90deg, #FF7043, #FF5722)'};${petsPct === 100 ? 'animation: qpm-rainbow-progress 3s linear infinite; background-size: 200% 100%;' : ''}"></div>
+            <div class="pr-journal-item">
+              <div class="pr-journal-header">
+                <span>🌿 Crop Variants Discovered</span>
+                <span class="pr-journal-count">${produceVariantsDiscovered} / ${totalProduceVariants}</span>
+              </div>
+              <div class="pr-progress-bar">
+                <div class="pr-progress-fill pr-progress-animated" style="width:${producePct}%;background:${producePct === 100 ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)' : 'linear-gradient(90deg, #2E7D32, #4CAF50)'};${producePct === 100 ? 'animation: qpm-rainbow-progress 3s linear infinite; background-size: 200% 100%;' : ''}"></div>
+              </div>
+              <div class="pr-progress-pct">${producePct.toFixed(1)}%</div>
             </div>
-            <div class="pr-progress-pct">${petsPct.toFixed(1)}%</div>
           </div>
-          <div class="pr-journal-item">
-            <div class="pr-journal-header">
-              <span>🌿 Crop Variants Discovered</span>
-              <span class="pr-journal-count">${produceVariantsDiscovered} / ${totalProduceVariants}</span>
+
+          <!-- Detailed Journal Stats -->
+          <div class="pr-journal-details" style="margin-top: 16px;">
+            <div class="pr-journal-tabs">
+              <button class="pr-journal-tab ${activeJournalTab === 'crops' ? 'active' : ''}" onclick="
+                document.querySelectorAll('.pr-journal-tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                document.querySelectorAll('.pr-journal-tab-content').forEach(c => c.style.display = 'none');
+                document.getElementById('pr-journal-crops').style.display = 'block';
+                window.QPM?.storage?.set('player-inspector:journal-tab', 'crops');
+              ">🌿 Crops</button>
+              <button class="pr-journal-tab ${activeJournalTab === 'pets' ? 'active' : ''}" onclick="
+                document.querySelectorAll('.pr-journal-tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                document.querySelectorAll('.pr-journal-tab-content').forEach(c => c.style.display = 'none');
+                document.getElementById('pr-journal-pets').style.display = 'block';
+                window.QPM?.storage?.set('player-inspector:journal-tab', 'pets');
+              ">🐾 Pets</button>
             </div>
-            <div class="pr-progress-bar">
-              <div class="pr-progress-fill pr-progress-animated" style="width:${producePct}%;background:${producePct === 100 ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)' : 'linear-gradient(90deg, #2E7D32, #4CAF50)'};${producePct === 100 ? 'animation: qpm-rainbow-progress 3s linear infinite; background-size: 200% 100%;' : ''}"></div>
+
+            <!-- Tab Contents -->
+            <div id="pr-journal-crops" class="pr-journal-tab-content" style="display: ${activeJournalTab === 'crops' ? 'block' : 'none'};">
+              ${cropRows}
             </div>
-            <div class="pr-progress-pct">${producePct.toFixed(1)}%</div>
+            <div id="pr-journal-pets" class="pr-journal-tab-content" style="display: ${activeJournalTab === 'pets' ? 'block' : 'none'};">
+              ${petRows}
+            </div>
           </div>
         </div>
       </div>
@@ -2012,6 +2085,17 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
       .pr-progress-pct { font-size: 12px; color: #94a3b8; text-align: right; margin-top: 4px; }
       .pr-progress-bar { height: 12px; border-radius: 999px; background: rgba(0,0,0,0.3); overflow: hidden; border: 1px solid rgba(255,255,255,0.15); position: relative; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3); }
       .pr-progress-fill { height: 100%; transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
+      .pr-journal-tabs { display: flex; gap: 6px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+      .pr-journal-tab { padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: #cbd5e1; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+      .pr-journal-tab:hover { background: rgba(100,181,246,0.1); color: #e0e7ff; border-color: rgba(100,181,246,0.3); }
+      .pr-journal-tab.active { background: linear-gradient(135deg, rgba(100,181,246,0.25), rgba(139,92,246,0.2)); border-color: rgba(100,181,246,0.5); color: #7dd3fc; box-shadow: 0 2px 8px rgba(100,181,246,0.3); }
+      .pr-journal-tab-content { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; max-height: 300px; overflow-y: auto; }
+      .pr-journal-detail-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); transition: all 0.2s ease; }
+      .pr-journal-detail-row:hover { background: rgba(255,255,255,0.05); border-color: rgba(100,181,246,0.2); transform: translateX(2px); }
+      .pr-journal-species { font-size: 12px; font-weight: 600; color: #e2e8f0; min-width: 100px; }
+      .pr-journal-variants { font-size: 11px; color: #94a3b8; font-weight: 500; min-width: 120px; }
+      .pr-progress-bar-mini { height: 8px; border-radius: 999px; background: rgba(0,0,0,0.3); overflow: hidden; border: 1px solid rgba(255,255,255,0.1); flex: 1; }
+      .pr-progress-fill-mini { height: 100%; transition: width 0.4s ease; border-radius: 999px; }
       .pr-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
       .pr-stat-row { display: flex; justify-content: space-between; padding: 12px 14px; border-radius: 10px; background: linear-gradient(135deg, rgba(100,181,246,0.05), rgba(139,92,246,0.03)); border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease; }
       .pr-stat-row:hover { transform: translateX(4px); background: linear-gradient(135deg, rgba(100,181,246,0.1), rgba(139,92,246,0.05)); border-color: rgba(100,181,246,0.3); box-shadow: 0 4px 12px rgba(100,181,246,0.2); }

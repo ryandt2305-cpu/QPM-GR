@@ -13,12 +13,7 @@ import type {
   PlayerRoomResult,
   PlayerView,
 } from '../types/publicRooms';
-import {
-  fetchAvailableRooms,
-  searchRoomsByPlayerName as supabaseSearchRooms,
-  searchPlayersByName as supabaseSearchPlayers,
-  fetchPlayerView as supabaseFetchPlayerView,
-} from '../services/supabaseRooms';
+import { listRooms } from '../services/ariesRooms';
 
 type ConnectionStatus = PublicRoomsState['connectionStatus'];
 
@@ -123,7 +118,8 @@ function scheduleRefresh(): void {
 
 async function fetchRoomsInternal(): Promise<void> {
   updateConnectionStatus('connecting');
-  const rooms = await fetchAvailableRooms(200);
+  const response = await listRooms(200);
+  const rooms = response.data ?? [];
   if (!rooms || rooms.length === 0) {
     updateConnectionStatus('retrying');
     return;
@@ -198,13 +194,45 @@ export function getConfig(): Readonly<PublicRoomsConfig> {
 
 // Pass-through searches and player lookups
 export async function searchRoomsByPlayerName(query: string): Promise<RoomSearchResult[]> {
-  return supabaseSearchRooms(query, { limitRooms: 200, minQueryLength: 2 });
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const lower = q.toLowerCase();
+  const res = await listRooms(200);
+  const rooms = res.data ?? [];
+  const results: RoomSearchResult[] = [];
+  for (const room of rooms) {
+    if (!room.userSlots || room.userSlots.length === 0) continue;
+    const matchedSlots = room.userSlots.filter(slot => slot.name?.toLowerCase().includes(lower));
+    if (matchedSlots.length > 0) results.push({ room, matchedSlots });
+  }
+  return results;
 }
 
 export async function searchPlayersByName(query: string): Promise<PlayerRoomResult[]> {
-  return supabaseSearchPlayers(query, { limitRooms: 200, minQueryLength: 2 });
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const lower = q.toLowerCase();
+  const res = await listRooms(200);
+  const rooms = res.data ?? [];
+  const map = new Map<string, PlayerRoomResult>();
+  for (const room of rooms) {
+    if (!room.userSlots || room.userSlots.length === 0) continue;
+    for (const slot of room.userSlots) {
+      if (!slot.name || !slot.name.toLowerCase().includes(lower)) continue;
+      const key = `${room.id}::${slot.name}`;
+      if (map.has(key)) continue;
+      map.set(key, {
+        playerName: slot.name,
+        avatarUrl: slot.avatarUrl,
+        roomId: room.id,
+        roomPlayersCount: room.playersCount,
+      });
+    }
+  }
+  return Array.from(map.values());
 }
 
 export async function fetchPlayerView(playerId: string): Promise<PlayerView | null> {
-  return supabaseFetchPlayerView(playerId);
+  // Aries API does not provide player view data; return null for now.
+  return null;
 }

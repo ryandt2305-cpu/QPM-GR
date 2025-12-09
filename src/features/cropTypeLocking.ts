@@ -756,10 +756,35 @@ function ensureStyles(): void {
     .qpm-inventory-item-wrapper {
       position: relative;
     }
-    
+
     /* Hide default favorite button when our lock button is active */
-  .qpm-inventory-item-wrapper button[aria-label*="avorite"] {
+    .qpm-inventory-item-wrapper button[aria-label*="avorite"] {
       display: none;
+    }
+
+    /* Mutation tags */
+    .qpm-mutation-tags {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      display: flex;
+      gap: 2px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .qpm-mutation-tag {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 0, 0, 0.2);
     }
   `).id = CROP_LOCK_STYLE_ID;
 }
@@ -811,8 +836,33 @@ function injectCropLockStyles(): void {
     }
 
     /* Hide default favorite button when our lock button is active */
-  .qpm-inventory-item-wrapper button[aria-label*="avorite"] {
+    .qpm-inventory-item-wrapper button[aria-label*="avorite"] {
       display: none;
+    }
+
+    /* Mutation tags */
+    .qpm-mutation-tags {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      display: flex;
+      gap: 2px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .qpm-mutation-tag {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 0, 0, 0.2);
     }
   `;
   style.id = CROP_LOCK_STYLE_ID;
@@ -1249,19 +1299,51 @@ function extractInventoryIdFromUnknown(
   return null;
 }
 
+function getMutationTagColor(mutation: string): { bg: string; text: string; letter: string } {
+  const normalized = mutation.toLowerCase();
+  if (normalized.includes('rainbow')) return { bg: 'rgba(255, 99, 255, 0.7)', text: '#fff', letter: 'R' };
+  if (normalized.includes('gold')) return { bg: 'rgba(255, 215, 0, 0.9)', text: '#000', letter: 'G' };
+  if (normalized.includes('frozen')) return { bg: 'rgba(135, 217, 255, 0.9)', text: '#000', letter: 'F' };
+  if (normalized.includes('wet')) return { bg: 'rgba(110, 205, 255, 0.9)', text: '#000', letter: 'W' };
+  if (normalized.includes('chilled')) return { bg: 'rgba(160, 200, 255, 0.9)', text: '#000', letter: 'C' };
+  if (normalized.includes('dawn')) return { bg: 'rgba(255, 165, 95, 0.9)', text: '#000', letter: 'D' };
+  if (normalized.includes('amber')) return { bg: 'rgba(255, 175, 35, 0.9)', text: '#000', letter: 'A' };
+  return { bg: 'rgba(150, 150, 150, 0.7)', text: '#fff', letter: '?' };
+}
+
 function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, allItems: CropItem[]): void {
   const itemElement = representativeItem.element as HTMLElement;
   if (!itemElement) return;
-  
+
   // Make the item wrapper relative positioned
   itemElement.classList.add('qpm-inventory-item-wrapper');
   itemElement.style.position = 'relative';
-  
+
+  // Add mutation tags if present
+  const mutations = representativeItem.mutations || [];
+  if (mutations.length > 0) {
+    const mutationContainer = document.createElement('div');
+    mutationContainer.className = 'qpm-mutation-tags';
+
+    // Show up to 3 mutation tags
+    mutations.slice(0, 3).forEach(mutation => {
+      const tagInfo = getMutationTagColor(mutation);
+      const tag = document.createElement('span');
+      tag.className = 'qpm-mutation-tag';
+      tag.textContent = tagInfo.letter;
+      tag.title = mutation;
+      tag.style.cssText = `background: ${tagInfo.bg}; color: ${tagInfo.text};`;
+      mutationContainer.appendChild(tag);
+    });
+
+    itemElement.appendChild(mutationContainer);
+  }
+
   // Create lock button
   const lockButton = document.createElement('button');
   lockButton.className = 'qpm-crop-lock-button';
   lockButton.title = `Toggle lock for all ${representativeItem.species} items`;
-  
+
   let configLocked = config.lockedTypes[speciesKey] || false;
   const allFavoritedNow = allItems.every((crop) => (crop.element ? isInventoryItemFavorited(crop.element) : false));
 
@@ -1272,17 +1354,17 @@ function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, a
   }
 
   updateLockButtonState(lockButton, configLocked);
-  
+
   // Handle click
   lockButton.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     toggleCropTypeLock(speciesKey, allItems, lockButton);
   });
-  
+
   itemElement.appendChild(lockButton);
   currentLockButtons.set(speciesKey, lockButton);
-  
+
   log(`🔒 Added lock button for ${representativeItem.species} (${allItems.length} items)`);
 }
 

@@ -1007,66 +1007,12 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
   const leftHtml = renderPlot(leftPlot, 'Left');
   const rightHtml = renderPlot(rightPlot, 'Right');
   
-  // Render boardwalk tiles between plots (23 cols × 12 rows = 276 tiles)
-  const BOARDWALK_COLS = 23;
-  const BOARDWALK_ROWS = 12;
-  const boardwalkObjects = garden?.boardwalkTileObjects && typeof garden.boardwalkTileObjects === 'object' ? garden.boardwalkTileObjects : null;
-  let boardwalkHtml = '';
-  if (boardwalkObjects && Object.keys(boardwalkObjects).length > 0) {
-    // Build 2D grid structure for boardwalk (23 cols × 12 rows)
-    type BoardwalkTile = { tileId: number; decorId: string; exists: boolean };
-    const boardwalkGrid: BoardwalkTile[][] = [];
-
-    // Initialize grid
-    for (let row = 0; row < BOARDWALK_ROWS; row++) {
-      boardwalkGrid[row] = [];
-      for (let col = 0; col < BOARDWALK_COLS; col++) {
-        const tileId = row * BOARDWALK_COLS + col;
-        boardwalkGrid[row][col] = { tileId, decorId: '', exists: false };
-      }
-    }
-
-    // Fill in actual tiles from boardwalkObjects
-    for (const [tileIdStr, payload] of Object.entries(boardwalkObjects)) {
-      const tileId = parseInt(tileIdStr, 10);
-      if (!Number.isFinite(tileId) || tileId < 0 || tileId >= BOARDWALK_COLS * BOARDWALK_ROWS) continue;
-
-      const col = tileId % BOARDWALK_COLS;
-      const row = Math.floor(tileId / BOARDWALK_COLS);
-      const tilePayload = payload as any;
-      const decorId = tilePayload?.decorId || tilePayload?.id || 'unknown';
-
-      boardwalkGrid[row][col] = { tileId, decorId, exists: true };
-    }
-
-    // Render grid
-    const boardwalkTiles = boardwalkGrid.map(row => row.map(tile => {
-      if (!tile.exists) {
-        return `<div class="pr-boardwalk-tile pr-boardwalk-tile-empty" title="Empty tile #${tile.tileId}"></div>`;
-      }
-      return `
-        <div class="pr-boardwalk-tile" title="Tile ${tile.tileId}: ${tile.decorId}">
-          <div style="font-size: 20px;">🪵</div>
-          <div style="font-size: 8px; color: #b4a490; font-weight: 600;">#${tile.tileId}</div>
-        </div>
-      `;
-    }).join('')).join('');
-
-    boardwalkHtml = `
-      <div class="pr-boardwalk-section">
-        <div class="pr-garden-plot-label">Boardwalk (${Object.keys(boardwalkObjects).length}/${BOARDWALK_COLS * BOARDWALK_ROWS} tiles)</div>
-        <div class="pr-boardwalk-grid pr-boardwalk-grid-23x12">${boardwalkTiles}</div>
-      </div>
-    `;
-  }
-  
   const gardenHtml = `
     <div class="pr-garden-plots">
       <div class="pr-garden-plot">
         <div class="pr-garden-plot-label">Left Plot</div>
         <div class="pr-garden-grid pr-garden-grid-10x10">${leftHtml}</div>
       </div>
-      ${boardwalkHtml}
       <div class="pr-garden-plot">
         <div class="pr-garden-plot-label">Right Plot</div>
         <div class="pr-garden-grid pr-garden-grid-10x10">${rightHtml}</div>
@@ -1500,18 +1446,55 @@ function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: Player
     const timestamp = normalizeMillis(obj.timestamp ?? obj.time ?? obj.createdAt ?? null);
     const ago = timestamp ? formatUpdatedAgo(new Date(timestamp).toISOString()) : 'recently';
     const params = obj.parameters || obj;
+    
+    // Extract crop/pet/item info from parameters
     const crop = params?.species || params?.crop || params?.seed || obj.seed;
-    const pet = params?.pet || params?.species || obj.pet;
+    const pet = params?.pet?.name || params?.pet?.petSpecies || params?.petSpecies || obj.pet;
     const mutations = params?.mutations || params?.mutation || [];
-    const sprite = crop ? getMutatedCropSpriteUrl(String(crop).toLowerCase(), mutations) : (pet ? getPetSpriteDataUrl(String(pet).toLowerCase()) : null);
+    let sprite = null;
+    
+    // Get appropriate sprite
+    if (crop) {
+      sprite = getMutatedCropSpriteUrl(String(crop).toLowerCase(), mutations);
+    } else if (pet) {
+      const petSpecies = params?.pet?.petSpecies || pet;
+      sprite = getPetSpriteDataUrl(String(petSpecies).toLowerCase());
+    }
 
+    // Build detailed description based on action type
     let detail = '';
-    if (rawAction.toLowerCase().includes('hatch')) {
+    if (rawAction === 'feedPet') {
+      const petName = params?.pet?.name || 'pet';
+      detail = `Fed ${petName}`;
+    } else if (rawAction === 'purchaseEgg') {
+      const eggIds = params?.eggIds || [];
+      const eggType = Array.isArray(eggIds) && eggIds.length > 0 ? eggIds[0] : 'egg';
+      detail = `Purchased ${friendlyName(eggType)}`;
+    } else if (rawAction === 'purchaseSeed') {
+      const seedIds = params?.seedIds || [];
+      const seedType = Array.isArray(seedIds) && seedIds.length > 0 ? seedIds[0] : 'seed';
+      detail = `Purchased ${friendlyName(seedType)}`;
+    } else if (rawAction === 'purchaseTool') {
+      detail = `Purchased tool`;
+    } else if (rawAction === 'harvest') {
+      const crops = params?.crops || [];
+      const cropCount = Array.isArray(crops) ? crops.length : 1;
+      const cropSpecies = Array.isArray(crops) && crops.length > 0 ? crops[0].species : 'crops';
+      detail = `Harvested ${cropCount} ${friendlyName(cropSpecies)}`;
+    } else if (rawAction === 'plantEgg') {
+      detail = `Planted an egg`;
+    } else if (rawAction.startsWith('PetXpBoost')) {
+      const bonusXp = params?.bonusXp || 0;
+      const affected = params?.petsAffected?.length || 0;
+      detail = `+${bonusXp} XP to ${affected} pet${affected !== 1 ? 's' : ''}`;
+    } else if (rawAction === 'ProduceScaleBoostII' || rawAction === 'ProduceScaleBoost') {
+      detail = `Crop size boost activated`;
+    } else if (rawAction.includes('Kisser') || rawAction.includes('Granter')) {
+      detail = `${action} ability triggered`;
+    } else if (rawAction.toLowerCase().includes('hatch')) {
       detail = `Hatched ${friendlyName(pet || crop || 'pet')}`;
     } else if (rawAction.toLowerCase().includes('sell')) {
       detail = `Sold ${friendlyName(pet || crop || 'item')}`;
-    } else if (rawAction.toLowerCase().includes('purchase') || rawAction.toLowerCase().includes('buy')) {
-      detail = `Purchased ${friendlyName(params?.itemType || crop || pet || 'item')}`;
     } else if (params?.currency && params?.purchasePrice) {
       detail = `Spent ${params.purchasePrice} ${params.currency}`;
     } else {

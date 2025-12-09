@@ -432,7 +432,7 @@ function renderCropBoostSection(root: HTMLElement): void {
       `;
       
       // Get BASE species by removing mutation prefixes (Rainbow, Gold, Frozen, etc.)
-      // E.g., "Rainbow Sunflower" -> "sunflower"
+      // E.g., "Rainbow Sunflower" -> "Sunflower"
       let baseSpecies = crop.species;
       const mutationPrefixes = ['Rainbow', 'Gold', 'Golden', 'Frozen', 'Amber', 'Wet', 'Chilled', 'Dawnlit'];
       for (const prefix of mutationPrefixes) {
@@ -441,9 +441,10 @@ function renderCropBoostSection(root: HTMLElement): void {
           break;
         }
       }
-      const speciesKey = baseSpecies.toLowerCase().trim();
+      // Capitalize first letter for proper sprite lookup (getCropSpriteDataUrl expects "Wheat", "Sunflower", etc.)
+      const speciesKey = baseSpecies.charAt(0).toUpperCase() + baseSpecies.slice(1).toLowerCase();
       
-      // Try to get sprite from extractor first, fallback to CDN
+      // Try to get sprite from extractor first, fallback to gradient
       const spriteDataUrl = getCropSpriteDataUrl(speciesKey);
       if (spriteDataUrl) {
         cropImage.style.backgroundImage = `url(${spriteDataUrl})`;

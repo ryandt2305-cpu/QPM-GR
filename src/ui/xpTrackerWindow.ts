@@ -4,6 +4,7 @@ import { formatCoins } from '../features/valueCalculator';
 import { log } from '../utils/logger';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
+import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
 import {
   calculateXpStats,
   getCombinedXpStats,
@@ -884,9 +885,13 @@ function createXpRow(tbody: HTMLTableSectionElement, stats: XpAbilityStats): voi
   const row = tbody.insertRow();
   row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
 
-  // Pet Name
+  // Pet Name (with sprite)
   const nameCell = row.insertCell();
-  nameCell.textContent = `${stats.petName} (STR ${stats.strength})`;
+  const petSprite = getPetSpriteDataUrl(stats.species);
+  const spriteHtml = petSprite
+    ? `<img src="${petSprite}" style="width:20px;height:20px;vertical-align:middle;image-rendering:pixelated;margin-right:6px;border-radius:3px;border:1px solid rgba(168,139,250,0.2);" alt="${stats.species}" />`
+    : '';
+  nameCell.innerHTML = spriteHtml + `${stats.petName} (STR ${stats.strength})`;
   nameCell.style.cssText = `
     padding: 10px 12px;
     color: var(--qpm-text, #fff);
@@ -1011,18 +1016,22 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
   const row = tbody.insertRow();
   row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
 
-  // Pet Name (with MAX STR below in small grey text)
+  // Pet Name (with sprite and MAX STR below in small grey text)
   const nameCell = row.insertCell();
   const maxStr = pet.species && pet.targetScale ? calculateMaxStrength(pet.targetScale, pet.species) : null;
   const petNameDisplay = pet.name || pet.species || 'Unknown';
+  const petSprite = pet.species ? getPetSpriteDataUrl(pet.species) : null;
+  const spriteHtml = petSprite
+    ? `<img src="${petSprite}" style="width:20px;height:20px;vertical-align:middle;image-rendering:pixelated;margin-right:6px;border-radius:3px;border:1px solid rgba(168,139,250,0.2);" alt="${pet.species}" />`
+    : '';
 
   if (maxStr) {
     nameCell.innerHTML = `
-      <div style="font-weight: 500; color: var(--qpm-text, #fff);">${petNameDisplay}</div>
-      <div style="font-size: 10px; color: var(--qpm-text-muted, #888); margin-top: 2px;">MAX STR ${maxStr}</div>
+      ${spriteHtml}<div style="display:inline-block;vertical-align:middle;"><div style="font-weight: 500; color: var(--qpm-text, #fff);">${petNameDisplay}</div>
+      <div style="font-size: 10px; color: var(--qpm-text-muted, #888); margin-top: 2px;">MAX STR ${maxStr}</div></div>
     `;
   } else {
-    nameCell.textContent = petNameDisplay;
+    nameCell.innerHTML = spriteHtml + petNameDisplay;
   }
 
   nameCell.style.cssText = `

@@ -21,6 +21,11 @@ export declare function getAbilityColor(abilityName: string): {
  */
 export declare function renderPetCard(config: PetCardConfig): string;
 /**
+ * Generate pet species icon for filter cards (no STR label)
+ * Just shows sprite + name
+ */
+export declare function renderPetSpeciesIcon(species: string): string;
+/**
  * Generate lightweight pet sprite only (for use in lists/trackers)
  * Still includes abilities + name + STR but in compact format
  */

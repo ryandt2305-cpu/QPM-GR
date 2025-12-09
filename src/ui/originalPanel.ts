@@ -29,7 +29,7 @@ import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
 import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA, calculateEffectiveProcRate } from './trackerWindow';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { renderCompactPetSprite, renderPetSpeciesIcon, getAbilityColor } from '../utils/petCardRenderer';
-import { getCropSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl, getPetSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
@@ -4616,19 +4616,39 @@ function createStatsHeader(): HTMLElement {
         card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
       });
 
-      // Header with emoji
+      // Header with sprite icon
       const header = document.createElement('div');
       header.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:8px;';
 
-      const emoji = document.createElement('span');
-      emoji.style.cssText = 'font-size:18px;';
-      emoji.textContent = itemConfig.emoji;
+      // Get sprite based on item name
+      let spriteUrl: string | null = null;
+      if (itemConfig.name === 'Mythical Eggs') {
+        spriteUrl = getPetSpriteDataUrl('MythicalEgg');
+      } else {
+        // Starweaver, Dawnbinder, Moonbinder are crops
+        spriteUrl = getCropSpriteDataUrl(itemConfig.name);
+      }
+
+      const iconContainer = document.createElement('div');
+      iconContainer.style.cssText = 'width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;';
+
+      if (spriteUrl) {
+        const spriteImg = document.createElement('img');
+        spriteImg.src = spriteUrl;
+        spriteImg.alt = itemConfig.name;
+        spriteImg.style.cssText = 'width:100%;height:100%;object-fit:contain;image-rendering:pixelated;';
+        iconContainer.appendChild(spriteImg);
+      } else {
+        // Fallback to emoji if sprite not found
+        iconContainer.textContent = itemConfig.emoji;
+        iconContainer.style.fontSize = '18px';
+      }
 
       const title = document.createElement('div');
       title.style.cssText = `font-size:11px;font-weight:700;color:${itemConfig.textColor};text-transform:uppercase;letter-spacing:0.5px;`;
       title.textContent = itemConfig.name;
 
-      header.appendChild(emoji);
+      header.appendChild(iconContainer);
       header.appendChild(title);
       card.appendChild(header);
 

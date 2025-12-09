@@ -4,7 +4,7 @@
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 
-const TUTORIAL_SHOWN_KEY = 'qpm_tutorial_shown_v2.3.0';
+const TUTORIAL_SHOWN_KEY = 'qpm_tutorial_shown_v3.0.0';
 const TUTORIAL_IMAGE_PATH = './docs/QPM_user_guide.jpg';
 
 export function shouldShowTutorial(): boolean {
@@ -76,7 +76,7 @@ export function showTutorialPopup(): void {
   const titleText = document.createElement('div');
   titleText.innerHTML = `
     <div style="font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 2px;">
-      Welcome to QPM v2.3.0!
+      Welcome to QPM v3.0.0!
     </div>
     <div style="font-size: 13px; color: rgba(255, 255, 255, 0.7);">
       Quick start guide for new features

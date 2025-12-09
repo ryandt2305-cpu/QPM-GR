@@ -22,7 +22,7 @@ import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvai
 import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
-import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets } from './utils/spriteExtractor';
+import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, initSprites, Sprites } from './utils/spriteExtractor';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
@@ -30,11 +30,16 @@ import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetH
 import { toggleWindow } from './ui/modalWindow';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
+import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
+import { resetFriendsCache } from './services/ariesPlayers';
+import { exposeValidationCommands } from './utils/validationCommands';
+import { storage } from './utils/storage';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
+  storage, // Expose storage for inline onclick handlers
   debugPets: () => {
     const pets = getActivePetsDebug();
     console.log('=== Active Pets Debug (v2024-11-13-DOM-STRENGTH) ===');
@@ -968,7 +973,70 @@ const QPM_DEBUG_API = {
       return false;
     }
   },
+
+  resetTutorial: async () => {
+    const { resetTutorial } = await import('./ui/tutorialPopup');
+    resetTutorial();
+    console.log('Tutorial reset. Reload the page to see it again.');
+  },
+
+  showTutorial: async () => {
+    const { showTutorialPopup } = await import('./ui/tutorialPopup');
+    showTutorialPopup();
+  },
 };
+
+registerInspectFriendHelper();
+registerInspectPlayerHelper();
+
+// Simple console helper to force inspector self playerId for friend-level testing
+function registerInspectFriendHelper(): void {
+  const fn = (playerId: string): void => {
+    const pid = (playerId || '').trim();
+    if (!pid) {
+      console.warn('[QPM Inspector] Provide a playerId string.');
+      return;
+    }
+    try {
+      localStorage.setItem('quinoa:selfPlayerId', pid);
+      resetFriendsCache();
+      console.log('[QPM Inspector] self playerId set to', pid, 'friend cache cleared.');
+    } catch (err) {
+      console.warn('[QPM Inspector] Unable to persist self playerId', err);
+    }
+  };
+
+  if (!(window as any).QPM_INSPECT_FRIEND) {
+    (window as any).QPM_INSPECT_FRIEND = fn;
+  }
+
+  try {
+    shareGlobal('QPM_INSPECT_FRIEND', fn);
+  } catch (err) {
+    console.warn('[QPM Inspector] Failed to share helper globally', err);
+  }
+}
+
+function registerInspectPlayerHelper(): void {
+  const fn = (playerId: string, playerName?: string): void => {
+    const pid = (playerId || '').trim();
+    if (!pid) {
+      console.warn('[PublicRooms] Provide a playerId string.');
+      return;
+    }
+    openInspectorDirect(pid, playerName || pid);
+  };
+
+  if (!(window as any).QPM_INSPECT_PLAYER) {
+    (window as any).QPM_INSPECT_PLAYER = fn;
+  }
+
+  try {
+    shareGlobal('QPM_INSPECT_PLAYER', fn);
+  } catch (err) {
+    console.warn('[PublicRooms] Failed to share QPM_INSPECT_PLAYER globally', err);
+  }
+}
 
 shareGlobal('QPM', QPM_DEBUG_API);
 shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
@@ -1103,7 +1171,8 @@ async function initialize(): Promise<void> {
   log('🚀 Quinoa Pet Manager initializing...');
   
   // Initialize sprite extractor early to intercept image loads
-  spriteExtractor.init();
+  initSprites();
+  shareGlobal('Sprites', Sprites);
   
   // Wait for game to be ready
   await waitForGame();
@@ -1157,6 +1226,19 @@ async function initialize(): Promise<void> {
   // Initialize public rooms
   initPublicRooms();
 
+  // Setup garden inspector and expose commands via shareGlobal (like other QPM commands)
+  const gardenCommands = setupGardenInspector();
+  shareGlobal('QPM_INSPECT_GARDEN', gardenCommands.QPM_INSPECT_GARDEN);
+  shareGlobal('QPM_EXPOSE_GARDEN', gardenCommands.QPM_EXPOSE_GARDEN);
+  shareGlobal('QPM_CURRENT_TILE', gardenCommands.QPM_CURRENT_TILE);
+  // Also add to QPM_DEBUG_API for discoverability
+  (QPM_DEBUG_API as any).inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
+  (QPM_DEBUG_API as any).exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
+  (QPM_DEBUG_API as any).currentTile = gardenCommands.QPM_CURRENT_TILE;
+
+  // Expose validation commands for testing
+  exposeValidationCommands();
+
   // Set configuration for UI
   setCfg(cfg);
 
@@ -1165,6 +1247,12 @@ async function initialize(): Promise<void> {
 
   // Start version checker (checks for updates periodically)
   startVersionChecker();
+
+  // Show tutorial popup on first load
+  const { showTutorialPopup } = await import('./ui/tutorialPopup');
+  setTimeout(() => {
+    showTutorialPopup();
+  }, 1500); // Delay to let UI settle
 
   log('✅ Quinoa Pet Manager initialized successfully');
 }

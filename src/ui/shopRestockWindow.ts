@@ -29,6 +29,7 @@ import {
 } from '../features/shopRestockLiveTracker';
 import { parseRestockFile } from '../features/shopRestockParser';
 import { log } from '../utils/logger';
+import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
 
 export interface ShopRestockWindowState {
   root: HTMLElement;
@@ -489,6 +490,22 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
 
     const leftSide = document.createElement('div');
     leftSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+    // Add crop/seed sprite
+    const cropSprite = getCropSpriteDataUrl(rareItem.name);
+    if (cropSprite) {
+      const spriteImg = document.createElement('img');
+      spriteImg.src = cropSprite;
+      spriteImg.alt = rareItem.name;
+      spriteImg.style.cssText = `
+        width: 16px;
+        height: 16px;
+        image-rendering: pixelated;
+        border-radius: 3px;
+        border: 1px solid rgba(168, 139, 250, 0.2);
+      `;
+      leftSide.appendChild(spriteImg);
+    }
 
     const itemName = document.createElement('span');
     itemName.textContent = rareItem.name;

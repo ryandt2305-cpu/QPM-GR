@@ -1,9 +1,10 @@
 /**
- * TypeScript definitions for Public Rooms feature (Supabase-backed)
+ * TypeScript definitions for Public Rooms feature (Aries-backed)
  */
 export interface RoomUserSlot {
     name: string;
     avatarUrl: string | null;
+    playerId?: string | null;
 }
 export interface Room {
     id: string;
@@ -24,13 +25,14 @@ export interface PlayerRoomResult {
     roomPlayersCount: number;
 }
 export interface PlayerPrivacyPayload {
-    allowProfile: boolean;
-    allowGarden: boolean;
-    allowInventory: boolean;
-    allowStats: boolean;
-    allowActivity: boolean;
-    allowJournal: boolean;
-    allowRoom: boolean;
+    showProfile: boolean;
+    showGarden: boolean;
+    showInventory: boolean;
+    showStats: boolean;
+    showActivityLog: boolean;
+    showJournal: boolean;
+    showCoins: boolean;
+    hideRoomFromPublicList?: boolean;
 }
 export interface PlayerViewState {
     garden: unknown | null;
@@ -54,6 +56,11 @@ export interface PlayerView {
 }
 export interface RoomsMap {
     [roomId: string]: Room;
+}
+export interface ApiResponse<T> {
+    status: number;
+    data: T | null;
+    error?: string;
 }
 export interface PublicRoomsConfig {
     refreshIntervalSeconds: number;

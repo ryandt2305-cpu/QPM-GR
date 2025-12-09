@@ -6,6 +6,35 @@ import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
 import { getVariantChipColors } from '../data/variantBadges';
 
+// Species name normalization for sprite lookups
+const SPECIES_NAME_MAP: Record<string, string> = {
+  'orangetulip': 'Tulip',
+  'tulip': 'Tulip',
+  'dawncelestial': 'Dawnbinder',
+  'dawnbinder': 'Dawnbinder',
+  'mooncelestial': 'Moonbinder',
+  'moonbinder': 'Moonbinder',
+  'starweaver': 'Starweaver',
+  'mythicalegg': 'Mythical',
+  'mythical': 'Mythical',
+};
+
+function normalizeSpeciesName(species: string): string {
+  const key = species.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return SPECIES_NAME_MAP[key] || species;
+}
+
+// Wrapper functions that handle normalization automatically
+function getNormalizedCropSprite(species: string): string | null {
+  const normalized = normalizeSpeciesName(species);
+  return getCropSpriteDataUrl(normalized) || getCropSpriteDataUrl(species.toLowerCase()) || getCropSpriteDataUrl(species);
+}
+
+function getNormalizedPetSprite(species: string): string | null {
+  const normalized = normalizeSpeciesName(species);
+  return getPetSpriteDataUrl(normalized) || getPetSpriteDataUrl(species.toLowerCase()) || getPetSpriteDataUrl(species);
+}
+
 // Shop layout order (produce section follows this sequence)
 // Shop layout order (top -> bottom) as requested
 const SHOP_LAYOUT_ORDER = [
@@ -70,6 +99,22 @@ export function createJournalCheckerSection(): HTMLElement {
     padding: 16px;
     color: #fff;
   `;
+
+  // Add rainbow border animation styles
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes qpm-rainbow-border {
+      0% { background-position: 0% 50%, 0% 50%; }
+      50% { background-position: 0% 50%, 100% 50%; }
+      100% { background-position: 0% 50%, 200% 50%; }
+    }
+    @keyframes qpm-rainbow-progress {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+  `;
+  root.appendChild(style);
 
   // Header
   const header = document.createElement('div');
@@ -215,17 +260,24 @@ export function createJournalCheckerSection(): HTMLElement {
         const collectedCount = species.variants.filter(v => v.collected).length;
         const totalCount = species.variants.length;
         const percentage = (collectedCount / totalCount) * 100;
+        const isComplete = percentage === 100;
 
         const speciesCard = document.createElement('div');
 
-        // Add rainbow animation if all variants collected
-        if (percentage === 100) {
+        // Add rainbow animation if all variants collected (11/11)
+        if (isComplete) {
           speciesCard.classList.add('qpm-rainbow-complete');
           speciesCard.style.cssText = `
+            position: relative;
             border-radius: 10px;
             padding: 16px;
             margin-bottom: 10px;
-            border: 1px solid #333;
+            border: 2px solid transparent;
+            background: linear-gradient(135deg, #1f1f1f, #1a1a1a) padding-box,
+                        linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9, #FF1744) border-box;
+            background-size: 100% 100%, 200% 200%;
+            animation: qpm-rainbow-border 3s linear infinite;
+            box-shadow: 0 0 20px rgba(255, 23, 68, 0.3);
             transition: all 0.2s;
           `;
         } else {
@@ -240,7 +292,7 @@ export function createJournalCheckerSection(): HTMLElement {
         }
 
         speciesCard.addEventListener('mouseenter', () => {
-          if (percentage !== 100) {
+          if (!isComplete) {
             speciesCard.style.borderColor = '#8BC34A44';
           }
           speciesCard.style.transform = 'translateX(4px)';
@@ -252,11 +304,30 @@ export function createJournalCheckerSection(): HTMLElement {
           speciesCard.style.transform = 'translateX(0)';
         });
 
-        // Get sprite
+        // Get sprite - apply rainbow mutation if all variants collected
         const speciesKey = species.species.toLowerCase().replace(/\s+/g, '');
-        const spriteDataUrl = getCropSpriteDataUrl(speciesKey) || getCropSpriteDataUrl(species.species.toLowerCase());
+        const normalizedName = normalizeSpeciesName(species.species);
+        let spriteDataUrl: string | null = null;
+        
+        if (isComplete) {
+          // Apply rainbow mutation for completed species
+          const { spriteExtractor } = await import('../utils/spriteExtractor');
+          const baseCanvas = spriteExtractor.getCropSprite(normalizedName) || spriteExtractor.getCropSprite(speciesKey) || spriteExtractor.getCropSprite(species.species.toLowerCase());
+          if (baseCanvas) {
+            const rainbowCanvas = spriteExtractor.renderPlantWithMutations(baseCanvas, ['Rainbow']);
+            try {
+              spriteDataUrl = rainbowCanvas.toDataURL('image/png');
+            } catch {
+              spriteDataUrl = getCropSpriteDataUrl(normalizedName);
+            }
+          } else {
+            spriteDataUrl = getCropSpriteDataUrl(normalizedName);
+          }
+        } else {
+          spriteDataUrl = getCropSpriteDataUrl(normalizedName) || getCropSpriteDataUrl(speciesKey) || getCropSpriteDataUrl(species.species.toLowerCase());
+        }
+        
         const isTall = TALL_SPECIES.has(speciesKey.replace(/[^a-z0-9]/g, ''));
-        const isComplete = percentage === 100;
         
         speciesCard.innerHTML = `
           <div style="display: flex; gap: 12px; margin-bottom: 12px;">
@@ -272,7 +343,7 @@ export function createJournalCheckerSection(): HTMLElement {
                 border: 2px solid ${isComplete ? '#8BC34A' : '#444'};
                 flex-shrink: 0;
                 image-rendering: pixelated;
-                ${isComplete ? 'box-shadow: 0 0 20px #8BC34A66; filter: saturate(1.5) brightness(1.2);' : ''}
+                ${isComplete ? 'box-shadow: 0 0 20px rgba(255, 23, 68, 0.5);' : ''}
               "></div>
             ` : ''}
             <div style="flex: 1;">
@@ -303,11 +374,14 @@ export function createJournalCheckerSection(): HTMLElement {
             overflow: hidden;
           ">
             <div style="
-              background: linear-gradient(90deg, #8BC34A, #66BB6A);
+              background: ${isComplete 
+                ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9, #FF1744)' 
+                : 'linear-gradient(90deg, #8BC34A, #66BB6A)'};
+              ${isComplete ? 'background-size: 200% 100%; animation: qpm-rainbow-progress 3s linear infinite;' : ''}
               height: 100%;
               width: ${percentage}%;
               transition: width 0.5s ease;
-              box-shadow: 0 0 10px #8BC34A77;
+              box-shadow: 0 0 10px ${isComplete ? 'rgba(255, 23, 68, 0.5)' : '#8BC34A77'};
             "></div>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -410,7 +484,25 @@ export function createJournalCheckerSection(): HTMLElement {
         });
 
         const isComplete = percentage === 100;
-        const petSprite = getPetSpriteDataUrl(species.species.toLowerCase());
+        const normalizedPetName = normalizeSpeciesName(species.species);
+        
+        // Apply rainbow mutation to pet sprite if all variants collected
+        let petSprite: string | null = null;
+        if (isComplete) {
+          const { spriteExtractor } = await import('../utils/spriteExtractor');
+          const { getMutationSpriteDataUrl } = await import('../utils/petMutationRenderer');
+          const basePetSprite = spriteExtractor.getPetSprite(normalizedPetName) || spriteExtractor.getPetSprite(species.species.toLowerCase());
+          if (basePetSprite) {
+            // Try to get rainbow mutation
+            const rainbowSprite = getMutationSpriteDataUrl(normalizedPetName, 'rainbow');
+            petSprite = rainbowSprite || getPetSpriteDataUrl(normalizedPetName);
+          } else {
+            petSprite = getPetSpriteDataUrl(normalizedPetName) || getPetSpriteDataUrl(species.species.toLowerCase());
+          }
+        } else {
+          petSprite = getPetSpriteDataUrl(normalizedPetName) || getPetSpriteDataUrl(species.species.toLowerCase());
+        }
+        
         const imageHtml = petSprite
           ? `<div style="
                 width: 64px;
@@ -423,7 +515,7 @@ export function createJournalCheckerSection(): HTMLElement {
                 border: 2px solid ${isComplete ? '#42A5F5' : '#444'};
                 flex-shrink: 0;
                 image-rendering: pixelated;
-                ${isComplete ? 'box-shadow: 0 0 20px #42A5F566; filter: saturate(1.3);' : ''}
+                ${isComplete ? 'box-shadow: 0 0 20px rgba(66, 165, 245, 0.5);' : ''}
               "></div>`
           : `<div style="
                 width: 64px;
@@ -467,11 +559,14 @@ export function createJournalCheckerSection(): HTMLElement {
             overflow: hidden;
           ">
             <div style="
-              background: linear-gradient(90deg, #42A5F5, #64B5F6);
+              background: ${isComplete 
+                ? 'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9, #FF1744)' 
+                : 'linear-gradient(90deg, #42A5F5, #64B5F6)'};
+              ${isComplete ? 'background-size: 200% 100%; animation: qpm-rainbow-progress 3s linear infinite;' : ''}
               height: 100%;
               width: ${percentage}%;
               transition: width 0.5s ease;
-              box-shadow: 0 0 10px #42A5F577;
+              box-shadow: 0 0 10px ${isComplete ? 'rgba(66, 165, 245, 0.5)' : '#42A5F577'};
             "></div>
           </div>
         `;
@@ -588,9 +683,10 @@ export function createJournalCheckerSection(): HTMLElement {
           const priorityColor = rec.priority === 'high' ? '#f44336' : rec.priority === 'medium' ? '#ff9800' : '#666';
 
           // Get sprite for this species
+          const normalizedSpeciesPriority = normalizeSpeciesName(rec.species);
           const spriteUrl = rec.type === 'produce'
-            ? getCropSpriteDataUrl(rec.species.toLowerCase())
-            : getPetSpriteDataUrl(rec.species.toLowerCase());
+            ? getCropSpriteDataUrl(normalizedSpeciesPriority) || getCropSpriteDataUrl(rec.species.toLowerCase())
+            : getPetSpriteDataUrl(normalizedSpeciesPriority) || getPetSpriteDataUrl(rec.species.toLowerCase());
 
           const spriteHtml = spriteUrl
             ? `<img src="${spriteUrl}" alt="${rec.species}" style="width: 32px; height: 32px; image-rendering: pixelated;">`
@@ -1003,9 +1099,9 @@ export function createJournalCheckerSection(): HTMLElement {
     padding-right: 4px;
   `;
 
-  // Add custom scrollbar styling and rainbow animation
-  const style = document.createElement('style');
-  style.textContent = `
+  // Add custom scrollbar styling
+  const scrollbarStyle = document.createElement('style');
+  scrollbarStyle.textContent = `
     div[data-qpm-section="journal-checker"] ::-webkit-scrollbar {
       width: 8px;
     }
@@ -1063,7 +1159,7 @@ export function createJournalCheckerSection(): HTMLElement {
       color: #000 !important;
     }
   `;
-  document.head.appendChild(style);
+  document.head.appendChild(scrollbarStyle);
 
   root.appendChild(resultsContainer);
 

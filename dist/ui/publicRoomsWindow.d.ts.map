@@ -1,1 +1,1 @@
-{"version":3,"file":"publicRoomsWindow.d.ts","sourceRoot":"","sources":["../../src/ui/publicRoomsWindow.ts"],"names":[],"mappings":"AAmWA,wBAAgB,uBAAuB,CAAC,IAAI,EAAE,WAAW,GAAG,IAAI,CA0D/D"}
+{"version":3,"file":"publicRoomsWindow.d.ts","sourceRoot":"","sources":["../../src/ui/publicRoomsWindow.ts"],"names":[],"mappings":"AA2CA,eAAO,MAAM,oBAAoB;;;;;;;CAgJhC,CAAC;AAkPF,wBAAgB,mBAAmB,CAAC,QAAQ,EAAE,MAAM,EAAE,UAAU,CAAC,EAAE,MAAM,GAAG,IAAI,GAAG,IAAI,CA8BtF;AA03CD,wBAAgB,uBAAuB,CAAC,IAAI,EAAE,WAAW,GAAG,IAAI,CAiO/D"}

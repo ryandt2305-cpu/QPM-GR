@@ -1,104 +1,146 @@
-type SpriteCategory = 'plants' | 'pets' | 'unknown';
-declare class SpriteExtractor {
-    private sheets;
-    private tiles;
-    private tallComposites;
-    private initialized;
-    private scanInterval;
-    /**
-     * Initialize sprite extraction by scanning Pixi texture cache
-     * Waits for game to fully load before starting
-     */
-    init(): void;
-    /**
-     * Wait for game to load and find sprite sheet URL
-     */
-    private waitForPixi;
-    /**
-     * Scan Pixi.js texture cache for sprite sheets
-     */
-    private scanPixiTextures;
-    /**
-     * Get sheet name from Pixi texture key
-     */
-    private getSheetNameFromKey;
-    /**
-     * Process a sprite sheet and slice it into tiles
-     */
-    private processSheet;
-    ingestTextureSource(key: string, source: HTMLImageElement | HTMLCanvasElement): void;
-    /**
-     * Get a specific tile from a sheet
-     */
-    getTile(sheetName: string, index: number): HTMLCanvasElement | null;
-    /**
-     * Get crop sprite by species name
-     */
-    getCropSprite(species: string): HTMLCanvasElement | null;
-    private getTallComposite;
-    /**
-     * Map crop species to sprite index
-     * Based on actual game's plants.png sprite sheet (10x6 grid = 60 tiles, 256px each)
-     * Verified mapping from in-game sprite sheet
-     */
-    private getCropSpriteIndex;
-    /**
-     * Get pet sprite by species name
-     */
-    getPetSprite(species: string): HTMLCanvasElement | null;
-    private getPetSpriteIndex;
-    /**
-     * Get all available sheets
-     */
-    getSheets(): string[];
-    getSheetSummaries(): Array<{
-        name: string;
-        url: string;
-        tileSize: number;
-        tilesPerRow: number;
-        tilesPerColumn: number;
-    }>;
-    /**
-     * Get mutation overlay tile
-     */
-    getMutationOverlay(mutation: string): HTMLCanvasElement | null;
-    loadSheetFromUrl(url: string, alias?: string): Promise<boolean>;
-    /**
-     * Check if sprites are loaded
-     */
-    isReady(): boolean;
-}
-export declare const spriteExtractor: SpriteExtractor;
-export declare function loadTrackedSpriteSheets(maxSheets?: number, category?: SpriteCategory | 'all'): Promise<string[]>;
-export declare function listTrackedSpriteResources(category?: SpriteCategory | 'all'): Array<{
+type SpriteMode = 'bitmap' | 'canvas' | 'dataURL';
+type SpriteCategory = 'tiles' | 'ui' | 'unknown';
+type MutationName = 'Gold' | 'Rainbow' | 'Wet' | 'Chilled' | 'Frozen' | 'Dawnlit' | 'Ambershine' | 'Dawncharged' | 'Ambercharged' | 'Dawnbound' | 'Amberlit' | 'Amberbound';
+export type TileInfo<T = ImageBitmap | HTMLCanvasElement | string> = {
+    sheet: string;
     url: string;
-    sources: string[];
-    lastSeen: number;
-    category: SpriteCategory;
-}>;
-export declare function getCropSpriteDataUrl(species: string): string | null;
-/**
- * Create a sprite element for rendering in UI
- */
-/**
- * Get pet sprite as data URL for use in CSS background-image
- */
+    index: number;
+    col: number;
+    row: number;
+    size: number;
+    data: T;
+};
+type MutationIconTile = {
+    tile: TileInfo<HTMLCanvasElement>;
+    offsetX?: number;
+    offsetY?: number;
+    scale?: number;
+    opacity?: number;
+    ignoreBaseOffset?: boolean;
+};
+type Config = {
+    skipAlphaBelow: number;
+    blackBelow: number;
+    tolerance: number;
+    ruleAllplants512: RegExp;
+};
+type LoadTilesOptions = {
+    mode?: SpriteMode;
+    includeBlanks?: boolean;
+    forceSize?: 256 | 512;
+    onlySheets?: RegExp;
+};
+type PreloadTilesOptions = LoadTilesOptions & {
+    batchSize?: number;
+    delayMs?: number;
+    onProgress?: (processed: number, total: number) => void;
+};
+export declare class SpritesCore {
+    cfg: Config;
+    private initialized;
+    private onMessageListener;
+    private all;
+    private familyAssets;
+    private assetFamilies;
+    private tileCacheBitmap;
+    private tileCacheCanvas;
+    private tileCacheDataURL;
+    private uiCache;
+    constructor(autoStart?: boolean);
+    init(): this;
+    destroy(): void;
+    lists(): {
+        all: string[];
+        [family: string]: string[];
+    };
+    listFamilies(): string[];
+    listAssetsForFamily(family: string): string[];
+    registerKnownAsset(url: string, families?: string[]): boolean;
+    listTilesByCategory(re: RegExp): string[];
+    listPlants(): string[];
+    listAllPlants(): string[];
+    listItems(): string[];
+    listSeeds(): string[];
+    listPets(): string[];
+    loadUI(): Promise<Map<string, HTMLImageElement>>;
+    loadTiles(options?: LoadTilesOptions): Promise<Map<string, TileInfo<any>[]>>;
+    loadSheetFromUrl(url: string, _alias?: string, forceSize?: 256 | 512): Promise<boolean>;
+    preloadTilesGradually(options?: PreloadTilesOptions): Promise<void>;
+    loadTilesAuto(): Promise<Map<string, TileInfo[]>>;
+    loadTiles256(): Promise<Map<string, TileInfo[]>>;
+    loadTiles512(): Promise<Map<string, TileInfo[]>>;
+    getTile(sheetBase: string, index: number, mode?: SpriteMode): Promise<TileInfo | null>;
+    flatTiles(options?: LoadTilesOptions): Promise<TileInfo[]>;
+    clearCaches(): void;
+    toCanvas(tile: TileInfo<ImageBitmap | HTMLCanvasElement | string>): HTMLCanvasElement;
+    applyCanvasFilter(canvas: HTMLCanvasElement, filterName: MutationName): HTMLCanvasElement | null;
+    applySpriteFilter(tile: TileInfo<ImageBitmap | HTMLCanvasElement | string>, filterName: string): HTMLCanvasElement | null;
+    renderPlantWithMutationsNonTall(opts: {
+        baseTile: TileInfo<ImageBitmap | HTMLCanvasElement | string>;
+        mutations: string[];
+        mutationIcons: Record<string, MutationIconTile>;
+        mutationOverlayTiles?: Record<string, MutationIconTile>;
+        isTall?: boolean;
+    }): HTMLCanvasElement;
+    private startSniffers;
+    private normalizeFamilies;
+    private add;
+    private addAsset;
+    private getCacheForMode;
+    private ensureTilesForUrl;
+    private sliceOne;
+    private delay;
+    private tileToCanvas;
+    private drawGradient;
+    private makeAngleGradient;
+    private sortMutations;
+    private applyColorMutations;
+    private applyFilterChain;
+    private drawMutationIcons;
+    private drawMutationOverlayTiles;
+}
+export declare const Sprites: SpritesCore;
+export declare function initSprites(config?: Partial<Config>): SpritesCore;
+export declare function getTileCanvas(sheet: string, index: number): Promise<HTMLCanvasElement | null>;
+export declare function getCropSpriteByTileId(tileId: string | number | null | undefined): Promise<HTMLCanvasElement | null>;
+export declare function getCropSpriteDataUrl(speciesOrTile: string | number | null | undefined): string | null;
 export declare function getPetSpriteDataUrl(species: string): string | null;
-export declare function getPetSpriteCanvas(species: string): HTMLCanvasElement | null;
-/**
- * Get mutation overlay sprite as data URL
- */
 export declare function getMutationOverlayDataUrl(mutation: string): string | null;
-export declare function createSpriteElement(species: string, size?: number): HTMLElement | null;
-/**
- * Render an on-screen grid of a sprite sheet (useful for manual mapping)
- */
+export declare function renderPlantWithMutations(base: HTMLCanvasElement, mutations: string[]): HTMLCanvasElement;
+export declare function getPetSpriteCanvas(species: string): HTMLCanvasElement | null;
+export declare function createSpriteElement(sheet: string, index: number, size?: number): HTMLDivElement | null;
+export declare function renderPlantSprite(tileId: string | number | null | undefined, species?: string | null, mutations?: string[]): Promise<string | null>;
+export declare function loadTrackedSpriteSheets(maxSheets?: number, _category?: SpriteCategory | 'all' | 'plants' | 'pets'): Promise<string[]>;
 export declare function renderSpriteGridOverlay(sheetName?: string, maxTiles?: number): void;
 export declare function renderAllSpriteSheetsOverlay(maxTilesPerSheet?: number): void;
-/**
- * Scan Pixi texture cache for pet sprite sheets
- * Console command: window.inspectPetSprites()
- */
 export declare function inspectPetSprites(): Promise<void>;
+export declare function listTrackedSpriteResources(_category?: SpriteCategory | 'all' | 'plants' | 'pets'): Array<{
+    url: string;
+    families: string[];
+}>;
+export declare function getSheetSummaries(): Array<{
+    name: string;
+    url: string;
+    tileSize: number;
+    tilesPerRow: number;
+    tilesPerColumn: number;
+}>;
+declare function legacyGetTile(sheet: string, index: number): HTMLCanvasElement | null;
+declare function legacyGetCropSprite(species: string): HTMLCanvasElement | null;
+declare function legacyGetCropSpriteByTileId(tileId: string | number | null | undefined): HTMLCanvasElement | null;
+declare function legacyGetPetSprite(species: string): HTMLCanvasElement | null;
+export declare function legacyGetSeedSprite(seedName: string): HTMLCanvasElement | null;
+export declare function legacyGetItemSprite(itemName: string): HTMLCanvasElement | null;
+declare function legacyRenderPlantWithMutations(base: HTMLCanvasElement, mutations: string[]): HTMLCanvasElement;
+export declare const spriteExtractor: {
+    readonly getTile: typeof legacyGetTile;
+    readonly getCropSprite: typeof legacyGetCropSprite;
+    readonly getCropSpriteByTileId: typeof legacyGetCropSpriteByTileId;
+    readonly getSeedSprite: typeof legacyGetSeedSprite;
+    readonly getPetSprite: typeof legacyGetPetSprite;
+    readonly renderPlantWithMutations: typeof legacyRenderPlantWithMutations;
+    readonly loadSheetFromUrl: (url: string, _alias?: string, forceSize?: 256 | 512) => Promise<boolean>;
+    readonly init: () => void;
+};
 export {};
 //# sourceMappingURL=spriteExtractor.d.ts.map

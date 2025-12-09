@@ -62,7 +62,10 @@ function httpGet<T>(path: string, query?: Record<string, string | number | undef
           error = `HTTP ${res.status}`;
         }
 
-        resolve({ status: res.status, data: parsed, error });
+        const result: ApiResponse<T> = error
+          ? { status: res.status, data: parsed, error }
+          : { status: res.status, data: parsed };
+        resolve(result);
       },
       onerror: err => {
         resolve({ status: 0, data: null, error: String(err ?? 'Network error') });
@@ -75,21 +78,30 @@ export async function listRooms(limit = 50): Promise<ApiResponse<Room[]>> {
   const res = await httpGet<RoomDto[]>('rooms', { limit });
 
   if (!res.data || !Array.isArray(res.data)) {
-    return { status: res.status, data: null, error: res.error };
+    return res.error ? { status: res.status, data: null, error: res.error } : { status: res.status, data: null };
   }
 
-  const rooms: Room[] = res.data.map(r => ({
-    id: r.id,
-    isPrivate: r.is_private,
-    playersCount: r.players_count ?? 0,
-    lastUpdatedAt: r.last_updated_at,
-    lastUpdatedByPlayerId: r.last_updated_by_player_id,
-    userSlots: Array.isArray(r.user_slots)
-      ? r.user_slots.map(slot => ({ name: slot.name, avatarUrl: slot.avatar_url ?? null }))
-      : undefined,
-  }));
+  const rooms: Room[] = res.data.map(r => {
+    const base = {
+      id: r.id,
+      isPrivate: r.is_private,
+      playersCount: r.players_count ?? 0,
+      lastUpdatedAt: r.last_updated_at,
+      lastUpdatedByPlayerId: r.last_updated_by_player_id,
+    } satisfies Omit<Room, 'userSlots'>;
 
-  return { status: res.status, data: rooms, error: res.error };
+    if (Array.isArray(r.user_slots)) {
+      const slots: RoomUserSlot[] = r.user_slots.map(slot => ({
+        name: slot.name,
+        avatarUrl: slot.avatar_url ?? null,
+        playerId: slot.player_id ?? null,
+      }));
+      return { ...base, userSlots: slots } satisfies Room;
+    }
+    return base as Room;
+  });
+
+  return res.error ? { status: res.status, data: rooms, error: res.error } : { status: res.status, data: rooms };
 }
 
 interface RoomDto {
@@ -98,7 +110,7 @@ interface RoomDto {
   players_count: number | null;
   last_updated_at: string;
   last_updated_by_player_id: string | null;
-  user_slots?: Array<{ name: string; avatar_url?: string | null }>;
+  user_slots?: Array<{ name: string; avatar_url?: string | null; player_id?: string | null }>;
 }
 
 // Re-export for convenience

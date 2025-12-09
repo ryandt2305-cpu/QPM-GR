@@ -1,10 +1,11 @@
 /**
- * TypeScript definitions for Public Rooms feature (Supabase-backed)
+ * TypeScript definitions for Public Rooms feature (Aries-backed)
  */
 
 export interface RoomUserSlot {
   name: string;
   avatarUrl: string | null;
+  playerId?: string | null; // Aries may provide player_id for richer lookups
 }
 
 export interface Room {
@@ -29,13 +30,14 @@ export interface PlayerRoomResult {
 }
 
 export interface PlayerPrivacyPayload {
-  allowProfile: boolean;
-  allowGarden: boolean;
-  allowInventory: boolean;
-  allowStats: boolean;
-  allowActivity: boolean;
-  allowJournal: boolean;
-  allowRoom: boolean;
+  showProfile: boolean;
+  showGarden: boolean;
+  showInventory: boolean;
+  showStats: boolean;
+  showActivityLog: boolean;
+  showJournal: boolean;
+  showCoins: boolean;
+  hideRoomFromPublicList?: boolean;
 }
 
 export interface PlayerViewState {
@@ -62,6 +64,12 @@ export interface PlayerView {
 
 export interface RoomsMap {
   [roomId: string]: Room;
+}
+
+export interface ApiResponse<T> {
+  status: number;
+  data: T | null;
+  error?: string;
 }
 
 // Public Rooms configuration

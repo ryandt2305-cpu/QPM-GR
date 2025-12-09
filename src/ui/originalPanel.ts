@@ -28,11 +28,38 @@ import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type Dynamic
 import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
 import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA, calculateEffectiveProcRate } from './trackerWindow';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
+import { renderCompactPetSprite, getAbilityColor } from '../utils/petCardRenderer';
+import { getCropSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
 import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, UPDATE_URL, GITHUB_URL, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
+
+// Helper function to get mutated crop sprite URL
+function getMutatedCropSpriteUrl(species: string, mutations: string[]): string {
+  // Ensure species is a valid string
+  const speciesStr = String(species || '').trim().toLowerCase();
+  if (!speciesStr) {
+    return '';
+  }
+
+  const baseCanvas = spriteExtractor.getCropSprite(speciesStr);
+  if (!baseCanvas) {
+    return getCropSpriteDataUrl(speciesStr) || '';
+  }
+
+  // Apply mutations if present
+  const mutatedCanvas = mutations && mutations.length > 0
+    ? spriteExtractor.renderPlantWithMutations(baseCanvas, mutations)
+    : baseCanvas;
+
+  try {
+    return mutatedCanvas.toDataURL('image/png');
+  } catch {
+    return '';
+  }
+}
 
 export interface UIState {
   panel: HTMLElement | null;
@@ -1535,7 +1562,11 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
   headerLine.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;color:#ffe9a6;';
 
   const nameLabel = document.createElement('span');
-  nameLabel.textContent = `${entry.name ?? 'Unknown'} • ${entry.abilityNames.join(', ')}`;
+  nameLabel.style.cssText = 'display:flex;align-items:center;gap:6px;';
+  const turtleSprite = renderCompactPetSprite({
+    species: 'Turtle'
+  });
+  nameLabel.innerHTML = `${turtleSprite}<span>${entry.name ?? 'Unknown'} • ${entry.abilityNames.join(', ')}</span>`;
 
   const statusBadge = document.createElement('span');
         statusBadge.textContent = entry.active ? 'Active' : 'Needs feed';
@@ -3063,11 +3094,24 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       }
     });
 
+    // Create ability block instead of text label
+    const abilityColor = getAbilityColor(option.id);
+    const abilityBlock = document.createElement('div');
+    abilityBlock.style.cssText = `
+      width: 14px;
+      height: 14px;
+      background: ${abilityColor.base};
+      border-radius: 2px;
+      box-shadow: 0 0 6px ${abilityColor.glow}, 0 1px 3px rgba(0,0,0,0.3);
+    `;
+    abilityBlock.title = option.label;
+
     const label = document.createElement('span');
     label.textContent = option.label;
     label.style.cssText = `font-size: 13px; color: var(--qpm-text, #fff);`;
 
     checkbox.appendChild(input);
+    checkbox.appendChild(abilityBlock);
     checkbox.appendChild(label);
     petAbilitiesSection.appendChild(checkbox);
   });
@@ -3138,21 +3182,24 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       }
     });
 
-    const colorDot = document.createElement('span');
-    colorDot.style.cssText = `
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: ${option.color};
+    // Use mutated sunflower sprite instead of color dot
+    const mutationSprite = getMutatedCropSpriteUrl('sunflower', [option.id]);
+    const spriteEl = document.createElement('img');
+    spriteEl.src = mutationSprite;
+    spriteEl.style.cssText = `
+      width: 20px;
+      height: 20px;
+      image-rendering: pixelated;
       flex-shrink: 0;
     `;
+    spriteEl.title = option.label;
 
     const label = document.createElement('span');
     label.textContent = option.label;
     label.style.cssText = `font-size: 13px; color: var(--qpm-text, #fff);`;
 
     checkbox.appendChild(input);
-    checkbox.appendChild(colorDot);
+    checkbox.appendChild(spriteEl);
     checkbox.appendChild(label);
     mutationsSection.appendChild(checkbox);
   });
@@ -3346,11 +3393,20 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       updateAutoFavoriteConfig({ filterBySpecies: updated });
     });
 
+    // Use compact pet sprite instead of text
+    const petSprite = renderCompactPetSprite({
+      species: species
+    });
+    const spriteContainer = document.createElement('div');
+    spriteContainer.innerHTML = petSprite;
+    spriteContainer.style.cssText = 'flex-shrink: 0;';
+
     const label = document.createElement('span');
     label.textContent = species;
     label.style.cssText = 'color: var(--qpm-text, #fff);';
 
     checkbox.appendChild(input);
+    checkbox.appendChild(spriteContainer);
     checkbox.appendChild(label);
     speciesCheckboxContainer.appendChild(checkbox);
   });
@@ -3391,12 +3447,19 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       updateAutoFavoriteConfig({ filterByCropTypes: updated });
     });
 
+    // Use crop sprite
+    const cropSprite = getMutatedCropSpriteUrl(cropName.toLowerCase(), []);
+    const spriteImg = document.createElement('img');
+    spriteImg.src = cropSprite;
+    spriteImg.style.cssText = 'width: 20px; height: 20px; image-rendering: pixelated; flex-shrink: 0;';
+
     const label = document.createElement('span');
     label.textContent = cropName;
     label.style.cssText = 'color: var(--qpm-text, #fff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
     label.title = cropName;
 
     checkbox.appendChild(input);
+    checkbox.appendChild(spriteImg);
     checkbox.appendChild(label);
     cropTypeCheckboxContainer.appendChild(checkbox);
   });
@@ -7584,7 +7647,10 @@ function createTrackersSection(): HTMLElement[] {
           row.appendChild(abilityCell);
 
           const petCell = document.createElement('td');
-          petCell.textContent = entry.displayName;
+          const petSprite = renderCompactPetSprite({
+            species: entry.displayName
+          });
+          petCell.innerHTML = `<div style="display:flex;align-items:center;gap:6px;">${petSprite}<span>${entry.displayName}</span></div>`;
           row.appendChild(petCell);
 
           const procsCell = document.createElement('td');

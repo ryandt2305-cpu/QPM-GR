@@ -13,6 +13,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @match        https://magiccircle.gg/r/*
 // @match        https://magicgarden.gg/r/*
 // @match        https://starweaver.org/r/*
+// @connect      ariesmod-api.ariedam.fr
 // @updateURL    https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
 // @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
 // @run-at       document-start

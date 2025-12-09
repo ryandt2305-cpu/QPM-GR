@@ -1007,25 +1007,55 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
   const leftHtml = renderPlot(leftPlot, 'Left');
   const rightHtml = renderPlot(rightPlot, 'Right');
   
-  // Render boardwalk tiles between plots
+  // Render boardwalk tiles between plots (23 cols × 12 rows = 276 tiles)
+  const BOARDWALK_COLS = 23;
+  const BOARDWALK_ROWS = 12;
   const boardwalkObjects = garden?.boardwalkTileObjects && typeof garden.boardwalkTileObjects === 'object' ? garden.boardwalkTileObjects : null;
   let boardwalkHtml = '';
   if (boardwalkObjects && Object.keys(boardwalkObjects).length > 0) {
-    const boardwalkTiles = Object.entries(boardwalkObjects).map(([tileIdStr, payload]) => {
+    // Build 2D grid structure for boardwalk (23 cols × 12 rows)
+    type BoardwalkTile = { tileId: number; decorId: string; exists: boolean };
+    const boardwalkGrid: BoardwalkTile[][] = [];
+
+    // Initialize grid
+    for (let row = 0; row < BOARDWALK_ROWS; row++) {
+      boardwalkGrid[row] = [];
+      for (let col = 0; col < BOARDWALK_COLS; col++) {
+        const tileId = row * BOARDWALK_COLS + col;
+        boardwalkGrid[row][col] = { tileId, decorId: '', exists: false };
+      }
+    }
+
+    // Fill in actual tiles from boardwalkObjects
+    for (const [tileIdStr, payload] of Object.entries(boardwalkObjects)) {
       const tileId = parseInt(tileIdStr, 10);
+      if (!Number.isFinite(tileId) || tileId < 0 || tileId >= BOARDWALK_COLS * BOARDWALK_ROWS) continue;
+
+      const col = tileId % BOARDWALK_COLS;
+      const row = Math.floor(tileId / BOARDWALK_COLS);
       const tilePayload = payload as any;
       const decorId = tilePayload?.decorId || tilePayload?.id || 'unknown';
+
+      boardwalkGrid[row][col] = { tileId, decorId, exists: true };
+    }
+
+    // Render grid
+    const boardwalkTiles = boardwalkGrid.map(row => row.map(tile => {
+      if (!tile.exists) {
+        return `<div class="pr-boardwalk-tile pr-boardwalk-tile-empty" title="Empty tile #${tile.tileId}"></div>`;
+      }
       return `
-        <div class="pr-boardwalk-tile" title="Tile ${tileId}: ${decorId}">
-          <div style="font-size: 24px;">🪵</div>
-          <div style="font-size: 9px; color: #999;">#${tileId}</div>
+        <div class="pr-boardwalk-tile" title="Tile ${tile.tileId}: ${tile.decorId}">
+          <div style="font-size: 20px;">🪵</div>
+          <div style="font-size: 8px; color: #b4a490; font-weight: 600;">#${tile.tileId}</div>
         </div>
       `;
-    }).join('');
+    }).join('')).join('');
+
     boardwalkHtml = `
       <div class="pr-boardwalk-section">
-        <div class="pr-garden-plot-label">Boardwalk (${Object.keys(boardwalkObjects).length} tiles)</div>
-        <div class="pr-boardwalk-grid">${boardwalkTiles}</div>
+        <div class="pr-garden-plot-label">Boardwalk (${Object.keys(boardwalkObjects).length}/${BOARDWALK_COLS * BOARDWALK_ROWS} tiles)</div>
+        <div class="pr-boardwalk-grid pr-boardwalk-grid-23x12">${boardwalkTiles}</div>
       </div>
     `;
   }
@@ -1969,9 +1999,10 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
       .pr-garden-placeholder { font-size: 16px; opacity: 0.3; }
       .pr-multi-icon { position: absolute; top: 0; right: 0; background: rgba(124,58,237,0.9); color: #fff; font-size: 9px; font-weight: 700; padding: 1px 3px; border-radius: 0 3px 0 4px; line-height: 1; }
       .pr-boardwalk-section { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-      .pr-boardwalk-grid { display: flex; flex-wrap: wrap; gap: 4px; padding: 12px; background: rgba(101, 67, 33, 0.2); border-radius: 8px; max-width: 180px; justify-content: center; border: 2px dashed rgba(139, 90, 43, 0.4); }
-      .pr-boardwalk-tile { width: 40px; height: 40px; background: linear-gradient(135deg, #654321, #8B5A2B); border: 1px solid rgba(139, 90, 43, 0.6); border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: help; transition: transform 0.15s ease, box-shadow 0.15s ease; }
-      .pr-boardwalk-tile:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(139, 90, 43, 0.6); }
+      .pr-boardwalk-grid-23x12 { display: grid; grid-template-columns: repeat(23, 20px); grid-template-rows: repeat(12, 20px); gap: 1px; padding: 8px; background: rgba(101, 67, 33, 0.2); border-radius: 8px; justify-content: center; border: 2px dashed rgba(139, 90, 43, 0.4); }
+      .pr-boardwalk-tile { width: 20px; height: 20px; background: linear-gradient(135deg, #654321, #8B5A2B); border: 1px solid rgba(139, 90, 43, 0.6); border-radius: 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: help; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+      .pr-boardwalk-tile:hover { transform: scale(1.15); box-shadow: 0 4px 12px rgba(139, 90, 43, 0.6); z-index: 10; }
+      .pr-boardwalk-tile-empty { background: rgba(20,25,32,0.4); border-color: rgba(139, 90, 43, 0.2); }
       .pr-pet-str { color: #a78bfa; font-size: 13px; font-weight: 700; }
       .pr-journal-progress { display: flex; flex-direction: column; gap: 16px; }
       .pr-journal-item { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); transition: transform 0.2s ease, box-shadow 0.2s ease; }

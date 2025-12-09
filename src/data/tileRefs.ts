@@ -34,6 +34,7 @@ export const tileRefsPlants: Record<string, number> = {
   Corn: 36,
   FavaBean: 37,
   Cacao: 38,
+  CacaoBean: 38, // Alias for "Cacao Bean" (same as Cacao)
 
   PalmTreeTop: 39,
   BushyTree: 40,
@@ -48,7 +49,11 @@ export const tileRefsPlants: Record<string, number> = {
   Echeveria: 49,
   Delphinium: 50,
   DawnCelestialCrop: 51,
+  Dawnbinder: 51, // Alias for "Dawnbinder" (DawnCelestial)
+  DawnCelestial: 51, // Explicit alias
   MoonCelestialCrop: 52,
+  Moonbinder: 52, // Alias for "Moonbinder" (MoonCelestial)
+  MoonCelestial: 52, // Explicit alias
 
   Camellia: 57,
   Hedge: 58,
@@ -62,6 +67,7 @@ export const tileRefsTallPlants: Record<string, number> = {
 
   DawnCelestialPlatform: 3,
   DawnCelestialPlant: 4,
+  Dawnbinder: 4, // Alias for "Dawnbinder" tall plant
   DawnCelestialPlantActive: 5,
   DawnCelestialPlatformTopmostLayer: 6,
 
@@ -70,12 +76,14 @@ export const tileRefsTallPlants: Record<string, number> = {
 
   MoonCelestialPlatform: 9,
   MoonCelestialPlant: 10,
+  Moonbinder: 10, // Alias for "Moonbinder" tall plant
   MoonCelestialPlantActive: 11,
 
   StarweaverPlatform: 13,
   StarweaverPlant: 14,
 
   CacaoTree: 15,
+  CacaoBeanTree: 15, // Alias for "Cacao Bean" tall plant
 };
 
 export const tileRefsSeeds: Record<string, number> = {
@@ -85,7 +93,9 @@ export const tileRefsSeeds: Record<string, number> = {
 
   Starweaver: 6,
   DawnCelestial: 7,
+  Dawnbinder: 7, // Alias for "Dawnbinder" seed
   MoonCelestial: 8,
+  Moonbinder: 8, // Alias for "Moonbinder" seed
 
   Blueberry: 11,
   Banana: 12,
@@ -105,6 +115,7 @@ export const tileRefsSeeds: Record<string, number> = {
   Peach: 27,
   FavaBean: 28,
   Cacao: 29,
+  CacaoBean: 29, // Alias for "Cacao Bean" seed
   Delphinium: 30,
 
   Coconut: 31,

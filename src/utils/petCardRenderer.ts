@@ -167,6 +167,27 @@ export function renderPetCard(config: PetCardConfig): string {
 }
 
 /**
+ * Generate pet species icon for filter cards (no STR label)
+ * Just shows sprite + name
+ */
+export function renderPetSpeciesIcon(species: string): string {
+  const speciesStr = String(species || '').trim();
+  if (!speciesStr) {
+    return '<div style="font-size: 16px;">🐾</div>';
+  }
+
+  // Get base sprite (no mutations for filter cards)
+  const sprite = getPetSpriteDataUrl(speciesStr);
+
+  return `
+    <div class="qpm-pet-species-icon" style="display: inline-flex; align-items: center; gap: 6px;">
+      ${sprite ? `<img src="${sprite}" alt="${speciesStr}" style="width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; border-radius: 4px; border: 1px solid rgba(168,139,250,0.2);" />` : `<div style="font-size: 16px;">🐾</div>`}
+      <span style="font-size: 12px; font-weight: 600; color: #e2e8f0;">${speciesStr}</span>
+    </div>
+  `;
+}
+
+/**
  * Generate lightweight pet sprite only (for use in lists/trackers)
  * Still includes abilities + name + STR but in compact format
  */

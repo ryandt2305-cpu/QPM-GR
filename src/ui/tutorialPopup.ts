@@ -222,7 +222,8 @@ export function showTutorialPopup(): void {
     gotItBtn.style.boxShadow = '0 4px 12px rgba(76, 175, 80, 0.3)';
   });
   gotItBtn.addEventListener('click', () => {
-    markTutorialAsShown();
+    // Don't mark as shown - allow it to show again on refresh
+    // Only "Don't show again" button will permanently hide it
     closeTutorial();
   });
 

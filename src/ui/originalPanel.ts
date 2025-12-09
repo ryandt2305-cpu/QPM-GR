@@ -28,7 +28,7 @@ import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type Dynamic
 import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
 import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA, calculateEffectiveProcRate } from './trackerWindow';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
-import { renderCompactPetSprite, getAbilityColor } from '../utils/petCardRenderer';
+import { renderCompactPetSprite, renderPetSpeciesIcon, getAbilityColor } from '../utils/petCardRenderer';
 import { getCropSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
@@ -3247,7 +3247,7 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   abilityFilterSection.appendChild(abilityFilterTitle);
 
   const abilityCheckboxContainer = document.createElement('div');
-  abilityCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-height: 300px; overflow-y: auto;';
+  abilityCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;';
 
   // Dynamically import all abilities from petAbilities.ts
   const { getAllAbilityDefinitions } = await import('../data/petAbilities');
@@ -3393,21 +3393,14 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       updateAutoFavoriteConfig({ filterBySpecies: updated });
     });
 
-    // Use compact pet sprite instead of text
-    const petSprite = renderCompactPetSprite({
-      species: species
-    });
-    const spriteContainer = document.createElement('div');
-    spriteContainer.innerHTML = petSprite;
-    spriteContainer.style.cssText = 'flex-shrink: 0;';
-
-    const label = document.createElement('span');
-    label.textContent = species;
-    label.style.cssText = 'color: var(--qpm-text, #fff);';
+    // Use pet species icon (no STR label)
+    const petIcon = renderPetSpeciesIcon(species);
+    const iconContainer = document.createElement('div');
+    iconContainer.innerHTML = petIcon;
+    iconContainer.style.cssText = 'flex-shrink: 0;';
 
     checkbox.appendChild(input);
-    checkbox.appendChild(spriteContainer);
-    checkbox.appendChild(label);
+    checkbox.appendChild(iconContainer);
     speciesCheckboxContainer.appendChild(checkbox);
   });
 
@@ -3424,7 +3417,7 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   cropTypeSection.appendChild(cropTypeTitle);
 
   const cropTypeCheckboxContainer = document.createElement('div');
-  cropTypeCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-height: 300px; overflow-y: auto;';
+  cropTypeCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;';
 
   // Dynamically import all crop names from cropBaseStats.ts
   const { getAllCropNames } = await import('../data/cropBaseStats');

@@ -1411,17 +1411,23 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     favorited: inventoryContext.favoritedIds.size
   });
 
-  const initialFavoritedSet = new Set(inventoryContext.favoritedIds);
-  const statesBefore = collectInventoryStates(items, inventoryContext);
-  if (statesBefore.length === 0) {
-    log('⚠️ No inventory entries with ids found for crop type', { speciesKey });
+  // NEW APPROACH - Work directly with inventory data, not DOM items
+  const queues = captureSpeciesQueues(inventoryContext);
+  const speciesQueue = queues.get(speciesKey);
+
+  if (!speciesQueue || speciesQueue.length === 0) {
+    log('⚠️ No inventory entries found for crop type', { speciesKey });
     showToast(`⚠️ No ${speciesLabel} inventory entries found`);
     return;
   }
 
+  const initialFavoritedSet = new Set(inventoryContext.favoritedIds);
+  const statesBefore = speciesQueue; // Use queue entries directly
+  const totalCount = statesBefore.length;
+
   const initialFavoriteIds = statesBefore
     .filter((state) => state.isFavorited)
-    .map((state) => state.itemId);
+    .map((state) => state.id);
   const baselineFavoritesBefore = new Set(
     config.baselineFavoriteIds[speciesKey] ?? initialFavoriteIds
   );
@@ -1429,12 +1435,14 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   const toggleSet = new Set<string>();
 
   if (shouldLock) {
+    // Lock: favorite all unfavorited items
     for (const state of statesBefore) {
       if (!state.isFavorited) {
-        toggleSet.add(state.itemId);
+        toggleSet.add(state.id);
       }
     }
   } else {
+    // Unlock: unfavorite items based on sync mode
     if (syncMode) {
       const manualFavorites: string[] = [];
 
@@ -1443,9 +1451,9 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
           continue;
         }
 
-        if (!managedBefore.has(state.itemId) && !baselineFavoritesBefore.has(state.itemId)) {
-          manualFavorites.push(state.itemId);
-          baselineFavoritesBefore.add(state.itemId);
+        if (!managedBefore.has(state.id) && !baselineFavoritesBefore.has(state.id)) {
+          manualFavorites.push(state.id);
+          baselineFavoritesBefore.add(state.id);
         }
       }
 
@@ -1464,24 +1472,24 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
           continue;
         }
 
-        const isManaged = managedBefore.has(state.itemId);
-        const isBaseline = baselineFavoritesBefore.has(state.itemId);
+        const isManaged = managedBefore.has(state.id);
+        const isBaseline = baselineFavoritesBefore.has(state.id);
 
         if (isManaged || !isBaseline) {
-          toggleSet.add(state.itemId);
+          toggleSet.add(state.id);
         }
       }
     } else {
       for (const state of statesBefore) {
         if (state.isFavorited) {
-          toggleSet.add(state.itemId);
+          toggleSet.add(state.id);
         }
       }
     }
 
     if (managedBefore.size > 0) {
       for (const managedId of managedBefore) {
-        if (!toggleSet.has(managedId) && !statesBefore.some((state) => state.itemId === managedId)) {
+        if (!toggleSet.has(managedId) && !statesBefore.some((state) => state.id === managedId)) {
           toggleSet.add(managedId);
         }
       }
@@ -1496,6 +1504,14 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   }
 
   const idsToToggle = Array.from(toggleSet);
+
+  log(`📋 Found ${totalCount} ${speciesLabel} items, ${idsToToggle.length} need toggling`, {
+    speciesKey,
+    shouldLock,
+    totalItems: totalCount,
+    toToggle: idsToToggle.length,
+    currentlyFavorited: statesBefore.filter(s => s.isFavorited).length
+  });
 
   if (idsToToggle.length === 0) {
     log('ℹ️ Crop lock toggle skipped (state already matches request)', { speciesKey, shouldLock });
@@ -1546,9 +1562,11 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     source: inventoryContext.source
   };
 
-  const statesAfter = collectInventoryStates(items, effectiveContext);
-  const favoritedAfter = new Set(statesAfter.filter((state) => state.isFavorited).map((state) => state.itemId));
-  const totalCount = statesAfter.length;
+  // Re-capture species queue from final inventory context
+  const finalQueues = captureSpeciesQueues(effectiveContext);
+  const finalSpeciesQueue = finalQueues.get(speciesKey) ?? [];
+  const statesAfter = finalSpeciesQueue;
+  const favoritedAfter = new Set(statesAfter.filter((state) => state.isFavorited).map((state) => state.id));
   const favoritedCount = favoritedAfter.size;
 
   const managedAfter = new Set(managedBefore);
@@ -1557,15 +1575,15 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
       if (!state.isFavorited) {
         continue;
       }
-      const previouslyFavorited = statesBefore.find((prev) => prev.itemId === state.itemId)?.isFavorited ?? false;
+      const previouslyFavorited = statesBefore.find((prev) => prev.id === state.id)?.isFavorited ?? false;
       if (!previouslyFavorited) {
-        managedAfter.add(state.itemId);
+        managedAfter.add(state.id);
       }
     }
   } else if (managedBefore.size > 0) {
     for (const state of statesAfter) {
       if (!state.isFavorited) {
-        managedAfter.delete(state.itemId);
+        managedAfter.delete(state.id);
       }
     }
   } else {
@@ -1580,7 +1598,7 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   if (shouldLock) {
     operationSucceeded = favoritedAfter.size === totalCount;
   } else if (managedBefore.size > 0) {
-    operationSucceeded = statesAfter.every((state) => !managedBefore.has(state.itemId) || !state.isFavorited);
+    operationSucceeded = statesAfter.every((state) => !managedBefore.has(state.id) || !state.isFavorited);
   } else {
     operationSucceeded = idsToToggle.every((itemId) => !favoritedAfter.has(itemId));
   }
@@ -1590,7 +1608,7 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     if (shouldLock) {
       const baselineAfterLock = statesBefore
         .filter((state) => state.isFavorited)
-        .map((state) => state.itemId);
+        .map((state) => state.id);
       if (baselineAfterLock.length > 0) {
         config.baselineFavoriteIds[speciesKey] = baselineAfterLock;
       } else {

@@ -69,8 +69,8 @@ export interface PlantData {
 export type WeatherType = 'rain' | 'snow' | 'dawn' | 'amber' | 'sunny' | 'unknown';
 
 const MUTATION_CONFIG_KEY = 'quinoa-mutation-reminder-config';
-const INVENTORY_CONTAINER = '.McFlex.css-1cyjil4'; // Same as crop locking
-const INVENTORY_ITEM = 'div.css-vmnhaw';
+const INVENTORY_CONTAINER = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
+const INVENTORY_ITEM = 'div.css-79elbk'; // NEW - Graphics engine 2025-12-13
 const CROP_INVENTORY_ATOM_LABEL = 'myCropInventoryAtom';
 
 let config: MutationConfig = {

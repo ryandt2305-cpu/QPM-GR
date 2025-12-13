@@ -26,13 +26,13 @@ export interface CropTypeLockConfig {
 
 // Target actual inventory modal, not shop
 const INVENTORY_PANEL_SELECTOR = 'section.chakra-modal__content[role="dialog"]';
-const INVENTORY_GRID_SELECTOR = '.McFlex.css-1cyjil4'; // The actual items container
-const INVENTORY_ITEM_SELECTOR = 'div.css-vmnhaw'; // Individual item slots (the outer wrapper)
+const INVENTORY_GRID_SELECTOR = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
+const INVENTORY_ITEM_SELECTOR = 'div.css-79elbk'; // NEW - Graphics engine 2025-12-13
 const FAVORITE_BUTTON_SELECTOR = 'button[aria-label*="avorite"]';
 const CROP_LOCK_STYLE_ID = 'qpm-crop-lock-styles';
 
 // Use the items container, NOT the filter buttons grid
-const USER_INVENTORY_SELECTOR = '.McFlex.css-1cyjil4';
+const USER_INVENTORY_SELECTOR = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
 
 const DEBUG_INVENTORY_LOGS = false;
 const dbg = (...args: unknown[]): void => {
@@ -935,6 +935,8 @@ function extractCropData(itemElement: Element): CropItem | null {
   try {
     // Try multiple name selectors - prioritize the actual name element
     const nameSelectors = [
+      'p.chakra-text.css-1k5d5up',  // NEW - primary for new graphics engine
+      'p.chakra-text.css-1d354tw',  // NEW - for crops with mutations/stats
       'p.chakra-text.css-8xfasz', // The actual item name from your HTML
       '.McFlex.css-1gd1uup p.chakra-text', // Name in the flex container
       'p.chakra-text.css-rbbzu5',
@@ -942,10 +944,10 @@ function extractCropData(itemElement: Element): CropItem | null {
       '[data-testid="item-name"]',
       'p'
     ];
-    
+
     let nameElement: Element | null = null;
     let itemName: string | null = null;
-    
+
     for (const selector of nameSelectors) {
       nameElement = itemElement.querySelector(selector);
       if (nameElement) {
@@ -953,10 +955,22 @@ function extractCropData(itemElement: Element): CropItem | null {
         if (itemName && itemName.length > 0) break;
       }
     }
-    
+
     if (!itemName) {
       log('❌ No item name found');
       return null;
+    }
+
+    // NEW - Exclude pets (have "STR XX" text)
+    const allText = itemElement.textContent || '';
+    if (/\bSTR\s+\d+/i.test(allText)) {
+      return null; // This is a pet, not a crop
+    }
+
+    // NEW - Only accept crops (have "X.X kg" weight text)
+    const hasWeight = /\d+\.?\d*\s*kg/i.test(allText);
+    if (!hasWeight) {
+      return null; // Not a crop
     }
 
     // STRICT: Only accept items that are confirmed crops (harvested produce)
@@ -969,7 +983,7 @@ function extractCropData(itemElement: Element): CropItem | null {
 
     // Extract species from name
     const species = extractSpeciesFromName(cleanedLabel) || cleanedLabel;
-    
+
     return {
       id: `crop-${Date.now()}-${Math.random()}`,
       species,
@@ -1375,8 +1389,22 @@ function updateLockButtonState(button: HTMLElement, isLocked: boolean): void {
 
 function getFavoriteToggleButton(element: Element | null | undefined): HTMLButtonElement | null {
   if (!element) return null;
-  const button = element.querySelector(FAVORITE_BUTTON_SELECTOR);
-  return button instanceof HTMLButtonElement ? button : null;
+
+  // First try: search within element (legacy)
+  let button = element.querySelector(FAVORITE_BUTTON_SELECTOR);
+  if (button instanceof HTMLButtonElement) return button;
+
+  // NEW - Second try: search in grandparent (new graphics engine)
+  // Structure: grandparent -> parent -> element (div.css-79elbk)
+  // Favorite button is sibling of parent, so it's in grandparent
+  const parent = element.parentElement;
+  const grandparent = parent?.parentElement;
+  if (grandparent) {
+    button = grandparent.querySelector(FAVORITE_BUTTON_SELECTOR);
+    if (button instanceof HTMLButtonElement) return button;
+  }
+
+  return null;
 }
 
 function isInventoryItemFavorited(element: Element | null | undefined): boolean {
@@ -1634,6 +1662,19 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
 }
 
 function isFavoriteButtonActive(button: HTMLButtonElement): boolean {
+  // NEW - Check SVG class for new graphics engine (2025-12-13)
+  const svg = button.querySelector('svg');
+  if (svg) {
+    // Favorited = css-etd02c, Unfavorited = css-gtfkln
+    if (svg.classList.contains('css-etd02c')) {
+      return true; // Favorited
+    }
+    if (svg.classList.contains('css-gtfkln')) {
+      return false; // Not favorited
+    }
+  }
+
+  // Legacy detection methods below
   const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() ?? '';
   if (ariaLabel.includes('unfavorite')) {
     return true;
@@ -1646,7 +1687,6 @@ function isFavoriteButtonActive(button: HTMLButtonElement): boolean {
   if (ariaPressed === 'true') return true;
   if (ariaPressed === 'false') return false;
 
-  const svg = button.querySelector('svg');
   if (svg) {
     const path = svg.querySelector('path');
     if (path) {
@@ -1660,7 +1700,7 @@ function isFavoriteButtonActive(button: HTMLButtonElement): boolean {
   const buttonStyle = getComputedStyle(button);
   const isActive = buttonStyle.color !== 'currentColor' ||
                    button.classList.contains('active');
-  
+
   return isActive;
 }
 

@@ -28,7 +28,6 @@ export interface CropTypeLockConfig {
 const INVENTORY_PANEL_SELECTOR = 'section.chakra-modal__content[role="dialog"]';
 const INVENTORY_GRID_SELECTOR = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
 const INVENTORY_ITEM_SELECTOR = 'div.css-79elbk'; // NEW - Graphics engine 2025-12-13
-const FAVORITE_BUTTON_SELECTOR = 'button[aria-label*="avorite"]';
 const CROP_LOCK_STYLE_ID = 'qpm-crop-lock-styles';
 
 // Use the items container, NOT the filter buttons grid
@@ -376,7 +375,7 @@ async function captureInventoryContext(): Promise<InventoryContext | null> {
 }
 
 function collectInventoryStates(items: CropItem[], context: InventoryContext | null): CropInventoryState[] {
-  const favoritedSet = context?.favoritedIds ?? null;
+  const favoritedSet = context?.favoritedIds ?? new Set<string>();
   const queues = context ? captureSpeciesQueues(context) : null;
   const missingSpecies: Record<string, number> = {};
   const states: CropInventoryState[] = [];
@@ -391,8 +390,9 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
     const queue = queues?.get(normalizedSpecies) ?? null;
 
     let itemId = readInventoryId(element);
-    let isFavorited = itemId && favoritedSet ? favoritedSet.has(itemId) : !!(item.element && isInventoryItemFavorited(item.element));
+    let isFavorited = false;
 
+    // Try to get item ID from DOM or queue
     if (!itemId && queue && queue.length > 0) {
       const fallback = queue.shift()!;
       itemId = fallback.id;
@@ -402,6 +402,11 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
       if (index >= 0) {
         queue.splice(index, 1);
       }
+      // Use inventory data for favorite state (not DOM)
+      isFavorited = favoritedSet.has(itemId);
+    } else if (itemId) {
+      // Use inventory data for favorite state (not DOM)
+      isFavorited = favoritedSet.has(itemId);
     }
 
     if (!itemId) {
@@ -409,8 +414,7 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
       continue;
     }
 
-    const stateFavorited = favoritedSet ? favoritedSet.has(itemId) : isFavorited;
-    states.push({ item, element, itemId, isFavorited: stateFavorited });
+    states.push({ item, element, itemId, isFavorited });
   }
 
   const missingKeys = Object.keys(missingSpecies);
@@ -1358,14 +1362,8 @@ function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, a
   lockButton.className = 'qpm-crop-lock-button';
   lockButton.title = `Toggle lock for all ${representativeItem.species} items`;
 
-  let configLocked = config.lockedTypes[speciesKey] || false;
-  const allFavoritedNow = allItems.every((crop) => (crop.element ? isInventoryItemFavorited(crop.element) : false));
-
-  if (allFavoritedNow !== configLocked) {
-    config.lockedTypes[speciesKey] = allFavoritedNow;
-    storage.set(LOCK_CONFIG_KEY, config);
-    configLocked = allFavoritedNow;
-  }
+  // Use config state - actual favorite state will be determined from inventory data when toggling
+  const configLocked = config.lockedTypes[speciesKey] || false;
 
   updateLockButtonState(lockButton, configLocked);
 
@@ -1385,31 +1383,6 @@ function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, a
 function updateLockButtonState(button: HTMLElement, isLocked: boolean): void {
   button.textContent = isLocked ? '🔒' : '🔓';
   button.className = `qpm-crop-lock-button ${isLocked ? 'locked' : 'unlocked'}`;
-}
-
-function getFavoriteToggleButton(element: Element | null | undefined): HTMLButtonElement | null {
-  if (!element) return null;
-
-  // First try: search within element (legacy)
-  let button = element.querySelector(FAVORITE_BUTTON_SELECTOR);
-  if (button instanceof HTMLButtonElement) return button;
-
-  // NEW - Second try: search in grandparent (new graphics engine)
-  // Structure: grandparent -> parent -> element (div.css-79elbk)
-  // Favorite button is sibling of parent, so it's in grandparent
-  const parent = element.parentElement;
-  const grandparent = parent?.parentElement;
-  if (grandparent) {
-    button = grandparent.querySelector(FAVORITE_BUTTON_SELECTOR);
-    if (button instanceof HTMLButtonElement) return button;
-  }
-
-  return null;
-}
-
-function isInventoryItemFavorited(element: Element | null | undefined): boolean {
-  const favoriteButton = getFavoriteToggleButton(element);
-  return favoriteButton ? isFavoriteButtonActive(favoriteButton) : false;
 }
 
 async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?: HTMLElement): Promise<void> {
@@ -1661,49 +1634,6 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   showToast(`${shouldLock ? '🔒 Locked' : '🔓 Unlocked'} ${successCount}/${totalCount} ${speciesLabel} items`);
 }
 
-function isFavoriteButtonActive(button: HTMLButtonElement): boolean {
-  // NEW - Check SVG class for new graphics engine (2025-12-13)
-  const svg = button.querySelector('svg');
-  if (svg) {
-    // Favorited = css-etd02c, Unfavorited = css-gtfkln
-    if (svg.classList.contains('css-etd02c')) {
-      return true; // Favorited
-    }
-    if (svg.classList.contains('css-gtfkln')) {
-      return false; // Not favorited
-    }
-  }
-
-  // Legacy detection methods below
-  const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() ?? '';
-  if (ariaLabel.includes('unfavorite')) {
-    return true;
-  }
-  if (ariaLabel.includes('favorite') && !ariaLabel.includes('unfavorite')) {
-    return false;
-  }
-
-  const ariaPressed = button.getAttribute('aria-pressed');
-  if (ariaPressed === 'true') return true;
-  if (ariaPressed === 'false') return false;
-
-  if (svg) {
-    const path = svg.querySelector('path');
-    if (path) {
-      const fill = path.getAttribute('fill');
-      if (fill && fill !== 'none' && fill !== 'currentColor') {
-        return true;
-      }
-    }
-  }
-
-  const buttonStyle = getComputedStyle(button);
-  const isActive = buttonStyle.color !== 'currentColor' ||
-                   button.classList.contains('active');
-
-  return isActive;
-}
-
 function showToast(text: string): void {
   const toast = document.createElement('div');
   toast.textContent = text;
@@ -1918,34 +1848,34 @@ function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
   label.textContent = species.charAt(0).toUpperCase() + species.slice(1);
   button.appendChild(label);
   
-  // Track favorites state
+  // Track favorites state from config
   const speciesKey = normalizeSpeciesKey(species) ?? species.toLowerCase();
-  let allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
-  updateButtonState();
+  const isLocked = config.lockedTypes[speciesKey] || false;
+
+  // Set initial visual state based on config
+  if (isLocked) {
+    button.style.filter = 'drop-shadow(0 0 8px gold)';
+    label.style.color = '#ffd700';
+  } else {
+    button.style.filter = 'none';
+    label.style.color = '#fff';
+  }
 
   // Click handler
   container.addEventListener('click', async () => {
     const lockButton = currentLockButtons.get(speciesKey);
     await toggleCropTypeLock(speciesKey, crops, lockButton);
-    allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
-    updateButtonState();
-  });
-  
-  function updateButtonState() {
-    const favoritedCount = crops.filter((crop) => isInventoryItemFavorited(crop.element)).length;
-    const partial = favoritedCount > 0 && favoritedCount < crops.length;
 
-    if (allFavorited) {
+    // Update visual state based on new config state
+    const newLockedState = config.lockedTypes[speciesKey] || false;
+    if (newLockedState) {
       button.style.filter = 'drop-shadow(0 0 8px gold)';
       label.style.color = '#ffd700';
-    } else if (partial) {
-      button.style.filter = 'drop-shadow(0 0 6px #ffa726)';
-      label.style.color = '#ffa726';
     } else {
       button.style.filter = 'none';
       label.style.color = '#fff';
     }
-  }
+  });
   
   container.appendChild(button);
   container.appendChild(label);

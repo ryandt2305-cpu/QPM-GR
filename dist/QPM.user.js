@@ -13,16 +13,12 @@
 // @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
 // @run-at       document-start
 // @inject-into  page
-// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js
-// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js
-// @require      https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
-// @connect      supabase.co
 // @connect      raw.githubusercontent.com
 // @grant        GM_openInTab
 // @grant        unsafeWindow

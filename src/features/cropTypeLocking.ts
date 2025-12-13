@@ -26,13 +26,12 @@ export interface CropTypeLockConfig {
 
 // Target actual inventory modal, not shop
 const INVENTORY_PANEL_SELECTOR = 'section.chakra-modal__content[role="dialog"]';
-const INVENTORY_GRID_SELECTOR = '.McFlex.css-1cyjil4'; // The actual items container
-const INVENTORY_ITEM_SELECTOR = 'div.css-vmnhaw'; // Individual item slots (the outer wrapper)
-const FAVORITE_BUTTON_SELECTOR = 'button[aria-label*="avorite"]';
+const INVENTORY_GRID_SELECTOR = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
+const INVENTORY_ITEM_SELECTOR = 'div.css-79elbk'; // NEW - Graphics engine 2025-12-13
 const CROP_LOCK_STYLE_ID = 'qpm-crop-lock-styles';
 
 // Use the items container, NOT the filter buttons grid
-const USER_INVENTORY_SELECTOR = '.McFlex.css-1cyjil4';
+const USER_INVENTORY_SELECTOR = '.McFlex.css-zo8r2v'; // NEW - Graphics engine 2025-12-13
 
 const DEBUG_INVENTORY_LOGS = false;
 const dbg = (...args: unknown[]): void => {
@@ -376,7 +375,7 @@ async function captureInventoryContext(): Promise<InventoryContext | null> {
 }
 
 function collectInventoryStates(items: CropItem[], context: InventoryContext | null): CropInventoryState[] {
-  const favoritedSet = context?.favoritedIds ?? null;
+  const favoritedSet = context?.favoritedIds ?? new Set<string>();
   const queues = context ? captureSpeciesQueues(context) : null;
   const missingSpecies: Record<string, number> = {};
   const states: CropInventoryState[] = [];
@@ -391,8 +390,9 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
     const queue = queues?.get(normalizedSpecies) ?? null;
 
     let itemId = readInventoryId(element);
-    let isFavorited = itemId && favoritedSet ? favoritedSet.has(itemId) : !!(item.element && isInventoryItemFavorited(item.element));
+    let isFavorited = false;
 
+    // Try to get item ID from DOM or queue
     if (!itemId && queue && queue.length > 0) {
       const fallback = queue.shift()!;
       itemId = fallback.id;
@@ -402,6 +402,11 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
       if (index >= 0) {
         queue.splice(index, 1);
       }
+      // Use inventory data for favorite state (not DOM)
+      isFavorited = favoritedSet.has(itemId);
+    } else if (itemId) {
+      // Use inventory data for favorite state (not DOM)
+      isFavorited = favoritedSet.has(itemId);
     }
 
     if (!itemId) {
@@ -409,8 +414,7 @@ function collectInventoryStates(items: CropItem[], context: InventoryContext | n
       continue;
     }
 
-    const stateFavorited = favoritedSet ? favoritedSet.has(itemId) : isFavorited;
-    states.push({ item, element, itemId, isFavorited: stateFavorited });
+    states.push({ item, element, itemId, isFavorited });
   }
 
   const missingKeys = Object.keys(missingSpecies);
@@ -935,6 +939,8 @@ function extractCropData(itemElement: Element): CropItem | null {
   try {
     // Try multiple name selectors - prioritize the actual name element
     const nameSelectors = [
+      'p.chakra-text.css-1k5d5up',  // NEW - primary for new graphics engine
+      'p.chakra-text.css-1d354tw',  // NEW - for crops with mutations/stats
       'p.chakra-text.css-8xfasz', // The actual item name from your HTML
       '.McFlex.css-1gd1uup p.chakra-text', // Name in the flex container
       'p.chakra-text.css-rbbzu5',
@@ -942,10 +948,10 @@ function extractCropData(itemElement: Element): CropItem | null {
       '[data-testid="item-name"]',
       'p'
     ];
-    
+
     let nameElement: Element | null = null;
     let itemName: string | null = null;
-    
+
     for (const selector of nameSelectors) {
       nameElement = itemElement.querySelector(selector);
       if (nameElement) {
@@ -953,10 +959,22 @@ function extractCropData(itemElement: Element): CropItem | null {
         if (itemName && itemName.length > 0) break;
       }
     }
-    
+
     if (!itemName) {
       log('❌ No item name found');
       return null;
+    }
+
+    // NEW - Exclude pets (have "STR XX" text)
+    const allText = itemElement.textContent || '';
+    if (/\bSTR\s+\d+/i.test(allText)) {
+      return null; // This is a pet, not a crop
+    }
+
+    // NEW - Only accept crops (have "X.X kg" weight text)
+    const hasWeight = /\d+\.?\d*\s*kg/i.test(allText);
+    if (!hasWeight) {
+      return null; // Not a crop
     }
 
     // STRICT: Only accept items that are confirmed crops (harvested produce)
@@ -969,7 +987,7 @@ function extractCropData(itemElement: Element): CropItem | null {
 
     // Extract species from name
     const species = extractSpeciesFromName(cleanedLabel) || cleanedLabel;
-    
+
     return {
       id: `crop-${Date.now()}-${Math.random()}`,
       species,
@@ -1344,14 +1362,8 @@ function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, a
   lockButton.className = 'qpm-crop-lock-button';
   lockButton.title = `Toggle lock for all ${representativeItem.species} items`;
 
-  let configLocked = config.lockedTypes[speciesKey] || false;
-  const allFavoritedNow = allItems.every((crop) => (crop.element ? isInventoryItemFavorited(crop.element) : false));
-
-  if (allFavoritedNow !== configLocked) {
-    config.lockedTypes[speciesKey] = allFavoritedNow;
-    storage.set(LOCK_CONFIG_KEY, config);
-    configLocked = allFavoritedNow;
-  }
+  // Use config state - actual favorite state will be determined from inventory data when toggling
+  const configLocked = config.lockedTypes[speciesKey] || false;
 
   updateLockButtonState(lockButton, configLocked);
 
@@ -1371,17 +1383,6 @@ function addLockButtonToItem(representativeItem: CropItem, speciesKey: string, a
 function updateLockButtonState(button: HTMLElement, isLocked: boolean): void {
   button.textContent = isLocked ? '🔒' : '🔓';
   button.className = `qpm-crop-lock-button ${isLocked ? 'locked' : 'unlocked'}`;
-}
-
-function getFavoriteToggleButton(element: Element | null | undefined): HTMLButtonElement | null {
-  if (!element) return null;
-  const button = element.querySelector(FAVORITE_BUTTON_SELECTOR);
-  return button instanceof HTMLButtonElement ? button : null;
-}
-
-function isInventoryItemFavorited(element: Element | null | undefined): boolean {
-  const favoriteButton = getFavoriteToggleButton(element);
-  return favoriteButton ? isFavoriteButtonActive(favoriteButton) : false;
 }
 
 async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?: HTMLElement): Promise<void> {
@@ -1410,17 +1411,23 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     favorited: inventoryContext.favoritedIds.size
   });
 
-  const initialFavoritedSet = new Set(inventoryContext.favoritedIds);
-  const statesBefore = collectInventoryStates(items, inventoryContext);
-  if (statesBefore.length === 0) {
-    log('⚠️ No inventory entries with ids found for crop type', { speciesKey });
+  // NEW APPROACH - Work directly with inventory data, not DOM items
+  const queues = captureSpeciesQueues(inventoryContext);
+  const speciesQueue = queues.get(speciesKey);
+
+  if (!speciesQueue || speciesQueue.length === 0) {
+    log('⚠️ No inventory entries found for crop type', { speciesKey });
     showToast(`⚠️ No ${speciesLabel} inventory entries found`);
     return;
   }
 
+  const initialFavoritedSet = new Set(inventoryContext.favoritedIds);
+  const statesBefore = speciesQueue; // Use queue entries directly
+  const totalCount = statesBefore.length;
+
   const initialFavoriteIds = statesBefore
     .filter((state) => state.isFavorited)
-    .map((state) => state.itemId);
+    .map((state) => state.id);
   const baselineFavoritesBefore = new Set(
     config.baselineFavoriteIds[speciesKey] ?? initialFavoriteIds
   );
@@ -1428,12 +1435,14 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   const toggleSet = new Set<string>();
 
   if (shouldLock) {
+    // Lock: favorite all unfavorited items
     for (const state of statesBefore) {
       if (!state.isFavorited) {
-        toggleSet.add(state.itemId);
+        toggleSet.add(state.id);
       }
     }
   } else {
+    // Unlock: unfavorite items based on sync mode
     if (syncMode) {
       const manualFavorites: string[] = [];
 
@@ -1442,9 +1451,9 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
           continue;
         }
 
-        if (!managedBefore.has(state.itemId) && !baselineFavoritesBefore.has(state.itemId)) {
-          manualFavorites.push(state.itemId);
-          baselineFavoritesBefore.add(state.itemId);
+        if (!managedBefore.has(state.id) && !baselineFavoritesBefore.has(state.id)) {
+          manualFavorites.push(state.id);
+          baselineFavoritesBefore.add(state.id);
         }
       }
 
@@ -1463,24 +1472,24 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
           continue;
         }
 
-        const isManaged = managedBefore.has(state.itemId);
-        const isBaseline = baselineFavoritesBefore.has(state.itemId);
+        const isManaged = managedBefore.has(state.id);
+        const isBaseline = baselineFavoritesBefore.has(state.id);
 
         if (isManaged || !isBaseline) {
-          toggleSet.add(state.itemId);
+          toggleSet.add(state.id);
         }
       }
     } else {
       for (const state of statesBefore) {
         if (state.isFavorited) {
-          toggleSet.add(state.itemId);
+          toggleSet.add(state.id);
         }
       }
     }
 
     if (managedBefore.size > 0) {
       for (const managedId of managedBefore) {
-        if (!toggleSet.has(managedId) && !statesBefore.some((state) => state.itemId === managedId)) {
+        if (!toggleSet.has(managedId) && !statesBefore.some((state) => state.id === managedId)) {
           toggleSet.add(managedId);
         }
       }
@@ -1495,6 +1504,14 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   }
 
   const idsToToggle = Array.from(toggleSet);
+
+  log(`📋 Found ${totalCount} ${speciesLabel} items, ${idsToToggle.length} need toggling`, {
+    speciesKey,
+    shouldLock,
+    totalItems: totalCount,
+    toToggle: idsToToggle.length,
+    currentlyFavorited: statesBefore.filter(s => s.isFavorited).length
+  });
 
   if (idsToToggle.length === 0) {
     log('ℹ️ Crop lock toggle skipped (state already matches request)', { speciesKey, shouldLock });
@@ -1545,9 +1562,11 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     source: inventoryContext.source
   };
 
-  const statesAfter = collectInventoryStates(items, effectiveContext);
-  const favoritedAfter = new Set(statesAfter.filter((state) => state.isFavorited).map((state) => state.itemId));
-  const totalCount = statesAfter.length;
+  // Re-capture species queue from final inventory context
+  const finalQueues = captureSpeciesQueues(effectiveContext);
+  const finalSpeciesQueue = finalQueues.get(speciesKey) ?? [];
+  const statesAfter = finalSpeciesQueue;
+  const favoritedAfter = new Set(statesAfter.filter((state) => state.isFavorited).map((state) => state.id));
   const favoritedCount = favoritedAfter.size;
 
   const managedAfter = new Set(managedBefore);
@@ -1556,15 +1575,15 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
       if (!state.isFavorited) {
         continue;
       }
-      const previouslyFavorited = statesBefore.find((prev) => prev.itemId === state.itemId)?.isFavorited ?? false;
+      const previouslyFavorited = statesBefore.find((prev) => prev.id === state.id)?.isFavorited ?? false;
       if (!previouslyFavorited) {
-        managedAfter.add(state.itemId);
+        managedAfter.add(state.id);
       }
     }
   } else if (managedBefore.size > 0) {
     for (const state of statesAfter) {
       if (!state.isFavorited) {
-        managedAfter.delete(state.itemId);
+        managedAfter.delete(state.id);
       }
     }
   } else {
@@ -1579,7 +1598,7 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
   if (shouldLock) {
     operationSucceeded = favoritedAfter.size === totalCount;
   } else if (managedBefore.size > 0) {
-    operationSucceeded = statesAfter.every((state) => !managedBefore.has(state.itemId) || !state.isFavorited);
+    operationSucceeded = statesAfter.every((state) => !managedBefore.has(state.id) || !state.isFavorited);
   } else {
     operationSucceeded = idsToToggle.every((itemId) => !favoritedAfter.has(itemId));
   }
@@ -1589,7 +1608,7 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
     if (shouldLock) {
       const baselineAfterLock = statesBefore
         .filter((state) => state.isFavorited)
-        .map((state) => state.itemId);
+        .map((state) => state.id);
       if (baselineAfterLock.length > 0) {
         config.baselineFavoriteIds[speciesKey] = baselineAfterLock;
       } else {
@@ -1631,37 +1650,6 @@ async function toggleCropTypeLock(speciesKey: string, items: CropItem[], button?
 
   const successCount = shouldLock ? favoritedAfter.size : totalCount - favoritedAfter.size;
   showToast(`${shouldLock ? '🔒 Locked' : '🔓 Unlocked'} ${successCount}/${totalCount} ${speciesLabel} items`);
-}
-
-function isFavoriteButtonActive(button: HTMLButtonElement): boolean {
-  const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() ?? '';
-  if (ariaLabel.includes('unfavorite')) {
-    return true;
-  }
-  if (ariaLabel.includes('favorite') && !ariaLabel.includes('unfavorite')) {
-    return false;
-  }
-
-  const ariaPressed = button.getAttribute('aria-pressed');
-  if (ariaPressed === 'true') return true;
-  if (ariaPressed === 'false') return false;
-
-  const svg = button.querySelector('svg');
-  if (svg) {
-    const path = svg.querySelector('path');
-    if (path) {
-      const fill = path.getAttribute('fill');
-      if (fill && fill !== 'none' && fill !== 'currentColor') {
-        return true;
-      }
-    }
-  }
-
-  const buttonStyle = getComputedStyle(button);
-  const isActive = buttonStyle.color !== 'currentColor' ||
-                   button.classList.contains('active');
-  
-  return isActive;
 }
 
 function showToast(text: string): void {
@@ -1878,34 +1866,34 @@ function createCropTypeButton(species: string, crops: CropItem[]): HTMLElement {
   label.textContent = species.charAt(0).toUpperCase() + species.slice(1);
   button.appendChild(label);
   
-  // Track favorites state
+  // Track favorites state from config
   const speciesKey = normalizeSpeciesKey(species) ?? species.toLowerCase();
-  let allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
-  updateButtonState();
+  const isLocked = config.lockedTypes[speciesKey] || false;
+
+  // Set initial visual state based on config
+  if (isLocked) {
+    button.style.filter = 'drop-shadow(0 0 8px gold)';
+    label.style.color = '#ffd700';
+  } else {
+    button.style.filter = 'none';
+    label.style.color = '#fff';
+  }
 
   // Click handler
   container.addEventListener('click', async () => {
     const lockButton = currentLockButtons.get(speciesKey);
     await toggleCropTypeLock(speciesKey, crops, lockButton);
-    allFavorited = crops.every((crop) => isInventoryItemFavorited(crop.element));
-    updateButtonState();
-  });
-  
-  function updateButtonState() {
-    const favoritedCount = crops.filter((crop) => isInventoryItemFavorited(crop.element)).length;
-    const partial = favoritedCount > 0 && favoritedCount < crops.length;
 
-    if (allFavorited) {
+    // Update visual state based on new config state
+    const newLockedState = config.lockedTypes[speciesKey] || false;
+    if (newLockedState) {
       button.style.filter = 'drop-shadow(0 0 8px gold)';
       label.style.color = '#ffd700';
-    } else if (partial) {
-      button.style.filter = 'drop-shadow(0 0 6px #ffa726)';
-      label.style.color = '#ffa726';
     } else {
       button.style.filter = 'none';
       label.style.color = '#fff';
     }
-  }
+  });
   
   container.appendChild(button);
   container.appendChild(label);

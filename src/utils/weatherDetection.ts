@@ -4,6 +4,13 @@
 import { getGameHudRoot } from './dom';
 
 export const WEATHER_CANVAS_SELECTORS: readonly string[] = [
+  // NEW - Graphics engine 2025-12-13
+  '#App > div.McFlex.css-1k630i1 > div.McFlex.css-neeqas > div.McFlex.css-1mq3gde > div.McGrid.css-9guy2q > div.McFlex.css-13izacw > div.css-79elbk',
+  '#App > div.McFlex.css-neeqas div.css-79elbk',
+  '#App [data-tm-hud-root] div.css-79elbk',
+  '#App .QuinoaUI .css-79elbk',
+  '#App .css-79elbk',
+  // Legacy selectors (keep these too for compatibility)
   '#App > div.McFlex.css-1k630i1 > div.McFlex.css-neeqas > div.McFlex.css-1mq3gde > div.McGrid.css-9guy2q > div.McFlex.css-13izacw > div.css-vmnhaw',
   '#App > div.McFlex.css-neeqas div.css-vmnhaw',
   '#App [data-tm-hud-root] div.css-vmnhaw',

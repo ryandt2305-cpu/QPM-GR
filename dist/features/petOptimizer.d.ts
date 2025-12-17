@@ -78,13 +78,19 @@ export declare function collectAllPets(): Promise<CollectedPet[]>;
  */
 export declare function calculatePetScore(pet: CollectedPet): PetScore;
 /**
- * Analyze all collected pets and determine status
+ * Analyze all collected pets and determine status (ASYNC version for better performance)
+ * Breaks work into chunks to prevent blocking the main thread
+ */
+export declare function analyzePetsAsync(pets: CollectedPet[], onProgress?: (percent: number) => void): Promise<OptimizerAnalysis>;
+/**
+ * Analyze all collected pets and determine status (SYNCHRONOUS version - kept for compatibility)
+ * NOTE: Use analyzePetsAsync() for better performance to avoid blocking the UI
  */
 export declare function analyzePets(pets: CollectedPet[]): OptimizerAnalysis;
 /**
  * Get full analysis with caching
  */
-export declare function getOptimizerAnalysis(forceRefresh?: boolean): Promise<OptimizerAnalysis>;
+export declare function getOptimizerAnalysis(forceRefresh?: boolean, onProgress?: (percent: number) => void): Promise<OptimizerAnalysis>;
 export declare function onAnalysisUpdate(callback: (analysis: OptimizerAnalysis) => void): () => void;
 export declare function startPetOptimizer(): void;
 //# sourceMappingURL=petOptimizer.d.ts.map

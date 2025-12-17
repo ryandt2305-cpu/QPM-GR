@@ -123,13 +123,27 @@ function renderPetOptimizerWindow(body: HTMLElement): void {
 async function refreshAnalysis(forceRefresh = false): Promise<void> {
   if (!globalState) return;
 
-  globalState.summaryContainer.innerHTML = '<div style="color: #aaa;">⏳ Analyzing pets...</div>';
+  // Show initial loading state
+  globalState.summaryContainer.innerHTML = '<div style="color: #aaa;">⏳ Loading pets...</div>';
   globalState.resultsContainer.innerHTML = '';
 
   try {
-    console.log('[Pet Optimizer] Starting analysis...');
-    const analysis = await getOptimizerAnalysis(forceRefresh);
-    console.log('[Pet Optimizer] Analysis complete:', analysis);
+    // Show progress during analysis
+    const progressDiv = document.createElement('div');
+    progressDiv.style.cssText = 'color: #aaa; display: flex; align-items: center; gap: 10px;';
+    progressDiv.innerHTML = `
+      <div>⏳ Analyzing pets...</div>
+      <div id="analysis-progress" style="font-weight: bold; color: var(--qpm-accent, #8f82ff);">0%</div>
+    `;
+    globalState.summaryContainer.innerHTML = '';
+    globalState.summaryContainer.appendChild(progressDiv);
+
+    const analysis = await getOptimizerAnalysis(forceRefresh, (percent) => {
+      const progressEl = document.getElementById('analysis-progress');
+      if (progressEl) {
+        progressEl.textContent = `${percent}%`;
+      }
+    });
 
     if (!analysis || analysis.totalPets === 0) {
       globalState.summaryContainer.innerHTML = `

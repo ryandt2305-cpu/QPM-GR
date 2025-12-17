@@ -248,27 +248,19 @@ export async function collectAllPets(): Promise<CollectedPet[]> {
 
   try {
     // 1. Active pets (3 slots)
-    log('📊 Pet Optimizer: Collecting active pets...');
     const activePets = getActivePetInfos();
-    log(`   Found ${activePets.length} active pets`);
     for (const pet of activePets) {
       const collected = activePetToCollected(pet);
       if (collected) pets.push(collected);
     }
 
     // 2. Inventory pets
-    log('📊 Pet Optimizer: Collecting inventory pets...');
     const inventoryPets = await getInventoryPets();
-    log(`   Found ${inventoryPets.length} inventory pets`);
     pets.push(...inventoryPets);
 
     // 3. Hutch pets
-    log('📊 Pet Optimizer: Collecting hutch pets...');
     const hutchPets = await getHutchPets();
-    log(`   Found ${hutchPets.length} hutch pets`);
     pets.push(...hutchPets);
-
-    log(`✅ Pet Optimizer: Collected ${pets.length} total pets (${activePets.length} active, ${inventoryPets.length} inventory, ${hutchPets.length} hutch)`);
   } catch (error) {
     log('❌ Pet Optimizer: Error during collection:', error);
     throw error;
@@ -589,7 +581,78 @@ function calculateAbilityRarityScore(abilityIds: string[]): number {
 // ============================================================================
 
 /**
- * Analyze all collected pets and determine status
+ * Analyze all collected pets and determine status (ASYNC version for better performance)
+ * Breaks work into chunks to prevent blocking the main thread
+ */
+export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (percent: number) => void): Promise<OptimizerAnalysis> {
+  const comparisons: PetComparison[] = [];
+  const CHUNK_SIZE = 10; // Process 10 pets at a time
+
+  // Calculate scores for all pets (fast, synchronous)
+  const petScores = new Map<string, PetScore>();
+  for (const pet of pets) {
+    petScores.set(pet.id, calculatePetScore(pet));
+  }
+
+  // Group pets by species + ability combination (fast, synchronous)
+  const groups = groupPetsByAbilities(pets);
+
+  // Analyze pets in chunks to avoid blocking UI
+  for (let i = 0; i < pets.length; i += CHUNK_SIZE) {
+    const chunk = pets.slice(i, i + CHUNK_SIZE);
+
+    for (const pet of chunk) {
+      const score = petScores.get(pet.id)!;
+      const comparison = analyzePet(pet, score, pets, groups);
+      comparisons.push(comparison);
+    }
+
+    // Report progress
+    if (onProgress) {
+      onProgress(Math.min(100, Math.round(((i + CHUNK_SIZE) / pets.length) * 100)));
+    }
+
+    // Yield control back to browser every chunk
+    if (i + CHUNK_SIZE < pets.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  // Categorize by status (fast, synchronous)
+  const keep = comparisons.filter(c => c.status === 'keep');
+  const consider = comparisons.filter(c => c.status === 'consider');
+  const obsolete = comparisons.filter(c => c.status === 'obsolete');
+  const upgrades = comparisons.filter(c => c.status === 'upgrade');
+
+  // Group by strategy (fast, synchronous)
+  const strategyPets = new Map<StrategyCategory, PetComparison[]>();
+  for (const strategy of STRATEGY_DEFINITIONS) {
+    const filtered = comparisons.filter(c =>
+      c.pet.abilityIds.some(id => getAbilityStrategy(id) === strategy.id)
+    );
+    strategyPets.set(strategy.id, filtered);
+  }
+
+  return {
+    allPets: pets,
+    comparisons,
+    keep,
+    consider,
+    obsolete,
+    upgrades,
+    strategyPets,
+    totalPets: pets.length,
+    activePets: pets.filter(p => p.location === 'active').length,
+    inventoryPets: pets.filter(p => p.location === 'inventory').length,
+    hutchPets: pets.filter(p => p.location === 'hutch').length,
+    obsoleteCount: obsolete.length,
+    upgradeCount: upgrades.length,
+  };
+}
+
+/**
+ * Analyze all collected pets and determine status (SYNCHRONOUS version - kept for compatibility)
+ * NOTE: Use analyzePetsAsync() for better performance to avoid blocking the UI
  */
 export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
   const comparisons: PetComparison[] = [];
@@ -914,7 +977,7 @@ function isAbilityUpgrade(abilityA: string, abilityB: string): boolean {
 /**
  * Get full analysis with caching
  */
-export async function getOptimizerAnalysis(forceRefresh = false): Promise<OptimizerAnalysis> {
+export async function getOptimizerAnalysis(forceRefresh = false, onProgress?: (percent: number) => void): Promise<OptimizerAnalysis> {
   const now = Date.now();
 
   if (!forceRefresh && cachedAnalysis && now - analysisTimestamp < ANALYSIS_CACHE_TTL_MS) {
@@ -922,7 +985,8 @@ export async function getOptimizerAnalysis(forceRefresh = false): Promise<Optimi
   }
 
   const pets = await collectAllPets();
-  const analysis = analyzePets(pets);
+  // Use async chunked analysis to prevent UI blocking
+  const analysis = await analyzePetsAsync(pets, onProgress);
 
   cachedAnalysis = analysis;
   analysisTimestamp = now;

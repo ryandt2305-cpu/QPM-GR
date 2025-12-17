@@ -22,7 +22,10 @@ import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvai
 import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
-import { spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, initSprites, Sprites } from './utils/spriteExtractor';
+// New sprite system (sprite-v2)
+import { initSpriteSystem } from './sprite-v2/index';
+import type { SpriteService } from './sprite-v2/types';
+import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, initSprites, Sprites } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
@@ -1169,13 +1172,23 @@ async function waitForGame(): Promise<void> {
 
 async function initialize(): Promise<void> {
   log('🚀 Quinoa Pet Manager initializing...');
-  
-  // Initialize sprite extractor early to intercept image loads
-  initSprites();
-  shareGlobal('Sprites', Sprites);
-  
+
+  // Initialize sprite system (sprite-v2) - must be done early to hook PIXI
+  let spriteService: SpriteService | null = null;
+  const spriteInit = initSpriteSystem().then((service) => {
+    spriteService = service;
+    setSpriteService(service);
+    shareGlobal('Sprites', service);
+    log('✅ Sprite system v2 initialized');
+  }).catch((err) => {
+    log('❌ Sprite system failed to initialize:', err);
+  });
+
   // Wait for game to be ready
   await waitForGame();
+
+  // Wait for sprite system to finish initializing
+  await spriteInit;
   
   // Export sprite inspector to whichever window context is available
   if (typeof window !== 'undefined') {

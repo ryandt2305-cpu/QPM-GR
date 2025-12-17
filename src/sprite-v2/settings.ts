@@ -5,16 +5,16 @@ import type { SpriteConfig, MutationMeta, MutationName } from './types';
 export const DEFAULT_CFG: SpriteConfig = {
   origin: 'https://magicgarden.gg',
   jobOn: true,
-  jobBudgetMs: 5,
-  jobBurstMs: 12,
+  jobBudgetMs: 3,  // Reduced from 5ms to 3ms for smoother UI on low-end devices
+  jobBurstMs: 10,  // Reduced from 12ms to 10ms to prevent frame drops
   jobBurstWindowMs: 400,
-  jobCapPerTick: 20,
+  jobCapPerTick: 15,  // Reduced from 20 to 15 to prevent overwhelming low-end CPUs
   cacheOn: true,
-  cacheMaxEntries: 1200,
-  cacheMaxCost: 5000,
+  cacheMaxEntries: 2000,  // Increased from 1200 to reduce re-rendering
+  cacheMaxCost: 8000,  // Increased from 5000 to cache more sprites
   keepCacheOnClose: true,
   srcCanvasMax: 450,
-  debugLog: true,
+  debugLog: false,  // Disabled debug logging for production performance
   debugLimitDefault: 25,
 };
 

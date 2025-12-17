@@ -317,8 +317,8 @@ const spriteDescriptorRegistry = new Map<string, SpriteDescriptor>();
 const spriteHydrationQueue = new Set<HTMLElement>();
 let spriteDescriptorCounter = 0;
 let spriteHydrationScheduled = false;
-const SPRITE_HYDRATION_FRAME_BUDGET_MS = 12;
-const SPRITE_HYDRATION_MAX_PER_FRAME = 4;
+const SPRITE_HYDRATION_FRAME_BUDGET_MS = 8;  // Reduced from 12ms to 8ms for smoother scrolling
+const SPRITE_HYDRATION_MAX_PER_FRAME = 2;  // Reduced from 4 to 2 to prevent CPU spikes on low-end devices
 let spriteIntersectionObserver: IntersectionObserver | null = null;
 
 function ensureSpriteObserver(): void {
@@ -333,7 +333,10 @@ function ensureSpriteObserver(): void {
         queueSpriteHydration(el);
       }
     }
-  }, { rootMargin: '64px' });
+  }, {
+    rootMargin: '100px',  // Increased from 64px to 100px for earlier sprite loading
+    threshold: 0.01  // Load sprites when 1% visible for better performance
+  });
 }
 
 function queueSpriteHydration(node: HTMLElement): void {

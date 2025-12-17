@@ -311,13 +311,17 @@ export function createJournalCheckerSection(): HTMLElement {
         
         if (isComplete) {
           // Apply rainbow mutation for completed species
-          const { spriteExtractor } = await import('../utils/spriteExtractor');
+          const { spriteExtractor } = await import('../sprite-v2/compat');
           const baseCanvas = spriteExtractor.getCropSprite(normalizedName) || spriteExtractor.getCropSprite(speciesKey) || spriteExtractor.getCropSprite(species.species.toLowerCase());
           if (baseCanvas) {
             const rainbowCanvas = spriteExtractor.renderPlantWithMutations(baseCanvas, ['Rainbow']);
-            try {
-              spriteDataUrl = rainbowCanvas.toDataURL('image/png');
-            } catch {
+            if (rainbowCanvas) {
+              try {
+                spriteDataUrl = rainbowCanvas.toDataURL('image/png');
+              } catch {
+                spriteDataUrl = getCropSpriteDataUrl(normalizedName);
+              }
+            } else {
               spriteDataUrl = getCropSpriteDataUrl(normalizedName);
             }
           } else {
@@ -489,7 +493,7 @@ export function createJournalCheckerSection(): HTMLElement {
         // Apply rainbow mutation to pet sprite if all variants collected
         let petSprite: string | null = null;
         if (isComplete) {
-          const { spriteExtractor } = await import('../utils/spriteExtractor');
+          const { spriteExtractor } = await import('../sprite-v2/compat');
           const { getMutationSpriteDataUrl } = await import('../utils/petMutationRenderer');
           const basePetSprite = spriteExtractor.getPetSprite(normalizedPetName) || spriteExtractor.getPetSprite(species.species.toLowerCase());
           if (basePetSprite) {

@@ -1,5 +1,5 @@
 // src/utils/petCardRenderer.ts - Generate Pet Hub-style pet cards with abilities + name + STR
-import { getPetSpriteDataUrl } from './spriteExtractor';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl } from './petMutationRenderer';
 import { spriteCache } from './spriteCache';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../store/xpTracker';

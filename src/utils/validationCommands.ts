@@ -1,7 +1,7 @@
 // src/utils/validationCommands.ts
 // Console commands for testing and validation
 
-import { spriteExtractor } from './spriteExtractor';
+import { spriteExtractor } from '../sprite-v2/compat';
 import { spriteCache } from './spriteCache';
 import { log } from './logger';
 import { getAllCropNames } from '../data/cropBaseStats';

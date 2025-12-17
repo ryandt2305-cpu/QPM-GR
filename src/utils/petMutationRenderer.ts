@@ -1,5 +1,5 @@
 import { log } from './logger';
-import { getPetSpriteCanvas } from './spriteExtractor';
+import { getPetSpriteCanvas } from '../sprite-v2/compat';
 
 export type MutationSpriteType = 'rainbow' | 'gold';
 

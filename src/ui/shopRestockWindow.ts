@@ -29,7 +29,7 @@ import {
 } from '../features/shopRestockLiveTracker';
 import { parseRestockFile } from '../features/shopRestockParser';
 import { log } from '../utils/logger';
-import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl } from '../sprite-v2/compat';
 
 export interface ShopRestockWindowState {
   root: HTMLElement;

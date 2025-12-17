@@ -4,7 +4,7 @@ import { formatCoins } from '../features/valueCalculator';
 import { log } from '../utils/logger';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
-import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
 import {
   calculateXpStats,
   getCombinedXpStats,

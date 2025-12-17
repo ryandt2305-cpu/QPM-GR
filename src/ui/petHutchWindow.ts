@@ -2,7 +2,7 @@
 
 import { log } from '../utils/logger';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
-import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl } from '../utils/petMutationRenderer';
 import { storage } from '../utils/storage';
 

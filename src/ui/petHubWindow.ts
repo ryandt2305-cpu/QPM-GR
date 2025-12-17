@@ -6,7 +6,7 @@ import { getAtomByLabel, readAtomValue, findAtomsByLabel } from '../core/jotaiBr
 import { getDetailedPetStats, type DetailedPetStats, type AbilityStats } from '../utils/petDataTester';
 import { getSpeciesXpPerLevel, getSpeciesMaxScale, calculateMaxStrength } from '../store/xpTracker';
 import { getInventoryItems } from '../store/inventory';
-import { getPetSpriteDataUrl, loadTrackedSpriteSheets } from '../utils/spriteExtractor';
+import { getPetSpriteDataUrl, loadTrackedSpriteSheets } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl, type MutationSpriteType } from '../utils/petMutationRenderer';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
 import { getPetMetadata } from '../data/petMetadata';

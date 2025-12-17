@@ -29,7 +29,7 @@ import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
 import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA, calculateEffectiveProcRate } from './trackerWindow';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { renderCompactPetSprite, renderPetSpeciesIcon, getAbilityColor } from '../utils/petCardRenderer';
-import { getCropSpriteDataUrl, getPetSpriteDataUrl, spriteExtractor } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl, getPetSpriteDataUrl, spriteExtractor } from '../sprite-v2/compat';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
@@ -53,6 +53,8 @@ function getMutatedCropSpriteUrl(species: string, mutations: string[]): string {
   const mutatedCanvas = mutations && mutations.length > 0
     ? spriteExtractor.renderPlantWithMutations(baseCanvas, mutations)
     : baseCanvas;
+
+  if (!mutatedCanvas) return '';
 
   try {
     return mutatedCanvas.toDataURL('image/png');

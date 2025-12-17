@@ -16,48 +16,54 @@ export function setSpriteService(svc: SpriteService): void {
 /**
  * Gets crop sprite data URL by species name or tile ID
  * OLD API: getCropSpriteDataUrl(speciesOrTile: string | number)
+ * NOTE: Synchronous wrapper around async service
  */
-export async function getCropSpriteDataUrl(speciesOrTile: string | number | null | undefined): Promise<string | null> {
+export function getCropSpriteDataUrl(speciesOrTile: string | number | null | undefined): string {
   if (!service) {
     console.warn('[Sprite Compat] Service not initialized yet');
-    return null;
+    return '';
   }
 
-  if (speciesOrTile == null) return null;
+  if (speciesOrTile == null) return '';
 
   const id = String(speciesOrTile);
-  const category = 'plant'; // Try plant first
 
   try {
-    const url = await service.renderToDataURL({ category, id, mutations: [] });
-    if (url) return url;
+    // Try plant first
+    let canvas = service.renderToCanvas({ category: 'plant', id, mutations: [] });
+    if (canvas) return canvas.toDataURL('image/png');
 
-    // Try tallplant if plant didn't work
-    const tallUrl = await service.renderToDataURL({ category: 'tallplant', id, mutations: [] });
-    return tallUrl;
+    // Try tallplant
+    canvas = service.renderToCanvas({ category: 'tallplant', id, mutations: [] });
+    if (canvas) return canvas.toDataURL('image/png');
+
+    return '';
   } catch (e) {
     console.error('[Sprite Compat] getCropSpriteDataUrl failed:', e);
-    return null;
+    return '';
   }
 }
 
 /**
  * Gets pet sprite data URL by species name
  * OLD API: getPetSpriteDataUrl(species: string)
+ * NOTE: Synchronous wrapper around async service
  */
-export async function getPetSpriteDataUrl(species: string): Promise<string | null> {
+export function getPetSpriteDataUrl(species: string): string {
   if (!service) {
     console.warn('[Sprite Compat] Service not initialized yet');
-    return null;
+    return '';
   }
 
-  if (!species) return null;
+  if (!species) return '';
 
   try {
-    return await service.renderToDataURL({ category: 'pet', id: species, mutations: [] });
+    const canvas = service.renderToCanvas({ category: 'pet', id: species, mutations: [] });
+    if (!canvas) return '';
+    return canvas.toDataURL('image/png');
   } catch (e) {
     console.error('[Sprite Compat] getPetSpriteDataUrl failed:', e);
-    return null;
+    return '';
   }
 }
 
@@ -94,20 +100,23 @@ export function getCropSpriteByTileId(tileId: string | number | null | undefined
 /**
  * Gets mutation overlay data URL
  * OLD API: getMutationOverlayDataUrl(mutation: string)
+ * NOTE: Synchronous wrapper around async service
  */
-export async function getMutationOverlayDataUrl(mutation: string): Promise<string | null> {
+export function getMutationOverlayDataUrl(mutation: string): string {
   if (!service) {
     console.warn('[Sprite Compat] Service not initialized yet');
-    return null;
+    return '';
   }
 
-  if (!mutation) return null;
+  if (!mutation) return '';
 
   try {
-    return await service.renderToDataURL({ category: 'mutation-overlay', id: mutation, mutations: [] });
+    const canvas = service.renderToCanvas({ category: 'mutation-overlay', id: mutation, mutations: [] });
+    if (!canvas) return '';
+    return canvas.toDataURL('image/png');
   } catch (e) {
     console.error('[Sprite Compat] getMutationOverlayDataUrl failed:', e);
-    return null;
+    return '';
   }
 }
 
@@ -187,27 +196,30 @@ export function createSpriteElement(sheet: string, index: number, size = 64): HT
 /**
  * Renders plant sprite
  * OLD API: renderPlantSprite(tileId, species?, mutations?)
+ * NOTE: Synchronous wrapper around async service
  */
-export async function renderPlantSprite(tileId: string | number | null | undefined, species?: string | null, mutations: string[] = []): Promise<string | null> {
+export function renderPlantSprite(tileId: string | number | null | undefined, species?: string | null, mutations: string[] = []): string {
   if (!service) {
     console.warn('[Sprite Compat] Service not initialized yet');
-    return null;
+    return '';
   }
 
   const id = species || String(tileId);
-  if (!id) return null;
+  if (!id) return '';
 
   try {
     // Try plant first
-    let url = await service.renderToDataURL({ category: 'plant', id, mutations });
-    if (url) return url;
+    let canvas = service.renderToCanvas({ category: 'plant', id, mutations });
+    if (canvas) return canvas.toDataURL('image/png');
 
     // Try tallplant
-    url = await service.renderToDataURL({ category: 'tallplant', id, mutations });
-    return url;
+    canvas = service.renderToCanvas({ category: 'tallplant', id, mutations });
+    if (canvas) return canvas.toDataURL('image/png');
+
+    return '';
   } catch (e) {
     console.error('[Sprite Compat] renderPlantSprite failed:', e);
-    return null;
+    return '';
   }
 }
 

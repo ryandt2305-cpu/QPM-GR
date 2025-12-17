@@ -17,7 +17,7 @@ import {
   type CropSizeInfo,
 } from '../features/cropBoostTracker';
 import { log } from '../utils/logger';
-import { getCropSpriteDataUrl } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl } from '../sprite-v2/compat';
 
 // ============================================================================
 // Helper Functions

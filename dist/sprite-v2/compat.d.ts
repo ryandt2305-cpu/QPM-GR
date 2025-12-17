@@ -3,13 +3,15 @@ export declare function setSpriteService(svc: SpriteService): void;
 /**
  * Gets crop sprite data URL by species name or tile ID
  * OLD API: getCropSpriteDataUrl(speciesOrTile: string | number)
+ * NOTE: Synchronous wrapper around async service
  */
-export declare function getCropSpriteDataUrl(speciesOrTile: string | number | null | undefined): Promise<string | null>;
+export declare function getCropSpriteDataUrl(speciesOrTile: string | number | null | undefined): string;
 /**
  * Gets pet sprite data URL by species name
  * OLD API: getPetSpriteDataUrl(species: string)
+ * NOTE: Synchronous wrapper around async service
  */
-export declare function getPetSpriteDataUrl(species: string): Promise<string | null>;
+export declare function getPetSpriteDataUrl(species: string): string;
 /**
  * Gets crop sprite canvas by tile ID
  * OLD API: getCropSpriteByTileId(tileId: string | number)
@@ -18,8 +20,9 @@ export declare function getCropSpriteByTileId(tileId: string | number | null | u
 /**
  * Gets mutation overlay data URL
  * OLD API: getMutationOverlayDataUrl(mutation: string)
+ * NOTE: Synchronous wrapper around async service
  */
-export declare function getMutationOverlayDataUrl(mutation: string): Promise<string | null>;
+export declare function getMutationOverlayDataUrl(mutation: string): string;
 /**
  * Renders plant with mutations
  * OLD API: renderPlantWithMutations(base: HTMLCanvasElement, mutations: string[])
@@ -39,8 +42,9 @@ export declare function createSpriteElement(sheet: string, index: number, size?:
 /**
  * Renders plant sprite
  * OLD API: renderPlantSprite(tileId, species?, mutations?)
+ * NOTE: Synchronous wrapper around async service
  */
-export declare function renderPlantSprite(tileId: string | number | null | undefined, species?: string | null, mutations?: string[]): Promise<string | null>;
+export declare function renderPlantSprite(tileId: string | number | null | undefined, species?: string | null, mutations?: string[]): string;
 /**
  * Legacy sprite extractor object for compatibility
  */

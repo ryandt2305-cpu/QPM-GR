@@ -3,7 +3,7 @@
 
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { getAchievementDefinitions, getAchievementProgress, subscribeToAchievements, triggerAchievementRecompute, getAchievementSnapshot, type AchievementDefinition, type AchievementRarity } from '../store/achievements';
-import { createSpriteElement, getPetSpriteDataUrl, loadTrackedSpriteSheets, spriteExtractor, listTrackedSpriteResources, initSprites } from '../utils/spriteExtractor';
+import { createSpriteElement, getPetSpriteDataUrl, loadTrackedSpriteSheets, spriteExtractor, listTrackedSpriteResources, initSprites } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl } from '../utils/petMutationRenderer';
 import { log } from '../utils/logger';
 type FilterStatus = 'all' | 'in-progress' | 'completed';

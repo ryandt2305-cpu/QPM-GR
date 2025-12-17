@@ -1,7 +1,7 @@
 // src/ui/journalCheckerSection.ts
 // Visually revamped Journal Checker UI
 
-import { getCropSpriteDataUrl, getPetSpriteDataUrl } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl, getPetSpriteDataUrl } from '../sprite-v2/compat';
 import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
 import { getVariantChipColors } from '../data/variantBadges';

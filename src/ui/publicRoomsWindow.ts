@@ -12,7 +12,7 @@ import {
 import type { RoomsMap, Room, RoomUserSlot, PublicRoomsState, PlayerView } from '../types/publicRooms';
 import { getPlayerView, getCachedFriendsSet, resetFriendsCache } from '../services/ariesPlayers';
 import { storage } from '../utils/storage';
-import { getCropSpriteDataUrl, getPetSpriteDataUrl, getMutationOverlayDataUrl, spriteExtractor, initSprites } from '../utils/spriteExtractor';
+import { getCropSpriteDataUrl, getPetSpriteDataUrl, getMutationOverlayDataUrl, spriteExtractor, initSprites } from '../sprite-v2/compat';
 import { findVariantBadge } from '../data/variantBadges';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../store/xpTracker';
 

@@ -8,6 +8,11 @@ interface PetCardConfig {
     size?: 'small' | 'medium' | 'large';
 }
 /**
+ * Normalize ability name for display
+ * Converts camelCase or PascalCase ability IDs to human-readable names
+ */
+export declare function normalizeAbilityName(abilityId: string): string;
+/**
  * Get ability color configuration
  */
 export declare function getAbilityColor(abilityName: string): {

@@ -15,6 +15,30 @@ interface PetCardConfig {
 }
 
 /**
+ * Normalize ability name for display
+ * Converts camelCase or PascalCase ability IDs to human-readable names
+ */
+export function normalizeAbilityName(abilityId: string): string {
+  if (!abilityId) return '';
+
+  // Add spaces before capital letters and numbers
+  const withSpaces = abilityId
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([A-Z])/g, '$1 $2');
+
+  // Special replacements for common patterns
+  return withSpaces
+    .replace(/\bII\b/g, 'II')
+    .replace(/\bIII\b/g, 'III')
+    .replace(/\bIV\b/g, 'IV')
+    .replace(/\bXp\b/gi, 'XP')
+    .replace(/_NEW\b/g, '')
+    .trim();
+}
+
+/**
  * Get ability color configuration
  */
 export function getAbilityColor(abilityName: string): { base: string; glow: string; text: string } {

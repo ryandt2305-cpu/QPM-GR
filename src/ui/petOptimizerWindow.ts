@@ -13,7 +13,7 @@ import {
   type CollectedPet,
 } from '../features/petOptimizer';
 import { STRATEGY_DEFINITIONS, type StrategyCategory } from '../data/abilityStrategies';
-import { getPetSpriteDataUrl } from '../utils/spriteExtractor';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl } from '../utils/petMutationRenderer';
 import { getAbilityColor, normalizeAbilityName } from '../utils/petCardRenderer';
 import { formatCoins } from '../features/valueCalculator';

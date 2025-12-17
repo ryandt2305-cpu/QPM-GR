@@ -4041,6 +4041,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   registerTab('xp-tracker', 'XP Tracker', '✨', []);
   registerTab('shop-restock', 'Shop Restock', '🏪', []);
   registerTab('pet-hub', 'Pet Hub', '🐾', []);
+  registerTab('pet-optimizer', 'Pet Optimizer', '🎯', []);
   registerTab('public-rooms', 'Public Rooms', '🌐', []);
   registerTab('crop-boost', 'Crop Boosts', '🌱', []);
   registerTab('achievements', 'Achievements', '🏆', []);
@@ -4214,6 +4215,21 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     });
     petHubButton.replaceWith(newPetHubButton);
     tabButtons.set('pet-hub', newPetHubButton);
+  }
+
+  const petOptimizerButton = tabButtons.get('pet-optimizer');
+  if (petOptimizerButton) {
+    const newPetOptimizerButton = petOptimizerButton.cloneNode(true) as HTMLButtonElement;
+    newPetOptimizerButton.dataset.windowId = 'pet-optimizer';
+    newPetOptimizerButton.addEventListener('click', () => {
+      import('./petOptimizerWindow').then(({ openPetOptimizerWindow }) => {
+        openPetOptimizerWindow();
+      }).catch(error => {
+        log('⚠️ Failed to load Pet Optimizer window', error);
+      });
+    });
+    petOptimizerButton.replaceWith(newPetOptimizerButton);
+    tabButtons.set('pet-optimizer', newPetOptimizerButton);
   }
 
   activateTab('dashboard');

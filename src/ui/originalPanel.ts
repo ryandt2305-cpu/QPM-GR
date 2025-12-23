@@ -3665,7 +3665,7 @@ function createGuideSection(): HTMLElement {
   `;
 
   const img = document.createElement('img');
-  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/MGGuide.jpeg';
+  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
   img.style.cssText = `
     width: 100%;

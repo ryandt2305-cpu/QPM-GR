@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (allow dist/QPM.user.js for distribution)
 dist/
+!dist/QPM.user.js
 main-*.js
-*.user.js
 
 # Supabase-sensitive sources and compiled outputs
 src/services/supabaseRooms.ts

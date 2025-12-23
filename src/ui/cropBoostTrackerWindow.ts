@@ -17,7 +17,7 @@ import {
   type CropSizeInfo,
 } from '../features/cropBoostTracker';
 import { log } from '../utils/logger';
-import { getCropSpriteCanvas } from '../sprite-v2/compat';
+import { getCropSpriteCanvas, getCropSpriteWithMutations } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 
 // ============================================================================
@@ -435,24 +435,38 @@ function renderCropBoostSection(root: HTMLElement): void {
       // Get BASE species by removing mutation prefixes (Rainbow, Gold, Frozen, etc.)
       // E.g., "Rainbow Sunflower" -> "Sunflower"
       let baseSpecies = crop.species;
+      const detectedMutations: string[] = [...(crop.mutations || [])];
       const mutationPrefixes = ['Rainbow', 'Gold', 'Golden', 'Frozen', 'Amber', 'Wet', 'Chilled', 'Dawnlit'];
       for (const prefix of mutationPrefixes) {
         if (baseSpecies.startsWith(prefix + ' ')) {
           baseSpecies = baseSpecies.substring(prefix.length + 1);
+          // Add to mutations if not already present
+          if (!detectedMutations.includes(prefix)) {
+            detectedMutations.push(prefix === 'Golden' ? 'Gold' : prefix);
+          }
           break;
         }
       }
       // Capitalize first letter for proper sprite lookup (sprite service expects "Wheat", "Sunflower", etc.)
       const speciesKey = baseSpecies.charAt(0).toUpperCase() + baseSpecies.slice(1).toLowerCase();
       
-      // Try to get sprite from extractor first, fallback to gradient
-      const spriteDataUrl = canvasToDataUrl(getCropSpriteCanvas(speciesKey));
+      // Try to get sprite with mutations applied, fallback to base sprite
+      let spriteDataUrl: string | null = null;
+      if (detectedMutations.length > 0) {
+        spriteDataUrl = canvasToDataUrl(getCropSpriteWithMutations(speciesKey, detectedMutations));
+      }
+      if (!spriteDataUrl) {
+        spriteDataUrl = canvasToDataUrl(getCropSpriteCanvas(speciesKey));
+      }
+      
       if (spriteDataUrl) {
         cropImage.style.backgroundImage = `url(${spriteDataUrl})`;
+        // Add data attribute for auto-refresh when sprites become ready
+        cropImage.setAttribute('data-qpm-sprite', `crop:${speciesKey}${detectedMutations.length > 0 ? ':' + detectedMutations.join(',') : ''}`);
       } else {
-        // Fallback to CDN URLs if sprite extraction not ready
         // Fallback: try to use a simple colored square as placeholder
         cropImage.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
+        cropImage.setAttribute('data-qpm-sprite', `crop:${speciesKey}`);
       }
       
       // Text content

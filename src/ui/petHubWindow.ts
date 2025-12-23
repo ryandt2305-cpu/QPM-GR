@@ -6,7 +6,7 @@ import { getAtomByLabel, readAtomValue, findAtomsByLabel } from '../core/jotaiBr
 import { getDetailedPetStats, type DetailedPetStats, type AbilityStats } from '../utils/petDataTester';
 import { getSpeciesXpPerLevel, getSpeciesMaxScale, calculateMaxStrength } from '../store/xpTracker';
 import { getInventoryItems } from '../store/inventory';
-import { getPetSpriteCanvas, getPetSpriteWithMutations } from '../sprite-v2/compat';
+import { getPetSpriteCanvas, getPetSpriteWithMutations, onSpritesReady, isSpritesReady } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { pageWindow, isIsolatedContext, readSharedGlobal } from '../core/pageContext';
 import { getPetMetadata } from '../data/petMetadata';
@@ -1748,12 +1748,26 @@ function createPetHubContent(root: HTMLElement, allPets: PetWithSource[]): void 
   root.appendChild(contentContainer);
   renderContent();
 
+  // Subscribe to sprite ready event to re-hydrate sprites when they become available
+  // This fixes the issue where Pet Hub opens before sprites are loaded
+  let spriteReadyUnsubscribe: (() => void) | null = null;
+  if (!isSpritesReady()) {
+    spriteReadyUnsubscribe = onSpritesReady(() => {
+      // Re-hydrate all sprites in the content container
+      hydrateSpritesWithin(contentContainer);
+      log('[PetHub] Sprites ready - re-hydrating');
+    });
+  }
+
   // Clean up sprite dropdown listeners when Pet Hub window is destroyed
   cleanupOnDetach(root, () => {
     detachSpriteDropdownListeners(true); // Force cleanup
     if (ariesRetryTimer != null) {
       window.clearTimeout(ariesRetryTimer);
       ariesRetryTimer = null;
+    }
+    if (spriteReadyUnsubscribe) {
+      spriteReadyUnsubscribe();
     }
     resetSpriteHydrationState();
   });

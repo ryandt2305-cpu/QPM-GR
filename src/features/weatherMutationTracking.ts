@@ -6,6 +6,7 @@ import { getCropStats } from '../data/cropBaseStats';
 import { BASE_MULTIPLIERS, COMBINED_MULTIPLIERS } from '../data/cropMultipliers';
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
+import { visibleInterval } from '../utils/timerManager';
 import {
   computeSlotStateFromMutationNames,
   type PlantSlotState,
@@ -478,8 +479,8 @@ export function initializeWeatherMutationTracking(): void {
     processGardenUpdate(gardenSnapshot);
   }, true);
 
-  // Recalculate periodically (every 10 seconds)
-  setInterval(() => {
+  // Recalculate periodically (every 10 seconds, pauses when tab hidden)
+  visibleInterval('weather-mutation-recalc', () => {
     recalculateRates();
   }, 10000);
 }

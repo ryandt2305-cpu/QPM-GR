@@ -14,6 +14,7 @@ import {
 } from '../utils/weatherDetection';
 import { log } from '../utils/logger';
 import { readAtomValue as readRegistryAtomValue, subscribeAtomValue } from '../core/atomRegistry';
+import { visibleInterval } from '../utils/timerManager';
 import type { WeatherAtomValue } from '../types/gameAtoms';
 
 export type WeatherSnapshot = {
@@ -41,7 +42,7 @@ let current: WeatherSnapshot = {
   expectedEndAt: null,
 };
 
-let pollTimer: number | null = null;
+let pollTimerCleanup: (() => void) | null = null;
 let override: { kind: DetailedWeather; expiresAt: number } | null = null;
 const POLL_INTERVAL_MS = 2000;
 let atomUnsubscribe: (() => void) | null = null;
@@ -228,16 +229,16 @@ async function ensureAtomBridge(): Promise<void> {
 }
 
 export function startWeatherHub(): void {
-  if (pollTimer != null) return;
+  if (pollTimerCleanup != null) return;
   void ensureAtomBridge();
   pollWeather(true);
-  pollTimer = window.setInterval(() => pollWeather(false), POLL_INTERVAL_MS);
+  pollTimerCleanup = visibleInterval('weather-hub-poll', () => pollWeather(false), POLL_INTERVAL_MS);
 }
 
 export function stopWeatherHub(): void {
-  if (pollTimer != null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
+  if (pollTimerCleanup != null) {
+    pollTimerCleanup();
+    pollTimerCleanup = null;
   }
   atomUnsubscribe?.();
   atomUnsubscribe = null;

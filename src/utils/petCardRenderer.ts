@@ -196,11 +196,9 @@ export function renderPetSpeciesIcon(species: string): string {
   // Get base sprite (no mutations for filter cards)
   const sprite = canvasToDataUrl(getPetSpriteCanvas(speciesStr));
 
-  // Always include data attribute for sprite refresh when sprites become ready
-  // No background - sprite will load when ready
   return `
     <div class="qpm-pet-species-icon" style="display: inline-flex; align-items: center; gap: 6px;">
-      <img data-qpm-sprite="pet:${speciesStr}" src="${sprite || ''}" alt="${speciesStr}" style="width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; flex-shrink: 0;" />
+      ${sprite ? `<img src="${sprite}" alt="${speciesStr}" style="width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; border-radius: 4px; border: 1px solid rgba(168,139,250,0.2);" />` : `<div style="font-size: 16px;">🐾</div>`}
       <span style="font-size: 12px; font-weight: 600; color: #e2e8f0;">${speciesStr}</span>
     </div>
   `;

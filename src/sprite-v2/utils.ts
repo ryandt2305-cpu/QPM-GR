@@ -1,7 +1,7 @@
 // sprite-v2/utils.ts - PIXI utility functions
+// Simplified to match Aries Mod's approach for Chrome/Firefox compatibility
 
 import type { PixiConstructors } from './types';
-import { getRuntimeWindow } from './detector';
 
 /**
  * Finds any node in a PIXI display tree matching a predicate
@@ -29,14 +29,29 @@ export function findAny(root: any, pred: (node: any) => boolean, lim = 25000): a
   return null;
 }
 
-/**
- * Extracts PIXI constructors from the app or global PIXI object
- */
-export function getCtors(app: any): PixiConstructors {
-  const win = getRuntimeWindow();
-  const P = (win as any).PIXI;
+// Declare unsafeWindow for TypeScript (provided by Tampermonkey in sandbox mode)
+declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
-  // Try to get constructors from global PIXI object
+/**
+ * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
+ * Matches Aries Mod's approach exactly for Chrome/Firefox compatibility.
+ */
+function getRoot(): any {
+  // Match Aries Mod's exact pattern: check if variable exists first
+  return typeof unsafeWindow !== 'undefined' && unsafeWindow
+    ? unsafeWindow
+    : globalThis;
+}
+
+/**
+ * Extracts PIXI constructors from the app, renderer, or global PIXI object.
+ * Uses unsafeWindow consistently for Chrome/Firefox compatibility.
+ */
+export function getCtors(app: any, renderer?: any): PixiConstructors {
+  const root = getRoot();
+  const P = root.PIXI || root.__PIXI__;
+
+  // Method 1: Try to get constructors from global PIXI object (most reliable)
   if (P?.Texture && P?.Sprite && P?.Container && P?.Rectangle) {
     return {
       Container: P.Container,
@@ -47,28 +62,30 @@ export function getCtors(app: any): PixiConstructors {
     };
   }
 
-  // Fallback: extract constructors from stage
-  const stage = app?.stage;
-  const anySpr = findAny(stage, (x) => {
-    return x?.texture?.frame && x?.constructor && x?.texture?.constructor && x?.texture?.frame?.constructor;
-  });
+  // Method 2: Try to extract from app.stage if app is available
+  if (app?.stage) {
+    const stage = app.stage;
+    const anySpr = findAny(stage, (x) => {
+      return x?.texture?.frame && x?.constructor && x?.texture?.constructor && x?.texture?.frame?.constructor;
+    });
 
-  if (!anySpr) {
-    throw new Error('No Sprite found - cannot extract PIXI constructors');
+    if (anySpr) {
+      const anyTxt = findAny(
+        stage,
+        (x) => (typeof x?.text === 'string' || typeof x?.text === 'number') && x?.style
+      );
+
+      return {
+        Container: stage.constructor,
+        Sprite: anySpr.constructor,
+        Texture: anySpr.texture.constructor,
+        Rectangle: anySpr.texture.frame.constructor,
+        Text: anyTxt?.constructor || null,
+      };
+    }
   }
 
-  const anyTxt = findAny(
-    stage,
-    (x) => (typeof x?.text === 'string' || typeof x?.text === 'number') && x?.style
-  );
-
-  return {
-    Container: stage.constructor,
-    Sprite: anySpr.constructor,
-    Texture: anySpr.texture.constructor,
-    Rectangle: anySpr.texture.frame.constructor,
-    Text: anyTxt?.constructor || null,
-  };
+  throw new Error('No PIXI constructors found - cannot extract from app or globals');
 }
 
 /**

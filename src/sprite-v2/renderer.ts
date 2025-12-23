@@ -38,7 +38,7 @@ const FILTERS: Record<string, SpriteFilterConfig> = {
 const SUPPORTED_BLEND_OPS = (() => {
   try {
     const c = document.createElement('canvas');
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', { willReadFrequently: true });
     if (!g) return new Set<string>();
 
     const ops = ['color', 'hue', 'saturation', 'luminosity', 'overlay', 'screen', 'lighter', 'source-atop'];
@@ -188,7 +188,7 @@ function applyFilterOnto(ctx: CanvasRenderingContext2D, sourceCanvas: HTMLCanvas
     const m = document.createElement('canvas');
     m.width = w;
     m.height = h;
-    const mctx = m.getContext('2d')!;
+    const mctx = m.getContext('2d', { willReadFrequently: true })!;
     mctx.imageSmoothingEnabled = false;
     fillGrad(mctx, w, h, f, fullSpan);
     mctx.globalCompositeOperation = 'destination-in';
@@ -237,7 +237,7 @@ function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig): HTMLC
 
     c.width = fullW;
     c.height = fullH;
-    const ctx = c.getContext('2d')!;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
     ctx.imageSmoothingEnabled = false;
 
     const rotated = rot === true || rot === 2 || rot === 8;
@@ -414,7 +414,7 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
       const layerCanvas = document.createElement('canvas');
       layerCanvas.width = w;
       layerCanvas.height = h;
-      const lctx = layerCanvas.getContext('2d')!;
+      const lctx = layerCanvas.getContext('2d', { willReadFrequently: true })!;
       lctx.imageSmoothingEnabled = false;
       lctx.save();
       lctx.translate(w * aX, h * aY);
@@ -442,7 +442,7 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
         const maskedCanvas = document.createElement('canvas');
         maskedCanvas.width = ow;
         maskedCanvas.height = oCan.height;
-        const mctx = maskedCanvas.getContext('2d')!;
+        const mctx = maskedCanvas.getContext('2d', { willReadFrequently: true })!;
         mctx.imageSmoothingEnabled = false;
         mctx.drawImage(oCan, 0, 0);
         mctx.globalCompositeOperation = 'destination-in';

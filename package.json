@@ -1,23 +1,31 @@
 {
-  "name": "quinoa-ws-hud",
-  "private": true,
-  "type": "module",
+  "name": "quinoa-pet-manager",
+  "version": "3.0.6",
+  "description": "Quality of life tools for Magic Garden including crop tracking, mutation reminders, and inventory management",
+  "main": "dist/userscript.js",
   "scripts": {
-    "build": "node scripts/build-userscript.cjs",
-    "build:vite": "npx vite build",
-    "dev": "npx vite build --watch",
-    "serve": "npx http-server dist -p 5174 --cors"
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "build:userscript": "node scripts/build-userscript.js",
+    "build:dist": "npm run build && npm run build:userscript",
+    "scrape-game-data": "node scripts/scrape-game-data.js",
+    "parse-discord-html": "node --max-old-space-size=4096 scripts/parse-discord-html.js",
+    "preview": "vite preview",
+    "postinstall": "echo Cross-platform setup complete!"
   },
   "devDependencies": {
-    "@supabase/supabase-js": "^2.58.0",
-    "@types/tampermonkey": "^5.0.4",
-    "esbuild": "^0.24.2",
-    "vite": "^5.0.0",
-    "vite-plugin-dts": "^3.6.0",
-    "terser": "^5.27.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.10.0",
+    "@types/tampermonkey": "^4.0.10",
+    "terser": "^5.26.0",
+    "typescript": "^5.3.0",
+    "vite": "^7.1.12",
+    "vite-plugin-dts": "^4.5.4"
   },
   "dependencies": {
-    "jszip": "^3.9.1"
+    "firebase": "^11.0.1",
+    "git": "^0.1.5",
+    "jsdom": "^27.2.0",
+    "jszip": "^3.10.1"
   }
 }
+

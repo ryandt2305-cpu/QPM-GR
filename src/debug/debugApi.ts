@@ -39,6 +39,7 @@ type DebugApiType = {
   inspectGarden?: () => any;
   exposeGarden?: () => any;
   currentTile?: () => any;
+  verifyBulkFavorite: () => Promise<any>;
 };
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
@@ -401,6 +402,120 @@ export async function createDebugApi(): Promise<DebugApiType> {
       const { showTutorialPopup } = await import('../ui/tutorialPopup');
       showTutorialPopup();
     },
+
+    verifyBulkFavorite: async () => {
+      const { pageWindow } = await import('../core/pageContext');
+      const { getCropSpriteDataUrl } = await import('../sprite-v2/compat');
+      const { getInventoryItems, getFavoritedItemIds, readInventoryDirect } = await import('../store/inventory');
+      
+      const results: Record<string, any> = {
+        timestamp: new Date().toISOString(),
+        checks: {},
+      };
+
+      // 1. Check inventory access via Jotai atoms (the correct way)
+      const cachedItems = getInventoryItems();
+      const cachedFavorites = getFavoritedItemIds();
+      const directInventory = await readInventoryDirect();
+      
+      const items = directInventory?.items || cachedItems;
+      const favoritedIds = directInventory?.favoritedItemIds || Array.from(cachedFavorites);
+      
+      results.checks.inventoryAccess = {
+        status: items.length > 0 ? '✅' : '❌',
+        source: directInventory ? 'Jotai atom (direct read)' : 'Cached',
+        totalItems: items.length,
+        favoritedCount: favoritedIds.length,
+        cachedItemCount: cachedItems.length,
+      };
+
+      // 2. Find Produce items and analyze structure
+      const produceItems = items.filter((item: any) => {
+        const raw = item.raw || item;
+        return raw?.itemType === 'Produce';
+      });
+      const speciesSet = new Set(produceItems.map((item: any) => {
+        const raw = item.raw || item;
+        return raw?.species || item?.species;
+      }).filter(Boolean));
+      
+      const sampleRaw = (produceItems[0]?.raw || produceItems[0]) as Record<string, unknown> | undefined;
+      results.checks.produceItems = {
+        status: produceItems.length > 0 ? '✅' : '⚠️',
+        count: produceItems.length,
+        uniqueSpecies: Array.from(speciesSet),
+        sampleItem: sampleRaw ? {
+          id: sampleRaw.id as string | undefined,
+          itemType: sampleRaw.itemType as string | undefined,
+          species: sampleRaw.species as string | undefined,
+          mutations: sampleRaw.mutations as string[] | undefined,
+          allFields: Object.keys(sampleRaw),
+        } : null,
+      };
+
+      // 3. Check WebSocket
+      const typedPageWindow = pageWindow as any;
+      const hasWebSocket = !!typedPageWindow?.MagicCircle_RoomConnection?.sendMessage;
+      results.checks.webSocket = {
+        status: hasWebSocket ? '✅' : '❌',
+        available: hasWebSocket,
+      };
+
+      // 4. Check sprite system for produce
+      const spriteTests: Record<string, string> = {};
+      const testSpecies = Array.from(speciesSet).slice(0, 5) as string[];
+      for (const species of testSpecies) {
+        try {
+          const url = getCropSpriteDataUrl(species);
+          spriteTests[species] = url ? (url.startsWith('data:image') ? '✅ Valid' : '⚠️ Invalid URL') : '❌ No sprite';
+        } catch (e) {
+          spriteTests[species] = '❌ Error';
+        }
+      }
+      results.checks.spriteSystem = {
+        status: Object.values(spriteTests).length === 0 || Object.values(spriteTests).every(v => v.startsWith('✅')) ? '✅' : '⚠️',
+        testedSpecies: spriteTests,
+        note: testSpecies.length === 0 ? 'No produce species to test' : undefined,
+      };
+
+      // 5. Check dialog detection (for when inventory is open)
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      const inventoryDialog = Array.from(dialogs).find(d => {
+        const text = d.textContent?.toLowerCase() || '';
+        // More lenient check - just exclude shops
+        const isShop = text.includes('shop') || text.includes('seeds in stock') || text.includes('buy');
+        return !isShop && dialogs.length > 0;
+      });
+      results.checks.dialogDetection = {
+        status: dialogs.length > 0 ? '✅' : '⚠️',
+        openDialogs: dialogs.length,
+        inventoryDialogFound: !!inventoryDialog,
+        note: dialogs.length === 0 ? 'Open your inventory and run again' : undefined,
+      };
+
+      // Summary
+      const hasItems = items.length > 0;
+      const hasProduceOrCanTest = produceItems.length > 0 || hasItems;
+      const allPassed = hasItems && hasWebSocket;
+      results.summary = {
+        status: allPassed ? '✅ All checks passed' : '⚠️ Some checks need attention',
+        readyForRewrite: hasItems && hasWebSocket,
+      };
+
+      console.log('🔍 Bulk Favorite Verification Results:');
+      console.log(JSON.stringify(results, null, 2));
+      
+      // Also log a nice table
+      console.table({
+        'Inventory Access': `${results.checks.inventoryAccess.status} (${items.length} items)`,
+        'Produce Items': `${results.checks.produceItems.status} (${produceItems.length} items)`,
+        'WebSocket': results.checks.webSocket.status,
+        'Sprite System': results.checks.spriteSystem.status,
+        'Dialog Detection': results.checks.dialogDetection.status,
+      });
+
+      return results;
+    },
   };
 
   return debugApi;
@@ -452,7 +567,7 @@ export function createLazyDebugProxy(): Record<string, any> {
     'debugLevels', 'debugInventory', 'testPetData', 'testComparePets', 'testAbilityDefinitions',
     'debugAriesIntegration', 'toggleBadgePreview', 'debugInventoryAtoms', 'scanSeeds',
     'auditRainbowPets', 'openPetHub3v3', 'resetTutorial', 'showTutorial',
-    'inspectGarden', 'exposeGarden', 'currentTile',
+    'inspectGarden', 'exposeGarden', 'currentTile', 'verifyBulkFavorite',
   ];
 
   for (const method of lazyMethods) {

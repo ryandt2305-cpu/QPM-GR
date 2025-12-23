@@ -53,14 +53,6 @@ function notify(): void {
   }
 }
 
-/**
- * Manually trigger a refresh notification to all listeners.
- * Used when sprites become ready to refresh UI that depends on pet info.
- */
-export function refreshPetInfoListeners(): void {
-  notify();
-}
-
 function clearStartRetry(): void {
   if (retryTimer != null) {
     window.clearTimeout(retryTimer);

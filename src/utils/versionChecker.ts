@@ -1,4 +1,6 @@
-const CURRENT_VERSION = '3.0.7'; // This should match package.json version
+import { visibleInterval } from './timerManager';
+
+const CURRENT_VERSION = '3.0.5'; // This should match package.json version
 export const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
 export const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -62,7 +64,7 @@ let cached: VersionInfo = {
 
 const listeners = new Set<(info: VersionInfo) => void>();
 let started = false;
-let timer: number | null = null;
+let timerCleanup: (() => void) | null = null;
 
 function emit(): void {
   listeners.forEach((cb) => {
@@ -121,7 +123,7 @@ export function startVersionChecker(): void {
   if (started) return;
   started = true;
   void checkForUpdates(true);
-  timer = window.setInterval(() => void checkForUpdates(false), CHECK_INTERVAL_MS);
+  timerCleanup = visibleInterval('version-checker', () => void checkForUpdates(false), CHECK_INTERVAL_MS);
 }
 
 /**

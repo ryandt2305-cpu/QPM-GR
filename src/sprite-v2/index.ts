@@ -238,48 +238,163 @@ async function loadTextures(
 }
 
 /**
- * Fast PIXI resolution - tries direct detection first, falls back to hooks.
- * This is more reliable than just waiting for hooks when the script loads after PIXI init.
+ * Fast PIXI resolution - simplified to match Aries Mod's proven approach.
+ * Uses unsafeWindow consistently for Chrome/Firefox compatibility.
  */
 type PixiBundle = { app: any; renderer: any; version: string | null };
 
-async function resolvePixiFast(): Promise<PixiBundle> {
-  const root: any = (globalThis as any).unsafeWindow || (globalThis as any);
+// Declare unsafeWindow for TypeScript (provided by Tampermonkey in sandbox mode)
+declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+
+/**
+ * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
+ * Matches Aries Mod's approach exactly for Chrome/Firefox compatibility.
+ */
+function getRoot(): any {
+  // Match Aries Mod's exact pattern: check if variable exists first
+  return typeof unsafeWindow !== 'undefined' && unsafeWindow
+    ? unsafeWindow
+    : globalThis;
+}
+
+/**
+ * Traverse React fiber tree to find QuinoaEngine and extract PIXI renderer.
+ * This is a fallback when hooks and global polling fail.
+ */
+function findPixiViaFiber(): PixiBundle | null {
+  try {
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return null;
+    
+    // Find React fiber root on the canvas or its ancestors
+    let element: Element | null = canvas;
+    let fiber: any = null;
+    
+    while (element && !fiber) {
+      const keys = Object.keys(element);
+      for (const key of keys) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactContainer$')) {
+          fiber = (element as any)[key];
+          break;
+        }
+      }
+      element = element.parentElement;
+    }
+    
+    if (!fiber) return null;
+    
+    // BFS to find QuinoaEngine in the fiber tree
+    const queue: any[] = [fiber];
+    const visited = new WeakSet();
+    let iterations = 0;
+    const maxIterations = 10000;
+    
+    while (queue.length > 0 && iterations++ < maxIterations) {
+      const node = queue.shift();
+      if (!node || visited.has(node)) continue;
+      visited.add(node);
+      
+      // Check memoizedState chain for QuinoaEngine
+      let state = node.memoizedState;
+      let hookDepth = 0;
+      while (state && hookDepth++ < 50) {
+        const ms = state.memoizedState !== undefined ? state.memoizedState : state;
+        
+        if (ms && typeof ms === 'object') {
+          // Check for QuinoaEngine structure (has canvasSpriteCache with renderer)
+          if (ms.canvasSpriteCache?.renderer) {
+            return { app: ms.app || null, renderer: ms.canvasSpriteCache.renderer, version: null };
+          }
+          // Alternative: gameTextureCache
+          if (ms.gameTextureCache?.renderer) {
+            return { app: ms.app || null, renderer: ms.gameTextureCache.renderer, version: null };
+          }
+          // Direct PIXI app check (has stage, renderer, ticker)
+          if (ms.stage && ms.renderer && ms.ticker) {
+            return { app: ms, renderer: ms.renderer, version: null };
+          }
+          // Direct renderer check
+          if (ms.extract && ms.render && (ms.gl || ms.context)) {
+            return { app: null, renderer: ms, version: null };
+          }
+        }
+        
+        state = state.next;
+      }
+      
+      // Traverse fiber tree
+      if (node.child) queue.push(node.child);
+      if (node.sibling) queue.push(node.sibling);
+      if (node.return && !visited.has(node.return)) queue.push(node.return);
+    }
+  } catch {
+    // Silent failure - will try other detection methods
+  }
   
-  const check = (): PixiBundle | null => {
-    // Check multiple possible locations for the PIXI app (same as Arie's Mod)
+  return null;
+}
+
+async function resolvePixiFast(): Promise<PixiBundle> {
+  const root = getRoot();
+  
+  // Check 1: Injected script captured PIXI (critical for Chrome!)
+  const checkInjectedCapture = (): PixiBundle | null => {
+    const captured = root.__QPM_PIXI_CAPTURED__;
+    if (captured?.app && captured?.renderer) {
+      return { app: captured.app, renderer: captured.renderer, version: captured.version || null };
+    }
+    return null;
+  };
+  
+  // Check 2: Global PIXI variables
+  const checkGlobals = (): PixiBundle | null => {
     const app = root.__PIXI_APP__ || root.PIXI_APP || root.app || null;
-    const renderer =
-      root.__PIXI_RENDERER__ ||
-      root.PIXI_RENDERER__ ||
-      root.renderer ||
-      (app as any)?.renderer ||
-      null;
+    const renderer = root.__PIXI_RENDERER__ || root.PIXI_RENDERER__ || root.renderer || app?.renderer || null;
+    
     if (app && renderer) {
       const version = root.__PIXI_VERSION__ || root.__PIXI__?.VERSION || root.PIXI?.VERSION || null;
-      console.log('[Sprite System] Found PIXI via direct detection');
       return { app, renderer, version };
     }
     return null;
   };
   
+  // Check 3: Aries Mod's sprite service (piggyback if available)
+  const checkAriesService = (): PixiBundle | null => {
+    const ariesService = root.__MG_SPRITE_SERVICE__;
+    if (ariesService?.state?.renderer) {
+      return { app: ariesService.state.app || null, renderer: ariesService.state.renderer, version: ariesService.state.version || null };
+    }
+    return null;
+  };
+  
+  // Check 4: React fiber traversal (direct DOM inspection)
+  const checkFiber = (): PixiBundle | null => findPixiViaFiber();
+  
+  // Combined check - injected capture is most reliable for Chrome
+  const check = (): PixiBundle | null => checkInjectedCapture() || checkGlobals() || checkAriesService() || checkFiber();
+  
   // Try immediately
   const hit = check();
   if (hit) return hit;
 
-  // Poll for up to 5 seconds (game might still be initializing)
-  const maxMs = 5000;
-  const start = performance.now();
-  while (performance.now() - start < maxMs) {
-    await new Promise(r => setTimeout(r, 50));
+  // Poll for up to 15 seconds with all methods
+  const maxMs = 15000;
+  const pollStart = performance.now();
+  
+  while (performance.now() - pollStart < maxMs) {
+    await new Promise(r => setTimeout(r, 100));
     const retry = check();
     if (retry) return retry;
   }
 
-  // Fall back to waiting on hooks (last resort)
-  console.log('[Sprite System] Direct detection failed, waiting on hooks...');
-  const waited = await waitForPixi(hooks);
-  return { app: waited.app, renderer: waited.renderer, version: waited.version };
+  // Final fallback: wait on hooks
+  const waited = await waitForPixi(hooks, 5000).catch(() => ({ app: null, renderer: null, version: null }));
+  
+  if (waited.renderer || waited.app?.renderer) {
+    return { app: waited.app, renderer: waited.renderer || waited.app?.renderer, version: waited.version };
+  }
+  
+  throw new Error('PIXI app timeout');
 }
 
 async function start(): Promise<SpriteService> {
@@ -320,9 +435,15 @@ async function start(): Promise<SpriteService> {
   // Brief yield to let the browser catch up after PIXI init
   await yieldToBrowser();
 
-  ctx.state.ctors = getCtors(app);
+  // Get renderer (prefer explicit renderer, fallback to app.renderer)
   const renderer = _renderer || app?.renderer || app?.render || null;
-  ctx.state.app = app;
+  if (!renderer) {
+    throw new Error('No PIXI renderer found');
+  }
+  
+  // Get PIXI constructors - try global PIXI first, then fall back to extraction
+  ctx.state.ctors = getCtors(app, renderer);
+  ctx.state.app = app; // May be null if we got renderer through canvasSpriteCache
   ctx.state.renderer = renderer;
   ctx.state.sig = computeVariantSignature(ctx.state).sig;
 
@@ -332,11 +453,22 @@ async function start(): Promise<SpriteService> {
   // Load all textures using prefetched data where available
   await loadTextures(ctx.state.base, ctx.state, ctx.cfg, prefetched);
 
-  // Start job processor
+  // Start job processor using ticker if available, otherwise use requestAnimationFrame
   ctx.state.open = true;
-  app.ticker?.add?.(() => {
-    processVariantJobs(ctx!.state, ctx!.cfg);
-  });
+  if (app?.ticker?.add) {
+    app.ticker.add(() => {
+      processVariantJobs(ctx!.state, ctx!.cfg);
+    });
+  } else {
+    // Fallback: use requestAnimationFrame for job processing
+    const processLoop = () => {
+      if (ctx?.state?.open) {
+        processVariantJobs(ctx.state, ctx.cfg);
+        requestAnimationFrame(processLoop);
+      }
+    };
+    requestAnimationFrame(processLoop);
+  }
 
   // Helper to render texture to canvas
   const renderTextureToCanvas = (tex: any): HTMLCanvasElement | null => {

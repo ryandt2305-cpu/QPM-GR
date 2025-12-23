@@ -1,6 +1,7 @@
 // src/store/stats.ts
 import { storage } from '../utils/storage';
 import { startWeatherHub, onWeatherSnapshot, getWeatherSnapshot, type WeatherSnapshot } from './weatherHub';
+import { visibleInterval } from '../utils/timerManager';
 import type { WeatherPreset } from '../features/weatherUtils';
 
 export type ShopCategoryKey = 'seeds' | 'eggs' | 'tools' | 'decor';
@@ -112,7 +113,7 @@ let state: StatsState;
 let initialized = false;
 let saveTimer: number | null = null;
 let weatherUnsubscribe: (() => void) | null = null;
-let weatherTickTimer: number | null = null;
+let weatherTickTimerCleanup: (() => void) | null = null;
 let lastWeatherTickAt = Date.now();
 
 const listeners = new Set<(snapshot: StatsSnapshot) => void>();
@@ -503,12 +504,12 @@ function attachWeatherTracking(): void {
     }
   }, true);
 
-  weatherTickTimer = window.setInterval(() => {
+  weatherTickTimerCleanup = visibleInterval('stats-weather-tick', () => {
     const changed = recordWeatherDuration(Date.now());
     if (changed) {
       commitState();
     }
-  }, WEATHER_TICK_INTERVAL) as unknown as number;
+  }, WEATHER_TICK_INTERVAL);
 }
 
 export function initializeStatsStore(): void {

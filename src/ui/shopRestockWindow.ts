@@ -28,6 +28,7 @@ import {
   isLiveTrackingEnabled,
 } from '../features/shopRestockLiveTracker';
 import { parseRestockFile } from '../features/shopRestockParser';
+import { visibleInterval } from '../utils/timerManager';
 import { log } from '../utils/logger';
 import { getCropSpriteCanvas, getPetSpriteCanvas } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
@@ -35,7 +36,7 @@ import { canvasToDataUrl } from '../utils/canvasHelpers';
 export interface ShopRestockWindowState {
   root: HTMLElement;
   contentContainer: HTMLElement;
-  countdownInterval: number | null;
+  countdownInterval: (() => void) | null;
   resizeListener: (() => void) | null;
 }
 
@@ -181,7 +182,7 @@ function renderContent(state: ShopRestockWindowState): void {
 
   // Clear countdown interval if exists
   if (state.countdownInterval !== null) {
-    clearInterval(state.countdownInterval);
+    state.countdownInterval();
     state.countdownInterval = null;
   }
 
@@ -912,18 +913,18 @@ function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
   // Initial update
   updateCountdowns();
 
-  // Update every second (only if window is still in DOM)
+  // Update every second (only if window is still in DOM) - pauses when tab hidden
   if (state.countdownInterval !== null) {
-    clearInterval(state.countdownInterval);
+    state.countdownInterval();
   }
-  state.countdownInterval = window.setInterval(() => {
+  state.countdownInterval = visibleInterval('shop-restock-countdown', () => {
     // Check if section is still in DOM before updating
     if (document.contains(section)) {
       updateCountdowns();
     } else {
       // Cleanup if removed from DOM
       if (state.countdownInterval !== null) {
-        clearInterval(state.countdownInterval);
+        state.countdownInterval();
         state.countdownInterval = null;
       }
     }
@@ -1071,7 +1072,7 @@ function createImportSection(state: ShopRestockWindowState): HTMLElement {
       font-weight: 600;
     `;
     clearBtn.onclick = () => {
-      if (confirm('⚠️ This will clear all Shop Restock history and prediction data.\n\nYour other QPM settings (XP tracking, etc.) will NOT be affected.\n\nThis cannot be undone. Are you sure?')) {
+      if (confirm('⚠️ This will clear all Shop Restock history and prediction data.\n\nYour other QPM settings (auto-feed, XP tracking, etc.) will NOT be affected.\n\nThis cannot be undone. Are you sure?')) {
         clearAllRestocks();
         // Reload the UI to reflect cleared state
         renderContent(state);
@@ -1557,7 +1558,7 @@ export function hideShopRestockWindow(state: ShopRestockWindowState): void {
 export function destroyShopRestockWindow(state: ShopRestockWindowState): void {
   // Clear countdown interval
   if (state.countdownInterval !== null) {
-    clearInterval(state.countdownInterval);
+    state.countdownInterval();
     state.countdownInterval = null;
   }
 

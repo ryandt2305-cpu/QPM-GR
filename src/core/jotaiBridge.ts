@@ -1,4 +1,7 @@
 // src/core/jotaiBridge.ts
+// Jotai bridge that coordinates with Aries Mod / other mods
+// Prioritizes reading from existing stores, falls back to capture if needed
+
 import { readSharedGlobal, shareGlobal, pageWindow } from './pageContext';
 import { log } from '../utils/logger';
 
@@ -7,59 +10,26 @@ export type JotaiStore = {
   set(atom: unknown, value: unknown): void | Promise<void>;
   sub(atom: unknown, cb: () => void): () => void | Promise<() => void>;
   __polyfill?: boolean;
+  __source?: string;
 };
 
 const STORE_GLOBAL_KEY = '__qpmJotaiStore__';
 const CACHE_GLOBAL_KEY = '__qpmJotaiAtomCache__';
+
+// Keys to check for existing stores - Aries Mod keys first
 const SHARED_STORE_KEYS = [
-  '__jotaiStore',
-  'jotaiStore',
-  '__QPM_SHARED_JOTAI__',
+  '__jotaiStore',      // Aries Mod primary
+  'jotaiStore',        // Aries Mod alternate
   '__MG_SHARED_JOTAI__',
+  '__MGTOOLS_JOTAI_STORE__',
+  '__QPM_SHARED_JOTAI__',
+  '__QPM_JOTAI_STORE__',
 ] as const;
 
-// Keep reference to any discovered cache; avoid pre-populating to let the game own the value.
 let liveAtomCache: AtomCacheLike | null = null;
-
-function mirrorStore(store: JotaiStore) {
-  shareGlobal(STORE_GLOBAL_KEY, store);
-  SHARED_STORE_KEYS.forEach((key) => {
-    try {
-      (pageWindow as any)[key] = store;
-    } catch {}
-  });
-  try {
-    if ((pageWindow as any).AriesMod?.services) {
-      (pageWindow as any).AriesMod.services.jotaiStore = store;
-    }
-  } catch {}
-}
-
-function startSharedStorePolling(): void {
-  if (sharedStorePoller != null) return;
-  // Poll frequently to detect when Aries Mod or game exposes the store
-  // This helps avoid conflicts by using an existing store instead of capturing a new one
-  sharedStorePoller = window.setInterval(() => {
-    try {
-      const candidate = getSharedStoreCandidate();
-      if (candidate && !candidate.__polyfill) {
-        storeRef = candidate;
-        mirrorStore(candidate);
-        log('[jotaiBridge] Using shared store from another mod/game');
-        if (sharedStorePoller != null) {
-          clearInterval(sharedStorePoller);
-          sharedStorePoller = null;
-        }
-      }
-    } catch {}
-  }, 500); // Check more frequently to pick up Aries Mod's store faster
-}
-
 let storeRef: JotaiStore | null = null;
 let captureInFlight = false;
-let lastCaptureError: unknown = null;
-let lastCaptureMode: 'fiber' | 'write' | 'polyfill' | null = null;
-let sharedStorePoller: number | null = null;
+let lastCaptureMode: 'aries' | 'shared' | 'fiber' | 'write' | 'cache-read' | null = null;
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -68,43 +38,32 @@ type AtomCacheLike = {
   values: () => IterableIterator<any>;
 };
 
-function mirrorAtomCache(cache: AtomCacheLike): void {
-  // Be non-invasive: only mirror if nothing exists yet so we don't fight the game/Aries
-  try {
-    const current = (pageWindow as any).jotaiAtomCache;
-    const currentCache = current && (current as any).cache ? (current as any).cache : current;
-    const hasMap = currentCache && typeof (currentCache as any).get === 'function';
-    if (hasMap) return;
-  } catch {}
-
-  try {
-    const shape = cache as AtomCacheLike & { cache?: AtomCacheLike };
-    shape.cache = cache;
-    (pageWindow as any).jotaiAtomCache = shape;
-    if ((pageWindow as any).AriesMod?.services) {
-      (pageWindow as any).AriesMod.services.jotaiAtomCache = shape;
-    }
-  } catch {}
-}
-
 function isAtomCacheLike(value: unknown): value is AtomCacheLike {
   return !!value && typeof (value as AtomCacheLike).get === 'function' && typeof (value as AtomCacheLike).values === 'function';
 }
 
-// Expose any shared cache if it already exists; otherwise defer to the game.
-const existingCache = readSharedGlobal<AtomCacheLike>(CACHE_GLOBAL_KEY);
-if (existingCache && isAtomCacheLike(existingCache)) {
-  liveAtomCache = existingCache;
+function isValidStore(store: unknown): store is JotaiStore {
+  return !!store && 
+    typeof (store as JotaiStore).get === 'function' &&
+    typeof (store as JotaiStore).set === 'function' &&
+    typeof (store as JotaiStore).sub === 'function';
 }
 
+/**
+ * Get atom cache from global scope
+ */
 function getAtomCache(): AtomCacheLike | undefined {
+  // Check our cached reference first
+  if (liveAtomCache) return liveAtomCache;
+
+  // Check shared global
   const cached = readSharedGlobal<AtomCacheLike>(CACHE_GLOBAL_KEY);
   if (cached && isAtomCacheLike(cached)) {
     liveAtomCache = cached;
-    mirrorAtomCache(cached);
     return cached;
   }
 
+  // Check window.jotaiAtomCache (game/Aries Mod)
   const raw = (pageWindow as unknown as Record<string, unknown>).jotaiAtomCache as
     | { cache?: unknown }
     | AtomCacheLike
@@ -113,78 +72,63 @@ function getAtomCache(): AtomCacheLike | undefined {
   const candidate = raw && 'cache' in raw ? (raw as { cache?: unknown }).cache : raw;
   if (isAtomCacheLike(candidate)) {
     liveAtomCache = candidate as AtomCacheLike;
-    mirrorAtomCache(candidate as AtomCacheLike);
     return candidate as AtomCacheLike;
   }
+
   return undefined;
 }
 
-function getSharedStoreCandidate(): JotaiStore | null {
-  // 1) Aries Mod might expose under services - CHECK FIRST to avoid conflicts
-  const ariesSvc = (pageWindow as any)?.AriesMod?.services;
-  const ariesStore = ariesSvc?.jotaiStore;
-  if (
-    ariesStore &&
-    typeof ariesStore.get === 'function' &&
-    typeof ariesStore.set === 'function' &&
-    typeof ariesStore.sub === 'function'
-  ) {
-    return ariesStore as JotaiStore;
+/**
+ * Try to get an existing store from Aries Mod or other mods
+ */
+function getExistingStore(): JotaiStore | null {
+  // 1) Aries Mod services - highest priority
+  try {
+    const ariesStore = (pageWindow as any)?.AriesMod?.services?.jotaiStore;
+    if (isValidStore(ariesStore) && !ariesStore.__polyfill) {
+      return { ...ariesStore, __source: 'aries' } as JotaiStore;
+    }
+  } catch {}
+
+  // 2) Check shared global slots
+  for (const key of SHARED_STORE_KEYS) {
+    try {
+      const candidate = (pageWindow as any)[key];
+      if (isValidStore(candidate) && !candidate.__polyfill) {
+        return candidate;
+      }
+    } catch {}
   }
 
-  // 2) Already shared by us or another tool
+  // 3) Check our own shared global
   const shared = readSharedGlobal<JotaiStore>(STORE_GLOBAL_KEY);
-  if (shared && typeof shared.get === 'function' && typeof shared.set === 'function') return shared;
-
-  // 3) Common global slots other tools may use (Aries/MGTools-like)
-  for (const key of SHARED_STORE_KEYS) {
-    const candidate = (pageWindow as any)[key];
-    if (
-      candidate &&
-      typeof candidate.get === 'function' &&
-      typeof candidate.set === 'function' &&
-      typeof candidate.sub === 'function'
-    ) {
-      return candidate as JotaiStore;
-    }
+  if (isValidStore(shared) && !shared.__polyfill) {
+    return shared;
   }
 
   return null;
 }
 
-async function waitForAtomCache(timeoutMs = 5000): Promise<AtomCacheLike | undefined> {
-  const start = Date.now();
-  let cache = getAtomCache();
-
-  while (!cache && Date.now() - start < timeoutMs) {
-    await wait(50);
-    cache = getAtomCache();
-  }
-
-  if (cache) {
-    liveAtomCache = cache;
-    mirrorAtomCache(cache);
-  }
-
-  return cache;
-}
-
-type FiberNode = {
-  pendingProps?: { value?: unknown } & Record<string, unknown>;
-  child?: FiberNode | null;
-  sibling?: FiberNode | null;
-  alternate?: FiberNode | null;
-};
-
-type ReactDevToolsHook = {
-  renderers?: Map<number, unknown>;
-  getFiberRoots?: (rendererId: number) => Set<FiberNode> | undefined;
-};
-
+/**
+ * Find store via React Fiber tree
+ */
 function findStoreViaFiber(): JotaiStore | null {
-  const hook: ReactDevToolsHook | undefined = (pageWindow as unknown as Record<string, unknown>)[
+  type FiberNode = {
+    pendingProps?: { value?: unknown } & Record<string, unknown>;
+    child?: FiberNode | null;
+    sibling?: FiberNode | null;
+    alternate?: FiberNode | null;
+  };
+
+  type ReactDevToolsHook = {
+    renderers?: Map<number, unknown>;
+    getFiberRoots?: (rendererId: number) => Set<FiberNode> | undefined;
+  };
+
+  const hook = (pageWindow as unknown as Record<string, unknown>)[
     '__REACT_DEVTOOLS_GLOBAL_HOOK__'
   ] as ReactDevToolsHook | undefined;
+  
   if (!hook?.renderers?.size) return null;
 
   for (const [rendererId] of hook.renderers) {
@@ -195,26 +139,17 @@ function findStoreViaFiber(): JotaiStore | null {
       const seen = new Set<FiberNode>();
       const stack: Array<FiberNode | null | undefined> = [];
 
-      const fiberRoot = (root as { current?: FiberNode }).current ?? (root as FiberNode | null | undefined);
-      if (fiberRoot) {
-        stack.push(fiberRoot);
-      }
+      const fiberRoot = (root as { current?: FiberNode }).current ?? root;
+      if (fiberRoot) stack.push(fiberRoot);
 
       while (stack.length) {
         const fiber = stack.pop();
         if (!fiber || seen.has(fiber)) continue;
         seen.add(fiber);
 
-        const value = fiber.pendingProps?.value as unknown;
-        if (
-          value &&
-          typeof value === 'object' &&
-          typeof (value as JotaiStore).get === 'function' &&
-          typeof (value as JotaiStore).set === 'function' &&
-          typeof (value as JotaiStore).sub === 'function'
-        ) {
-          lastCaptureMode = 'fiber';
-          return value as JotaiStore;
+        const value = fiber.pendingProps?.value;
+        if (isValidStore(value)) {
+          return { ...value, __source: 'fiber' } as JotaiStore;
         }
 
         if (fiber.child) stack.push(fiber.child);
@@ -226,10 +161,37 @@ function findStoreViaFiber(): JotaiStore | null {
   return null;
 }
 
-async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
+/**
+ * Wait for atom cache to become available
+ */
+async function waitForAtomCache(timeoutMs = 5000): Promise<AtomCacheLike | undefined> {
+  const start = Date.now();
+  let cache = getAtomCache();
+
+  while (!cache && Date.now() - start < timeoutMs) {
+    await wait(100);
+    cache = getAtomCache();
+  }
+
+  if (cache) {
+    liveAtomCache = cache;
+    // Mirror to our global for other mods
+    try {
+      shareGlobal(CACHE_GLOBAL_KEY, cache);
+    } catch {}
+  }
+
+  return cache;
+}
+
+/**
+ * Capture store via write-once patching
+ * Only used as fallback when no existing store is available
+ */
+async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore | null> {
   const cache = await waitForAtomCache(timeoutMs);
   if (!cache) {
-    throw new Error('jotaiAtomCache.cache not available');
+    return null;
   }
 
   let capturedGet: ((atom: unknown) => unknown) | null = null;
@@ -238,6 +200,7 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
   type PatchedAtom = {
     write?: (get: any, set: any, ...args: any[]) => unknown;
     __origWrite?: (get: any, set: any, ...args: any[]) => unknown;
+    __qpmPatched?: boolean;
   } & Record<string, unknown>;
 
   const patchedAtoms: PatchedAtom[] = [];
@@ -248,6 +211,7 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
         if (atom.__origWrite) {
           atom.write = atom.__origWrite;
           delete atom.__origWrite;
+          delete atom.__qpmPatched;
         }
       } catch {}
     }
@@ -258,13 +222,16 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
   for (const atom of cache.values()) {
     if (!atom || typeof (atom as PatchedAtom).write !== 'function') continue;
     const candidate = atom as PatchedAtom;
-    if (candidate.__origWrite) {
+    
+    // Check if already patched by another mod (Aries Mod uses __origWrite too)
+    if (candidate.__origWrite || candidate.__qpmPatched) {
       alreadyPatched = true;
       continue;
     }
 
     const original = candidate.write!.bind(candidate);
     candidate.__origWrite = candidate.write!;
+    candidate.__qpmPatched = true;
     candidate.write = function patchedWrite(get: any, set: any, ...args: any[]) {
       if (!capturedSet) {
         capturedGet = get;
@@ -276,35 +243,20 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
     patchedAtoms.push(candidate);
   }
 
-  // If another script already patched writes, avoid double-patching to reduce conflicts
+  // If another mod already patched writes, wait to see if they expose the store
   if (alreadyPatched && !patchedAtoms.length) {
-    // Another mod (Aries/MGTools) likely patched writes; wait a bit to see if they expose the store
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const shared = getSharedStoreCandidate();
+      const shared = getExistingStore();
       if (shared) {
-        lastCaptureMode = 'write';
         return shared;
       }
-      await wait(50);
+      await wait(100);
     }
-
-    lastCaptureMode = 'polyfill';
-    log('[jotaiBridge] jotai writes already patched by another mod; skipping capture hook');
-    return {
-      get() {
-        throw new Error('Jotai store unavailable (already patched by another mod)');
-      },
-      set() {
-        throw new Error('Jotai store unavailable (already patched by another mod)');
-      },
-      sub() {
-        return () => {};
-      },
-      __polyfill: true,
-    };
+    return null;
   }
 
+  // Wait for capture
   try {
     const deadline = Date.now() + timeoutMs;
     while (!capturedSet && Date.now() < deadline) {
@@ -315,23 +267,10 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
   }
 
   if (!capturedSet || !capturedGet) {
-    lastCaptureMode = 'polyfill';
-    log('[jotaiBridge] Unable to capture Jotai store via write hook, using polyfill');
-    return {
-      get() {
-        throw new Error('Jotai store unavailable (polyfill)');
-      },
-      set() {
-        throw new Error('Jotai store unavailable (polyfill)');
-      },
-      sub() {
-        return () => {};
-      },
-      __polyfill: true,
-    };
+    return null;
   }
 
-  lastCaptureMode = 'write';
+  // Use batched polling for subscriptions (shared with cache-read store)
   return {
     get(atom: unknown) {
       return capturedGet!(atom);
@@ -340,81 +279,207 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore> {
       await capturedSet!(atom, value);
     },
     sub(atom: unknown, cb: () => void) {
-      let lastValue: unknown;
-      const interval = setInterval(() => {
-        try {
-          const current = capturedGet!(atom);
-          if (current !== lastValue) {
-            lastValue = current;
-            cb();
-          }
-        } catch {}
-      }, 100);
-      return () => clearInterval(interval);
+      return batchedSubscriptionManager.subscribe(atom, cb, () => {
+        try { return capturedGet!(atom); } catch { return undefined; }
+      });
     },
+    __source: 'write',
   };
 }
 
+// ============================================================================
+// BATCHED SUBSCRIPTION MANAGER
+// Uses a single requestAnimationFrame loop instead of multiple setIntervals
+// ============================================================================
+
+type SubscriptionEntry = {
+  atom: unknown;
+  callbacks: Set<() => void>;
+  getValue: () => unknown;
+  lastValue: unknown;
+};
+
+class BatchedSubscriptionManager {
+  private subscriptions = new Map<unknown, SubscriptionEntry>();
+  private rafId: number | null = null;
+  private isRunning = false;
+  private lastPollTime = 0;
+  private readonly POLL_INTERVAL_MS = 500; // Poll every 500ms instead of 100-250ms per subscription
+
+  subscribe(atom: unknown, cb: () => void, getValue: () => unknown): () => void {
+    let entry = this.subscriptions.get(atom);
+    if (!entry) {
+      entry = { atom, callbacks: new Set(), getValue, lastValue: undefined };
+      // Get initial value
+      try { entry.lastValue = getValue(); } catch {}
+      this.subscriptions.set(atom, entry);
+    }
+    entry.callbacks.add(cb);
+    
+    // Start polling if not already running
+    if (!this.isRunning && this.subscriptions.size > 0) {
+      this.start();
+    }
+    
+    return () => {
+      entry?.callbacks.delete(cb);
+      if (entry?.callbacks.size === 0) {
+        this.subscriptions.delete(atom);
+        if (this.subscriptions.size === 0) {
+          this.stop();
+        }
+      }
+    };
+  }
+
+  private start(): void {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    this.lastPollTime = performance.now();
+    this.tick();
+  }
+
+  private stop(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.isRunning = false;
+  }
+
+  private tick = (): void => {
+    if (!this.isRunning) return;
+    
+    const now = performance.now();
+    const elapsed = now - this.lastPollTime;
+    
+    // Only poll at the configured interval
+    if (elapsed >= this.POLL_INTERVAL_MS) {
+      this.lastPollTime = now;
+      this.pollAllSubscriptions();
+    }
+    
+    this.rafId = requestAnimationFrame(this.tick);
+  };
+
+  private pollAllSubscriptions(): void {
+    // Skip if page is hidden
+    if (document.hidden) return;
+    
+    for (const entry of this.subscriptions.values()) {
+      try {
+        const current = entry.getValue();
+        if (current !== entry.lastValue) {
+          entry.lastValue = current;
+          // Call all callbacks for this atom
+          for (const cb of entry.callbacks) {
+            try { cb(); } catch {}
+          }
+        }
+      } catch {}
+    }
+  }
+
+  getStats(): { count: number; atoms: string[] } {
+    return {
+      count: this.subscriptions.size,
+      atoms: Array.from(this.subscriptions.keys()).map(a => String(a)),
+    };
+  }
+}
+
+const batchedSubscriptionManager = new BatchedSubscriptionManager();
+
+/**
+ * Create a cache-read-only store that reads directly from Jotai's atom cache
+ */
+function createCacheReadStore(): JotaiStore {
+  return {
+    get(atom: unknown) {
+      const cache = getAtomCache();
+      if (!cache) {
+        throw new Error('Jotai atom cache not available');
+      }
+      const state = cache.get(atom) as { v?: unknown } | undefined;
+      if (state && Object.prototype.hasOwnProperty.call(state, 'v')) {
+        return state.v;
+      }
+      throw new Error('Atom value not found in cache');
+    },
+    set() {
+      throw new Error('QPM cache-read store cannot write. Use Aries Mod for writes.');
+    },
+    sub(atom: unknown, cb: () => void) {
+      return batchedSubscriptionManager.subscribe(atom, cb, () => {
+        const cache = getAtomCache();
+        if (!cache) return undefined;
+        const state = cache.get(atom) as { v?: unknown } | undefined;
+        return state && Object.prototype.hasOwnProperty.call(state, 'v') ? state.v : undefined;
+      });
+    },
+    __polyfill: true,
+    __source: 'cache-read',
+  };
+}
+
+/**
+ * Share our store for other mods, but DON'T overwrite existing stores
+ */
+function shareStoreNonInvasively(store: JotaiStore): void {
+  try {
+    shareGlobal(STORE_GLOBAL_KEY, store);
+  } catch {}
+  
+  try {
+    if (!(pageWindow as any).__QPM_JOTAI_STORE__) {
+      (pageWindow as any).__QPM_JOTAI_STORE__ = store;
+    }
+  } catch {}
+  
+  // Also mirror to common global keys if not set
+  try {
+    if (!(pageWindow as any).__jotaiStore && !store.__polyfill) {
+      (pageWindow as any).__jotaiStore = store;
+    }
+  } catch {}
+}
+
+/**
+ * Main entry point - get a Jotai store for reading
+ */
 export async function ensureJotaiStore(): Promise<JotaiStore> {
+  // Return cached store if we have a valid one
   if (storeRef && !storeRef.__polyfill) {
     return storeRef;
   }
 
-  // Try to reuse any store already exposed by us or another mod
-  let sharedCandidate = getSharedStoreCandidate();
-  if (sharedCandidate && !sharedCandidate.__polyfill) {
-    storeRef = sharedCandidate;
-    mirrorStore(storeRef);
-    log('[jotaiBridge] Using shared store from another mod');
+  // 1) Check for existing store from Aries Mod or other mods
+  let existing = getExistingStore();
+  if (existing) {
+    storeRef = existing;
+    lastCaptureMode = existing.__source === 'aries' ? 'aries' : 'shared';
+    shareStoreNonInvasively(storeRef);
     return storeRef;
   }
-  
-  // If Aries Mod is present but store not ready yet, wait a bit for it
+
+  // 2) If Aries Mod is present but store not ready, wait a bit for it
   const ariesPresent = !!(pageWindow as any)?.AriesMod;
-  if (ariesPresent && !sharedCandidate) {
-    log('[jotaiBridge] Aries Mod detected, waiting for shared store...');
-    const waitForAries = async (maxWait: number) => {
-      const start = Date.now();
-      while (Date.now() - start < maxWait) {
-        await wait(100);
-        const candidate = getSharedStoreCandidate();
-        if (candidate && !candidate.__polyfill) {
-          return candidate;
-        }
+  if (ariesPresent) {
+    const maxWait = 3000;
+    const start = Date.now();
+    while (Date.now() - start < maxWait) {
+      await wait(200);
+      existing = getExistingStore();
+      if (existing) {
+        storeRef = existing;
+        lastCaptureMode = existing.__source === 'aries' ? 'aries' : 'shared';
+        shareStoreNonInvasively(storeRef);
+        return storeRef;
       }
-      return null;
-    };
-    const ariesStore = await waitForAries(3000); // Wait up to 3 seconds for Aries
-    if (ariesStore) {
-      storeRef = ariesStore;
-      mirrorStore(storeRef);
-      log('[jotaiBridge] Using Aries Mod store');
-      return storeRef;
-    }
-    log('[jotaiBridge] Aries Mod store not available, proceeding with capture');
-  }
-  
-  // Re-check in case it became available
-  sharedCandidate = getSharedStoreCandidate();
-  if (sharedCandidate && !sharedCandidate.__polyfill) {
-    storeRef = sharedCandidate;
-    mirrorStore(storeRef);
-    return storeRef;
-  }
-  if (sharedCandidate && sharedCandidate.__polyfill) {
-    storeRef = sharedCandidate;
-    mirrorStore(storeRef);
-    startSharedStorePolling();
-  }
-
-  const sharedStore = readSharedGlobal<JotaiStore>(STORE_GLOBAL_KEY);
-  if (sharedStore && (!sharedStore.__polyfill || !storeRef)) {
-    storeRef = sharedStore;
-    if (!storeRef.__polyfill) {
-      return storeRef;
     }
   }
 
+  // Prevent concurrent captures
   if (captureInFlight) {
     const maxWait = 6000;
     const start = Date.now();
@@ -428,33 +493,59 @@ export async function ensureJotaiStore(): Promise<JotaiStore> {
 
   captureInFlight = true;
   try {
-    const viaFiber = findStoreViaFiber();
-    if (viaFiber) {
-      storeRef = viaFiber;
-      mirrorStore(storeRef);
+    // 3) Try React Fiber
+    const fiberStore = findStoreViaFiber();
+    if (fiberStore) {
+      storeRef = fiberStore;
+      lastCaptureMode = 'fiber';
+      shareStoreNonInvasively(storeRef);
       return storeRef;
     }
 
-    const viaWrite = await captureViaWriteOnce();
-    storeRef = viaWrite;
-    mirrorStore(storeRef);
-    if (storeRef.__polyfill) {
-      startSharedStorePolling();
+    // 4) Try write-once capture (only if no other mod has captured)
+    const writeStore = await captureViaWriteOnce(5000);
+    if (writeStore) {
+      storeRef = writeStore;
+      lastCaptureMode = 'write';
+      shareStoreNonInvasively(storeRef);
+      return storeRef;
     }
+
+    // 5) Final fallback: cache-read-only store
+    // This can at least read values if the cache exists
+    const cache = getAtomCache();
+    if (cache) {
+      storeRef = createCacheReadStore();
+      lastCaptureMode = 'cache-read';
+      shareStoreNonInvasively(storeRef);
+      log('[jotaiBridge] Using cache-read fallback store');
+      return storeRef;
+    }
+
+    // 6) No options left - return a store that will throw on every operation
+    log('[jotaiBridge] ⚠️ No Jotai store available - functionality limited');
+    storeRef = {
+      get() { throw new Error('Jotai store unavailable'); },
+      set() { throw new Error('Jotai store unavailable'); },
+      sub() { return () => {}; },
+      __polyfill: true,
+      __source: 'none',
+    };
     return storeRef;
-  } catch (error) {
-    lastCaptureError = error;
-    throw error;
   } finally {
     captureInFlight = false;
   }
 }
 
+/**
+ * Get info about how we captured the store
+ */
 export function getCapturedInfo() {
   return {
     mode: lastCaptureMode,
-    error: lastCaptureError,
     hasStore: !!storeRef && !storeRef.__polyfill,
+    isReadOnly: storeRef?.__polyfill ?? true,
+    source: storeRef?.__source,
   };
 }
 
@@ -484,93 +575,52 @@ export function getAtomByLabel(label: string): any | null {
 }
 
 export async function readAtomValue<T = unknown>(atom: any): Promise<T> {
-  const cache = getAtomCache();
+  // Try store first
   try {
     const store = await ensureJotaiStore();
     if (!store.__polyfill) {
       return store.get(atom) as T;
     }
-  } catch (error) {
-    lastCaptureError = error;
-  }
+  } catch {}
 
-  // Fallback: read directly from atom cache (non-invasive, like MGTools)
+  // Fallback: read directly from cache
+  const cache = getAtomCache();
   if (cache) {
     try {
-      const state = (cache as any).get ? (cache as any).get(atom) : undefined;
+      const state = cache.get(atom) as { v?: unknown } | undefined;
       if (state && Object.prototype.hasOwnProperty.call(state, 'v')) {
-        return (state as any).v as T;
+        return state.v as T;
       }
     } catch {}
   }
 
-  throw new Error('Jotai store unavailable and cache fallback failed');
+  throw new Error('Unable to read atom value');
 }
 
 export async function writeAtomValue(atom: any, value: unknown): Promise<void> {
   const store = await ensureJotaiStore();
+  if (store.__polyfill) {
+    throw new Error('QPM uses read-only Jotai access. Writes require Aries Mod.');
+  }
   await store.set(atom, value);
 }
 
 export async function subscribeAtom<T = unknown>(atom: any, cb: (value: T) => void): Promise<() => void> {
-  const cache = getAtomCache();
   const store = await ensureJotaiStore();
-
+  
   let disposed = false;
   const invoke = () => {
     if (disposed) return;
     try {
-      const next = store.__polyfill ? undefined : (store.get(atom) as T);
-      if (next !== undefined) {
-        cb(next);
-        return;
-      }
-    } catch (error) {
-      log('[jotaiBridge] Failed reading atom value during subscription', error);
-    }
-
-    if (cache) {
-      try {
-        const state = (cache as any).get ? (cache as any).get(atom) : undefined;
-        if (state && Object.prototype.hasOwnProperty.call(state, 'v')) {
-          cb((state as any).v as T);
-        }
-      } catch (error) {
-        log('[jotaiBridge] Failed reading atom cache during subscription', error);
-      }
-    }
+      const value = store.get(atom) as T;
+      cb(value);
+    } catch {}
   };
 
-  let unsubscribe: (() => void) | undefined;
-  if (!store.__polyfill) {
-    try {
-      const maybeUnsub = store.sub(atom, invoke);
-      unsubscribe = typeof maybeUnsub === 'function' ? maybeUnsub : await maybeUnsub;
-    } catch (error) {
-      log('[jotaiBridge] Failed subscribing to atom', error);
-      unsubscribe = undefined;
-    }
-  } else if (cache) {
-    let last: unknown;
-    const interval = setInterval(() => {
-      if (disposed) {
-        clearInterval(interval);
-        return;
-      }
-      try {
-        const state = (cache as any).get ? (cache as any).get(atom) : undefined;
-        const next = state && Object.prototype.hasOwnProperty.call(state, 'v') ? (state as any).v : undefined;
-        if (next !== last) {
-          last = next;
-          if (next !== undefined) {
-            cb(next as T);
-          }
-        }
-      } catch {}
-    }, 250);
-    unsubscribe = () => clearInterval(interval);
-  }
+  const maybeUnsub = store.sub(atom, invoke);
+  const unsubscribe = typeof maybeUnsub === 'function' ? maybeUnsub : await maybeUnsub;
 
+  // Initial value
   invoke();
 
   return () => {

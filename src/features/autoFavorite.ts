@@ -5,6 +5,7 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, isInventoryStoreActive } from '../store/inventory';
+import { criticalInterval } from '../utils/timerManager';
 
 const STORAGE_KEY = 'qpm.autoFavorite.v1';
 
@@ -33,7 +34,7 @@ let config: AutoFavoriteConfig = {
 };
 
 const listeners = new Set<(config: AutoFavoriteConfig) => void>();
-let intervalId: number | null = null;
+let cleanupInterval: (() => void) | null = null;
 let seenItemIds = new Set<string>();
 
 /**
@@ -450,11 +451,11 @@ function sendFavoriteMessage(itemId: string): boolean {
 }
 
 function startAutoFavoritePolling(): void {
-  if (intervalId !== null) return;
+  if (cleanupInterval !== null) return;
 
   let pollCount = 0;
 
-  intervalId = window.setInterval(() => {
+  cleanupInterval = criticalInterval('auto-favorite-poll', () => {
     pollCount++;
 
     // Early exit if auto-favorite is disabled or no watched items
@@ -652,15 +653,15 @@ function startAutoFavoritePolling(): void {
 
     // Update seen IDs to current state
     seenItemIds = currentItemIds;
-  }, 2000); // Every 2 seconds (optimized)
+  }, 2000); // Every 2 seconds (optimized, pauses when tab hidden)
 
-  log('✅ Auto-favorite polling started (2 second interval)');
+  log('✅ Auto-favorite polling started (2 second interval, visibility-aware)');
 }
 
 function stopAutoFavoritePolling(): void {
-  if (intervalId !== null) {
-    window.clearInterval(intervalId);
-    intervalId = null;
+  if (cleanupInterval !== null) {
+    cleanupInterval();
+    cleanupInterval = null;
     log('⏹️ Auto-favorite polling stopped');
   }
 }

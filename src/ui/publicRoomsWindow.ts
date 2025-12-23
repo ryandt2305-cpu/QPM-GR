@@ -138,8 +138,7 @@ export const setupGardenInspector = () => {
     });
   }
   
-  console.log('✅ [QPM] Garden inspector ready! Run: QPM_INSPECT_GARDEN()');
-  console.log('   Open the Public Rooms inspector on any player, then run the command');
+  // Garden inspector commands exposed via shareGlobal: QPM_INSPECT_GARDEN(), QPM_CURRENT_TILE(), QPM_INSPECT_TARGET()
   
   // Helper to show current tile player is standing on
   const QPM_CURRENT_TILE = async () => {
@@ -701,7 +700,7 @@ function overlayMutationSprites(base: HTMLCanvasElement, mutations: string[]): H
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return base;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(base, 0, 0);
@@ -747,7 +746,7 @@ function applyCanvasFilter(base: HTMLCanvasElement, filterName: string): HTMLCan
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(base, 0, 0);
@@ -758,7 +757,7 @@ function applyCanvasFilter(base: HTMLCanvasElement, filterName: string): HTMLCan
     const mask = document.createElement('canvas');
     mask.width = w;
     mask.height = h;
-    const mctx = mask.getContext('2d');
+    const mctx = mask.getContext('2d', { willReadFrequently: true });
     if (mctx) {
       drawGradient(mctx, w, h, cfg);
       mctx.globalCompositeOperation = 'destination-in';

@@ -19,8 +19,11 @@ import {
 } from '../store/xpTracker';
 import { calculateLiveETA } from './trackerWindow';
 import { getAbilityDefinition, type AbilityDefinition } from '../data/petAbilities';
+import { getAbilityColor } from '../utils/petCardRenderer';
 import { getHungerCapOrDefault } from '../data/petHungerCaps';
 import { calculateFeedsPerLevel, calculateFeedsForLevels } from '../data/petHungerDepletion';
+import { criticalInterval } from '../utils/timerManager';
+import { throttle } from '../utils/scheduling';
 
 export interface XpTrackerWindowState {
   root: HTMLElement;
@@ -29,7 +32,7 @@ export interface XpTrackerWindowState {
   tbody: HTMLTableSectionElement; // XP generation abilities
   combinedTbody: HTMLTableSectionElement;
   nearMaxLevelContainer: HTMLElement; // Near max level pets list
-  updateInterval: number | null;
+  updateInterval: (() => void) | null;
   latestPets: ActivePetInfo[];
   latestStats: XpAbilityStats[];
   totalTeamXpPerHour: number; // Total XP/hour for the whole team
@@ -455,11 +458,12 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
   window.addEventListener('resize', resizeListener);
   state.resizeListener = resizeListener;
 
-  // Subscribe to pet updates
-  state.unsubscribePets = onActivePetInfos((pets) => {
+  // Subscribe to pet updates (throttled to prevent excessive re-renders)
+  const throttledPetUpdate = throttle((pets: ActivePetInfo[]) => {
     state.latestPets = pets;
     updateXpTrackerDisplay(state);
-  });
+  }, 500);
+  state.unsubscribePets = onActivePetInfos(throttledPetUpdate);
 
   // Subscribe to XP tracker updates (for when XP config changes)
   state.unsubscribeXpTracker = onXpTrackerUpdate(() => {
@@ -467,8 +471,8 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     updateLevelProgressDisplays(state);
   });
 
-  // Start live countdown updates (every second)
-  state.updateInterval = window.setInterval(() => {
+  // Start live countdown updates (every second) - pauses when page is hidden
+  state.updateInterval = criticalInterval('xp-tracker-countdown', () => {
     updateLiveCountdowns(state);
   }, 1000);
 
@@ -886,12 +890,19 @@ function createXpRow(tbody: HTMLTableSectionElement, stats: XpAbilityStats): voi
   const row = tbody.insertRow();
   row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
 
-  // Pet Name (with sprite)
+  // Pet Name (with sprite and ability badge)
   const nameCell = row.insertCell();
   const petSprite = getPetSpriteDataUrl(stats.species);
-  // Include data-qpm-sprite attribute for auto-refresh when sprites load
-  const spriteHtml = `<img data-qpm-sprite="pet:${stats.species}" src="${petSprite || ''}" style="width:20px;height:20px;vertical-align:middle;image-rendering:pixelated;margin-right:6px;flex-shrink:0;" alt="${stats.species}" />`;
-  nameCell.innerHTML = spriteHtml + `${stats.petName} (STR ${stats.strength})`;
+  const abilityColor = getAbilityColor(stats.abilityName);
+  
+  // Create sprite container with ability badge
+  const spriteContainerHtml = `
+    <div style="position:relative;width:20px;height:20px;display:inline-block;vertical-align:middle;margin-right:6px;">
+      <img data-qpm-sprite="pet:${stats.species}" src="${petSprite || ''}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${stats.species}" />
+      <div style="position:absolute;bottom:-2px;right:-2px;width:8px;height:8px;border-radius:2px;background:${abilityColor.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${abilityColor.glow};" title="${stats.abilityName}"></div>
+    </div>
+  `;
+  nameCell.innerHTML = spriteContainerHtml + `${stats.petName} (STR ${stats.strength})`;
   nameCell.style.cssText = `
     padding: 10px 12px;
     color: var(--qpm-text, #fff);
@@ -1016,23 +1027,37 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
   const row = tbody.insertRow();
   row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
 
-  // Pet Name (with sprite and MAX STR below in small grey text)
+  // Pet Name (with sprite, ALL ability badges, and MAX STR below in small grey text)
   const nameCell = row.insertCell();
   const maxStr = pet.species && pet.targetScale ? calculateMaxStrength(pet.targetScale, pet.species) : null;
   const petNameDisplay = pet.name || pet.species || 'Unknown';
   const petSprite = pet.species ? getPetSpriteDataUrl(pet.species) : null;
-  // Include data-qpm-sprite attribute for auto-refresh when sprites load
-  const spriteHtml = pet.species
-    ? `<img data-qpm-sprite="pet:${pet.species}" src="${petSprite || ''}" style="width:20px;height:20px;vertical-align:middle;image-rendering:pixelated;margin-right:6px;flex-shrink:0;" alt="${pet.species}" />`
+  
+  // Check for XP abilities (for the XP Ability column)
+  const xpAbilities = findXpAbilities(pet);
+  
+  // Build ALL ability badges (up to 4) - displayed as column left of sprite
+  const petAbilities = pet.abilities || [];
+  const abilityBadgesHtml = petAbilities.slice(0, 4).map((abilityName) => {
+    const color = getAbilityColor(abilityName);
+    return `<div style="width:8px;height:8px;border-radius:2px;background:${color.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${color.glow};" title="${abilityName}"></div>`;
+  }).join('');
+  
+  // Create sprite container with ability badges column on left (matching user's image style)
+  const spriteContainerHtml = pet.species
+    ? `<div style="display:inline-flex;align-items:center;vertical-align:middle;margin-right:6px;">
+        ${abilityBadgesHtml ? `<div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">${abilityBadgesHtml}</div>` : ''}
+        <img data-qpm-sprite="pet:${pet.species}" src="${petSprite || ''}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${pet.species}" />
+      </div>`
     : '';
 
   if (maxStr) {
     nameCell.innerHTML = `
-      ${spriteHtml}<div style="display:inline-block;vertical-align:middle;"><div style="font-weight: 500; color: var(--qpm-text, #fff);">${petNameDisplay}</div>
+      ${spriteContainerHtml}<div style="display:inline-block;vertical-align:middle;"><div style="font-weight: 500; color: var(--qpm-text, #fff);">${petNameDisplay}</div>
       <div style="font-size: 10px; color: var(--qpm-text-muted, #888); margin-top: 2px;">MAX STR ${maxStr}</div></div>
     `;
   } else {
-    nameCell.innerHTML = spriteHtml + petNameDisplay;
+    nameCell.innerHTML = spriteContainerHtml + petNameDisplay;
   }
 
   nameCell.style.cssText = `
@@ -1049,9 +1074,8 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
     color: var(--qpm-text-muted, #aaa);
   `;
 
-  // XP Ability
+  // XP Ability (reuse xpAbilities from above)
   const abilityCell = row.insertCell();
-  const xpAbilities = findXpAbilities(pet);
   if (xpAbilities.length > 0) {
     const abilityNames = xpAbilities.map(a => a.rawName).join(', ');
     abilityCell.textContent = abilityNames;
@@ -1410,7 +1434,7 @@ export function hideXpTrackerWindow(state: XpTrackerWindowState): void {
  */
 export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
   if (state.updateInterval) {
-    clearInterval(state.updateInterval);
+    state.updateInterval();
   }
   if (state.resizeListener) {
     window.removeEventListener('resize', state.resizeListener);
@@ -1434,12 +1458,7 @@ export function setGlobalXpTrackerState(state: XpTrackerWindowState): void {
 
   // Expose filter toggle functions to window
   (window as any).qpmNearMaxToggleSpecies = (species: string) => {
-    if (!globalXpTrackerState) {
-      alert('[QPM DEBUG] globalXpTrackerState not set! Window not initialized properly.');
-      return;
-    }
-
-    alert(`[QPM DEBUG] Filter button clicked!\nSpecies: ${species}\nCurrent filters: ${Array.from(nearMaxFilters.species).join(', ') || 'ALL'}`);
+    if (!globalXpTrackerState) return;
 
     if (species === '__ALL__') {
       nearMaxFilters.species.clear();
@@ -1461,12 +1480,7 @@ export function setGlobalXpTrackerState(state: XpTrackerWindowState): void {
   };
 
   (window as any).qpmNearMaxToggleSource = (source: 'active' | 'inventory' | 'hutch') => {
-    if (!globalXpTrackerState) {
-      alert('[QPM DEBUG] globalXpTrackerState not set! Window not initialized properly.');
-      return;
-    }
-
-    alert(`[QPM DEBUG] Location filter clicked!\nSource: ${source}\nCurrent filters: ${Array.from(nearMaxFilters.sources).join(', ')}`);
+    if (!globalXpTrackerState) return;
 
     if (nearMaxFilters.sources.has(source)) {
       nearMaxFilters.sources.delete(source);

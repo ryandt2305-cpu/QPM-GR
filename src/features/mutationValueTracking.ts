@@ -5,6 +5,7 @@ import { getAbilityHistorySnapshot } from '../store/abilityLogs';
 import { storage } from '../utils/storage';
 import { debounce } from '../utils/helpers';
 import { log } from '../utils/logger';
+import { visibleInterval } from '../utils/timerManager';
 import { resetWeatherMutationTracking } from './weatherMutationTracking';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from './abilityValuation';
 
@@ -395,8 +396,8 @@ export function initializeMutationValueTracking(): void {
   // Recalculate on init
   recalculateStats();
 
-  // Recalculate periodically (every 10 seconds)
-  setInterval(() => {
+  // Recalculate periodically (every 10 seconds, pauses when tab hidden)
+  visibleInterval('mutation-value-recalc', () => {
     recalculateStats();
   }, 10000);
 }

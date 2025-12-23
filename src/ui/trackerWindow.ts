@@ -3,10 +3,11 @@
 import { formatCoins, formatCoinsAbbreviated } from '../features/valueCalculator';
 import { log } from '../utils/logger';
 import { findBestMutationOpportunity, formatMutationOpportunity } from '../utils/gardenScanner';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getAbilityColor } from '../utils/petCardRenderer';
 import type { ActivePetInfo } from '../store/pets';
 import type { AbilityContribution } from './originalPanel';
 import type { AbilityDefinition } from '../data/petAbilities';
-import { getPetSpriteDataUrl, getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
 
 export interface AbilityGroup {
   definition: AbilityDefinition;
@@ -43,17 +44,6 @@ function calculatePerSecondProbability(perMinutePercent: number): number {
   const pMinute = perMinutePercent / 100;
   const pSecond = 1 - Math.pow(1 - pMinute, 1 / 60);
   return pSecond * 100; // Return as percentage
-}
-
-/**
- * Get proc rate for abilities (no waste calculation - simplified)
- */
-export function calculateEffectiveProcRate(
-  baseProcsPerHour: number,
-  _abilityId: string,
-): { effective: number; wastePercent: number } {
-  // Simply return the base rate - waste calculation removed
-  return { effective: baseProcsPerHour, wastePercent: 0 };
 }
 
 /**
@@ -133,54 +123,45 @@ export function createAbilityRow(
   savedBaselines?: Map<string, number>,
 ): HTMLTableRowElement {
   const row = tbody.insertRow();
-  row.style.cssText = 'border-bottom: 1px solid var(--qpm-border);';
+  row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
 
   // Add data attributes for tracking across re-renders
   row.dataset.petIndex = String(entry.petIndex);
   row.dataset.abilityId = entry.definition.id;
 
-  const procsPerHour = entry.procsPerHour;
+  // Use base proc rate (no waste adjustment)
+  const effectiveProcsPerHour = entry.procsPerHour;
 
-  // Pet Name (with sprite and strength)
+  // Pet Name (with sprite, ALL ability badges, and strength)
   const nameCell = row.insertCell();
+  const petStrength = entry.pet.strength;
+  const strengthText = petStrength != null ? ` (STR ${petStrength})` : '';
+  
+  // Get pet sprite
+  const petSprite = entry.pet.species ? getPetSpriteDataUrl(entry.pet.species) : null;
+  
+  // Build ALL ability badges (up to 4)
+  const petAbilities = entry.pet.abilities || [];
+  const abilityBadgesHtml = petAbilities.slice(0, 4).map((abilityName, idx) => {
+    const color = getAbilityColor(abilityName);
+    return `<div style="width:8px;height:8px;border-radius:2px;background:${color.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${color.glow};" title="${abilityName}"></div>`;
+  }).join('');
+  
+  // Create sprite container with ability badges column on left (matching user's image style)
+  const spriteContainerHtml = petSprite
+    ? `<div style="position:relative;display:inline-flex;align-items:center;margin-right:6px;">
+        ${abilityBadgesHtml ? `<div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">${abilityBadgesHtml}</div>` : ''}
+        <img data-qpm-sprite="pet:${entry.pet.species}" src="${petSprite}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${entry.pet.species}" />
+      </div>`
+    : '';
+  
+  nameCell.innerHTML = `<div style="display:flex;align-items:center;">${spriteContainerHtml}<span>${entry.displayName}${strengthText}</span></div>`;
   nameCell.style.cssText = `
     padding: 10px 12px;
-    color: var(--qpm-text);
+    color: var(--qpm-text, #fff);
     font-weight: 500;
     white-space: nowrap;
   `;
-  
-  // Create container for sprite + name
-  const nameContainer = document.createElement('div');
-  nameContainer.style.cssText = 'display: flex; align-items: center; gap: 8px;';
-  
-  // Get pet sprite based on species and mutations
-  const petSpecies = entry.pet.species || entry.displayName;
-  const petMutations = entry.pet.mutations || [];
-  let spriteUrl = petMutations.length > 0 
-    ? getPetSpriteDataUrlWithMutations(petSpecies, petMutations)
-    : getPetSpriteDataUrl(petSpecies);
-  
-  // Create sprite image
-  const spriteImg = document.createElement('img');
-  spriteImg.dataset.qpmSprite = petMutations.length > 0 
-    ? `pet:${petSpecies}:${petMutations.join(',')}`
-    : `pet:${petSpecies}`;
-  spriteImg.alt = petSpecies;
-  spriteImg.style.cssText = 'width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; flex-shrink: 0;';
-  if (spriteUrl) {
-    spriteImg.src = spriteUrl;
-  }
-  nameContainer.appendChild(spriteImg);
-  
-  // Add name text
-  const petStrength = entry.pet.strength;
-  const strengthText = petStrength != null ? ` (STR ${petStrength})` : '';
-  const nameSpan = document.createElement('span');
-  nameSpan.textContent = entry.displayName + strengthText;
-  nameContainer.appendChild(nameSpan);
-  
-  nameCell.appendChild(nameContainer);
   nameCell.title = `Pet: ${entry.displayName}${petStrength != null ? `\nStrength: ${petStrength}` : '\nStrength: Unknown'}`;
 
   // Ability
@@ -188,7 +169,7 @@ export function createAbilityRow(
   abilityCell.textContent = abilityName;
   abilityCell.style.cssText = `
     padding: 10px 12px;
-    color: var(--qpm-text);
+    color: var(--qpm-text, #fff);
     white-space: nowrap;
   `;
 
@@ -205,7 +186,7 @@ export function createAbilityRow(
   chanceCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: var(--qpm-text);
+    color: var(--qpm-text, #fff);
     font-family: monospace;
     white-space: nowrap;
   `;
@@ -213,14 +194,14 @@ export function createAbilityRow(
 
   // Procs Per Hour
   const procsCell = row.insertCell();
-  procsCell.textContent = procsPerHour.toFixed(2);
+  procsCell.textContent = effectiveProcsPerHour.toFixed(2);
   procsCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: var(--qpm-text);
+    color: var(--qpm-text, #fff);
     font-family: monospace;
   `;
-  procsCell.title = `${procsPerHour.toFixed(2)} procs/hour`;
+  procsCell.title = `${entry.procsPerHour.toFixed(2)} procs/hour`;
 
   // Coins Per Proc
   const coinsPerProcCell = row.insertCell();
@@ -230,7 +211,7 @@ export function createAbilityRow(
   coinsPerProcCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: ${coinsPerProc > 0 ? 'var(--qpm-warning)' : 'var(--qpm-text-muted)'};
+    color: ${coinsPerProc > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
     font-family: monospace;
     font-weight: 500;
   `;
@@ -243,12 +224,12 @@ export function createAbilityRow(
 
   // Coins Per Hour
   const coinsPerHourCell = row.insertCell();
-  const coinsPerHour = procsPerHour * (coinsPerProc > 0 ? coinsPerProc : 0);
+  const coinsPerHour = effectiveProcsPerHour * (coinsPerProc > 0 ? coinsPerProc : 0);
   coinsPerHourCell.textContent = coinsPerHour > 0 ? formatFunc(coinsPerHour) : '—';
   coinsPerHourCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: ${coinsPerHour > 0 ? 'var(--qpm-warning)' : 'var(--qpm-text-muted)'};
+    color: ${coinsPerHour > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
     font-family: monospace;
     font-weight: 600;
   `;
@@ -259,9 +240,9 @@ export function createAbilityRow(
   // Next Proc ETA (Live Countdown)
   const etaCell = row.insertCell();
   etaCell.className = 'eta-countdown';
-  const avgMinutes = procsPerHour > 0 ? 60 / procsPerHour : 0;
+  const avgMinutes = effectiveProcsPerHour > 0 ? 60 / effectiveProcsPerHour : 0;
 
-  if (procsPerHour > 0) {
+  if (effectiveProcsPerHour > 0) {
     // Show live countdown (using last proc time or saved baseline or current time)
     let baselineTime: number;
     let isEstimate: boolean;
@@ -279,15 +260,15 @@ export function createAbilityRow(
     }
 
     etaCell.dataset.lastProc = String(baselineTime);
-    etaCell.dataset.effectiveRate = String(procsPerHour);
-    etaCell.dataset.normalColor = 'var(--qpm-positive)';
+    etaCell.dataset.effectiveRate = String(effectiveProcsPerHour);
+    etaCell.dataset.normalColor = 'var(--qpm-positive, #4CAF50)';
     etaCell.dataset.isEstimate = isEstimate ? 'true' : 'false';
-    const etaResult = calculateLiveETA(baselineTime, entry.expectedMinutesBetween, procsPerHour);
+    const etaResult = calculateLiveETA(baselineTime, entry.expectedMinutesBetween, effectiveProcsPerHour);
     etaCell.textContent = etaResult.text;
     etaCell.style.cssText = `
       padding: 10px 12px;
       text-align: right;
-      color: ${etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-positive)'};
+      color: ${etaResult.isOverdue ? 'var(--qpm-danger, #ef5350)' : 'var(--qpm-positive, #4CAF50)'};
       font-family: monospace;
       font-weight: 500;
       white-space: nowrap;
@@ -303,7 +284,7 @@ export function createAbilityRow(
     etaCell.style.cssText = `
       padding: 10px 12px;
       text-align: right;
-      color: var(--qpm-text-muted);
+      color: var(--qpm-text-muted, #aaa);
       font-family: monospace;
       font-weight: 500;
       white-space: nowrap;
@@ -315,8 +296,8 @@ export function createAbilityRow(
   if (detailedView) {
     const detailRow = tbody.insertRow();
     detailRow.style.cssText = `
-      background: var(--qpm-surface-2);
-      border-bottom: 1px solid var(--qpm-border);
+      background: var(--qpm-surface-2, #222);
+      border-bottom: 1px solid var(--qpm-border, #444);
     `;
 
     const detailCell = detailRow.insertCell();
@@ -324,27 +305,27 @@ export function createAbilityRow(
     detailCell.style.cssText = `
       padding: 8px 12px;
       font-size: 11px;
-      color: var(--qpm-text-muted);
+      color: var(--qpm-text-muted, #aaa);
       line-height: 1.6;
     `;
 
-    const petStrength = entry.pet.strength ?? 100;
-    const baseProb = entry.definition.baseProbability ?? 0;
-    const strMultiplier = petStrength / 100;
-    const modifiedProb = baseProb * strMultiplier;
+    const petStrengthVal = entry.pet.strength ?? 100;
+    const baseProbVal = entry.definition.baseProbability ?? 0;
+    const strMultiplier = petStrengthVal / 100;
+    const modifiedProb = baseProbVal * strMultiplier;
 
     const detailParts: string[] = [];
 
     // Chance per minute (wiki format: "X% × STR = Y%")
-    if (baseProb > 0) {
-      detailParts.push(`<strong>Chance Per Minute:</strong> ${baseProb.toFixed(2)}% × ${petStrength} = ${modifiedProb.toFixed(2)}%`);
+    if (baseProbVal > 0) {
+      detailParts.push(`<strong>Chance Per Minute:</strong> ${baseProbVal.toFixed(2)}% × ${petStrengthVal} = ${modifiedProb.toFixed(2)}%`);
     }
 
     // Effect calculation (wiki format: "Effect: X × STR = Y")
     if (entry.definition.effectLabel && entry.definition.effectBaseValue != null) {
       const effectResult = entry.definition.effectBaseValue * strMultiplier;
       const suffix = entry.definition.effectSuffix ?? '';
-      detailParts.push(`<strong>${entry.definition.effectLabel}:</strong> ${entry.definition.effectBaseValue}${suffix} × ${petStrength} = ${effectResult.toFixed(1)}${suffix}`);
+      detailParts.push(`<strong>${entry.definition.effectLabel}:</strong> ${entry.definition.effectBaseValue}${suffix} × ${petStrengthVal} = ${effectResult.toFixed(1)}${suffix}`);
     }
 
     // Mutation opportunity for Crop Mutation Boost abilities
@@ -352,7 +333,7 @@ export function createAbilityRow(
       try {
         const opportunity = findBestMutationOpportunity();
         if (opportunity) {
-          const opportunityText = formatMutationOpportunity(opportunity, petStrength);
+          const opportunityText = formatMutationOpportunity(opportunity, petStrengthVal);
           detailParts.push(`<strong>🌟 Opportunity:</strong> ${opportunityText}`);
         }
       } catch (error) {
@@ -401,8 +382,8 @@ export function createAbilityGroupTotalRow(
 
   const row = tbody.insertRow();
   row.style.cssText = `
-    border-bottom: 2px solid var(--qpm-border);
-    background: var(--qpm-surface-2);
+    border-bottom: 2px solid var(--qpm-border, #555);
+    background: var(--qpm-surface-2, #222);
     font-weight: 600;
   `;
 
@@ -415,7 +396,7 @@ export function createAbilityGroupTotalRow(
   nameCell.textContent = `📊 Total (${group.entries.length})`;
   nameCell.style.cssText = `
     padding: 10px 12px;
-    color: var(--qpm-accent);
+    color: var(--qpm-accent, #4CAF50);
     font-weight: 600;
     white-space: nowrap;
   `;
@@ -425,7 +406,7 @@ export function createAbilityGroupTotalRow(
   abilityCell.textContent = group.definition.name;
   abilityCell.style.cssText = `
     padding: 10px 12px;
-    color: var(--qpm-accent);
+    color: var(--qpm-accent, #4CAF50);
     white-space: nowrap;
   `;
 
@@ -435,7 +416,7 @@ export function createAbilityGroupTotalRow(
   chanceCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: var(--qpm-accent);
+    color: var(--qpm-accent, #4CAF50);
     font-family: monospace;
     white-space: nowrap;
     font-weight: 600;
@@ -448,7 +429,7 @@ export function createAbilityGroupTotalRow(
   procsCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: var(--qpm-accent);
+    color: var(--qpm-accent, #4CAF50);
     font-family: monospace;
     font-weight: 600;
   `;
@@ -462,7 +443,7 @@ export function createAbilityGroupTotalRow(
   coinsPerProcCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: ${avgCoinsPerProc > 0 ? 'var(--qpm-warning)' : 'var(--qpm-text-muted)'};
+    color: ${avgCoinsPerProc > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
     font-family: monospace;
     font-weight: 600;
   `;
@@ -477,7 +458,7 @@ export function createAbilityGroupTotalRow(
   coinsPerHourCell.style.cssText = `
     padding: 10px 12px;
     text-align: right;
-    color: ${totalCoinsPerHour > 0 ? 'var(--qpm-warning)' : 'var(--qpm-text-muted)'};
+    color: ${totalCoinsPerHour > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
     font-family: monospace;
     font-weight: 600;
   `;
@@ -509,14 +490,14 @@ export function createAbilityGroupTotalRow(
 
     etaCell.dataset.lastProc = String(baselineTime);
     etaCell.dataset.effectiveRate = String(group.totalProcsPerHour);
-    etaCell.dataset.normalColor = 'var(--qpm-accent)';
+    etaCell.dataset.normalColor = 'var(--qpm-accent, #4CAF50)';
     etaCell.dataset.isEstimate = isEstimate ? 'true' : 'false';
     const etaResult = calculateLiveETA(baselineTime, group.combinedEtaMinutes, group.totalProcsPerHour);
     etaCell.textContent = etaResult.text;
     etaCell.style.cssText = `
       padding: 10px 12px;
       text-align: right;
-      color: ${etaResult.isOverdue ? 'var(--qpm-danger)' : 'var(--qpm-accent)'};
+      color: ${etaResult.isOverdue ? 'var(--qpm-danger, #ef5350)' : 'var(--qpm-accent, #4CAF50)'};
       font-family: monospace;
       font-weight: 600;
       white-space: nowrap;
@@ -532,7 +513,7 @@ export function createAbilityGroupTotalRow(
     etaCell.style.cssText = `
       padding: 10px 12px;
       text-align: right;
-      color: var(--qpm-text-muted);
+      color: var(--qpm-text-muted, #aaa);
       font-family: monospace;
       font-weight: 600;
       white-space: nowrap;

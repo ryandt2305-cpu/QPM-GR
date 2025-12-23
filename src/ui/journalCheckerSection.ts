@@ -10,7 +10,6 @@ import {
   getCropSpriteDataUrlWithMutations as compatGetCropSpriteDataUrlWithMutations,
   getPetSpriteDataUrl as compatGetPetSpriteDataUrl,
   getPetSpriteDataUrlWithMutations as compatGetPetSpriteDataUrlWithMutations,
-  onSpritesReady,
 } from '../sprite-v2/compat';
 import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
@@ -1240,11 +1239,6 @@ export function createJournalCheckerSection(): HTMLElement {
 
   // Initial load
   updateDisplay();
-
-  // Re-render when sprites become available (they load in background)
-  onSpritesReady(() => {
-    updateDisplay();
-  });
 
   return root;
 }

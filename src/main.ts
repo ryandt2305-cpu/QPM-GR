@@ -1,63 +1,1055 @@
 // src/main.ts
-// Quinoa Pet Manager - Optimized for non-blocking initialization
-// Uses cooperative yielding and lazy loading patterns inspired by Aries mod
-
 import { ready, sleep, getGameHudRoot } from './utils/dom';
 import { log } from './utils/logger';
+import { yieldToBrowser } from './utils/scheduling';
+import { startMutationReminder } from './features/mutationReminder';
+import { startMutationTracker } from './features/mutationTracker';
+import { initializeHarvestReminder, configureHarvestReminder } from './features/harvestReminder';
+import { initializeTurtleTimer, configureTurtleTimer } from './features/turtleTimer';
+import { createOriginalUI, setCfg } from './ui/originalPanel';
+import { startGardenBridge } from './features/gardenBridge';
+import { initializeStatsStore } from './store/stats';
+import { initializePetXpTracker } from './store/petXpTracker';
+import { initializeXpTracker } from './store/xpTracker';
+import { initializeMutationValueTracking } from './features/mutationValueTracking';
+import { initializeAutoFavorite } from './features/autoFavorite';
+import { startBulkFavorite } from './features/bulkFavorite';
+import { getActivePetsDebug } from './store/pets';
+import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
+import { startSellSnapshotWatcher } from './store/sellSnapshot';
 import { shareGlobal } from './core/pageContext';
+import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
+import { feedPetInstantly, feedPetByIds, feedAllPetsInstantly, isInstantFeedAvailable } from './features/instantFeed';
+import { startVersionChecker } from './utils/versionChecker';
+import { startCropBoostTracker } from './features/cropBoostTracker';
+import { initPublicRooms } from './features/publicRooms';
+// New sprite system (sprite-v2)
+import { initSpriteSystem } from './sprite-v2/index';
+import type { SpriteService } from './sprite-v2/types';
+import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
+import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { initializeAchievements } from './store/achievements';
+import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
+import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
+import { toggleWindow } from './ui/modalWindow';
+import { exposeAriesBridge } from './integrations/ariesBridge';
+import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
+import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
+import { resetFriendsCache } from './services/ariesPlayers';
+import { exposeValidationCommands } from './utils/validationCommands';
 import { storage } from './utils/storage';
-import { yieldToBrowser, delay, waitFor } from './utils/scheduling';
 
-// CRITICAL: Import sprite module immediately for PIXI hook setup!
-// This side-effect import ensures hooks are created before any async code runs.
-// The game calls __PIXI_APP_INIT__ early, so we must have hooks ready.
-import './sprite-v2/index';
-
-// Type declaration for unsafeWindow (Tampermonkey/Greasemonkey)
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
-// ============================================================================
-// CRITICAL: Expose minimal API immediately (before any async work)
-// This allows other scripts to detect QPM quickly
-// ============================================================================
+// Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
+const QPM_DEBUG_API = {
+  storage, // Expose storage for inline onclick handlers
+  debugPets: () => {
+    const pets = getActivePetsDebug();
+    console.log('=== Active Pets Debug (v2024-11-13-DOM-STRENGTH) ===');
+    console.table(pets.map(p => ({
+      Slot: p.slotIndex,
+      Name: p.name || p.species,
+      Species: p.species,
+      Level: p.level,
+      Strength: p.strength,
+      TargetScale: p.targetScale,
+      Abilities: p.abilities.join(', '),
+      Hunger: p.hungerPct ? `${p.hungerPct.toFixed(1)}%` : 'N/A',
+    })));
+    console.log('Full normalized data:', pets);
+    console.log('\n=== Raw Data Inspection ===');
+    pets.forEach((p, i) => {
+      console.log(`\nPet ${i} (${p.name}):`);
+      console.log('Raw object:', p.raw);
+      if (p.raw && typeof p.raw === 'object') {
+        const raw = p.raw as Record<string, unknown>;
+        console.log('Available fields:', Object.keys(raw));
+        if (raw.slot && typeof raw.slot === 'object') {
+          console.log('slot fields:', Object.keys(raw.slot as Record<string, unknown>));
+          console.log('slot.xp:', (raw.slot as Record<string, unknown>).xp);
+        }
+        if (raw.pet && typeof raw.pet === 'object') {
+          console.log('pet fields:', Object.keys(raw.pet as Record<string, unknown>));
+        }
+      }
+    });
+    return pets;
+  },
 
-// Create a lazy-loading proxy for the debug API
-// The full API loads on first access to avoid blocking startup
-const createLazyQPMApi = () => {
-  const api: Record<string, any> = {
-    storage,
-    __isLazyProxy: true,
-    __version: '2.0.0',
-    __initialized: false,
-  };
+  debugAllAtoms: () => {
+    try {
+      const cache = (window as any).__qpmJotaiAtomCache__;
+      if (!cache || typeof cache.entries !== 'function') {
+        console.error('Jotai atom cache not available');
+        return null;
+      }
 
-  // Lazy getter for full debug API
-  api.__getFullApi = async () => {
-    const { getDebugApi } = await import('./debug/debugApi');
-    const fullApi = await getDebugApi();
-    // Merge full API into this object
-    Object.assign(api, fullApi);
-    api.__isLazyProxy = false;
-    api.__initialized = true;
-    return fullApi;
-  };
+      console.log('=== All Available Atoms ===');
+      const atomList: Array<{label: string, hasValue: boolean}> = [];
+      for (const [atom, meta] of cache.entries()) {
+        if (meta && typeof meta === 'object' && 'debugLabel' in meta) {
+          const label = (meta as any).debugLabel;
+          if (typeof label === 'string') {
+            atomList.push({
+              label,
+              hasValue: cache.has(atom)
+            });
+          }
+        }
+      }
+      console.table(atomList);
 
-  return api;
+      // Also check for pet-related atoms specifically
+      console.log('\n=== Pet-related Atoms ===');
+      const petAtoms = atomList.filter(a => a.label.toLowerCase().includes('pet'));
+      console.table(petAtoms);
+
+      return atomList;
+    } catch (error) {
+      console.error('Failed to list atoms:', error);
+      return null;
+    }
+  },
+
+  showPetSpriteGrid: (sheet = 'pets', maxTiles = 80) => renderSpriteGridOverlay(sheet, maxTiles),
+  showAllSpriteSheets: (maxTilesPerSheet = 120) => renderAllSpriteSheetsOverlay(maxTilesPerSheet),
+  listSpriteResources: (category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => listTrackedSpriteResources(category),
+  loadTrackedSpriteSheets: (maxSheets = 8, category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => loadTrackedSpriteSheets(maxSheets, category),
+
+  // Expose sprite extractor for debugging
+  spriteExtractor: spriteExtractor,
+  
+  // Debug function to view all sprite tiles
+  viewAllSprites: () => {
+    console.log('=== Exporting all sprite tiles ===');
+    const container = document.createElement('div');
+    container.style.cssText = `
+      position: fixed;
+      top: 50px;
+      right: 50px;
+      background: rgba(0,0,0,0.9);
+      padding: 20px;
+      max-width: 800px;
+      max-height: 80vh;
+      overflow: auto;
+      z-index: 999999;
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 5px;
+    `;
+    
+    for (let i = 0; i < 60; i++) {
+      const tile = spriteExtractor.getTile('plants', i);
+      if (tile) {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position: relative; text-align: center;';
+        
+        const label = document.createElement('div');
+        label.textContent = `${i}`;
+        label.style.cssText = 'font-size: 10px; color: #fff; background: rgba(0,0,0,0.7); padding: 2px;';
+        
+        const img = new Image();
+        img.src = tile.toDataURL();
+        img.style.cssText = 'width: 64px; height: 64px; image-rendering: pixelated; border: 1px solid #444;';
+        img.title = `Tile ${i}`;
+        
+        wrapper.appendChild(label);
+        wrapper.appendChild(img);
+        container.appendChild(wrapper);
+      }
+    }
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.style.cssText = 'position: sticky; top: 0; left: 0; z-index: 1; grid-column: 1 / -1;';
+    closeBtn.onclick = () => container.remove();
+    container.insertBefore(closeBtn, container.firstChild);
+    
+    document.body.appendChild(container);
+    console.log('Sprite viewer opened. Click tiles to see index.');
+  },
+
+  checkTargetScale: () => {
+    const pets = getActivePetsDebug();
+    console.log('=== TargetScale Analysis ===');
+    console.log('Checking if targetScale might be strength-related...\n');
+
+    pets.forEach((p, i) => {
+      const targetScale = p.targetScale ?? 0;
+      const xp = p.xp ?? 0;
+
+      // Try common formulas to convert targetScale to strength (0-100+ range)
+      const possibleStrength1 = Math.round(targetScale * 50); // Scale up by 50
+      const possibleStrength2 = Math.round((targetScale - 1) * 100); // Offset and scale
+      const possibleStrength3 = Math.round(targetScale * 45 + 5); // Linear transform
+
+      console.log(`Pet ${i}: ${p.name}`);
+      console.log(`  XP: ${xp}`);
+      console.log(`  TargetScale: ${targetScale.toFixed(6)}`);
+      console.log(`  Possible STR (×50): ${possibleStrength1}`);
+      console.log(`  Possible STR ((x-1)×100): ${possibleStrength2}`);
+      console.log(`  Possible STR (×45+5): ${possibleStrength3}\n`);
+    });
+
+    return pets;
+  },
+
+  debugSlotInfos: () => {
+    try {
+      const cache = (window as any).__qpmJotaiAtomCache__;
+      const store = (window as any).__qpmJotaiStore__;
+
+      if (!cache || !store) {
+        console.error('Jotai cache/store not available');
+        return null;
+      }
+
+      console.log('=== myPetSlotInfosAtom Data ===');
+
+      // Find the atom
+      let slotInfosAtom = null;
+      for (const [atom, meta] of cache.entries()) {
+        if (meta && typeof meta === 'object' && 'debugLabel' in meta) {
+          const label = (meta as any).debugLabel;
+          if (label === 'myPetSlotInfosAtom') {
+            slotInfosAtom = atom;
+            break;
+          }
+        }
+      }
+
+      if (!slotInfosAtom) {
+        console.error('myPetSlotInfosAtom not found in cache');
+        return null;
+      }
+
+      // Get the value
+      const value = store.get(slotInfosAtom);
+      console.log('Raw value:', value);
+
+      // Try to extract entries
+      if (Array.isArray(value)) {
+        console.log(`\nFound ${value.length} entries:\n`);
+        value.forEach((entry, i) => {
+          console.log(`Entry ${i}:`, entry);
+          if (entry && typeof entry === 'object') {
+            console.log(`  Fields:`, Object.keys(entry));
+            if ('slot' in entry && entry.slot && typeof entry.slot === 'object') {
+              console.log(`  slot fields:`, Object.keys(entry.slot));
+            }
+            if ('pet' in entry && entry.pet && typeof entry.pet === 'object') {
+              console.log(`  pet fields:`, Object.keys(entry.pet));
+            }
+            if ('stats' in entry && entry.stats && typeof entry.stats === 'object') {
+              console.log(`  stats fields:`, Object.keys(entry.stats));
+              console.log(`  stats content:`, entry.stats);
+            }
+          }
+        });
+      }
+
+      return value;
+    } catch (error) {
+      console.error('Failed to inspect myPetSlotInfosAtom:', error);
+      return null;
+    }
+  },
+
+  debugPetInventory: () => {
+    try {
+      const cache = (window as any).__qpmJotaiAtomCache__;
+      const store = (window as any).__qpmJotaiStore__;
+
+      if (!cache || !store) {
+        console.error('Jotai cache/store not available');
+        return null;
+      }
+
+      console.log('=== Pet Inventory & Hutch Atoms ===\n');
+
+      const atomsToCheck = [
+        'myPetInventoryAtom',
+        'myPetHutchPetItemsAtom',
+        'myPrimitivePetSlotsAtom',
+        'petInfosAtom'
+      ];
+
+      const results: Record<string, any> = {};
+
+      for (const atomLabel of atomsToCheck) {
+        console.log(`\n--- ${atomLabel} ---`);
+
+        // Find the atom
+        let targetAtom = null;
+        for (const [atom, meta] of cache.entries()) {
+          if (meta && typeof meta === 'object' && 'debugLabel' in meta) {
+            const label = (meta as any).debugLabel;
+            if (label === atomLabel) {
+              targetAtom = atom;
+              break;
+            }
+          }
+        }
+
+        if (!targetAtom) {
+          console.log(`${atomLabel} not found`);
+          continue;
+        }
+
+        try {
+          const value = store.get(targetAtom);
+          results[atomLabel] = value;
+          console.log('Value:', value);
+
+          if (Array.isArray(value) && value.length > 0) {
+            const first = value[0];
+            if (first && typeof first === 'object') {
+              console.log('First entry fields:', Object.keys(first));
+
+              // Check for nested pet/stats/slot
+              if ('pet' in first && first.pet && typeof first.pet === 'object') {
+                console.log('  pet fields:', Object.keys(first.pet));
+                console.log('  pet sample:', first.pet);
+              }
+              if ('stats' in first && first.stats && typeof first.stats === 'object') {
+                console.log('  stats fields:', Object.keys(first.stats));
+                console.log('  stats sample:', first.stats);
+              }
+              if ('slot' in first && first.slot && typeof first.slot === 'object') {
+                console.log('  slot fields:', Object.keys(first.slot));
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`Error reading ${atomLabel}:`, error);
+        }
+      }
+
+      return results;
+    } catch (error) {
+      console.error('Failed to inspect pet atoms:', error);
+      return null;
+    }
+  },
+
+  searchPageWindow: () => {
+    try {
+      const pageWin = (window as any).unsafeWindow || window;
+      console.log('=== Searching Page Window for Pet Data ===\n');
+
+      // Check common locations
+      const locations = [
+        'myData',
+        'myPets',
+        'activePets',
+        'petData',
+        'pets',
+        'UnifiedState',
+        'gameState',
+        'quinoaData'
+      ];
+
+      const found: Record<string, any> = {};
+
+      for (const loc of locations) {
+        if (loc in pageWin) {
+          console.log(`\nFound: ${loc}`);
+          const value = pageWin[loc];
+          console.log('Type:', typeof value);
+
+          if (value && typeof value === 'object') {
+            console.log('Keys:', Object.keys(value).slice(0, 20));
+            found[loc] = value;
+
+            // Look for pet-related nested data
+            if ('pets' in value) {
+              console.log('  → has pets property:', value.pets);
+            }
+            if ('activePets' in value) {
+              console.log('  → has activePets property:', value.activePets);
+            }
+            if ('inventory' in value && value.inventory) {
+              console.log('  → has inventory property');
+              const inv = value.inventory;
+              if (inv && typeof inv === 'object' && 'items' in inv) {
+                const items = (inv as any).items;
+                if (Array.isArray(items)) {
+                  console.log(`  → inventory has ${items.length} items`);
+                  // Look for pets in inventory
+                  const petItems = items.filter((item: any) =>
+                    item && typeof item === 'object' &&
+                    (item.itemType === 'Pet' || item.type === 'Pet' || 'petSpecies' in item || 'species' in item)
+                  );
+                  if (petItems.length > 0) {
+                    console.log(`  → Found ${petItems.length} pet items in inventory`);
+                    console.log('  → First pet item:', petItems[0]);
+                    console.log('  → First pet fields:', Object.keys(petItems[0]));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Search all window properties for pet-related data
+      console.log('\n=== Searching all window properties ===');
+      const allKeys = Object.keys(pageWin).filter(k =>
+        k.toLowerCase().includes('pet') ||
+        k.toLowerCase().includes('animal') ||
+        k.toLowerCase().includes('creature')
+      );
+      console.log('Pet-related keys:', allKeys);
+
+      return found;
+    } catch (error) {
+      console.error('Failed to search page window:', error);
+      return null;
+    }
+  },
+
+  inspectPetCards: () => {
+    try {
+      console.log('=== Inspecting Pet Card UI Elements ===\n');
+
+      // Look for pet cards on the left side of screen
+      const petCardSelectors = [
+        '[data-pet-slot]',
+        '[data-pet-id]',
+        '[data-slot-index]',
+        '.pet-card',
+        '.pet-slot',
+        '[class*="pet"]',
+        '[class*="Pet"]'
+      ];
+
+      const foundElements: HTMLElement[] = [];
+
+      for (const selector of petCardSelectors) {
+        const elements = document.querySelectorAll(selector);
+        if (elements.length > 0) {
+          console.log(`Found ${elements.length} elements with selector: ${selector}`);
+          elements.forEach(el => {
+            if (el instanceof HTMLElement && !foundElements.includes(el)) {
+              foundElements.push(el);
+            }
+          });
+        }
+      }
+
+      console.log(`\nTotal unique pet card elements found: ${foundElements.length}\n`);
+
+      foundElements.slice(0, 10).forEach((el, idx) => {
+        console.log(`\n--- Element ${idx} ---`);
+        console.log('Tag:', el.tagName);
+        console.log('Classes:', el.className);
+        console.log('Text content:', el.textContent?.substring(0, 200));
+        console.log('Data attributes:', Object.keys(el.dataset));
+
+        // Try to extract level/strength from text
+        const text = el.textContent || '';
+        const levelMatch = text.match(/(?:level|lvl|lv)[:\s]*(\d+)/i);
+        const strMatch = text.match(/(?:str|strength)[:\s]*(\d+)/i);
+        const ageMatch = text.match(/(?:age)[:\s]*(\d+)/i);
+
+        if (levelMatch) console.log('  → Found level:', levelMatch[1]);
+        if (strMatch) console.log('  → Found strength:', strMatch[1]);
+        if (ageMatch) console.log('  → Found age:', ageMatch[1]);
+      });
+
+      return foundElements;
+    } catch (error) {
+      console.error('Failed to inspect pet cards:', error);
+      return null;
+    }
+  },
+
+  findPetDataInDOM: () => {
+    try {
+      console.log('=== Searching DOM for Pet Level/Strength Data ===\n');
+
+      const pets = getActivePetsDebug();
+      const petNames = pets.map(p => p.name).filter(Boolean);
+
+      console.log('Looking for pets:', petNames);
+
+      // Search for elements containing pet names or level/strength keywords
+      const allElements = document.querySelectorAll('*');
+      const relevantElements: Array<{el: Element, reason: string}> = [];
+
+      for (const el of allElements) {
+        const text = el.textContent?.toLowerCase() || '';
+
+        // Skip if too much text (likely container)
+        if (text.length > 500) continue;
+
+        // Check for pet names
+        for (const name of petNames) {
+          if (name && text.includes(name.toLowerCase())) {
+            relevantElements.push({el, reason: `Contains pet name: ${name}`});
+            break;
+          }
+        }
+
+        // Check for level/age/strength keywords
+        if (/\b(age|level|lvl|lv|str|strength|max str)\b/i.test(text)) {
+          relevantElements.push({el, reason: 'Contains level/strength keywords'});
+        }
+      }
+
+      console.log(`\nFound ${relevantElements.length} potentially relevant elements\n`);
+
+      // Show up to 15 most relevant elements
+      relevantElements.slice(0, 15).forEach(({el, reason}, idx) => {
+        console.log(`\n--- Element ${idx} ---`);
+        console.log('Reason:', reason);
+        console.log('Tag:', el.tagName);
+        console.log('Classes:', el.className);
+        console.log('Text (first 300 chars):', el.textContent?.substring(0, 300));
+
+        // Try to extract numeric values
+        const text = el.textContent || '';
+        const ageMatch = text.match(/age[:\s]*(\d+)/i);
+        const strMatch = text.match(/(?:max\s+)?str[:\s]*(\d+)/i);
+        const levelMatch = text.match(/(?:level|lvl|lv)[:\s]*(\d+)/i);
+
+        if (ageMatch) console.log('  ✓ Age:', ageMatch[1]);
+        if (strMatch) console.log('  ✓ Strength:', strMatch[1]);
+        if (levelMatch) console.log('  ✓ Level:', levelMatch[1]);
+      });
+
+      return relevantElements;
+    } catch (error) {
+      console.error('Failed to search DOM:', error);
+      return null;
+    }
+  },
+
+  extractStrengthFromUI: () => {
+    try {
+      console.log('=== Extracting Strength from Pet Card UI ===\n');
+
+      const pets = getActivePetsDebug();
+      const results: Array<{pet: string, strength: number | null, element: Element | null}> = [];
+
+      // Search for elements containing "STR XX" pattern
+      const allElements = Array.from(document.querySelectorAll('*'));
+
+      for (const pet of pets) {
+        const petName = pet.name || pet.species || `Pet ${pet.slotIndex}`;
+        let foundStrength: number | null = null;
+        let foundElement: Element | null = null;
+
+        // Look for elements with text matching "STR \d+"
+        for (const el of allElements) {
+          const text = el.textContent || '';
+
+          // Skip containers with too much text
+          if (text.length > 100) continue;
+
+          // Look for "STR XX" pattern
+          const strMatch = text.match(/\bSTR\s+(\d+)\b/i);
+          if (strMatch && strMatch[1]) {
+            const strength = parseInt(strMatch[1], 10);
+
+            // Check if this element is near the pet's position/slot
+            // For now, just collect all STR values and log them
+            console.log(`Found STR ${strength} in element:`, el);
+            console.log('  Tag:', el.tagName);
+            console.log('  Classes:', el.className);
+            console.log('  Text:', text.trim());
+            console.log('  Parent:', el.parentElement?.className);
+
+            // Try to match by order (first STR found = first pet, etc)
+            if (!foundStrength) {
+              foundStrength = strength;
+              foundElement = el;
+            }
+          }
+        }
+
+        results.push({
+          pet: petName,
+          strength: foundStrength,
+          element: foundElement
+        });
+      }
+
+      console.log('\n=== Extracted Strength Values ===');
+      console.table(results.map(r => ({
+        Pet: r.pet,
+        Strength: r.strength ?? 'Not found'
+      })));
+
+      return results;
+    } catch (error) {
+      console.error('Failed to extract strength from UI:', error);
+      return null;
+    }
+  },
+
+  debugLevels: () => {
+    try {
+      console.log('=== Pet Level Calculation Debug ===\n');
+
+      const pets = getActivePetsDebug();
+
+      pets.forEach((pet, idx) => {
+        console.log(`\n--- Pet ${idx}: ${pet.name} (${pet.species}) ---`);
+        console.log(`XP: ${pet.xp ?? 'N/A'}`);
+        console.log(`Strength: ${pet.strength ?? 'N/A'}`);
+        console.log(`Level (Jotai): ${pet.level ?? 'null'}`);
+
+        if (pet.petId) {
+          const history = getPetXPHistory(pet.petId);
+          console.log(`XP History: ${history.length} samples`);
+
+          if (history.length >= 2) {
+            const first = history[0]!;
+            const last = history[history.length - 1]!;
+            const xpGained = last.xp - first.xp;
+            const timeElapsed = (last.timestamp - first.timestamp) / 1000;
+            const xpRate = xpGained / timeElapsed;
+
+            console.log(`  First sample: ${first.xp} XP at ${new Date(first.timestamp).toLocaleTimeString()}`);
+            console.log(`  Last sample: ${last.xp} XP at ${new Date(last.timestamp).toLocaleTimeString()}`);
+            console.log(`  XP gained: ${xpGained.toFixed(0)} over ${timeElapsed.toFixed(0)}s`);
+            console.log(`  XP rate: ${xpRate.toFixed(2)} XP/sec`);
+          }
+
+          const levelEstimate = estimatePetLevel(pet);
+          console.log(`\nLevel Estimate:`);
+          console.log(`  Current Level: ${levelEstimate.currentLevel ?? 'N/A'} / ${levelEstimate.maxLevel}`);
+          console.log(`  Confidence: ${levelEstimate.confidence}`);
+          console.log(`  Total XP Needed: ${levelEstimate.totalXPNeeded?.toFixed(0) ?? 'N/A'}`);
+          console.log(`  XP Rate: ${levelEstimate.xpGainRate?.toFixed(2) ?? 'N/A'} XP/sec`);
+
+          if (levelEstimate.totalXPNeeded && pet.xp) {
+            const progress = (pet.xp / levelEstimate.totalXPNeeded) * 100;
+            console.log(`  Progress: ${progress.toFixed(1)}%`);
+          }
+        }
+      });
+
+      return pets;
+    } catch (error) {
+      console.error('Failed to debug levels:', error);
+      return null;
+    }
+  },
+
+  // Instant Feed Functions (WebSocket-based)
+  feedPet: async (petIndex: number) => {
+    console.log(`🍖 Feeding pet at index ${petIndex}...`);
+    const result = await feedPetInstantly(petIndex);
+    if (result.success) {
+      console.log(`✅ Successfully fed ${result.petName || result.petSpecies} with ${result.foodSpecies}`);
+    } else {
+      console.error(`❌ Failed to feed pet: ${result.error}`);
+    }
+    return result;
+  },
+
+  feedPetByIds: async (petId: string, cropId: string) => {
+    console.log(`🍖 Feeding pet ${petId} with crop ${cropId}...`);
+    const result = await feedPetByIds(petId, cropId);
+    if (result.success) {
+      console.log(`✅ Successfully fed pet`);
+    } else {
+      console.error(`❌ Failed to feed pet: ${result.error}`);
+    }
+    return result;
+  },
+
+  feedAllPets: async (hungerThreshold = 40) => {
+    console.log(`🍖 Feeding all pets below ${hungerThreshold}% hunger...`);
+    const results = await feedAllPetsInstantly(hungerThreshold);
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    console.log(`✅ Fed ${successful} pets, ${failed} failed`);
+    return results;
+  },
+
+  isInstantFeedAvailable: () => {
+    const available = isInstantFeedAvailable();
+    console.log(available ? '✅ Instant feed is available' : '❌ Instant feed is NOT available (RoomConnection missing)');
+    return available;
+  },
+
+  debugInventory: async () => {
+    try {
+      const { getAtomByLabel, readAtomValue } = await import('./core/jotaiBridge');
+
+      console.log('=== Inventory Debug ===\n');
+
+      // Try userSlotsAtom first
+      const userSlotsAtom = getAtomByLabel('userSlotsAtom');
+      if (userSlotsAtom) {
+        const inventory = await readAtomValue(userSlotsAtom);
+        console.log('userSlotsAtom inventory:', inventory);
+
+        const plantItems = Array.isArray(inventory) ? inventory.filter((item: any) =>
+          item.itemType === 'Plant' ||
+          (item.slots && item.slots.length > 0)
+        ) : [];
+        console.log(`\nFound ${plantItems?.length || 0} plant items:`);
+        console.table(plantItems?.map((item: any, i: number) => ({
+          Index: i,
+          Species: item.species || 'N/A',
+          Name: item.name || 'N/A',
+          ItemType: item.itemType,
+          HasSlots: !!(item.slots && item.slots.length > 0),
+          NumSlots: item.slots?.length || 0,
+          Keys: Object.keys(item).join(', ')
+        })));
+
+        // Show first plant in detail
+        if (plantItems && plantItems.length > 0) {
+          console.log('\n=== First Plant Item (Full Structure) ===');
+          console.log(plantItems[0]);
+          if (plantItems[0].slots) {
+            console.log('\n=== Slots Detail ===');
+            console.log(plantItems[0].slots);
+          }
+        }
+
+        return { userSlots: inventory, plantItems };
+      }
+
+      console.error('❌ userSlotsAtom not found');
+      return null;
+    } catch (error) {
+      console.error('Failed to debug inventory:', error);
+      return null;
+    }
+  },
+
+  // === PET DATA TESTER (for Comparison Hub development) ===
+  testPetData: testPetData,
+  testComparePets: testComparePets,
+  testAbilityDefinitions: testAbilityDefinitions,
+
+  // === ARIES MOD INTEGRATION DEBUG ===
+  debugAriesIntegration: () => {
+    console.log('=== Aries Mod Integration Debug ===\n');
+
+    // Check different global locations
+    const checks = [
+      { name: 'window.PetsService', value: (window as any).PetsService },
+      { name: 'window.QWS', value: (window as any).QWS },
+      { name: 'window.QWS?.PetsService', value: (window as any).QWS?.PetsService },
+      { name: 'unsafeWindow.PetsService', value: (typeof unsafeWindow !== 'undefined' ? (unsafeWindow as any).PetsService : undefined) },
+      { name: 'unsafeWindow.QWS', value: (typeof unsafeWindow !== 'undefined' ? (unsafeWindow as any).QWS : undefined) },
+    ];
+
+    console.log('Checking for PetsService in various locations:\n');
+    checks.forEach(check => {
+      if (check.value !== undefined) {
+        console.log(`✅ ${check.name}:`, check.value);
+        if (check.value && typeof check.value === 'object') {
+          console.log(`   Properties:`, Object.keys(check.value));
+          if (typeof check.value.getTeams === 'function') {
+            try {
+              const teams = check.value.getTeams();
+              console.log(`   Teams (${Array.isArray(teams) ? teams.length : 'N/A'}):`, teams);
+            } catch (e) {
+              console.log(`   Error calling getTeams():`, e);
+            }
+          }
+        }
+      } else {
+        console.log(`❌ ${check.name}: Not found`);
+      }
+    });
+
+    console.log('\n=== Instructions ===');
+    console.log('If PetsService is not detected:');
+    console.log('1. Make sure Aries mod is installed and running');
+    console.log('2. Check that both scripts are loaded (QPM and Aries)');
+    console.log('3. Try reloading the page');
+    console.log('4. Check console for "[Aries]" prefixed logs from QPM');
+    console.log('\nIf you see PetsService but it\'s not working:');
+    console.log('• Open Pet Hub (QPM menu) and go to "3v3 Compare" tab');
+    console.log('• Click the "🔄 Refresh" button in the Aries section');
+    console.log('• Check console for detection logs');
+  },
+
+  toggleBadgePreview: async (force?: boolean) => {
+    try {
+      const { toggleBadgePreview } = await import('./ui/achievementsWindow');
+      const result = toggleBadgePreview(force);
+      log(`QPM badge preview ${result ? 'enabled' : 'disabled'}${force === undefined ? '' : ` (forced ${force})`}`);
+      return result;
+    } catch (error) {
+      console.error('Failed to toggle badge preview', error);
+      return null;
+    }
+  },
+
+  // Debug helpers (inventory + seeds + rainbow + Pet Hub)
+  debugInventoryAtoms: async (labels: string[] = ['myInventoryAtom', 'myCropInventoryAtom', 'seedInventoryAtom']) => {
+    const cache = (window as any).__qpmJotaiAtomCache__;
+    const store = (window as any).__qpmJotaiStore__;
+    console.log('Atom cache present:', !!cache, 'Store present:', !!store);
+    const found: Array<{ label: string; hasValue: boolean }> = [];
+    labels.forEach((label) => {
+      const atom = getAtomByLabel(label);
+      if (atom) {
+        const hasValue = !!cache?.has?.(atom);
+        found.push({ label, hasValue });
+      }
+    });
+    console.table(found);
+
+    for (const label of labels) {
+      const atom = getAtomByLabel(label);
+      if (!atom) continue;
+      try {
+        const value = await readAtomValue<any>(atom);
+        console.log(`Value for ${label}:`, value);
+      } catch (error) {
+        console.error(`Failed reading ${label}`, error);
+      }
+    }
+    return found;
+  },
+
+  scanSeeds: async () => {
+    const direct = await readInventoryDirect();
+    const cached = getInventoryItems();
+
+    const pickQty = (item: any): number | null => {
+      const raw = item?.raw ?? {};
+      const candidates: Array<unknown> = [
+        item.quantity,
+        item.count,
+        item.amount,
+        item.stackSize,
+        item.qty,
+        item.owned,
+        item.quantityOwned,
+        raw.quantity,
+        raw.count,
+        raw.amount,
+        raw.stackSize,
+        raw.qty,
+        raw.owned,
+        raw.quantityOwned,
+      ];
+      for (const c of candidates) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return null;
+    };
+
+    const isSeed = (item: any): boolean => {
+      const raw = item?.raw ?? {};
+      const textFields: Array<unknown> = [
+        item.itemType,
+        item.name,
+        item.displayName,
+        item.id,
+        item.species,
+        raw.itemType,
+        raw.type,
+        raw.category,
+        raw.subType,
+        raw.itemCategory,
+        raw.itemSubType,
+        raw.kind,
+      ];
+      if (textFields.some((f) => `${f ?? ''}`.toLowerCase().includes('seed'))) return true;
+      const tagFields: Array<unknown> = [raw.tags, raw.tagList, raw.itemTags, raw.labels];
+      for (const t of tagFields) {
+        if (Array.isArray(t) && t.some((v) => `${v ?? ''}`.toLowerCase().includes('seed'))) return true;
+      }
+      return raw.isSeed === true;
+    };
+
+    const scan = (items: any[]) => {
+      const seeds = [] as Array<{ id: string; qty: number; name?: string | null }>;
+      let max = 0;
+      for (const item of items) {
+        if (!isSeed(item)) continue;
+        const qty = pickQty(item);
+        if (!Number.isFinite(qty) || (qty as number) <= 0) continue;
+        const id = String(item.id ?? item.itemId ?? item.species ?? item.name ?? 'unknown');
+        seeds.push({ id, qty: qty as number, name: item.displayName ?? item.name ?? null });
+        max = Math.max(max, qty as number);
+      }
+      seeds.sort((a, b) => b.qty - a.qty);
+      return { max, seeds };
+    };
+
+    const directScan = scan(direct?.items ?? []);
+    const cachedScan = scan(cached);
+
+    console.log('Seed scan (direct atom read): max', directScan.max, directScan.seeds.slice(0, 10));
+    console.log('Seed scan (cached store): max', cachedScan.max, cachedScan.seeds.slice(0, 10));
+    return { directScan, cachedScan };
+  },
+
+  auditRainbowPets: async () => {
+    const readPetAtom = async (label: string): Promise<any[] | null> => {
+      const atom = getAtomByLabel(label);
+      if (!atom) return null;
+      try {
+        const value = await readAtomValue<any>(atom);
+        if (Array.isArray(value)) return value;
+        if (value && Array.isArray((value as any).items)) return (value as any).items;
+      } catch (error) {
+        console.error(`Failed to read ${label}`, error);
+      }
+      return null;
+    };
+
+    const petAtoms = ['myPetInventoryAtom', 'myPetHutchPetItemsAtom'];
+    const results: Record<string, any[]> = {};
+
+    const isRainbow = (item: any) => {
+      const raw = item?.raw ?? {};
+      const textFields: Array<unknown> = [
+        item.rarity,
+        item.petRarity,
+        item.rarityName,
+        item.quality,
+        item.variant,
+        item.mutation,
+        item.name,
+        item.petVariant,
+        raw.rarity,
+        raw.petRarity,
+        raw.rarityName,
+        raw.quality,
+        raw.variant,
+        raw.mutation,
+        raw.name,
+      ];
+      if (textFields.some((f) => `${f ?? ''}`.toLowerCase().includes('rainbow'))) return true;
+      return item.isRainbow === true || raw.isRainbow === true;
+    };
+
+    for (const label of petAtoms) {
+      const items = await readPetAtom(label);
+      if (!items) continue;
+      const hits = [] as Array<{ id: string; targetScale?: number | null; fields: unknown[] }>;
+      items.forEach((it: any, idx: number) => {
+        const raw = it?.raw ?? {};
+        if (isRainbow(it)) {
+          hits.push({
+            id: String(it.id ?? it.itemId ?? `idx-${idx}`),
+            targetScale: Number(it.targetScale ?? raw.targetScale ?? null) || null,
+            fields: [it.rarity, it.petRarity, it.rarityName, it.quality, it.variant, it.mutation, it.name, it.petVariant, raw.rarity, raw.petRarity, raw.rarityName, raw.quality, raw.variant, raw.mutation, raw.name],
+          });
+        }
+      });
+      results[label] = hits;
+      console.log(`Rainbow hits for ${label}:`, hits);
+    }
+    return results;
+  },
+
+  openPetHub3v3: async () => {
+    try {
+      // Prefer clicking the existing Pet Hub button so the window opens in the normal QPM chrome
+      const btn = document.querySelector('button[data-window-id="pet-hub"]') as HTMLButtonElement | null;
+      if (btn) {
+        btn.click();
+        setTimeout(() => {
+          const tab = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('3v3 Compare')) as HTMLButtonElement | undefined;
+          tab?.click();
+        }, 300);
+        return true;
+      }
+
+      // Fallback: open via toggleWindow so it still mounts inside the QPM window system
+      const render = (root: HTMLElement) => import('./ui/petHubWindow').then(({ renderPetHubWindow }) => renderPetHubWindow(root));
+      toggleWindow('pet-hub', '🐾 Pet Hub', render, '1600px', '92vh');
+      setTimeout(() => {
+        const tab = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('3v3 Compare')) as HTMLButtonElement | undefined;
+        tab?.click();
+      }, 400);
+      return true;
+    } catch (error) {
+      console.error('Failed to open Pet Hub 3v3', error);
+      return false;
+    }
+  },
+
+  resetTutorial: async () => {
+    const { resetTutorial } = await import('./ui/tutorialPopup');
+    resetTutorial();
+    console.log('Tutorial reset. Reload the page to see it again.');
+  },
+
+  showTutorial: async () => {
+    const { showTutorialPopup } = await import('./ui/tutorialPopup');
+    showTutorialPopup();
+  },
 };
 
-// Expose immediately so other scripts can detect QPM
-const QPM_API = createLazyQPMApi();
-shareGlobal('QPM', QPM_API);
-shareGlobal('QPM_DEBUG_API', QPM_API);
+registerInspectFriendHelper();
+registerInspectPlayerHelper();
 
+// Simple console helper to force inspector self playerId for friend-level testing
+function registerInspectFriendHelper(): void {
+  const fn = (playerId: string): void => {
+    const pid = (playerId || '').trim();
+    if (!pid) {
+      console.warn('[QPM Inspector] Provide a playerId string.');
+      return;
+    }
+    try {
+      localStorage.setItem('quinoa:selfPlayerId', pid);
+      resetFriendsCache();
+      console.log('[QPM Inspector] self playerId set to', pid, 'friend cache cleared.');
+    } catch (err) {
+      console.warn('[QPM Inspector] Unable to persist self playerId', err);
+    }
+  };
+
+  if (!(window as any).QPM_INSPECT_FRIEND) {
+    (window as any).QPM_INSPECT_FRIEND = fn;
+  }
+
+  try {
+    shareGlobal('QPM_INSPECT_FRIEND', fn);
+  } catch (err) {
+    console.warn('[QPM Inspector] Failed to share helper globally', err);
+  }
+}
+
+function registerInspectPlayerHelper(): void {
+  const fn = (playerId: string, playerName?: string): void => {
+    const pid = (playerId || '').trim();
+    if (!pid) {
+      console.warn('[PublicRooms] Provide a playerId string.');
+      return;
+    }
+    openInspectorDirect(pid, playerName || pid);
+  };
+
+  if (!(window as any).QPM_INSPECT_PLAYER) {
+    (window as any).QPM_INSPECT_PLAYER = fn;
+  }
+
+  try {
+    shareGlobal('QPM_INSPECT_PLAYER', fn);
+  } catch (err) {
+    console.warn('[PublicRooms] Failed to share QPM_INSPECT_PLAYER globally', err);
+  }
+}
+
+shareGlobal('QPM', QPM_DEBUG_API);
+shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
 const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-(globalDebugTarget as any).QPM_DEBUG_API = QPM_API;
-(globalDebugTarget as any).QPM = QPM_API;
+(globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
+(globalDebugTarget as any).QPM = QPM_DEBUG_API;
+log('✅ QPM debug API registered');
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
+// Load configuration similar to original
 const LS_KEY = 'quinoa-pet-manager';
 const defaultCfg = {
   enabled: false,
@@ -111,357 +1103,26 @@ function loadCfg() {
   }
 }
 
-// ============================================================================
-// HELPER REGISTRATION (non-blocking)
-// ============================================================================
-
-async function registerHelpers(): Promise<void> {
-  // Import these lazily to avoid blocking
-  const [
-    { resetFriendsCache },
-    { openInspectorDirect },
-  ] = await Promise.all([
-    import('./services/ariesPlayers'),
-    import('./ui/publicRoomsWindow'),
-  ]);
-
-  // Inspector friend helper
-  const inspectFriend = (playerId: string): void => {
-    const pid = (playerId || '').trim();
-    if (!pid) {
-      console.warn('[QPM Inspector] Provide a playerId string.');
-      return;
-    }
-    try {
-      localStorage.setItem('quinoa:selfPlayerId', pid);
-      resetFriendsCache();
-      console.log('[QPM Inspector] self playerId set to', pid);
-    } catch (err) {
-      console.warn('[QPM Inspector] Unable to persist self playerId', err);
-    }
-  };
-
-  // Inspector player helper
-  const inspectPlayer = (playerId: string, playerName?: string): void => {
-    const pid = (playerId || '').trim();
-    if (!pid) {
-      console.warn('[PublicRooms] Provide a playerId string.');
-      return;
-    }
-    openInspectorDirect(pid, playerName || pid);
-  };
-
-  // Register globally
-  (window as any).QPM_INSPECT_FRIEND = inspectFriend;
-  (window as any).QPM_INSPECT_PLAYER = inspectPlayer;
-  
-  try {
-    shareGlobal('QPM_INSPECT_FRIEND', inspectFriend);
-    shareGlobal('QPM_INSPECT_PLAYER', inspectPlayer);
-  } catch {
-    // Ignore errors
-  }
-}
-
-// ============================================================================
-// GAME DETECTION (non-blocking with yields)
-// ============================================================================
-
-async function waitForGame(): Promise<void> {
-  log('⏳ Waiting for game to load...');
-  
-  // Wait for DOM ready
-  await ready;
-  await yieldToBrowser();
-  
-  // Wait for game UI with timeout
-  const maxWait = 30000;
-  const interval = 500;
-  const deadline = Date.now() + maxWait;
-  
-  while (Date.now() < deadline) {
-    const hudRoot = getGameHudRoot();
-    if (hudRoot) {
-      const hudContent = hudRoot.querySelector('canvas, button, [data-tm-main-interface], [data-tm-hud-root]');
-      if (hudContent) {
-        log('✅ Game UI detected');
-        return;
-      }
-    }
-
-    const anyCanvas = document.querySelector('#App canvas');
-    if (anyCanvas) {
-      log('✅ Game UI detected');
-      return;
-    }
-
-    await delay(interval);
-  }
-  
-  log('⚠️ Game UI not detected within timeout, proceeding anyway');
-}
-
-// ============================================================================
-// MAIN INITIALIZATION (async, non-blocking)
-// ============================================================================
-
-async function initialize(): Promise<void> {
-  log('🚀 Quinoa Pet Manager initializing...');
-
-  // Load configuration
-  const loadedCfg = loadCfg();
-  const cfg = {
-    ...defaultCfg,
-    ...loadedCfg,
-    ui: { ...defaultCfg.ui, ...(loadedCfg.ui || {}) },
-    inventoryLocker: { ...defaultCfg.inventoryLocker, ...(loadedCfg.inventoryLocker || {}) },
-    mutationReminder: { ...defaultCfg.mutationReminder, ...(loadedCfg.mutationReminder || {}) },
-    harvestReminder: {
-      ...defaultCfg.harvestReminder,
-      ...(loadedCfg.harvestReminder || {}),
-      selectedMutations: {
-        ...defaultCfg.harvestReminder.selectedMutations,
-        ...(loadedCfg.harvestReminder?.selectedMutations || {}),
-      },
+const loadedCfg = loadCfg();
+const cfg = {
+  ...defaultCfg,
+  ...loadedCfg,
+  ui: { ...defaultCfg.ui, ...(loadedCfg.ui || {}) },
+  inventoryLocker: { ...defaultCfg.inventoryLocker, ...(loadedCfg.inventoryLocker || {}) },
+  mutationReminder: { ...defaultCfg.mutationReminder, ...(loadedCfg.mutationReminder || {}) },
+  harvestReminder: {
+    ...defaultCfg.harvestReminder,
+    ...(loadedCfg.harvestReminder || {}),
+    selectedMutations: {
+      ...defaultCfg.harvestReminder.selectedMutations,
+      ...(loadedCfg.harvestReminder?.selectedMutations || {}),
     },
-    turtleTimer: {
-      ...defaultCfg.turtleTimer,
-      ...(loadedCfg.turtleTimer || {}),
-    },
-  };
-
-  // ============================================================================
-  // PHASE 1: Wait for game UI first (fast - no heavy work yet)
-  // ============================================================================
-  
-  await waitForGame();
-  
-  // Yield to let browser paint
-  await yieldToBrowser();
-
-  // ============================================================================
-  // PHASE 2: Start sprite system in BACKGROUND (don't wait for it)
-  // UI will render without sprites, sprites load in background
-  // ============================================================================
-  
-  // Fire-and-forget sprite initialization - runs in background
-  const spriteInitPromise = (async () => {
-    // Small delay to let UI render first
-    await delay(100);
-    
-    try {
-      const { initSpriteSystem } = await import('./sprite-v2/index');
-      const service = await initSpriteSystem();
-      
-      // Set up sprite service globally
-      const { setSpriteService } = await import('./sprite-v2/compat');
-      setSpriteService(service);
-      shareGlobal('Sprites', service);
-      
-      // Export sprite inspector
-      if (typeof window !== 'undefined') {
-        const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-        const { inspectPetSprites } = await import('./sprite-v2/compat');
-        (targetWindow as any).inspectPetSprites = inspectPetSprites;
-      }
-      
-      log('✅ Sprite system v2 initialized (background)');
-      return service;
-    } catch (err) {
-      log('❌ Sprite system failed to initialize:', err);
-      return null;
-    }
-  })();
-  
-  // Don't await - let it run in background while we continue initialization
-
-  // ============================================================================
-  // PHASE 3: Initialize core systems (parallel where possible)
-  // ============================================================================
-
-  // Initialize stores and features in parallel groups
-  // Group 1: Core stores (can run in parallel)
-  const [
-    { initializeStatsStore },
-    { initializePetXpTracker },
-    { initializeXpTracker },
-    { initializeMutationValueTracking },
-    { initializeAutoFavorite },
-    { initializeAchievements },
-    { exposeAriesBridge },
-  ] = await Promise.all([
-    import('./store/stats'),
-    import('./store/petXpTracker'),
-    import('./store/xpTracker'),
-    import('./features/mutationValueTracking'),
-    import('./features/autoFavorite'),
-    import('./store/achievements'),
-    import('./integrations/ariesBridge'),
-  ]);
-
-  // Run sync initializations (these are fast)
-  initializeStatsStore();
-  initializePetXpTracker();
-  initializeXpTracker();
-  initializeMutationValueTracking();
-  initializeAutoFavorite();
-  initializeAchievements();
-  exposeAriesBridge();
-
-  await yieldToBrowser();
-
-  // Group 2: Async stores and bridges
-  const [
-    { startInventoryStore },
-    { startSellSnapshotWatcher },
-    { startGardenBridge },
-  ] = await Promise.all([
-    import('./store/inventory'),
-    import('./store/sellSnapshot'),
-    import('./features/gardenBridge'),
-  ]);
-
-  // These can run in parallel
-  await Promise.all([
-    startInventoryStore(),
-    startSellSnapshotWatcher(),
-    startGardenBridge(),
-  ]);
-
-  await yieldToBrowser();
-
-  // ============================================================================
-  // PHASE 4: Initialize features (parallel where safe)
-  // ============================================================================
-
-  const [
-    { startCropTypeLocking },
-    { initializeHarvestReminder, configureHarvestReminder },
-    { initializeTurtleTimer, configureTurtleTimer },
-    { startMutationReminder },
-    { startMutationTracker },
-    { startCropBoostTracker },
-    { initCropSizeIndicator },
-    { initPublicRooms },
-  ] = await Promise.all([
-    import('./features/cropTypeLocking'),
-    import('./features/harvestReminder'),
-    import('./features/turtleTimer'),
-    import('./features/mutationReminder'),
-    import('./features/mutationTracker'),
-    import('./features/cropBoostTracker'),
-    import('./features/cropSizeIndicator'),
-    import('./features/publicRooms'),
-  ]);
-
-  // Initialize features
-  startCropTypeLocking();
-  initializeHarvestReminder({
-    enabled: cfg.harvestReminder.enabled,
-    highlightEnabled: cfg.harvestReminder.highlightEnabled,
-    toastEnabled: cfg.harvestReminder.toastEnabled,
-    minSize: cfg.harvestReminder.minSize,
-    selectedMutations: cfg.harvestReminder.selectedMutations,
-  });
-  initializeTurtleTimer(cfg.turtleTimer);
-  startMutationReminder();
-  startMutationTracker();
-  startCropBoostTracker();
-  initCropSizeIndicator();
-  initPublicRooms();
-
-  // Apply configurations
-  configureHarvestReminder({
-    enabled: cfg.harvestReminder.enabled,
-    highlightEnabled: cfg.harvestReminder.highlightEnabled,
-    toastEnabled: cfg.harvestReminder.toastEnabled,
-    minSize: cfg.harvestReminder.minSize,
-    selectedMutations: cfg.harvestReminder.selectedMutations,
-  });
-  configureTurtleTimer(cfg.turtleTimer);
-
-  await yieldToBrowser();
-
-  // ============================================================================
-  // PHASE 5: Setup garden inspector and validation commands
-  // ============================================================================
-
-  const { setupGardenInspector } = await import('./ui/publicRoomsWindow');
-  const gardenCommands = setupGardenInspector();
-  shareGlobal('QPM_INSPECT_GARDEN', gardenCommands.QPM_INSPECT_GARDEN);
-  shareGlobal('QPM_EXPOSE_GARDEN', gardenCommands.QPM_EXPOSE_GARDEN);
-  shareGlobal('QPM_CURRENT_TILE', gardenCommands.QPM_CURRENT_TILE);
-
-  // Add to debug API
-  QPM_API.inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
-  QPM_API.exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
-  QPM_API.currentTile = gardenCommands.QPM_CURRENT_TILE;
-
-  const { exposeValidationCommands } = await import('./utils/validationCommands');
-  exposeValidationCommands();
-
-  await yieldToBrowser();
-
-  // ============================================================================
-  // PHASE 6: Create UI (the heaviest part - but sprites load in background)
-  // ============================================================================
-
-  const { createOriginalUI, setCfg } = await import('./ui/originalPanel');
-  setCfg(cfg);
-  
-  // Create UI without waiting for sprites - sprites will hydrate when ready
-  await createOriginalUI();
-
-  // Mark initialization complete EARLY - UI is usable now
-  QPM_API.__initialized = true;
-  log('✅ Quinoa Pet Manager UI ready');
-
-  // ============================================================================
-  // PHASE 7: Background tasks (non-blocking, fire-and-forget)
-  // ============================================================================
-
-  // Wait for sprite system to complete in background (for full functionality)
-  spriteInitPromise.then((service) => {
-    log('✅ Sprite system ready - full functionality available');
-    
-    // Trigger UI refresh for components that need sprites
-    // The qpm-sprites-ready event was dispatched by setSpriteService()
-    // Some windows may need manual refresh - trigger a pet info refresh to update tracker
-    if (service) {
-      import('./store/pets').then(({ refreshPetInfoListeners }) => {
-        // Small delay to let the event propagate
-        setTimeout(() => {
-          refreshPetInfoListeners();
-          log('🔄 Triggered pet info refresh for sprite-dependent UI');
-        }, 100);
-      }).catch(() => {});
-    }
-  }).catch(() => {});
-
-  // Start version checker in background
-  import('./utils/versionChecker').then(({ startVersionChecker }) => {
-    startVersionChecker();
-  }).catch(() => {});
-
-  // Register helpers in background
-  registerHelpers().catch(() => {});
-
-  // Show tutorial after a delay (non-blocking)
-  setTimeout(async () => {
-    try {
-      const { showTutorialPopup } = await import('./ui/tutorialPopup');
-      showTutorialPopup();
-    } catch {
-      // Ignore errors
-    }
-  }, 2000);
-
-  log('✅ Quinoa Pet Manager initialized successfully');
-}
-
-// ============================================================================
-// ERROR HANDLING
-// ============================================================================
+  },
+  turtleTimer: {
+    ...defaultCfg.turtleTimer,
+    ...(loadedCfg.turtleTimer || {}),
+  },
+};
 
 // Global error filter to silence noisy external proxy errors
 window.addEventListener('error', (event) => {
@@ -476,16 +1137,164 @@ window.addEventListener('error', (event) => {
   return true;
 }, true);
 
-// ============================================================================
-// ENTRY POINT - Wrapped in async IIFE for non-blocking execution
-// ============================================================================
-
-(async function main() {
-  'use strict';
+async function waitForGame(): Promise<void> {
+  log('⏳ Waiting for game to load...');
   
-  try {
-    await initialize();
-  } catch (error) {
-    console.error('[QuinoaPetMgr] Initialization failed:', error);
+  // Wait for body
+  await ready;
+  await sleep(100);
+  
+  // Wait for QuinoaUI (SPA-ready indicator)
+  const maxWait = 30000;
+  const interval = 500;
+  const deadline = Date.now() + maxWait;
+  
+  while (Date.now() < deadline) {
+    const hudRoot = getGameHudRoot();
+    if (hudRoot) {
+      const hudContent = hudRoot.querySelector('canvas, button, [data-tm-main-interface], [data-tm-hud-root], [data-tm-player-id]');
+      if (hudContent) {
+        log('✅ Game UI detected');
+        return;
+      }
+    }
+
+    const anyCanvas = document.querySelector('#App canvas');
+    if (anyCanvas) {
+      log('✅ Game UI detected');
+      return;
+    }
+
+    await sleep(interval);
   }
-})();
+  
+  log('⚠️ Game UI not detected within timeout, proceeding anyway');
+}
+
+async function initialize(): Promise<void> {
+  log('🚀 Quinoa Pet Manager initializing...');
+
+  // Initialize sprite system (sprite-v2) - must be done early to hook PIXI
+  // OPTIMIZATION: Don't block other initialization on sprite loading
+  let spriteService: SpriteService | null = null;
+  const spriteInit = initSpriteSystem().then((service) => {
+    spriteService = service;
+    setSpriteService(service);
+    shareGlobal('Sprites', service);
+    log('✅ Sprite system v2 initialized');
+    
+    // Export sprite inspector after sprites are ready
+    if (typeof window !== 'undefined') {
+      const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      (targetWindow as any).inspectPetSprites = inspectPetSprites;
+      log('🖼️ inspectPetSprites() available in console');
+    }
+  }).catch((err) => {
+    log('❌ Sprite system failed to initialize:', err);
+  });
+
+  // Wait for game to be ready (parallel with sprite init)
+  await waitForGame();
+
+  // OPTIMIZATION: Initialize core stores in batches with yields to prevent main thread blocking
+  // Phase 1: Critical stores that other features depend on
+  initializeStatsStore();
+  initializePetXpTracker();
+  await yieldToBrowser(); // Let browser paint
+
+  // Phase 2: XP tracking and inventory
+  initializeXpTracker();
+  initializeMutationValueTracking();
+  await startInventoryStore();
+  await yieldToBrowser();
+
+  // Phase 3: Auto-favorite and bulk operations
+  initializeAutoFavorite();
+  startBulkFavorite();
+  await startSellSnapshotWatcher();
+  await yieldToBrowser();
+
+  // Phase 4: Garden bridge (needed for reminders)
+  await startGardenBridge();
+  await yieldToBrowser();
+
+  // Phase 5: Initialize harvest and turtle timer
+  initializeHarvestReminder({
+    enabled: cfg.harvestReminder.enabled,
+    highlightEnabled: cfg.harvestReminder.highlightEnabled,
+    toastEnabled: cfg.harvestReminder.toastEnabled,
+    minSize: cfg.harvestReminder.minSize,
+    selectedMutations: cfg.harvestReminder.selectedMutations,
+  });
+  initializeTurtleTimer(cfg.turtleTimer);
+  await yieldToBrowser();
+
+  // Phase 6: Mutation tracking
+  startMutationReminder();
+  startMutationTracker();
+  await yieldToBrowser();
+
+  // Phase 7: Configure features
+  configureHarvestReminder({
+    enabled: cfg.harvestReminder.enabled,
+    highlightEnabled: cfg.harvestReminder.highlightEnabled,
+    toastEnabled: cfg.harvestReminder.toastEnabled,
+    minSize: cfg.harvestReminder.minSize,
+    selectedMutations: cfg.harvestReminder.selectedMutations,
+  });
+  configureTurtleTimer(cfg.turtleTimer);
+  await yieldToBrowser();
+
+  // Phase 8: Non-critical features (can load after UI is visible)
+  startCropBoostTracker();
+  initCropSizeIndicator();
+  await yieldToBrowser();
+
+  // Phase 9: Achievements (heavy, do later)
+  initializeAchievements();
+  exposeAriesBridge();
+  await yieldToBrowser();
+
+  // Phase 10: Public rooms and garden inspector
+  initPublicRooms();
+  const gardenCommands = setupGardenInspector();
+  shareGlobal('QPM_INSPECT_GARDEN', gardenCommands.QPM_INSPECT_GARDEN);
+  shareGlobal('QPM_EXPOSE_GARDEN', gardenCommands.QPM_EXPOSE_GARDEN);
+  shareGlobal('QPM_CURRENT_TILE', gardenCommands.QPM_CURRENT_TILE);
+  (QPM_DEBUG_API as any).inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
+  (QPM_DEBUG_API as any).exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
+  (QPM_DEBUG_API as any).currentTile = gardenCommands.QPM_CURRENT_TILE;
+
+  // Expose validation commands for testing
+  exposeValidationCommands();
+
+  // Set configuration for UI
+  setCfg(cfg);
+
+  // OPTIMIZATION: Wait for sprite system ONLY before creating UI
+  // This allows other features to initialize while sprites load in background
+  await spriteInit;
+
+  // Create UI (needs sprites to be ready)
+  await createOriginalUI();
+
+  // Start version checker (checks for updates periodically)
+  startVersionChecker();
+
+  // Show tutorial popup on first load
+  const { showTutorialPopup } = await import('./ui/tutorialPopup');
+  setTimeout(() => {
+    showTutorialPopup();
+  }, 1500); // Delay to let UI settle
+
+  log('✅ Quinoa Pet Manager initialized successfully');
+
+  // Schedule sprite cache warmup during idle time (Aries Mod pattern)
+  // Delays 2 seconds, then pre-renders sprites in background batches
+  scheduleWarmup(2000);
+}
+
+// Initialize when script loads
+initialize().catch(error => {
+  console.error('[QuinoaPetMgr] Initialization failed:', error);
+});

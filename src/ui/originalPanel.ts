@@ -7,7 +7,7 @@ import { createJournalCheckerSection as createJournalCheckerSectionNew } from '.
 import { isVisible, getGameHudRoot } from '../utils/dom';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import { getCropLockConfig, setCropLockSyncMode } from '../features/cropTypeLocking';
+import { isBulkFavoriteActive, refreshBulkFavorite } from '../features/bulkFavorite';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { formatSince } from '../utils/helpers';
 import { subscribeToStats, resetStats, getStatsSnapshot, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
@@ -43,6 +43,8 @@ import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRe
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
 import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, UPDATE_URL, GITHUB_URL, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { visibleInterval, criticalInterval, timerManager } from '../utils/timerManager';
+import { throttle, yieldToBrowser } from '../utils/scheduling';
 // Display Tweaker removed
 
 // Helper function to get mutated crop sprite URL
@@ -120,11 +122,11 @@ export interface UIState {
   mutationTrackerSourceBadge: HTMLElement | null;
   mutationTrackerEmpty: HTMLElement | null;
   trackerAbilityHistoryUnsubscribe: (() => void) | null;
-  trackerAbilityTicker: number | null;
+  trackerAbilityTicker: (() => void) | null;
   xpTrackerWindow: any | null; // XpTrackerWindowState from xpTrackerWindow.ts
   shopRestockWindow: any | null; // ShopRestockWindowState from shopRestockWindow.ts
   mutationTrackerUnsubscribe: (() => void) | null;
-  mutationTrackerTicker: number | null;
+  mutationTrackerTicker: (() => void) | null;
   turtleUnsubscribe: (() => void) | null;
   notificationsSection: HTMLElement | null;
   notificationsListWrapper: HTMLElement | null;
@@ -264,7 +266,7 @@ interface NumberOptionConfig {
 }
 
 const shopCountdownViews: ShopCountdownView[] = [];
-let shopCountdownTimer: number | null = null;
+let unregisterShopCountdownTimer: (() => void) | null = null;
 let latestRestockInfo: { nextRestockAt?: Record<string, number | null> } | null = null;
 
 let feedCount = 0;
@@ -1705,10 +1707,11 @@ function updateTurtleTimerViews(snapshot: TurtleTimerState): void {
 }
 
 function ensureShopCountdownTimer(): void {
-  if (shopCountdownTimer != null) {
+  if (unregisterShopCountdownTimer != null) {
     return;
   }
-  shopCountdownTimer = window.setInterval(updateShopCountdownViews, 1000) as unknown as number;
+  // Use unified timer manager - pauses when page is hidden
+  unregisterShopCountdownTimer = visibleInterval('shop-countdown', updateShopCountdownViews, 1000);
 }
 
 function registerShopCountdownView(view: ShopCountdownView): void {
@@ -1924,18 +1927,19 @@ function ensurePanelStyles(): void {
     align-items: center;
     gap: 6px;
     cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    transition: all 0.25s ease;
   }
 
   .qpm-nav__button:hover {
     border-color: var(--qpm-accent-strong);
     color: var(--qpm-text);
+    transform: translateY(-1px);
   }
 
   .qpm-nav__button--active {
     border-color: var(--qpm-accent);
     color: var(--qpm-text);
-    /* Background and box-shadow set by JavaScript based on tab color */
+    /* Background, box-shadow, and glow set by JavaScript based on tab color */
   }
 
   .qpm-tabs {
@@ -3804,42 +3808,33 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   content.append(nav, tabsContainer);
   panel.append(titleBar, content);
 
-  const cropLockConfig = getCropLockConfig();
-  const activeSyncMode = cropLockConfig.syncModeEnabled !== false;
-  const storedSyncMode = cfg.inventoryLocker?.syncMode;
-  const resolvedSyncMode = typeof storedSyncMode === 'boolean' ? storedSyncMode : activeSyncMode;
-
-  let updatedCfg = false;
-  if (!cfg.inventoryLocker) {
-    cfg.inventoryLocker = { syncMode: resolvedSyncMode };
-    updatedCfg = true;
-  } else if (cfg.inventoryLocker.syncMode !== resolvedSyncMode) {
-    cfg.inventoryLocker.syncMode = resolvedSyncMode;
-    updatedCfg = true;
-  }
-
-  if (updatedCfg) {
-    saveCfg();
-  }
-
-  if (cropLockConfig.syncModeEnabled !== resolvedSyncMode) {
-    setCropLockSyncMode(resolvedSyncMode);
-  }
-
+  // Create UI sections with yields to prevent freezing
   const statsHeader = createStatsHeader();
+  await yieldToBrowser();
+  
   const statsSection = createStatsSection();
+  await yieldToBrowser();
+  
   const notificationsSection = createNotificationSection();
+  await yieldToBrowser();
+  
   const turtleSection = createTurtleTimerSection();
+  await yieldToBrowser();
+  
   const trackerSections = createTrackersSection();
+  await yieldToBrowser();
 
-  // Inventory locker section
-  const lockerSection = createInventoryLockerSection(resolvedSyncMode);
+  // Bulk favorite section
+  const lockerSection = createBulkFavoriteSection();
+  await yieldToBrowser();
 
   // Mutation reminder section
   const mutationSection = createMutationSection();
+  await yieldToBrowser();
 
   // Mutation value section
   const mutationValueSection = createMutationValueSection();
+  await yieldToBrowser();
 
   // Stats overview section
   const statsOverviewSection = createStatsOverviewSection();
@@ -3858,20 +3853,26 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       const isActive = tabKey === key;
       button.classList.toggle('qpm-nav__button--active', isActive);
       
-      // Apply color coding - always show the color, brighter when active OR when window is open
+      // Apply color coding with glow - each button has unique color
       if (button.dataset.tabColor) {
         const baseColor = button.dataset.tabColor;
+        // Extract RGB values for glow effect
+        const rgbMatch = baseColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        const glowColor = rgbMatch ? `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, 0.4)` : baseColor;
+        
         // Check if this tab has an associated window that's open
         const windowId = button.dataset.windowId;
         const isWindowActive = windowId && isWindowOpen(windowId);
         
         if (isActive || isWindowActive) {
           button.style.background = baseColor;
-          button.style.boxShadow = `0 6px 18px ${baseColor}`;
+          button.style.boxShadow = `0 4px 14px ${glowColor}, inset 0 1px 0 rgba(255,255,255,0.1)`;
+          button.style.borderColor = baseColor.replace('0.28', '0.6');
         } else {
-          // Make inactive tabs show a dimmer version of their color
-          button.style.background = baseColor.replace('0.28', '0.14');
-          button.style.boxShadow = '';
+          // All buttons show their color dimly with subtle glow
+          button.style.background = baseColor.replace('0.28', '0.12');
+          button.style.boxShadow = `0 2px 8px ${glowColor.replace('0.4', '0.15')}`;
+          button.style.borderColor = baseColor.replace('0.28', '0.3');
         }
       }
     }
@@ -3887,7 +3888,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       button.addEventListener('click', () => activateTab(key));
     }
     
-    // Add color coding for visual distinction
+    // Add color coding for visual distinction - each button has unique color with glow
     const tabColors: Record<string, string> = {
       'dashboard': 'rgba(76, 175, 80, 0.28)',      // Green
       'turtle': 'rgba(33, 150, 243, 0.28)',        // Blue
@@ -3895,18 +3896,26 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       'xp-tracker': 'rgba(255, 152, 0, 0.28)',     // Orange
       'shop-restock': 'rgba(0, 188, 212, 0.28)',   // Cyan
       'pet-hub': 'rgba(103, 58, 183, 0.28)',       // Deep Purple
+      'pet-optimizer': 'rgba(244, 67, 54, 0.28)',  // Red
       'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
       'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
       'achievements': 'rgba(255, 215, 64, 0.28)',  // Gold
       'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
       'journal-checker': 'rgba(121, 85, 72, 0.28)', // Brown
       'guide': 'rgba(96, 125, 139, 0.28)',         // Blue Grey
+      'weather': 'rgba(156, 39, 176, 0.28)',       // Purple (Reminders)
+      'bulk-favorite': 'rgba(244, 143, 177, 0.28)', // Light Pink (Hearts)
     };
     
     if (tabColors[key]) {
-      button.dataset.tabColor = tabColors[key];
-      // Set initial background to dimmed color
-      button.style.background = tabColors[key].replace('0.28', '0.14');
+      const baseColor = tabColors[key];
+      button.dataset.tabColor = baseColor;
+      // Set initial background with subtle glow
+      const rgbMatch = baseColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      const glowColor = rgbMatch ? `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, 0.15)` : baseColor;
+      button.style.background = baseColor.replace('0.28', '0.12');
+      button.style.boxShadow = `0 2px 8px ${glowColor}`;
+      button.style.borderColor = baseColor.replace('0.28', '0.3');
     }
     
     nav.appendChild(button);
@@ -3945,7 +3954,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
   registerTab('guide', 'Guide', '📖', [guideSection]);
   registerTab('weather', 'Reminders', '🔔', [mutationSection]);
-  registerTab('locker', 'Locker', '🔒', [lockerSection]);
+  registerTab('bulk-favorite', 'Bulk Favorite', '❤️', [lockerSection]);
   // Display Tweaker tab removed
 
   // Override tab click handlers to open windows instead
@@ -4056,10 +4065,20 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     newAchievementsButton.dataset.windowId = 'achievements';
     newAchievementsButton.addEventListener('click', () => {
       const renderAchievementsWindow = async (root: HTMLElement) => {
-        const { createAchievementsWindow } = await import('./achievementsWindow');
-        const state = createAchievementsWindow();
-        state.root.dataset.achievementsRoot = 'true';
-        root.appendChild(state.root);
+        // Show loading state immediately
+        root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--qpm-text-dim);"><span>⏳ Loading Achievements...</span></div>';
+        // Yield to let loading state render
+        await new Promise(r => requestAnimationFrame(r));
+        try {
+          const { createAchievementsWindow } = await import('./achievementsWindow');
+          root.innerHTML = '';
+          const state = createAchievementsWindow();
+          state.root.dataset.achievementsRoot = 'true';
+          root.appendChild(state.root);
+        } catch (error) {
+          log('⚠️ Failed to load Achievements window', error);
+          root.innerHTML = '<div style="color:#ff6b6b;padding:20px;text-align:center;">Failed to load Achievements</div>';
+        }
       };
       toggleWindow('achievements', '🏆 Achievements', renderAchievementsWindow, undefined, '90vh');
     });
@@ -4088,27 +4107,27 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     tabButtons.set('weather', newWeatherButton);
   }
 
-  const lockerButton = tabButtons.get('locker');
-  if (lockerButton) {
-    const newLockerButton = lockerButton.cloneNode(true) as HTMLButtonElement;
-    newLockerButton.addEventListener('click', () => {
-      toggleWindow('locker', '🔒 Locker', renderLockerWindow, '650px', '85vh');
-    });
-    lockerButton.replaceWith(newLockerButton);
-    tabButtons.set('locker', newLockerButton);
-  }
+  // Bulk Favorite now opens in the main panel (no separate window needed)
+  // The tab content is already registered with [lockerSection]
 
   const petHubButton = tabButtons.get('pet-hub');
   if (petHubButton) {
     const newPetHubButton = petHubButton.cloneNode(true) as HTMLButtonElement;
     newPetHubButton.dataset.windowId = 'pet-hub';
     newPetHubButton.addEventListener('click', () => {
-      const renderPetHubWindow = (root: HTMLElement) => {
-        import('./petHubWindow').then(({ renderPetHubWindow }) => {
-          renderPetHubWindow(root);
-        }).catch(error => {
+      const renderPetHubWindow = async (root: HTMLElement) => {
+        // Show loading state immediately
+        root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--qpm-text-dim);"><span>⏳ Loading Pet Hub...</span></div>';
+        // Yield to let loading state render
+        await new Promise(r => requestAnimationFrame(r));
+        try {
+          const { renderPetHubWindow: render } = await import('./petHubWindow');
+          root.innerHTML = '';
+          render(root);
+        } catch (error) {
           log('⚠️ Failed to load Pet Hub window', error);
-        });
+          root.innerHTML = '<div style="color:#ff6b6b;padding:20px;text-align:center;">Failed to load Pet Hub</div>';
+        }
       };
       toggleWindow('pet-hub', '🐾 Pet Hub', renderPetHubWindow, '1600px', '92vh');
     });
@@ -4120,12 +4139,13 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   if (petOptimizerButton) {
     const newPetOptimizerButton = petOptimizerButton.cloneNode(true) as HTMLButtonElement;
     newPetOptimizerButton.dataset.windowId = 'pet-optimizer';
-    newPetOptimizerButton.addEventListener('click', () => {
-      import('./petOptimizerWindow').then(({ openPetOptimizerWindow }) => {
+    newPetOptimizerButton.addEventListener('click', async () => {
+      try {
+        const { openPetOptimizerWindow } = await import('./petOptimizerWindow');
         openPetOptimizerWindow();
-      }).catch(error => {
+      } catch (error) {
         log('⚠️ Failed to load Pet Optimizer window', error);
-      });
+      }
     });
     petOptimizerButton.replaceWith(newPetOptimizerButton);
     tabButtons.set('pet-optimizer', newPetOptimizerButton);
@@ -4284,18 +4304,6 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   window.addEventListener('resize', clampPanelPosition);
 
   document.body.appendChild(panel);
-
-  // Connect status callbacks to update UI
-  // TODO: Re-enable when autoFeed and weatherSwap features are implemented
-  // setFeedStatusCallback((status: string) => {
-  //   updateUIStatus(status);
-  //   refreshHeaderStats();
-  // });
-
-  // setWeatherStatusCallback((status: string) => {
-  //   updateWeatherUI(status);
-  //   refreshHeaderStats();
-  // });
 
   uiState.panel = panel;
   uiState.content = content;
@@ -4730,7 +4738,8 @@ function createDashboardIndicatorsCard(): HTMLElement {
     }
   };
 
-  setInterval(updateFeedRate, 5000);
+  // Use unified timer manager - pauses when page is hidden
+  visibleInterval('feed-rate-update', updateFeedRate, 5000);
   updateFeedRate();
 
   const restockBox = document.createElement('div');
@@ -4914,28 +4923,15 @@ function createStatsSection(): HTMLElement {
     header.style.background = 'transparent';
   });
 
-  const feedTitle = document.createElement('div');
-  feedTitle.textContent = '🍖 Auto Feed';
-  feedTitle.style.cssText = 'font-weight:700;color:#ffcc80;font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;';
-
-  const feedSummary = document.createElement('div');
-  feedSummary.style.cssText = 'color:#f0f0f0;margin-bottom:3px;font-size:11px;line-height:1.5;';
-
-  const feedDetail = document.createElement('div');
-  feedDetail.style.cssText = 'color:#c0c0c0;font-size:10px;margin-bottom:10px;line-height:1.5;';
-
   const weatherTitle = document.createElement('div');
-  weatherTitle.textContent = '☀️ Weather';
-  weatherTitle.style.cssText = 'font-weight:700;color:#80deea;font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;';
-
-  const weatherSummary = document.createElement('div');
-  weatherSummary.style.cssText = 'color:#f0f0f0;margin-bottom:3px;font-size:11px;line-height:1.5;';
+  weatherTitle.textContent = '☀️ Weather Uptime';
+  weatherTitle.style.cssText = 'font-weight:700;color:#80deea;font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;';
 
   const weatherDetail = document.createElement('div');
   weatherDetail.style.cssText = 'color:#c0c0c0;font-size:10px;margin-bottom:10px;line-height:1.5;';
 
   const shopTitle = document.createElement('div');
-  shopTitle.textContent = '🛒 Auto Shop';
+  shopTitle.textContent = '🛒 Shop Stats';
   shopTitle.style.cssText = 'font-weight:700;color:#ffab91;font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;';
 
   const shopSummary = document.createElement('div');
@@ -4961,11 +4957,7 @@ function createStatsSection(): HTMLElement {
   resetRow.append(resetButton);
 
   content.append(
-    feedTitle,
-    feedSummary,
-    feedDetail,
     weatherTitle,
-    weatherSummary,
     weatherDetail,
     shopTitle,
     shopSummary,
@@ -4978,37 +4970,9 @@ function createStatsSection(): HTMLElement {
   section.append(header, content);
 
   const renderStats = (snapshot: StatsSnapshot): void => {
-    const { feed, weather, shop } = snapshot;
+    const { weather, shop } = snapshot;
 
-    const feedParts: string[] = [];
-    feedParts.push(`${feed.totalFeeds} total feeds`);
-    if (feed.lastFeedAt) {
-      feedParts.push(`last ${formatSince(feed.lastFeedAt)}`);
-    }
-    feedSummary.textContent = feedParts.join(' • ');
-
-    const petEntries = Object.entries(feed.perPet)
-      .sort((a, b) => (b[1]?.count ?? 0) - (a[1]?.count ?? 0))
-      .slice(0, 3);
-    if (petEntries.length === 0) {
-      feedDetail.textContent = 'No feed history yet';
-    } else {
-      const lines = petEntries.map(([name, data]) => {
-        const since = data.lastFeedAt ? ` (${formatSince(data.lastFeedAt)})` : '';
-        return `${name} ×${data.count}${since}`;
-      });
-      feedDetail.textContent = lines.join(' • ');
-    }
-
-    const totalPrimary = weather.presetUsage.weather.primary + weather.presetUsage.noweather.primary;
-    const totalAlternate = weather.presetUsage.weather.alternate + weather.presetUsage.noweather.alternate;
-    const weatherParts: string[] = [];
-    weatherParts.push(`Swaps ${weather.totalSwaps}`);
-    weatherParts.push(`Primary ${totalPrimary}`);
-    if (totalAlternate > 0) weatherParts.push(`Alternate ${totalAlternate}`);
-    if (weather.cooldownBlocks > 0) weatherParts.push(`Cooldown blocks ${weather.cooldownBlocks}`);
-    weatherSummary.textContent = weatherParts.join(' • ');
-
+    // Weather uptime display (time spent in each weather type)
     const uptimeEntries = Object.entries(weather.timeByKind)
       .filter(([, value]) => value > 0)
       .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
@@ -6344,7 +6308,7 @@ function createTrackersSection(): HTMLElement[] {
     uiState.mutationTrackerUnsubscribe = null;
   }
   if (uiState.mutationTrackerTicker != null) {
-    window.clearInterval(uiState.mutationTrackerTicker);
+    uiState.mutationTrackerTicker();
     uiState.mutationTrackerTicker = null;
   }
 
@@ -6353,7 +6317,7 @@ function createTrackersSection(): HTMLElement[] {
     uiState.trackerAbilityHistoryUnsubscribe = null;
   }
   if (uiState.trackerAbilityTicker != null) {
-    window.clearInterval(uiState.trackerAbilityTicker);
+    uiState.trackerAbilityTicker();
     uiState.trackerAbilityTicker = null;
   }
 
@@ -7075,9 +7039,8 @@ function createTrackersSection(): HTMLElement[] {
   });
 
   renderMutationSection();
-  uiState.mutationTrackerTicker = window.setInterval(() => {
-    updateMutationCountdown();
-  }, 1000);
+  // Use unified timer manager - pauses when page is hidden
+  uiState.mutationTrackerTicker = criticalInterval('mutation-tracker-countdown', updateMutationCountdown, 1000);
 
   let trackerAbilityFilter = storage.get<string>(TRACKER_ABILITY_FILTER_KEY, 'all') ?? 'all';
   if (typeof trackerAbilityFilter !== 'string' || trackerAbilityFilter.trim().length === 0) {
@@ -7933,58 +7896,81 @@ function renderTrackersWindow(root: HTMLElement): void {
 
   root.style.cssText = 'display: flex; flex-direction: column; gap: 12px; min-width: 900px; max-width: 1200px;';
 
-  // Header with stats summary
-  const header = document.createElement('div');
-  header.style.cssText = `
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  // Summary section (matching XP Tracker style)
+  const summary = document.createElement('div');
+  summary.style.cssText = `
     padding: 12px 16px;
-    background: var(--qpm-surface-2);
-    border-radius: 6px;
-    border: 1px solid var(--qpm-border);
+    background: var(--qpm-surface-1, #1a1a1a);
+    border-bottom: 1px solid var(--qpm-border, #444);
+    border-radius: 6px 6px 0 0;
   `;
 
   const summaryText = document.createElement('div');
   summaryText.className = 'tracker-summary';
-  summaryText.style.cssText = 'font-size: 13px; color: var(--qpm-text); font-weight: 500;';
+  summaryText.style.cssText = `
+    color: var(--qpm-text, #fff);
+    font-size: 13px;
+    line-height: 1.6;
+    font-weight: 500;
+  `;
   summaryText.textContent = 'Loading pet data...';
-  header.appendChild(summaryText);
+  summary.appendChild(summaryText);
+  root.appendChild(summary);
 
-  // Settings panel container (hidden by default)
-  const settingsPanel = document.createElement('div');
-  settingsPanel.className = 'tracker-settings-panel';
-  settingsPanel.style.cssText = 'display: none;';
+  // Settings panel container (collapsible section matching XP Tracker style)
+  const settingsSection = document.createElement('div');
+  settingsSection.style.cssText = `border-bottom: 1px solid var(--qpm-border, #444);`;
 
-  const configButton = document.createElement('button');
-  configButton.className = 'qpm-button qpm-button--secondary';
-  configButton.textContent = '⚙️ Filters';
-  configButton.style.cssText = 'padding: 6px 12px; font-size: 12px;';
-  configButton.title = 'Show filter options';
-  configButton.addEventListener('click', () => {
-    const isHidden = settingsPanel.style.display === 'none';
-    settingsPanel.style.display = isHidden ? '' : 'none';
-    configButton.textContent = isHidden ? '⚙️ Hide Filters' : '⚙️ Filters';
-  });
-  header.appendChild(configButton);
-
-  root.appendChild(header);
-
-  // Settings panel
-  settingsPanel.style.cssText = `
-    display: none;
-    padding: 16px;
-    background: var(--qpm-surface-2);
-    border-radius: 6px;
-    border: 1px solid var(--qpm-border);
-    margin-bottom: 12px;
-    gap: 16px;
+  const settingsHeader = document.createElement('div');
+  settingsHeader.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--qpm-surface-2, #222);
+    cursor: pointer;
+    user-select: none;
   `;
 
   const settingsTitle = document.createElement('div');
-  settingsTitle.textContent = '⚙️ Display Options';
-  settingsTitle.style.cssText = 'font-weight: 600; color: var(--qpm-accent); margin-bottom: 12px; font-size: 13px;';
-  settingsPanel.appendChild(settingsTitle);
+  settingsTitle.textContent = '⚙️ Filters & Settings';
+  settingsTitle.style.cssText = `
+    color: var(--qpm-text, #fff);
+    font-size: 13px;
+    font-weight: 600;
+  `;
+
+  const settingsIndicator = document.createElement('span');
+  settingsIndicator.textContent = '▲';
+  settingsIndicator.style.cssText = `
+    color: var(--qpm-text-muted, #aaa);
+    font-size: 10px;
+  `;
+
+  settingsHeader.appendChild(settingsTitle);
+  settingsHeader.appendChild(settingsIndicator);
+
+  const settingsPanel = document.createElement('div');
+  settingsPanel.className = 'tracker-settings-panel';
+  settingsPanel.style.cssText = 'display: none; padding: 0;';
+
+  // Toggle settings visibility
+  settingsHeader.addEventListener('click', () => {
+    const isVisible = settingsPanel.style.display === 'block';
+    settingsPanel.style.display = isVisible ? 'none' : 'block';
+    settingsIndicator.textContent = isVisible ? '▲' : '▼';
+  });
+
+  settingsSection.appendChild(settingsHeader);
+  settingsSection.appendChild(settingsPanel);
+  root.appendChild(settingsSection);
+
+  // Settings panel content area
+  const settingsPanelContent = document.createElement('div');
+  settingsPanelContent.style.cssText = `
+    padding: 16px;
+    background: var(--qpm-surface-1, #1a1a1a);
+  `;
 
   const settingsGrid = document.createElement('div');
   settingsGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;';
@@ -8040,16 +8026,14 @@ function renderTrackersWindow(root: HTMLElement): void {
   abilityFilterContainer.appendChild(abilityCheckboxGrid);
   settingsGrid.appendChild(abilityFilterContainer);
 
-  settingsPanel.appendChild(settingsGrid);
-  root.appendChild(settingsPanel);
+  settingsPanelContent.appendChild(settingsGrid);
+  settingsPanel.appendChild(settingsPanelContent);
 
-  // Main table container
+  // Main table container (matching XP Tracker style)
   const tableContainer = document.createElement('div');
   tableContainer.style.cssText = `
     overflow-x: auto;
-    background: var(--qpm-surface-1);
-    border-radius: 6px;
-    border: 1px solid var(--qpm-border);
+    background: var(--qpm-surface-1, #1a1a1a);
     max-height: 60vh;
     overflow-y: auto;
   `;
@@ -8062,23 +8046,23 @@ function renderTrackersWindow(root: HTMLElement): void {
     font-size: 12px;
   `;
 
-  // Table header
+  // Table header (matching XP Tracker style)
   const thead = table.createTHead();
-  thead.style.cssText = 'position: sticky; top: 0; z-index: 10; background: var(--qpm-surface-1);';
+  thead.style.cssText = 'position: sticky; top: 0; z-index: 10;';
   const headerRow = thead.insertRow();
   headerRow.style.cssText = `
-    background: var(--qpm-surface-2);
-    border-bottom: 2px solid var(--qpm-border);
+    background: var(--qpm-surface-2, #222);
+    border-bottom: 2px solid var(--qpm-border, #555);
   `;
 
   const headers = [
-    { text: '🐾 Pet', tooltip: 'Pet name or species' },
-    { text: '✨ Ability', tooltip: 'Pet ability name' },
-    { text: '🎲 Chance %', tooltip: 'Calculated proc chance per minute (baseProbability × STR)' },
-    { text: '⚡ Procs/Hr', tooltip: 'Expected procs per hour' },
-    { text: '💰 Per Proc', tooltip: 'Coins earned per successful proc' },
-    { text: '💸 Per Hour', tooltip: 'Total coins per hour from this ability' },
-    { text: '⏱️ Next ETA', tooltip: 'Live countdown to next expected proc' },
+    { text: 'Pet', tooltip: 'Pet name or species' },
+    { text: 'Ability', tooltip: 'Pet ability name' },
+    { text: 'Chance %', tooltip: 'Calculated proc chance per minute (baseProbability × STR)' },
+    { text: 'Procs/Hr', tooltip: 'Expected procs per hour' },
+    { text: 'Per Proc', tooltip: 'Coins earned per successful proc' },
+    { text: 'Per Hour', tooltip: 'Total coins per hour from this ability' },
+    { text: 'Next ETA', tooltip: 'Live countdown to next expected proc' },
   ];
 
   headers.forEach(({ text, tooltip }) => {
@@ -8089,9 +8073,8 @@ function renderTrackersWindow(root: HTMLElement): void {
       padding: 10px 12px;
       text-align: left;
       font-weight: 600;
-      color: var(--qpm-accent);
+      color: var(--qpm-text, #fff);
       white-space: nowrap;
-      border-bottom: 1px solid var(--qpm-border);
       cursor: help;
     `;
     headerRow.appendChild(th);
@@ -8104,17 +8087,17 @@ function renderTrackersWindow(root: HTMLElement): void {
   tableContainer.appendChild(table);
   root.appendChild(tableContainer);
 
-  // Footer with totals
+  // Footer with totals (matching XP Tracker style)
   const footer = document.createElement('div');
   footer.className = 'tracker-footer';
   footer.style.cssText = `
     padding: 12px 16px;
-    background: var(--qpm-surface-2);
-    border-radius: 6px;
-    border: 1px solid var(--qpm-border);
+    background: var(--qpm-surface-2, #222);
+    border-top: 1px solid var(--qpm-border, #444);
+    border-radius: 0 0 6px 6px;
     font-size: 13px;
     font-weight: 600;
-    color: var(--qpm-accent);
+    color: var(--qpm-text, #fff);
   `;
   footer.textContent = 'Total: Loading...';
   root.appendChild(footer);
@@ -8126,21 +8109,22 @@ function renderTrackersWindow(root: HTMLElement): void {
     tbody,
     footer,
     abilityCheckboxGrid,
-    updateInterval: null as number | null,
+    updateInterval: null as (() => void) | null,
   };
 
-  // Subscribe to pet updates
-  onActivePetInfos((infos) => {
+  // Subscribe to pet updates (throttled to prevent excessive re-renders)
+  const throttledPetUpdate = throttle((infos: ActivePetInfo[]) => {
     modalLatestInfos = infos;
     modalLatestAnalysis = analyzeActivePetAbilities(infos);
     updateTrackerWindow(trackerState);
-  });
+  }, 500);
+  onActivePetInfos(throttledPetUpdate);
 
   // Initial render
   updateTrackerWindow(trackerState);
 
-  // Auto-update every second for live countdowns
-  trackerState.updateInterval = window.setInterval(() => {
+  // Auto-update every second for live countdowns - pauses when page is hidden
+  trackerState.updateInterval = criticalInterval('tracker-window-countdown', () => {
     updateTrackerWindowCountdowns(trackerState.tbody);
   }, 1000);
 
@@ -8148,7 +8132,7 @@ function renderTrackersWindow(root: HTMLElement): void {
   const observer = new MutationObserver(() => {
     if (!document.body.contains(root)) {
       if (trackerState.updateInterval !== null) {
-        clearInterval(trackerState.updateInterval);
+        trackerState.updateInterval();
       }
       observer.disconnect();
       log('Tracker window cleanup: interval cleared');
@@ -8702,65 +8686,31 @@ function renderRemindersWindow(root: HTMLElement): void{
   root.appendChild(mutationSection);
 }
 
-/**
- * Render function for the locker modal window
- */
-function renderLockerWindow(root: HTMLElement): void {
-  root.style.cssText = 'display: flex; flex-direction: column; gap: 16px; min-width: 600px;';
-
-  const syncMode = getCropLockConfig().syncModeEnabled !== false;
-
-  const lockerSection = createInventoryLockerSection(syncMode);
-  lockerSection.style.margin = '0';
-  root.appendChild(lockerSection);
-}
-
-function createInventoryLockerSection(initialSyncMode: boolean): HTMLElement {
+function createBulkFavoriteSection(): HTMLElement {
   const statusChip = document.createElement('span');
   statusChip.className = 'qpm-chip';
-  statusChip.textContent = initialSyncMode ? 'Sync Mode' : 'Basic Mode';
+  statusChip.textContent = isBulkFavoriteActive() ? 'Active' : 'Inactive';
 
-  const { root, body } = createCard('🔒 Inventory Locker', {
+  const { root, body } = createCard('❤️ Bulk Favorite', {
     collapsible: true,
     startCollapsed: true,
     subtitleElement: statusChip,
   });
-  root.dataset.qpmSection = 'inventory-locker';
+  root.dataset.qpmSection = 'bulk-favorite';
 
   const status = document.createElement('div');
   status.className = 'qpm-section-muted';
   status.style.marginBottom = '8px';
-
-  const updateStatus = (enabled: boolean) => {
-    status.textContent = enabled
-      ? 'Unlock keeps manual favorites; only locker-added favorites are removed.'
-      : 'Unlock toggles every favorite for the selected crop species.';
-    statusChip.textContent = enabled ? 'Sync Mode' : 'Basic Mode';
-  };
-
-  updateStatus(initialSyncMode);
+  status.textContent = 'Quickly favorite or unfavorite all produce of a species at once.';
   body.appendChild(status);
 
   const infoBox = document.createElement('div');
-  infoBox.innerHTML = '💡 <strong>How it works:</strong><br>• Open inventory to lock species<br>• Locked species are favorited automatically<br>• Sync mode preserves manual favorites<br>• Basic mode toggles all favorites';
+  infoBox.innerHTML = '💡 <strong>How it works:</strong><br>• Open your inventory<br>• Buttons appear next to the inventory for each produce type<br>• Click a button to favorite/unfavorite ALL items of that species<br>• Heart indicator shows if all items are favorited';
   infoBox.style.cssText = 'background:#333;padding:8px;border-radius:4px;margin-bottom:8px;font-size:10px;line-height:1.5;border-left:3px solid #FFCA28';
   body.appendChild(infoBox);
 
-  const syncToggle = createCheckboxOption('Sync mode (preserve manual favorites)', initialSyncMode, (checked) => {
-    if (!cfg.inventoryLocker) {
-      cfg.inventoryLocker = { syncMode: checked };
-    } else {
-      cfg.inventoryLocker.syncMode = checked;
-    }
-    setCropLockSyncMode(checked);
-    saveCfg();
-    updateStatus(checked);
-    showToast(checked ? 'Inventory locker sync mode enabled' : 'Inventory locker sync mode disabled');
-  });
-  body.appendChild(syncToggle);
-
   const helper = document.createElement('div');
-  helper.textContent = 'Tip: open inventory to lock species. Sync mode avoids unfavoriting crops you already starred.';
+  helper.textContent = 'Tip: Open inventory to see the bulk favorite buttons on the right side of the modal.';
   helper.style.cssText = 'font-size:10px;color:#A5D6A7;line-height:1.4;margin-top:8px;';
   body.appendChild(helper);
 

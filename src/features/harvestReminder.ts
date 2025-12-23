@@ -7,11 +7,10 @@ import { GardenSnapshot, getGardenSnapshot, onGardenSnapshot } from './gardenBri
 import { calculatePlantValue, formatCoins } from './valueCalculator';
 import { computeMutationMultiplier, normalizeMutationName } from '../utils/cropMultipliers';
 import type { MutationMultiplierBreakdown } from '../utils/cropMultipliers';
-import {
-  updateGardenHighlightOverlay,
-  clearGardenHighlightOverlay,
-  disposeGardenHighlightOverlay,
-} from '../ui/gardenHighlightOverlay';
+// Garden highlight overlay removed for performance - functions are no-ops
+const updateGardenHighlightOverlay = (_matches: unknown, _snapshot: unknown): boolean => false;
+const clearGardenHighlightOverlay = (): void => {};
+const disposeGardenHighlightOverlay = (): void => {};
 import { lookupMaxScale } from '../utils/plantScales';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { onWeatherSnapshot, startWeatherHub, WeatherSnapshot } from '../store/weatherHub';

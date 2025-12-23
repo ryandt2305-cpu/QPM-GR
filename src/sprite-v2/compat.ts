@@ -1,6 +1,8 @@
 // sprite-v2/compat.ts - Compatibility layer for old sprite API (canvas-first)
 
 import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { scheduleNonBlocking, delay } from '../utils/scheduling';
+import { log } from '../utils/logger';
 import type { SpriteService } from './types';
 
 let service: SpriteService | null = null;
@@ -9,37 +11,53 @@ export const serviceReady: Promise<SpriteService | null> = new Promise((resolve)
   serviceReadyResolve = resolve;
 });
 
-// Callback system for sprite-ready notifications
-const spriteReadyCallbacks = new Set<() => void>();
-let spritesAreReady = false;
+// Callbacks waiting for sprites to be ready
+const spritesReadyCallbacks: Array<() => void> = [];
+let spritesReady = false;
 
 /**
- * Register a callback to be called when sprites become ready.
+ * Register a callback to be called when sprites are ready.
  * If sprites are already ready, the callback is called immediately.
  * Returns an unsubscribe function.
  */
 export function onSpritesReady(callback: () => void): () => void {
-  if (spritesAreReady) {
-    // Already ready - call immediately
+  if (spritesReady) {
+    // Already ready, call immediately
     try {
       callback();
     } catch (e) {
       console.error('[Sprite Compat] onSpritesReady callback error:', e);
     }
-    return () => {}; // No-op unsubscribe
+    return () => {}; // No-op unsubscribe since already called
+  } else {
+    spritesReadyCallbacks.push(callback);
+    // Return unsubscribe function
+    return () => {
+      const idx = spritesReadyCallbacks.indexOf(callback);
+      if (idx !== -1) {
+        spritesReadyCallbacks.splice(idx, 1);
+      }
+    };
   }
-  
-  spriteReadyCallbacks.add(callback);
-  return () => {
-    spriteReadyCallbacks.delete(callback);
-  };
 }
 
 /**
- * Check if sprite service is ready
+ * Check if sprites are ready for use.
  */
 export function isSpritesReady(): boolean {
-  return spritesAreReady;
+  return spritesReady;
+}
+
+function notifySpritesReady(): void {
+  spritesReady = true;
+  for (const cb of spritesReadyCallbacks) {
+    try {
+      cb();
+    } catch (e) {
+      console.error('[Sprite Compat] onSpritesReady callback error:', e);
+    }
+  }
+  spritesReadyCallbacks.length = 0; // Clear callbacks
 }
 
 /**
@@ -81,90 +99,9 @@ function cacheDataUrl(key: string, value: string | null): string {
 // Legacy compat used data URL caches and warmup; the canvas-first path relies on PIXI's internal cache.
 export function setSpriteService(svc: SpriteService): void {
   service = svc;
-  spritesAreReady = true;
   serviceReadyResolve?.(service);
-  
-  // Call all registered callbacks
-  for (const callback of spriteReadyCallbacks) {
-    try {
-      callback();
-    } catch (e) {
-      console.error('[Sprite Compat] Sprite ready callback error:', e);
-    }
-  }
-  spriteReadyCallbacks.clear();
-  
-  // Dispatch event so UI components can refresh once sprites are available
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('qpm-sprites-ready'));
-    
-    // Also try to refresh any existing sprite images that failed to load
-    // This handles cases where UI rendered before sprites were ready
-    setTimeout(() => {
-      refreshPendingSpriteImages();
-    }, 50);
-  }
-}
-
-/**
- * Find and refresh any sprite images that have empty src or failed to load
- * Called automatically when sprite service becomes ready
- * 
- * Supports data attributes:
- * - data-qpm-sprite="pet:SpeciesName" - pet sprite
- * - data-qpm-sprite="crop:CropName" - crop sprite
- * - data-qpm-sprite="crop:CropName:Mutation1,Mutation2" - mutated crop sprite
- * - data-qpm-sprite="pet:SpeciesName:Mutation1,Mutation2" - mutated pet sprite
- */
-function refreshPendingSpriteImages(): void {
-  if (!service) return;
-  
-  try {
-    // Find all images with QPM sprite data attributes
-    const images = document.querySelectorAll<HTMLImageElement>('[data-qpm-sprite]');
-    let refreshed = 0;
-    
-    images.forEach((img) => {
-      const spriteData = img.dataset.qpmSprite;
-      if (!spriteData) return;
-      
-      const parts = spriteData.split(':');
-      const type = parts[0];
-      const id = parts[1];
-      const mutationsStr = parts[2];
-      
-      if (!type || !id) return;
-      
-      const mutations = mutationsStr ? mutationsStr.split(',') : [];
-      
-      let dataUrl: string | null = null;
-      
-      if (type === 'pet') {
-        if (mutations.length > 0) {
-          dataUrl = getPetSpriteDataUrlWithMutations(id, mutations);
-        } else {
-          dataUrl = getPetSpriteDataUrl(id);
-        }
-      } else if (type === 'crop') {
-        if (mutations.length > 0) {
-          dataUrl = getCropSpriteDataUrlWithMutations(id, mutations);
-        } else {
-          dataUrl = getCropSpriteDataUrl(id);
-        }
-      }
-      
-      if (dataUrl && dataUrl !== img.src) {
-        img.src = dataUrl;
-        refreshed++;
-      }
-    });
-    
-    if (refreshed > 0) {
-      console.log(`[Sprite Compat] Refreshed ${refreshed} pending sprite images`);
-    }
-  } catch (e) {
-    console.error('[Sprite Compat] Error refreshing sprites:', e);
-  }
+  // Notify all waiting callbacks that sprites are ready
+  notifySpritesReady();
 }
 
 /**
@@ -193,8 +130,9 @@ function normalizeSpeciesName(species: string | number): string {
   if (lower === 'pink tulip' || lower === 'pinktulip') return 'PinkTulip';
   if (lower === 'purple tulip' || lower === 'purpletulip') return 'PurpleTulip';
 
-  // Cacao / cocoa variants - sprite manifest uses "Cacao", not "CacaoBean"
-  if (lower === 'cacaobean' || lower === 'cacaobeans' || lower === 'cacao bean' || lower === 'cacao beans' || lower === 'cacaofruit' || lower === 'cacao') return 'Cacao';
+  // Cacao / cocoa variants - game uses "Cacao" as the internal sprite name
+  // Display names are "Cacao Bean" (seed), "Cacao Plant" (plant), "Cacao Fruit" (fruit)
+  if (lower === 'cacaobean' || lower === 'cacaobeans' || lower === 'cacaofruit' || lower === 'cacao' || lower === 'cacao bean' || lower === 'cocoa bean' || lower === 'cocoabean' || lower === 'cacao plant' || lower === 'cacao fruit') return 'Cacao';
 
   // Starweaver variations
   if (lower === 'starweaver') return 'Starweaver';
@@ -256,20 +194,11 @@ function getIdVariations(category: string, id: string): string[] {
   return variations;
 }
 
-// Track if we've already warned about service not being ready (avoid log spam)
-let hasWarnedNotReady = false;
-
 function tryRenderCanvas(category: string, id: string, mutations: string[] = []): HTMLCanvasElement | null {
   if (!service) {
-    // Only warn once to avoid console spam
-    if (!hasWarnedNotReady) {
-      console.warn('[Sprite Compat] Service not initialized yet - sprites will load when ready');
-      hasWarnedNotReady = true;
-    }
+    console.warn('[Sprite Compat] Service not initialized yet');
     return null;
   }
-  // Reset warning flag once service is available
-  hasWarnedNotReady = false;
 
   try {
     return service.renderToCanvas({ category: category as any, id, mutations });
@@ -556,4 +485,176 @@ export function listTrackedSpriteResources(_category = 'all'): Array<{ url: stri
 export function loadTrackedSpriteSheets(_maxSheets = 3, _category = 'all'): Promise<string[]> {
   console.warn('[Sprite Compat] loadTrackedSpriteSheets is deprecated in sprite-v2');
   return Promise.resolve([]);
+}
+
+// ============================================================================
+// SPRITE CACHE WARMUP (Aries Mod Pattern)
+// Pre-renders common sprites during browser idle time to avoid lag when displayed
+// ============================================================================
+
+// Warmup configuration
+const WARMUP_BATCH_SIZE = 3;  // Sprites per batch (matches Aries Mod)
+const WARMUP_DELAY_MS = 8;    // Delay between batches (matches Aries Mod)
+const WARMUP_CATEGORIES = ['pet', 'plant', 'crop', 'item'] as const;
+
+// Warmup state
+let warmupStarted = false;
+let warmupCompleted = false;
+type WarmupState = { total: number; done: number; completed: boolean };
+let warmupState: WarmupState = { total: 0, done: 0, completed: false };
+const warmupListeners = new Set<(state: WarmupState) => void>();
+
+function notifyWarmupProgress(state: Partial<WarmupState>): void {
+  Object.assign(warmupState, state);
+  for (const listener of warmupListeners) {
+    try {
+      listener(warmupState);
+    } catch {
+      // Ignore listener errors
+    }
+  }
+}
+
+/**
+ * Subscribe to warmup progress updates.
+ * Returns an unsubscribe function.
+ */
+export function onSpriteWarmupProgress(listener: (state: WarmupState) => void): () => void {
+  warmupListeners.add(listener);
+  // Emit current state immediately
+  try {
+    listener(warmupState);
+  } catch {
+    // Ignore
+  }
+  return () => warmupListeners.delete(listener);
+}
+
+/**
+ * Get current warmup state
+ */
+export function getSpriteWarmupState(): WarmupState {
+  return { ...warmupState };
+}
+
+/**
+ * Pre-warm the sprite cache during browser idle time.
+ * Uses scheduleNonBlocking to avoid blocking the main thread.
+ * Processes sprites in batches of 3 with 8ms delays (Aries Mod pattern).
+ */
+export async function warmupSpriteCache(): Promise<void> {
+  if (warmupStarted || warmupCompleted) {
+    return;
+  }
+  
+  if (!service) {
+    // Retry after service is ready
+    await serviceReady;
+    if (!service) {
+      log('⚠️ Sprite warmup: service not available');
+      return;
+    }
+  }
+
+  warmupStarted = true;
+  log('🔥 Starting sprite cache warmup...');
+
+  // Collect all sprites to warm up
+  const tasks: Array<{ category: string; id: string }> = [];
+  const seen = new Set<string>();
+
+  for (const category of WARMUP_CATEGORIES) {
+    try {
+      const items = service.list(category);
+      for (const item of items) {
+        const key = item.key;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        
+        // Extract base name from key (e.g., "sprite/pet/Cat" -> "Cat")
+        const parts = key.split('/').filter(Boolean);
+        const id = parts[parts.length - 1] || key;
+        tasks.push({ category, id });
+      }
+    } catch {
+      // Ignore category errors
+    }
+  }
+
+  const total = tasks.length;
+  let done = 0;
+  
+  notifyWarmupProgress({ total, done: 0, completed: false });
+  log(`🔥 Warming ${total} sprites in batches of ${WARMUP_BATCH_SIZE}...`);
+
+  // Process in batches
+  const processNextBatch = async (startIndex: number): Promise<void> => {
+    const batch = tasks.slice(startIndex, startIndex + WARMUP_BATCH_SIZE);
+    
+    // Process batch items using scheduleNonBlocking
+    await Promise.all(
+      batch.map(async ({ category, id }) => {
+        try {
+          await scheduleNonBlocking(() => {
+            // This triggers the sprite to be rendered and cached
+            if (category === 'pet') {
+              getPetSpriteCanvas(id);
+            } else {
+              getCropSpriteCanvas(id);
+            }
+          });
+          done++;
+          notifyWarmupProgress({ done });
+        } catch {
+          // Ignore individual sprite errors
+          done++;
+          notifyWarmupProgress({ done });
+        }
+      })
+    );
+
+    // Schedule next batch if there are more
+    const nextStart = startIndex + WARMUP_BATCH_SIZE;
+    if (nextStart < tasks.length) {
+      await delay(WARMUP_DELAY_MS);
+      await processNextBatch(nextStart);
+    }
+  };
+
+  if (tasks.length > 0) {
+    await processNextBatch(0);
+  }
+
+  warmupCompleted = true;
+  notifyWarmupProgress({ completed: true });
+  log(`✅ Sprite warmup complete: ${done} sprites cached`);
+}
+
+/**
+ * Start sprite warmup after a delay (to not interfere with initial load).
+ * Uses requestIdleCallback if available for optimal timing.
+ */
+export function scheduleWarmup(delayMs: number = 2000): void {
+  if (warmupStarted || warmupCompleted) {
+    return;
+  }
+
+  const startWarmup = () => {
+    if (typeof (window as any).requestIdleCallback === 'function') {
+      (window as any).requestIdleCallback(() => {
+        void warmupSpriteCache();
+      }, { timeout: 5000 });
+    } else {
+      void warmupSpriteCache();
+    }
+  };
+
+  // Wait for sprites to be ready first, then delay
+  if (spritesReady) {
+    setTimeout(startWarmup, delayMs);
+  } else {
+    onSpritesReady(() => {
+      setTimeout(startWarmup, delayMs);
+    });
+  }
 }

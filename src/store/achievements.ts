@@ -75,6 +75,7 @@ export interface AchievementSnapshot {
   lastRoomPlayers: number | null;
   sellBurstCoins: number | null;
   sellBurstAlone: boolean | null;
+  instantFeedsUsed: number | null;
   weatherEventsLastHour: number | null;
   // Future: activity log/events + coin balance + per-species counters + rolling windows
 }
@@ -118,6 +119,7 @@ let lastRoomIsPrivate = false;
 let lastCoinBalanceFromLogs: number | null = null;
 let sellBurstCoins = 0;
 let sellBurstAlone = false;
+let instantFeedsUsed = 0;
 let lastWeatherKind: string | null = null;
 const weatherEvents: Array<{ kind: string; timestamp: number }> = [];
 
@@ -312,6 +314,14 @@ function handleRoomSnapshot(source: any): void {
     handleRoomFromLog({ room }, now);
   }
   handleCoinsFromLog(source);
+}
+
+export function recordInstantFeedUse(count = 1): void {
+  const inc = Number(count);
+  if (Number.isFinite(inc) && inc > 0) {
+    instantFeedsUsed += inc;
+    scheduleEvaluate();
+  }
 }
 
 function persist(): void {
@@ -2372,6 +2382,78 @@ function ensureDefinitions(): void {
     },
 
     {
+      id: 'pets:chow-line-80',
+      title: 'Pet Chow Line I',
+      description: 'Use 80 instant feeds.',
+      category: 'pets',
+      rarity: 'common',
+      visibility: 'public',
+      target: 80,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-240',
+      title: 'Pet Chow Line II',
+      description: 'Use 240 instant feeds.',
+      category: 'pets',
+      rarity: 'uncommon',
+      visibility: 'public',
+      target: 240,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-720',
+      title: 'Pet Chow Line III',
+      description: 'Use 720 instant feeds.',
+      category: 'pets',
+      rarity: 'rare',
+      visibility: 'public',
+      target: 720,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-1850',
+      title: 'Pet Chow Line IV',
+      description: 'Use 1,850 instant feeds.',
+      category: 'pets',
+      rarity: 'legendary',
+      visibility: 'public',
+      target: 1_850,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-5000',
+      title: 'Pet Chow Line V',
+      description: 'Use 5,000 instant feeds.',
+      category: 'pets',
+      rarity: 'mythical',
+      visibility: 'public',
+      target: 5_000,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-15000',
+      title: 'Pet Chow Line VI',
+      description: 'Use 15,000 instant feeds.',
+      category: 'pets',
+      rarity: 'divine',
+      visibility: 'public',
+      target: 15_000,
+      icon: '🍖',
+    },
+    {
+      id: 'pets:chow-line-50000',
+      title: 'Pet Chow Line VII',
+      description: 'Use 50,000 instant feeds.',
+      category: 'pets',
+      rarity: 'celestial',
+      visibility: 'public',
+      target: 50_000,
+      icon: '🍖',
+      hiddenTargetUntil: 'pets:chow-line-15000',
+    },
+
+    {
       id: 'weather:dawnsmith-10',
       title: 'Dawnsmith I',
       description: 'Harvest 10 crops during Dawn moon.',
@@ -2762,6 +2844,7 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   let lastRoomPlayersSnap: number | null = null;
   let sellBurstCoinsSnap: number | null = null;
   let sellBurstAloneSnap: boolean | null = null;
+  let instantFeedsUsedSnap: number | null = null;
 
   try {
     const coinAtom = getAtomByLabel('myCoinsCountAtom');
@@ -3476,6 +3559,7 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
   lastRoomPlayersSnap = lastRoomPlayers || null;
   sellBurstCoinsSnap = sellBurstCoins || null;
   sellBurstAloneSnap = sellBurstAlone;
+  instantFeedsUsedSnap = instantFeedsUsed || null;
 
   const snapshot: AchievementSnapshot = {
     stats,
@@ -3518,6 +3602,7 @@ async function buildSnapshot(): Promise<AchievementSnapshot> {
     lastRoomPlayers: lastRoomPlayersSnap,
     sellBurstCoins: sellBurstCoinsSnap,
     sellBurstAlone: sellBurstAloneSnap,
+    instantFeedsUsed: instantFeedsUsedSnap,
     weatherEventsLastHour,
   };
   dbgAch('ℹ️ Achievements snapshot', {
@@ -3554,6 +3639,7 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
   const roomMinutes = snap.roomMinutes ?? 0;
   const sellBurstCoins = snap.sellBurstCoins ?? 0;
   const sellBurstAlone = snap.sellBurstAlone ?? false;
+  const instantFeedsUsed = snap.instantFeedsUsed ?? 0;
   const weatherEventsLastHour = snap.weatherEventsLastHour ?? 0;
   defs.forEach((def) => {
     const existing = state.progress.get(def.id) ?? {
@@ -3674,6 +3760,8 @@ function evaluate(defs: AchievementDefinition[], snap: AchievementSnapshot): voi
           current = abilityUnique30s;
         } else if (def.id === 'onetime:abilities:crit-crafter') {
           current = (abilityCounts['GoldGranter'] ?? 0) + (abilityCounts['RainbowGranter'] ?? 0);
+        } else if (def.id.startsWith('pets:chow-line-')) {
+          current = instantFeedsUsed;
         } else if (def.id.startsWith('garden:mutation-harvester-')) {
           current = mutatedHarvests;
         } else if (def.id.startsWith('garden:giant-grower-')) {

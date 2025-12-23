@@ -597,17 +597,6 @@ function resolveSprite(def: AchievementDefinition): ResolvedSprite {
       const url = getTileDataUrl('items', 13) ?? getTileDataUrl('mutations', 2);
       return { element, url } satisfies ResolvedSprite;
     },
-    'pets:chow-line': () => {
-      const petLayer = pet('bunny');
-      const food = createTileSpriteElement('plants', 51, Math.round(SPRITE_SIZE * 0.95));
-      if (food) food.style.transform = 'translate(-6px, 6px)';
-      const petEl = petLayer.element;
-      if (petEl) petEl.style.transform = 'translate(6px, -4px)';
-      const layers = [food, petEl].filter((el): el is HTMLElement => !!el);
-      const element = layers.length ? createLayeredSprite(layers, SPRITE_SIZE) : petEl;
-      const url = petLayer.url ?? getTileDataUrl('plants', 51);
-      return { element, url } satisfies ResolvedSprite;
-    },
     'weather:dawnsmith': () => {
       const dawn = createTileSpriteElement('animations', 49, SPRITE_SIZE);
       const crop = createTileSpriteElement('plants', 30, Math.round(SPRITE_SIZE * 0.7));

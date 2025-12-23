@@ -303,28 +303,13 @@ function createSidebar(container: Element): HTMLElement {
   const sidebarEl = document.createElement('div');
   sidebarEl.id = SIDEBAR_ID;
   
-  // Find all inventory items to get the rightmost edge
-  const allItems = document.querySelectorAll(INVENTORY_ITEM_SELECTOR);
-  let rightmostEdge = 0;
-  let topEdge = Infinity;
-  let bottomEdge = 0;
+  // Use container bounds for stable positioning (not individual items which change with filters)
+  const containerRect = container.getBoundingClientRect();
+  const rightmostEdge = containerRect.right;
+  const topEdge = containerRect.top;
+  const bottomEdge = containerRect.bottom;
   
-  allItems.forEach(item => {
-    const rect = item.getBoundingClientRect();
-    if (rect.right > rightmostEdge) rightmostEdge = rect.right;
-    if (rect.top < topEdge) topEdge = rect.top;
-    if (rect.bottom > bottomEdge) bottomEdge = rect.bottom;
-  });
-  
-  // Fallback to container if no items found
-  if (rightmostEdge === 0) {
-    const containerRect = container.getBoundingClientRect();
-    rightmostEdge = containerRect.right;
-    topEdge = containerRect.top;
-    bottomEdge = containerRect.bottom;
-  }
-  
-  // Position directly to the right of the rightmost inventory item
+  // Position directly to the right of the inventory container
   const gap = 8;
   const leftPosition = rightmostEdge + gap;
   
@@ -470,46 +455,27 @@ function findInventoryContainer(): Element | null {
   // Structure: McFlex css-1cyjil4 > McFlex css-zo8r2v > individual items
   let container: Element = firstItem;
   
-  // Go up until we find the flex container with multiple inventory items
+  // Find the first McFlex parent that contains multiple inventory items
+  // This is the stable container (css-zo8r2v) that maintains consistent bounds regardless of filters
   for (let i = 0; i < 5; i++) {
     const parent = container.parentElement;
     if (!parent) break;
     
     // Check if this is the inventory grid container
-    // It should contain the first item and have the grid layout class
+    // It should contain the first item and have the McFlex class
     if (
       parent.classList.contains('McFlex') &&
       parent.querySelectorAll(INVENTORY_ITEM_SELECTOR).length > 1
     ) {
-      container = parent;
-      break;
+      // Return this first McFlex - don't traverse further up
+      // The outer containers extend beyond the visible grid area
+      return parent;
     }
     
     container = parent;
   }
   
-  // Final validation - find the outermost inventory grid container
-  // Look for the container with css-zo8r2v or similar that wraps all items
-  let finalContainer: Element = container;
-  
-  for (let i = 0; i < 10; i++) {
-    const parent = finalContainer.parentElement;
-    if (!parent) break;
-    
-    // Stop when we hit the dialog or document body
-    if (parent === document.body || parent.getAttribute('role') === 'dialog') {
-      break;
-    }
-    
-    // If parent also contains inventory items, use it
-    if (parent.querySelector(FIRST_INVENTORY_ITEM_SELECTOR)) {
-      finalContainer = parent;
-    } else {
-      break;
-    }
-  }
-  
-  return finalContainer;
+  return container;
 }
 
 /**

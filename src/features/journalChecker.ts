@@ -4,6 +4,7 @@
 
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
+import { getAllPlantSpecies, getAllPetSpecies, getAllMutations, areCatalogsReady } from '../catalogs/gameCatalogs';
 
 const JOURNAL_DEBUG_LOGS = false;
 const jdbg = (...args: unknown[]): void => {
@@ -73,122 +74,85 @@ export type JournalSummary = {
 // Game Data Catalog
 // ============================================================================
 
-// All crop species and their variants
-// Journal tracks: Normal, Rainbow, Gold, mutations (Frozen, Wet, Chilled, Dawnlit, Dawnbound, Amberlit, Amberbound), and Max size
-const PRODUCE_CATALOG: Record<string, string[]> = {
-  // Common crops
-  'Carrot': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Tomato': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Corn': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Pepper': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'FavaBean': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+/**
+ * Dynamically generate produce catalog from game catalogs
+ * Automatically supports new plant species without code changes
+ */
+function getProduceCatalog(): Record<string, string[]> {
+  const catalog: Record<string, string[]> = {};
 
-  // Vegetables
-  'Pumpkin': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Squash': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  // Return empty if catalogs aren't ready yet
+  if (!areCatalogsReady()) {
+    return catalog;
+  }
 
-  // Fruits
-  'Strawberry': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Blueberry': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Watermelon': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Grape': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Apple': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Banana': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Lemon': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Coconut': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Lychee': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'DragonFruit': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'PassionFruit': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  // Build variant list dynamically from catalog
+  const variants: string[] = ['Normal'];
 
-  // Flowers
-  'Lily': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Sunflower': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Daffodil': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Camellia': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Delphinium': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'OrangeTulip': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Chrysanthemum': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  // Get all mutation names from catalog and add them ALL (FUTUREPROOF!)
+  const mutations = getAllMutations(); // Already returns string[]
 
-  // Succulents/Plants
-  'Aloe': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Cactus': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Echeveria': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'BurrosTail': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Bamboo': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
+  // Add all mutations from catalog (auto-discovers new mutations!)
+  for (const mutationName of mutations) {
+    // Ensure it's a string and skip MaxWeight
+    if (typeof mutationName !== 'string') continue;
+    if (mutationName.toLowerCase().includes('maxweight')) continue;
+    variants.push(mutationName);
+  }
 
-  // Special/Rare
-  'Mushroom': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'Starweaver': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'DawnCelestial': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'MoonCelestial': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-  'CacaoBean': ['Normal', 'Rainbow', 'Gold', 'Frozen', 'Wet', 'Chilled', 'Dawnlit', 'Dawncharged', 'Ambershine', 'Ambercharged', 'Max Weight'],
-};
+  // Add max weight (always present in journal system)
+  variants.push('Max Weight');
 
-// All pet species and their variants
-// Pets track: Normal, Rainbow, Gold, and Max size
-const PET_CATALOG: Record<string, string[]> = {
-  // Tier 1 - Common
-  'Worm': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Snail': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Bee': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
+  // Get all plant species from catalog
+  const species = getAllPlantSpecies();
 
-  // Tier 2 - Uncommon
-  'Chicken': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Bunny': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Dragonfly': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
+  // Assign variants to all species
+  for (const speciesName of species) {
+    catalog[speciesName] = variants.slice(); // Use slice() to create a copy
+  }
 
-  // Tier 3 - Rare
-  'Pig': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Cow': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Sheep': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Turkey': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
+  return catalog;
+}
 
-  // Tier 4 - Epic
-  'Squirrel': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Turtle': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Goat': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
+/**
+ * Dynamically generate pet catalog from game catalogs
+ * Automatically supports new pet species without code changes
+ */
+function getPetCatalog(): Record<string, string[]> {
+  const catalog: Record<string, string[]> = {};
 
-  // Tier 5 - Legendary
-  'Butterfly': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Peacock': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-  'Capybara': ['Normal', 'Rainbow', 'Gold', 'Max Weight'],
-};
+  // Return empty if catalogs aren't ready yet
+  if (!areCatalogsReady()) {
+    return catalog;
+  }
 
-// All pet abilities
-const PET_ABILITIES: string[] = [
-  // XP Boost
-  'XP Boost I',
-  'XP Boost II',
-  'XP Boost III',
+  // Build variant list for pets
+  const variants: string[] = ['Normal'];
 
-  // Selling
-  'Higher Sell Price I',
-  'Higher Sell Price II',
-  'Higher Sell Price III',
+  // Get mutation names from catalog
+  const mutations = getAllMutations(); // Already returns string[]
 
-  // Growth Speed
-  'Faster Growth I',
-  'Faster Growth II',
-  'Faster Growth III',
+  // Pets only track Rainbow and Gold (not weather mutations)
+  // Check for these specific mutations in the catalog
+  for (const mutationName of mutations) {
+    if (mutationName === 'Rainbow' || mutationName === 'Gold') {
+      variants.push(mutationName);
+    }
+  }
 
-  // Crop Size
-  'Bigger Crops I',
-  'Bigger Crops II',
-  'Bigger Crops III',
+  // Add max weight (always present for pets)
+  variants.push('Max Weight');
 
-  // Special Mutations
-  'Gold Granter',
-  'Rainbow Granter',
+  // Get all pet species from catalog
+  const species = getAllPetSpecies();
 
-  // Harvesting
-  'Extra Harvests I',
-  'Extra Harvests II',
+  // Assign variants to all species
+  for (const speciesName of species) {
+    catalog[speciesName] = variants.slice(); // Use slice() to create a copy
+  }
 
-  // Utility
-  'Crop Refund',
-  'Double Seeds',
-  'Weather Bonus',
-];
+  return catalog;
+}
 
 // ============================================================================
 // State
@@ -380,7 +344,8 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
   });
 
   // Process produce
-  for (const [species, possibleVariants] of Object.entries(PRODUCE_CATALOG)) {
+  const produceCatalog = getProduceCatalog();
+  for (const [species, possibleVariants] of Object.entries(produceCatalog)) {
     const speciesLog = produceLogByKey.get(resolveProduceKey(species));
     const loggedVariants = new Map<string, number>();
 
@@ -390,18 +355,24 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       }
     }
 
+    // Ensure possibleVariants is actually an array of strings
+    if (!Array.isArray(possibleVariants)) {
+      continue; // Skip if not an array
+    }
+
     summary.produce.push({
       species,
       variants: possibleVariants.map((variant) => ({
-        variant,
-        collected: loggedVariants.has(normalizeKey(variant)),
-        collectedAt: loggedVariants.get(normalizeKey(variant)),
+        variant: String(variant), // Ensure it's a string
+        collected: loggedVariants.has(normalizeKey(String(variant))),
+        collectedAt: loggedVariants.get(normalizeKey(String(variant))),
       })),
     });
   }
 
   // Process pets (variants only, no abilities)
-  for (const [species, possibleVariants] of Object.entries(PET_CATALOG)) {
+  const petCatalog = getPetCatalog();
+  for (const [species, possibleVariants] of Object.entries(petCatalog)) {
     const speciesLog = petLogByKey.get(normalizeKey(species));
     const loggedVariants = new Map<string, number>();
 
@@ -411,12 +382,17 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       }
     }
 
+    // Ensure possibleVariants is actually an array of strings
+    if (!Array.isArray(possibleVariants)) {
+      continue; // Skip if not an array
+    }
+
     summary.pets.push({
       species,
       variants: possibleVariants.map((variant) => ({
-        variant,
-        collected: loggedVariants.has(normalizeKey(variant)),
-        collectedAt: loggedVariants.get(normalizeKey(variant)),
+        variant: String(variant), // Ensure it's a string
+        collected: loggedVariants.has(normalizeKey(String(variant))),
+        collectedAt: loggedVariants.get(normalizeKey(String(variant))),
       })),
     });
   }

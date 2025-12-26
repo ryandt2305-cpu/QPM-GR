@@ -1,0 +1,173 @@
+// src/catalogs/types.ts
+// TypeScript interfaces for Magic Garden game catalogs
+// FULLY DYNAMIC - No hardcoded item/pet names, captures whatever the game has
+
+/**
+ * Sprite/tile reference for visual assets
+ */
+export interface TileRef {
+  sheet?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  [key: string]: unknown;
+}
+
+// ============================================================================
+// ITEM CATALOG - Tools, potions, and other purchasable items
+// ============================================================================
+
+export interface ItemCatalogEntry {
+  tileRef?: TileRef;
+  name?: string;
+  coinPrice: number;
+  creditPrice: number;
+  rarity?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are item IDs discovered at runtime */
+export type ItemCatalog = Record<string, ItemCatalogEntry>;
+
+// ============================================================================
+// DECOR CATALOG - Garden decorations
+// ============================================================================
+
+export interface DecorCatalogEntry {
+  tileRef?: TileRef;
+  rotationVariants?: Record<string, TileRef>;
+  name?: string;
+  coinPrice: number;
+  creditPrice: number;
+  rarity?: string;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are decor IDs discovered at runtime */
+export type DecorCatalog = Record<string, DecorCatalogEntry>;
+
+// ============================================================================
+// MUTATION CATALOG - Crop mutations (Gold, Rainbow, weather-based, etc.)
+// ============================================================================
+
+export interface MutationCatalogEntry {
+  baseChance: number;
+  coinMultiplier: number;
+  tileRef?: TileRef;
+  name?: string;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are mutation IDs discovered at runtime */
+export type MutationCatalog = Record<string, MutationCatalogEntry>;
+
+// ============================================================================
+// EGG CATALOG - Pet eggs with spawn weights and hatch info
+// ============================================================================
+
+export interface EggCatalogEntry {
+  tileRef?: TileRef;
+  name?: string;
+  faunaSpawnWeights: unknown; // Can be array or object, varies by game version
+  secondsToHatch: number;
+  coinPrice?: number;
+  creditPrice?: number;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are egg IDs discovered at runtime */
+export type EggCatalog = Record<string, EggCatalogEntry>;
+
+// ============================================================================
+// PET CATALOG - Pet species with diets and hunger costs
+// Critical: diet array and coinsToFullyReplenishHunger are the detection keys
+// ============================================================================
+
+export interface PetCatalogEntry {
+  tileRef?: TileRef;
+  name?: string;
+  diet: string[];
+  coinsToFullyReplenishHunger: number;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are pet species discovered at runtime */
+export type PetCatalog = Record<string, PetCatalogEntry>;
+
+// ============================================================================
+// PET ABILITIES - Ability definitions with triggers and parameters
+// ============================================================================
+
+export interface PetAbilityEntry {
+  trigger: string;
+  baseParameters: Record<string, unknown>;
+  baseProbability?: number;
+  name?: string;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are ability IDs discovered at runtime */
+export type PetAbilities = Record<string, PetAbilityEntry>;
+
+// ============================================================================
+// PLANT CATALOG - Plants with seed/plant/crop stages
+// ============================================================================
+
+export interface PlantStageInfo {
+  tileRef?: TileRef;
+  name?: string;
+  coinPrice?: number;
+  creditPrice?: number;
+  [key: string]: unknown;
+}
+
+export interface PlantCatalogEntry {
+  seed: PlantStageInfo;
+  plant: PlantStageInfo;
+  crop: PlantStageInfo;
+  name?: string;
+  [key: string]: unknown;
+}
+
+/** Dynamic catalog - keys are plant species discovered at runtime */
+export type PlantCatalog = Record<string, PlantCatalogEntry>;
+
+// ============================================================================
+// AGGREGATED CATALOGS CONTAINER
+// ============================================================================
+
+export interface GameCatalogs {
+  itemCatalog: ItemCatalog | null;
+  decorCatalog: DecorCatalog | null;
+  mutationCatalog: MutationCatalog | null;
+  eggCatalog: EggCatalog | null;
+  petCatalog: PetCatalog | null;
+  petAbilities: PetAbilities | null;
+  plantCatalog: PlantCatalog | null;
+  weatherCatalog: Record<string, unknown> | null;
+}
+
+/**
+ * Type guard to check if a catalog is loaded
+ */
+export function isCatalogLoaded<T>(catalog: T | null): catalog is T {
+  return catalog !== null;
+}
+
+/**
+ * Get list of all catalog keys
+ */
+export const CATALOG_KEYS = [
+  'itemCatalog',
+  'decorCatalog',
+  'mutationCatalog',
+  'eggCatalog',
+  'petCatalog',
+  'petAbilities',
+  'plantCatalog',
+  'weatherCatalog',
+] as const;
+
+export type CatalogKey = typeof CATALOG_KEYS[number];

@@ -45,6 +45,7 @@ import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { visibleInterval, criticalInterval, timerManager } from '../utils/timerManager';
 import { throttle, yieldToBrowser } from '../utils/scheduling';
+import { getAllPetSpecies, getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 // Display Tweaker removed
 
 // Helper function to get mutated crop sprite URL
@@ -3267,7 +3268,9 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   const speciesCheckboxContainer = document.createElement('div');
   speciesCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;';
 
-  const speciesOptions = [
+  // Get pet species dynamically from catalog (FUTUREPROOF!)
+  const speciesOptions = areCatalogsReady() ? getAllPetSpecies() : [
+    // Fallback list if catalogs not loaded yet
     'Worm', 'Snail', 'Bee', 'Chicken', 'Bunny', 'Dragonfly',
     'Pig', 'Cow', 'Turkey', 'Squirrel', 'Turtle', 'Goat',
     'Butterfly', 'Peacock', 'Capybara'
@@ -3316,9 +3319,15 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   const cropTypeCheckboxContainer = document.createElement('div');
   cropTypeCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;';
 
-  // Dynamically import all crop names from cropBaseStats.ts
-  const { getAllCropNames } = await import('../data/cropBaseStats');
-  const cropTypeOptions = getAllCropNames();
+  // Get plant species dynamically from catalog (FUTUREPROOF!)
+  // Fallback to hardcoded list if catalogs not ready
+  let cropTypeOptions: string[];
+  if (areCatalogsReady()) {
+    cropTypeOptions = getAllPlantSpecies();
+  } else {
+    const { getAllCropNames } = await import('../data/cropBaseStats');
+    cropTypeOptions = getAllCropNames();
+  }
 
   cropTypeOptions.forEach(cropName => {
     const checkbox = document.createElement('label');

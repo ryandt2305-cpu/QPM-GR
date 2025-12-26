@@ -49,6 +49,7 @@ export function setEggProbabilityConfig(updates: Partial<EggProbabilityConfig>):
 
 const BASE_RAINBOW_CHANCE = 0.001; // 0.1%
 const BASE_GOLD_CHANCE = 0.01;     // 1%
+const MAX_TARGET_STRENGTH = 100;   // Maximum pet strength (from game)
 
 /**
  * Get active pets with Pet Mutation Boost abilities
@@ -56,40 +57,45 @@ const BASE_GOLD_CHANCE = 0.01;     // 1%
  */
 async function getActivePetMutationBoost(): Promise<number> {
   try {
-    // Access myNonPrimitivePetSlotsAtom to get active pets
-    const petSlotsAtom = getAtomByLabel('myNonPrimitivePetSlotsAtom');
+    // Access myPetInfosAtom to get active pets
+    const petSlotsAtom = getAtomByLabel('myPetInfosAtom');
     if (!petSlotsAtom) {
-      log('🥚 [Mutation] myNonPrimitivePetSlotsAtom not found');
+      log('?? [Mutation] myPetInfosAtom not found');
       return 0;
     }
 
     const petSlots = await readAtomValue<any[]>(petSlotsAtom);
-    log('🥚 [Mutation] Pet slots:', petSlots);
+    log('?? [Mutation] Pet slots:', petSlots);
 
     if (!petSlots || petSlots.length === 0) {
-      log('🥚 [Mutation] No pet slots found');
+      log('?? [Mutation] No pet slots found');
       return 0;
     }
 
     let totalBoost = 0;
 
     for (let i = 0; i < petSlots.length; i++) {
-      const slot = petSlots[i];
-      log(`🥚 [Mutation] Pet slot ${i}:`, {
+      const petData = petSlots[i];
+      // Pet data is nested inside a 'slot' property
+      const slot = petData?.slot ?? petData;
+
+      log(`[Mutation] Pet slot ${i}:`, {
         species: slot?.petSpecies,
         hunger: slot?.hunger,
         abilities: slot?.abilities,
+        raw: petData,
       });
 
       // Check if pet has hunger > 0 (not starving)
-      if (!slot.hunger || slot.hunger <= 0) {
-        log(`🥚 [Mutation] Pet ${i} has no hunger, skipping`);
+      const hungerValue = slot?.hunger ?? 0;
+      if (hungerValue <= 0) {
+        log(`[Mutation] Pet ${i} has no hunger (${hungerValue}), skipping`);
         continue;
       }
 
       // Check if pet has abilities
       if (!slot.abilities || !Array.isArray(slot.abilities)) {
-        log(`🥚 [Mutation] Pet ${i} has no abilities array, skipping`);
+        log(`[Mutation] Pet ${i} has no abilities array, skipping`);
         continue;
       }
 
@@ -99,40 +105,58 @@ async function getActivePetMutationBoost(): Promise<number> {
           continue;
         }
 
-        log(`🥚 [Mutation] Found ${ability} on pet ${i}`);
+        log(`[Mutation] Found ${ability} on pet ${i}`);
 
         // Get boost percentage from catalog (futureproof!)
         const abilityDef = getAbilityDef(ability);
-        log(`🥚 [Mutation] Ability def for ${ability}:`, abilityDef);
+        log(`[Mutation] Ability def for ${ability}:`, abilityDef);
 
         if (!abilityDef?.baseParameters?.mutationChanceIncreasePercentage) {
-          log(`🥚 [Mutation] No mutationChanceIncreasePercentage in ability def`);
+          log(`[Mutation] No mutationChanceIncreasePercentage in ability def`);
           continue;
         }
 
         const boostPercentage = Number(abilityDef.baseParameters.mutationChanceIncreasePercentage);
         if (isNaN(boostPercentage) || boostPercentage <= 0) {
-          log(`🥚 [Mutation] Invalid boost percentage: ${boostPercentage}`);
+          log(`[Mutation] Invalid boost percentage: ${boostPercentage}`);
           continue;
         }
 
-        // Calculate strength scale factor
-        // For now, use a simplified approach: assume strength = 0.7 (average active pet)
-        // TODO: Implement full strength calculation if needed
-        const strengthScaleFactor = 0.7;
+        // Calculate strength scale factor from pet's XP and targetScale
+        // We need to calculate strength from XP if not provided
+        // For now, use a reasonable estimate based on targetScale (close to max = stronger)
+        const targetScale = slot?.targetScale ?? 1.0;
+        const xp = slot?.xp ?? 0;
+
+        // Estimate strength: pets closer to maxScale (2.0) are usually stronger
+        // This is a simplified calculation - actual strength would need species data
+        let strengthScaleFactor: number;
+
+        if (targetScale >= 1.9) {
+          // Very high scale pets are usually 80-100% strength
+          strengthScaleFactor = 0.9;
+        } else if (targetScale >= 1.5) {
+          // Medium-high scale pets are usually 60-80% strength
+          strengthScaleFactor = 0.75;
+        } else {
+          // Lower scale pets are usually 40-60% strength
+          strengthScaleFactor = 0.5;
+        }
+
+        log(`[Mutation] Using estimated strength based on targetScale ${targetScale}: ${strengthScaleFactor}`);
 
         const contribution = (boostPercentage * strengthScaleFactor) / 100;
-        log(`🥚 [Mutation] Adding ${contribution} boost (${boostPercentage}% × ${strengthScaleFactor})`);
+        log(`[Mutation] Adding ${contribution} boost (${boostPercentage}% x ${strengthScaleFactor})`);
 
         // Add this pet's boost contribution
         totalBoost += contribution;
       }
     }
 
-    log(`🥚 [Mutation] Total boost: ${totalBoost}`);
+    log(`?? [Mutation] Total boost: ${totalBoost}`);
     return totalBoost;
   } catch (error) {
-    log('⚠️ Error getting pet mutation boost:', error);
+    log('?��? Error getting pet mutation boost:', error);
     return 0;
   }
 }
@@ -151,7 +175,7 @@ async function calculateMutationProbabilities(): Promise<MutationProbability> {
 
   const totalBoost = await getActivePetMutationBoost();
 
-  // Apply formula: FINAL = BASE × (1 + totalBoost)
+  // Apply formula: FINAL = BASE ? (1 + totalBoost)
   const rainbow = BASE_RAINBOW_CHANCE * (1 + totalBoost);
   const gold = BASE_GOLD_CHANCE * (1 + totalBoost);
 
@@ -202,7 +226,7 @@ function calculateSpawnProbabilities(eggId: string): PetProbability[] | null {
         sprite = canvasToDataUrl(canvas);
       }
     } catch (error) {
-      log(`⚠️ Failed to load sprite for ${species}:`, error);
+      log(`?��? Failed to load sprite for ${species}:`, error);
     }
 
     return {
@@ -382,7 +406,7 @@ async function ensureEggProbabilityIndicator(
              class="qpm-egg-probability-sprite"
              style="width: 26px; height: 26px; image-rendering: pixelated; object-fit: contain;"
              title="${species}" />`
-      : `<div class="qpm-egg-probability-fallback" title="${species}">🐾</div>`;
+      : `<div class="qpm-egg-probability-fallback" title="${species}">?��</div>`;
 
     return `
       <div class="qpm-egg-probability-item">
@@ -503,7 +527,7 @@ async function injectEggProbabilityInfo(element: Element): Promise<void> {
 
   // Inject the probability UI (async for mutation calculation)
   ensureEggProbabilityIndicator(tooltipContent, probabilities).catch(error => {
-    log('⚠️ Error ensuring egg probability indicator:', error);
+    log('?��? Error ensuring egg probability indicator:', error);
   });
 }
 
@@ -526,7 +550,7 @@ function attachTooltipWatcher(tooltip: Element): void {
   const runInjection = () => {
     rafId = null;
     injectEggProbabilityInfo(tooltip).catch(error => {
-      log('⚠️ Error injecting egg probability info:', error);
+      log('?��? Error injecting egg probability info:', error);
     });
   };
 
@@ -565,7 +589,7 @@ function detachTooltipWatcher(tooltip: Element): void {
 function startTooltipWatcher(): void {
   if (domObserverHandle) return;
 
-  log('🥚 Egg Probability Indicator: Watching for egg tooltips');
+  log('?? Egg Probability Indicator: Watching for egg tooltips');
 
   const addedHandle = onAdded(TOOLTIP_SELECTOR, attachTooltipWatcher);
   const removedHandle = onRemoved(TOOLTIP_SELECTOR, detachTooltipWatcher);
@@ -594,7 +618,7 @@ function stopTooltipWatcher(): void {
 function startEggProbabilityIndicator(): void {
   if (domObserverHandle) return; // Already started
 
-  log('🥚 Egg Probability Indicator: Starting');
+  log('?? Egg Probability Indicator: Starting');
   startTooltipWatcher();
 }
 
@@ -604,7 +628,7 @@ function stopEggProbabilityIndicator(): void {
     domObserverHandle = null;
   }
 
-  log('🥚 Egg Probability Indicator: Stopped');
+  log('?? Egg Probability Indicator: Stopped');
 }
 
 // ============================================================================

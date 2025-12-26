@@ -7,6 +7,7 @@ import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, InventoryItem } from '../store/inventory';
 import { getCropSpriteDataUrl } from '../sprite-v2/compat';
 import { addStyle } from '../utils/dom';
+import { getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 
 // ============================================================================
 // TYPES
@@ -180,22 +181,37 @@ function getItemUUID(item: InventoryItem): string | null {
   return null;
 }
 
+/**
+ * Validate if a species exists in catalog (FUTUREPROOF!)
+ */
+function isValidSpecies(species: string): boolean {
+  if (!areCatalogsReady()) return true; // Allow all if catalog not ready (permissive)
+
+  const knownSpecies = getAllPlantSpecies();
+  return knownSpecies.includes(species);
+}
+
 function getProduceGroups(): ProduceGroup[] {
   const items = getInventoryItems();
   const favoritedIds = getFavoritedItemIds();
-  
+
   // Group by species, storing actual UUIDs
   const groupMap = new Map<string, string[]>();
-  
+
   for (const item of items) {
     const raw = item.raw as Record<string, unknown> | undefined;
     const itemType = raw?.itemType ?? item.itemType;
     const species = (raw?.species ?? item.species) as string | undefined;
-    
+
     // Get the actual UUID for this item
     const uuid = getItemUUID(item);
-    
+
     if (itemType !== 'Produce' || !species || !uuid) continue;
+
+    // Validate species exists in catalog
+    if (!isValidSpecies(species)) {
+      log(`⚠️ Unknown species in bulk favorite: ${species}`);
+    }
     
     const existing = groupMap.get(species);
     if (existing) {

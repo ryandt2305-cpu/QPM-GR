@@ -8,18 +8,27 @@ import { log } from '../utils/logger';
 import { visibleInterval } from '../utils/timerManager';
 import { resetWeatherMutationTracking } from './weatherMutationTracking';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from './abilityValuation';
+import { calculateMutationValue } from '../utils/mutationValueCalculator';
+import { getMutationMultiplier } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY = 'qpm.mutationValueTracking.v1';
 const SAVE_DEBOUNCE_MS = 3000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-// Fallback values if dynamic calculation unavailable
-const FALLBACK_VALUES = {
-  gold: 500000,
-  rainbow: 1000000,
-  cropBoost: 5000000,
-};
+/**
+ * Get mutation value dynamically from catalog (FUTUREPROOF!)
+ * Falls back to conservative estimate based on multiplier
+ */
+function getMutationValue(mutationId: string): number {
+  // Try catalog first
+  const catalogValue = calculateMutationValue(mutationId);
+  if (catalogValue !== null) return catalogValue;
+
+  // Fallback to conservative estimate based on multiplier
+  const multiplier = getMutationMultiplier(mutationId);
+  return Math.floor(5000 * multiplier); // 5000 * multiplier as fallback
+}
 
 export interface MutationValueStats {
   // Gold mutations
@@ -159,11 +168,11 @@ function recalculateStats(): void {
   const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
   const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
 
-  // Use dynamic values or fallback to static
-  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
-  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
-  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
-  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  // Use dynamic values or fallback to catalog-based estimates
+  const goldValue = goldEffect?.effectPerProc || getMutationValue('Gold');
+  const rainbowValue = rainbowEffect?.effectPerProc || getMutationValue('Rainbow');
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || getMutationValue('Rainbow'); // Crop boost uses similar multiplier
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || getMutationValue('Rainbow'); // Crop boost uses similar multiplier
 
   // Count gold granters
   const goldData = countAbilityProcs('GoldGranter', sessionStart);
@@ -236,10 +245,10 @@ function calculateCurrentHourValue(now: number, context: ReturnType<typeof build
   const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
   const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
 
-  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
-  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
-  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
-  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  const goldValue = goldEffect?.effectPerProc || getMutationValue('Gold');
+  const rainbowValue = rainbowEffect?.effectPerProc || getMutationValue('Rainbow');
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || getMutationValue('Rainbow');
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || getMutationValue('Rainbow');
 
   return (
     goldData.count * goldValue +
@@ -258,10 +267,10 @@ function calculateHourlyBreakdown(context: ReturnType<typeof buildAbilityValuati
   const cropBoostEffect1 = resolveDynamicAbilityEffect('ProduceScaleBoost', context, null);
   const cropBoostEffect2 = resolveDynamicAbilityEffect('ProduceScaleBoostII', context, null);
 
-  const goldValue = goldEffect?.effectPerProc || FALLBACK_VALUES.gold;
-  const rainbowValue = rainbowEffect?.effectPerProc || FALLBACK_VALUES.rainbow;
-  const cropBoost1Value = cropBoostEffect1?.effectPerProc || FALLBACK_VALUES.cropBoost;
-  const cropBoost2Value = cropBoostEffect2?.effectPerProc || FALLBACK_VALUES.cropBoost;
+  const goldValue = goldEffect?.effectPerProc || getMutationValue('Gold');
+  const rainbowValue = rainbowEffect?.effectPerProc || getMutationValue('Rainbow');
+  const cropBoost1Value = cropBoostEffect1?.effectPerProc || getMutationValue('Rainbow');
+  const cropBoost2Value = cropBoostEffect2?.effectPerProc || getMutationValue('Rainbow');
 
   const historySnapshot = getAbilityHistorySnapshot();
 

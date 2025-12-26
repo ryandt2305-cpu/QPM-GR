@@ -24,6 +24,7 @@ import { getHungerCapOrDefault } from '../data/petHungerCaps';
 import { calculateFeedsPerLevel, calculateFeedsForLevels } from '../data/petHungerDepletion';
 import { criticalInterval } from '../utils/timerManager';
 import { throttle } from '../utils/scheduling';
+import { getAbilityName } from '../utils/catalogHelpers';
 
 export interface XpTrackerWindowState {
   root: HTMLElement;
@@ -780,7 +781,7 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
       const stats = calculateXpStats(
         pet,
         ability.id,
-        rawName, // Use the raw ability name as it appears in game
+        getAbilityName(ability.id), // Get ability name from catalog (FUTUREPROOF!)
         ability.baseProbability ?? 0,
         ability.effectValuePerProc ?? 0
       );

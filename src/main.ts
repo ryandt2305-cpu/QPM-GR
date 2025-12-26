@@ -38,6 +38,8 @@ import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindo
 import { resetFriendsCache } from './services/ariesPlayers';
 import { exposeValidationCommands } from './utils/validationCommands';
 import { storage } from './utils/storage';
+// Data Catalog Loader
+import { initCatalogLoader, logCatalogStatus, diagnoseCatalogs, getCatalogs, areCatalogsReady, waitForCatalogs, onCatalogsReady } from './catalogs/gameCatalogs';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
@@ -1174,6 +1176,18 @@ async function waitForGame(): Promise<void> {
 async function initialize(): Promise<void> {
   log('🚀 Quinoa Pet Manager initializing...');
 
+  // Initialize catalog loader (hooks Object.* methods to capture game data)
+  // MUST be called early, before game code runs
+  initCatalogLoader();
+  log('[Main] Catalog loader initialized');
+
+  // Log when catalogs become ready (for timing analysis)
+  onCatalogsReady((catalogs) => {
+    const timeMs = performance.now();
+    log(`✅ [Catalog] Catalogs ready at ${(timeMs / 1000).toFixed(1)}s after page load`);
+    logCatalogStatus();
+  });
+
   // Initialize sprite system (sprite-v2) - must be done early to hook PIXI
   // OPTIMIZATION: Don't block other initialization on sprite loading
   let spriteService: SpriteService | null = null;
@@ -1264,6 +1278,19 @@ async function initialize(): Promise<void> {
   (QPM_DEBUG_API as any).inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
   (QPM_DEBUG_API as any).exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
   (QPM_DEBUG_API as any).currentTile = gardenCommands.QPM_CURRENT_TILE;
+
+  // Expose catalog functions to global debug API
+  (QPM_DEBUG_API as any).getCatalogs = getCatalogs;
+  (QPM_DEBUG_API as any).areCatalogsReady = areCatalogsReady;
+  (QPM_DEBUG_API as any).waitForCatalogs = waitForCatalogs;
+  (QPM_DEBUG_API as any).logCatalogStatus = logCatalogStatus;
+  (QPM_DEBUG_API as any).diagnoseCatalogs = diagnoseCatalogs;
+
+  // Also expose to window for easy console access
+  if (typeof window !== 'undefined') {
+    (window as any).__QPM_DiagnoseCatalogs = diagnoseCatalogs;
+    log('🔍 __QPM_DiagnoseCatalogs() available in console');
+  }
 
   // Expose validation commands for testing
   exposeValidationCommands();

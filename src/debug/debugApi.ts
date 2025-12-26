@@ -3,6 +3,7 @@
 // This reduces initial parse time by deferring this code until needed
 
 import { storage } from '../utils/storage';
+import { getCatalogs, areCatalogsReady, logCatalogStatus } from '../catalogs/gameCatalogs';
 
 // These imports are only used by debug functions, so they're fine to load here
 // when the debug API is actually accessed
@@ -10,6 +11,8 @@ type DebugApiType = {
   storage: typeof storage;
   debugPets: () => any;
   debugAllAtoms: () => any;
+  debugCatalogs: () => any;
+  inspectJournal: () => Promise<any>;
   showPetSpriteGrid: (sheet?: string, maxTiles?: number) => any;
   showAllSpriteSheets: (maxTilesPerSheet?: number) => any;
   listSpriteResources: (category?: 'plants' | 'pets' | 'unknown' | 'all') => any;
@@ -58,6 +61,7 @@ export async function createDebugApi(): Promise<DebugApiType> {
     { readInventoryDirect, getInventoryItems },
     { toggleWindow },
     spriteCompat,
+    { inspectJournal },
   ] = await Promise.all([
     import('../store/pets'),
     import('../store/petLevelCalculator'),
@@ -66,6 +70,7 @@ export async function createDebugApi(): Promise<DebugApiType> {
     import('../store/inventory'),
     import('../ui/modalWindow'),
     import('../sprite-v2/compat'),
+    import('./inspectJournal'),
   ]);
 
   const {
@@ -121,6 +126,25 @@ export async function createDebugApi(): Promise<DebugApiType> {
         return null;
       }
     },
+
+    debugCatalogs: () => {
+      const catalogs = getCatalogs();
+      const status = areCatalogsReady();
+
+      console.log('=== Data Catalog Loader Status ===');
+      console.log(`Ready: ${status ? '✅' : '⏳ Loading...'}`);
+
+      logCatalogStatus();
+
+      if (catalogs.petCatalog) {
+        console.log('\n=== Sample Pet Catalog Entry (Worm) ===');
+        console.log(catalogs.petCatalog['Worm']);
+      }
+
+      return { catalogs, ready: status };
+    },
+
+    inspectJournal,
 
     showPetSpriteGrid: (sheet = 'pets', maxTiles = 80) => renderSpriteGridOverlay(sheet, maxTiles),
     showAllSpriteSheets: (maxTilesPerSheet = 120) => renderAllSpriteSheetsOverlay(maxTilesPerSheet),
@@ -560,14 +584,14 @@ export function createLazyDebugProxy(): Record<string, any> {
 
   // Create lazy getters for all debug functions
   const lazyMethods = [
-    'debugPets', 'debugAllAtoms', 'showPetSpriteGrid', 'showAllSpriteSheets',
+    'debugPets', 'debugAllAtoms', 'debugCatalogs', 'showPetSpriteGrid', 'showAllSpriteSheets',
     'listSpriteResources', 'loadTrackedSpriteSheets', 'spriteExtractor',
     'viewAllSprites', 'checkTargetScale', 'debugSlotInfos', 'debugPetInventory',
     'searchPageWindow', 'inspectPetCards', 'findPetDataInDOM', 'extractStrengthFromUI',
     'debugLevels', 'debugInventory', 'testPetData', 'testComparePets', 'testAbilityDefinitions',
     'debugAriesIntegration', 'toggleBadgePreview', 'debugInventoryAtoms', 'scanSeeds',
     'auditRainbowPets', 'openPetHub3v3', 'resetTutorial', 'showTutorial',
-    'inspectGarden', 'exposeGarden', 'currentTile', 'verifyBulkFavorite',
+    'inspectGarden', 'exposeGarden', 'currentTile', 'verifyBulkFavorite', 'inspectJournal',
   ];
 
   for (const method of lazyMethods) {

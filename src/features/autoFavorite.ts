@@ -6,6 +6,8 @@ import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, isInventoryStoreActive } from '../store/inventory';
 import { criticalInterval } from '../utils/timerManager';
+import { getCropCategory, getAllCropCategories } from '../utils/cropCategorizer';
+import { getAllPlantSpecies, getAllAbilities, getAllMutations, areCatalogsReady } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY = 'qpm.autoFavorite.v1';
 
@@ -38,30 +40,28 @@ let cleanupInterval: (() => void) | null = null;
 let seenItemIds = new Set<string>();
 
 /**
- * Get crop type category for filtering
+ * Get crop type category for filtering (FUTUREPROOF - uses catalog!)
  */
 function getCropType(species: string | null | undefined): string | null {
   if (!species) return null;
-  
-  const normalized = species.toLowerCase();
-  
-  // Seed crops
-  const seeds = ['wheat', 'corn', 'rice', 'barley', 'oat', 'sunflower'];
-  if (seeds.some(s => normalized.includes(s))) return 'Seed';
-  
-  // Fruits
-  const fruits = ['apple', 'banana', 'strawberry', 'blueberry', 'grape', 'watermelon', 'lemon', 'coconut', 'lychee', 'passionfruit', 'dragonfruit', 'pumpkin'];
-  if (fruits.some(f => normalized.includes(f))) return 'Fruit';
-  
-  // Vegetables
-  const vegetables = ['carrot', 'tomato', 'pepper', 'aloe', 'mushroom', 'bamboo', 'favabean', 'squash'];
-  if (vegetables.some(v => normalized.includes(v))) return 'Vegetable';
-  
-  // Flowers
-  const flowers = ['daffodil', 'lily', 'tulip', 'chrysanthemum', 'camellia', 'echeveria', 'cactus', 'burrostail'];
-  if (flowers.some(f => normalized.includes(f))) return 'Flower';
-  
-  return 'Other';
+  return getCropCategory(species);
+}
+
+/**
+ * Get available filter options from catalogs (FUTUREPROOF!)
+ */
+export function getAvailableFilterOptions(): {
+  species: string[];
+  abilities: string[];
+  mutations: string[];
+  cropTypes: string[];
+} {
+  return {
+    species: areCatalogsReady() ? getAllPlantSpecies() : [],
+    abilities: areCatalogsReady() ? getAllAbilities() : [],
+    mutations: areCatalogsReady() ? Object.keys(getAllMutations()) : [],
+    cropTypes: getAllCropCategories(),
+  };
 }
 
 function loadConfig(): void {

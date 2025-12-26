@@ -43,6 +43,7 @@ const SPECIES_KEY_ALIASES: Record<string, string[]> = {
   passionfruit: ['passion fruit', 'passion-fruit', 'passionfruit'],
   dawncelestial: ['dawnbinder', 'dawn binder'],
   mooncelestial: ['moonbinder', 'moon binder'],
+  bamboo: ['bamboo shoot', 'bambooshoot'],
 };
 
 const resolveSpeciesKey = (raw: string): string => {
@@ -648,6 +649,8 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     'cacao bean': 'cacaobean',
     'cacao': 'cacaobean',
     'cocoa bean': 'cacaobean',
+    // Tooltip name differs from species name
+    'bamboo shoot': 'bamboo',
     // Multi-harvest fruit names
     'lychee fruit': 'lychee',
     'strawberry': 'strawberry',

@@ -28,6 +28,7 @@ import { initSpriteSystem } from './sprite-v2/index';
 import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { initEggProbabilityIndicator } from './features/eggProbabilityIndicator';
 import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
@@ -1262,6 +1263,8 @@ async function initialize(): Promise<void> {
   // Phase 8: Non-critical features (can load after UI is visible)
   startCropBoostTracker();
   initCropSizeIndicator();
+  initEggProbabilityIndicator();
+  log('✅ Egg Probability Indicator initialized');
   await yieldToBrowser();
 
   // Phase 9: Achievements (heavy, do later)
@@ -1285,6 +1288,15 @@ async function initialize(): Promise<void> {
   (QPM_DEBUG_API as any).waitForCatalogs = waitForCatalogs;
   (QPM_DEBUG_API as any).logCatalogStatus = logCatalogStatus;
   (QPM_DEBUG_API as any).diagnoseCatalogs = diagnoseCatalogs;
+
+  // Expose egg probability indicator functions
+  const { getEggProbabilityConfig, setEggProbabilityConfig, startEggProbabilityIndicator, stopEggProbabilityIndicator } = await import('./features/eggProbabilityIndicator');
+  (QPM_DEBUG_API as any).eggProbability = {
+    getConfig: getEggProbabilityConfig,
+    setConfig: setEggProbabilityConfig,
+    start: startEggProbabilityIndicator,
+    stop: stopEggProbabilityIndicator,
+  };
 
   // Also expose to window for easy console access
   if (typeof window !== 'undefined') {

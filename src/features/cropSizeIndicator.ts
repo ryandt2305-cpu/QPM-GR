@@ -209,6 +209,40 @@ function getCropStatsFromCatalog(species: string): CropStats | null {
   return result;
 }
 
+/**
+ * FUTUREPROOF: Get maxScale from catalog first, fallback to hardcoded plantScales.ts
+ * This ensures the script automatically handles new crops added to the game!
+ */
+function getMaxScaleForCrop(species: string, speciesNormalized: string): number {
+  // Try catalog first (FUTUREPROOF!)
+  if (areCatalogsReady()) {
+    // Try multiple name variations to match catalog entries
+    const variations = [
+      species,                                                      // Original case
+      speciesNormalized,                                           // Normalized lowercase
+      species.replace(/\s+/g, ''),                                 // Remove spaces
+      species.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''), // PascalCase
+      species.charAt(0).toUpperCase() + species.slice(1).replace(/\s+/g, ''),       // Capitalized no spaces
+    ];
+
+    for (const variant of variations) {
+      const plantEntry = getPlantSpecies(variant);
+      if (plantEntry?.crop?.maxScale && typeof plantEntry.crop.maxScale === 'number') {
+        return plantEntry.crop.maxScale;
+      }
+    }
+  }
+
+  // Fallback to hardcoded plantScales.ts lookup
+  const hardcodedMaxScale = lookupMaxScale(speciesNormalized);
+  if (hardcodedMaxScale !== null) {
+    return hardcodedMaxScale;
+  }
+
+  // Final fallback to default of 2.0
+  return 2.0;
+}
+
 function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number; weight: number; value: number } | null {
   let species = slot.species;
   if (!species) return null;
@@ -231,7 +265,7 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
   // Calculate CURRENT scale from weight (weight = baseWeight * scale)
   const weight = slot.weight ?? 0;
   let currentScale: number;
-  
+
   if (weight > 0 && cropStats.baseWeight > 0) {
     // If we have weight, calculate actual current scale from it
     currentScale = weight / cropStats.baseWeight;
@@ -241,10 +275,11 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
     // Priority: slot.scale > targetScale > plantScale
     currentScale = slot.scale ?? slot.targetScale ?? slot.plantScale ?? 1.0;
   }
-  
-  // Get max scale for this crop (from plantScales.ts lookup)
-  const maxScale = lookupMaxScale(speciesNormalized) ?? 2.0;
-  
+
+  // FUTUREPROOF: Get max scale from catalog first, fallback to hardcoded table
+  // This automatically handles new crops added to the game!
+  const maxScale = getMaxScaleForCrop(species, speciesNormalized);
+
   // Size display formula: maps scale range (1.0 to maxScale) to display range (50 to 100)
   // Example: Pumpkin maxScale=3, so scale 1.0->50, scale 2.0->75, scale 3.0->100
   // Formula: size = 50 + ((currentScale - 1) / (maxScale - 1)) * 50

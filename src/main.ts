@@ -14,6 +14,7 @@ import { initializeXpTracker } from './store/xpTracker';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeAutoFavorite } from './features/autoFavorite';
 import { startBulkFavorite } from './features/bulkFavorite';
+import { initializeGardenFilters } from './features/gardenFilters';
 import { getActivePetsDebug } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
 import { startSellSnapshotWatcher } from './store/sellSnapshot';
@@ -1233,6 +1234,10 @@ async function initialize(): Promise<void> {
   await startGardenBridge();
   await yieldToBrowser();
 
+  // Phase 4b: Initialize garden filters (needs PIXI and game loaded)
+  initializeGardenFilters();
+  await yieldToBrowser();
+
   // Phase 5: Initialize harvest and turtle timer
   initializeHarvestReminder({
     enabled: cfg.harvestReminder.enabled,
@@ -1288,6 +1293,25 @@ async function initialize(): Promise<void> {
   (QPM_DEBUG_API as any).waitForCatalogs = waitForCatalogs;
   (QPM_DEBUG_API as any).logCatalogStatus = logCatalogStatus;
   (QPM_DEBUG_API as any).diagnoseCatalogs = diagnoseCatalogs;
+
+  // Expose garden snapshot for debugging
+  const { getGardenSnapshot, getMapSnapshot, isGardenBridgeReady } = await import('./features/gardenBridge');
+  (QPM_DEBUG_API as any).getGardenSnapshot = getGardenSnapshot;
+  (QPM_DEBUG_API as any).getMapSnapshot = getMapSnapshot;
+  (QPM_DEBUG_API as any).isGardenBridgeReady = isGardenBridgeReady;
+
+  // Also expose to __QPM_INTERNAL__ for legacy/diagnostic access
+  const { getGardenFiltersConfig, updateGardenFiltersConfig, applyGardenFiltersNow } = await import('./features/gardenFilters');
+  const globalTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  (globalTarget as any).__QPM_INTERNAL__ = {
+    ...(globalTarget as any).__QPM_INTERNAL__,
+    getGardenSnapshot,
+    getMapSnapshot,
+    isGardenBridgeReady,
+    getGardenFiltersConfig,
+    updateGardenFiltersConfig,
+    applyGardenFiltersNow,
+  };
 
   // Expose egg probability indicator functions
   const { getEggProbabilityConfig, setEggProbabilityConfig, startEggProbabilityIndicator, stopEggProbabilityIndicator } = await import('./features/eggProbabilityIndicator');

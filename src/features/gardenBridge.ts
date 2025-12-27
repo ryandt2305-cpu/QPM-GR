@@ -4,7 +4,9 @@ import { shareGlobal, readSharedGlobal } from '../core/pageContext';
 import { log } from '../utils/logger';
 
 const MY_DATA_ATOM_LABEL = 'myDataAtom';
+const MAP_ATOM_LABEL = 'mapAtom';
 const GLOBAL_CACHE_KEY = '__qpmGardenSnapshot__';
+const GLOBAL_MAP_CACHE_KEY = '__qpmMapSnapshot__';
 
 export interface GardenState {
   tileObjects?: Record<string, unknown>;
@@ -12,10 +14,19 @@ export interface GardenState {
   [key: string]: unknown;
 }
 
+export interface MapSnapshot {
+  cols: number;
+  rows: number;
+  globalTileIdxToDirtTile: Record<number, { dirtTileIdx: number; userSlotIdx: number }>;
+  globalTileIdxToBoardwalk: Record<number, { boardwalkTileIdx: number; userSlotIdx: number }>;
+  [key: string]: unknown;
+}
+
 export type GardenSnapshot = GardenState | null;
 
 let initialized = false;
 let cachedGarden: GardenSnapshot = readSharedGlobal<GardenSnapshot>(GLOBAL_CACHE_KEY) ?? null;
+let cachedMap: MapSnapshot | null = readSharedGlobal<MapSnapshot>(GLOBAL_MAP_CACHE_KEY) ?? null;
 let unsubscribe: (() => void) | null = null;
 const listeners = new Set<(state: GardenSnapshot) => void>();
 let retryTimer: number | null = null;
@@ -50,14 +61,48 @@ function extractGarden(value: Record<string, unknown> | null | undefined): Garde
 async function resolveGardenSnapshot(): Promise<GardenSnapshot> {
   const myDataAtom = getAtomByLabel(MY_DATA_ATOM_LABEL);
   if (!myDataAtom) {
+    log('⚠️ [GardenBridge] myDataAtom not found (labels may be unavailable, trying structure-based fallback)');
     throw new Error('Unable to locate myDataAtom in jotaiAtomCache');
   }
 
+  log('[GardenBridge] ✅ Found myDataAtom');
+
   const myData = await readAtomValue<Record<string, unknown> | null>(myDataAtom).catch((error) => {
-    log('⚠️ Failed to read myDataAtom', error);
+    log('⚠️ [GardenBridge] Failed to read myDataAtom', error);
     return null;
   });
-  return extractGarden(myData ?? undefined);
+  const garden = extractGarden(myData ?? undefined);
+
+  if (garden?.tileObjects) {
+    log(`[GardenBridge] ✅ Garden data loaded (${Object.keys(garden.tileObjects).length} tiles)`);
+  } else {
+    log('[GardenBridge] ⚠️ Garden data empty or invalid');
+  }
+
+  return garden;
+}
+
+async function resolveMapSnapshot(): Promise<MapSnapshot | null> {
+  const mapAtom = getAtomByLabel(MAP_ATOM_LABEL);
+  if (!mapAtom) {
+    log('⚠️ [GardenBridge] mapAtom not found');
+    return null;
+  }
+
+  log('[GardenBridge] ✅ Found mapAtom');
+
+  const map = await readAtomValue<MapSnapshot | null>(mapAtom).catch((error) => {
+    log('⚠️ [GardenBridge] Failed to read mapAtom', error);
+    return null;
+  });
+
+  if (map && map.cols && map.rows) {
+    log(`[GardenBridge] ✅ Map data loaded (${map.cols}x${map.rows} grid)`);
+  } else {
+    log('[GardenBridge] ⚠️ Map data empty or invalid');
+  }
+
+  return map;
 }
 
 export async function startGardenBridge(): Promise<void> {
@@ -86,6 +131,13 @@ export async function startGardenBridge(): Promise<void> {
   try {
     const initial = await resolveGardenSnapshot();
     updateCache(initial);
+
+    // Also load map snapshot (non-critical, doesn't trigger retry if it fails)
+    const mapSnapshot = await resolveMapSnapshot();
+    if (mapSnapshot) {
+      cachedMap = mapSnapshot;
+      shareGlobal(GLOBAL_MAP_CACHE_KEY, cachedMap);
+    }
   } catch (error) {
     log('⚠️ Unable to prime garden snapshot', error);
     if (!retryTimer) {
@@ -113,6 +165,8 @@ export async function startGardenBridge(): Promise<void> {
   unsubscribe = await subscribeAtom<Record<string, unknown> | null>(myDataAtom, (value) => {
     updateCache(extractGarden(value ?? undefined));
   });
+
+  log('✅ [GardenBridge] Garden bridge started successfully');
 }
 
 export function stopGardenBridge(): void {
@@ -127,6 +181,10 @@ export function stopGardenBridge(): void {
 
 export function getGardenSnapshot(): GardenSnapshot {
   return cachedGarden;
+}
+
+export function getMapSnapshot(): MapSnapshot | null {
+  return cachedMap;
 }
 
 export function onGardenSnapshot(cb: (state: GardenSnapshot) => void, fireImmediately = true): () => void {

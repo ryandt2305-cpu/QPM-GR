@@ -26,6 +26,7 @@ import { criticalInterval } from '../utils/timerManager';
 import { throttle } from '../utils/scheduling';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import type { DetailedWeather } from '../utils/weatherDetection';
+import { getAbilityName } from '../utils/catalogHelpers';
 
 export interface XpTrackerWindowState {
   root: HTMLElement;

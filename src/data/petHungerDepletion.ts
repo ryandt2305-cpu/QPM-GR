@@ -5,6 +5,7 @@
 /**
  * How long it takes for a pet to fully deplete their hunger (minutes)
  * This is independent of hunger capacity - all pets deplete at species-specific rates
+ * Source: Magic Garden Wiki (https://magicgarden.wiki/Pets)
  */
 export const PET_HUNGER_DEPLETION_TIMES: Record<string, number> = {
   // Common pets
@@ -21,6 +22,12 @@ export const PET_HUNGER_DEPLETION_TIMES: Record<string, number> = {
   pig: 60,
   cow: 75,
   turkey: 60,
+
+  // Winter pets (Legendary, 100 hours to mature)
+  snowfox: 45,
+  stoat: 60,
+  whitecaribou: 75,
+  caribou: 75, // Alias for WhiteCaribou
 
   // Legendary pets
   squirrel: 30,

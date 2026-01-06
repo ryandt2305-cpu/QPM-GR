@@ -20,6 +20,8 @@ export interface AbilityDefinition {
   effectLabel?: string; // e.g., "Scale increase", "Growth time reduction", "Coin range"
   effectBaseValue?: number; // e.g., 10 for "10% × STR"
   effectSuffix?: string; // e.g., "%", "m", "" for ranges
+  // Weather requirement (for abilities like SnowyPetXpBoost)
+  requiredWeather?: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber';
 }
 
 const ABILITY_DEFINITIONS: AbilityDefinition[] = [
@@ -296,6 +298,30 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     rollPeriodMinutes: 1,
     effectValuePerProc: 400,
     effectUnit: 'xp',
+  },
+  {
+    id: 'PetXpBoostIII',
+    name: 'XP Boost III',
+    aliases: ['Pet XP Boost III', 'Pet XP Boost 3', 'XP Boost 3'],
+    category: 'xp',
+    trigger: 'continuous',
+    baseProbability: 40,
+    rollPeriodMinutes: 1,
+    effectValuePerProc: 500,
+    effectUnit: 'xp',
+  },
+  {
+    id: 'SnowyPetXpBoost',
+    name: 'Snowy XP Boost',
+    aliases: ['Snowy Pet XP Boost'],
+    category: 'xp',
+    trigger: 'continuous',
+    baseProbability: 50,
+    rollPeriodMinutes: 1,
+    effectValuePerProc: 450,
+    effectUnit: 'xp',
+    requiredWeather: 'snow',
+    notes: 'Only active during Frost weather. Chance: 50% × STR. XP: 450 × STR per proc.',
   },
   {
     id: 'HungerRestore',

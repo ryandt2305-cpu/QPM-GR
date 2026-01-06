@@ -24,7 +24,8 @@ import { getHungerCapOrDefault } from '../data/petHungerCaps';
 import { calculateFeedsPerLevel, calculateFeedsForLevels } from '../data/petHungerDepletion';
 import { criticalInterval } from '../utils/timerManager';
 import { throttle } from '../utils/scheduling';
-import { getAbilityName } from '../utils/catalogHelpers';
+import { getWeatherSnapshot } from '../store/weatherHub';
+import type { DetailedWeather } from '../utils/weatherDetection';
 
 export interface XpTrackerWindowState {
   root: HTMLElement;
@@ -41,10 +42,12 @@ export interface XpTrackerWindowState {
   unsubscribePets: (() => void) | null;
   unsubscribeXpTracker: (() => void) | null;
   resizeListener: (() => void) | null;
+  currentWeather: DetailedWeather; // Track current weather for weather-dependent abilities
 }
 
 // XP ability IDs we're tracking (continuous only, excludes hatch XP)
-const XP_ABILITY_IDS = ['PetXpBoost', 'PetXpBoostII'];
+// Source: GameSourceFiles/gg-preview-pr-2329/fauna/faunaAbilitiesDex.ts
+const XP_ABILITY_IDS = ['PetXpBoost', 'PetXpBoostII', 'PetXpBoostIII', 'SnowyPetXpBoost'];
 
 // Max level for all pets
 const MAX_LEVEL = 30;
@@ -448,6 +451,7 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     unsubscribePets: null,
     unsubscribeXpTracker: null,
     resizeListener: null,
+    currentWeather: 'unknown',
   };
 
   // Add resize listener to keep window visible when viewport changes
@@ -767,6 +771,10 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
  * Update XP tracker display
  */
 function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
+  // Get current weather
+  const weatherSnapshot = getWeatherSnapshot();
+  state.currentWeather = weatherSnapshot.kind;
+
   // Clear tables and summary
   state.petLevelTbody.innerHTML = '';
   (state.tbody as unknown as HTMLDivElement).innerHTML = '';
@@ -783,7 +791,9 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
         ability.id,
         getAbilityName(ability.id), // Get ability name from catalog (FUTUREPROOF!)
         ability.baseProbability ?? 0,
-        ability.effectValuePerProc ?? 0
+        ability.effectValuePerProc ?? 0,
+        ability.requiredWeather ?? null,
+        state.currentWeather
       );
 
       allStats.push(stats);
@@ -812,6 +822,10 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
   const baseXpPerHour = 3600; // Always 3600 per pet, never changes
   state.totalTeamXpPerHour = baseXpPerHour + abilityXpPerHour;
 
+  // Weather indicator for display
+  const weatherIcon = state.currentWeather === 'snow' ? '❄️' : state.currentWeather === 'rain' ? '🌧️' : state.currentWeather === 'dawn' ? '🌅' : state.currentWeather === 'amber' ? '🌕' : '☀️';
+  const weatherLabel = state.currentWeather === 'unknown' ? 'Unknown' : state.currentWeather.charAt(0).toUpperCase() + state.currentWeather.slice(1);
+
   // Update XP Generation Summary (text only, not a table)
   if (allStats.length === 0) {
     (state.tbody as unknown as HTMLDivElement).innerHTML = `
@@ -830,7 +844,8 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
         <div style="margin-left: 8px; font-size: 11px; color: var(--qpm-text, #fff); line-height: 1.6;">
           • Base: <span style="color: var(--qpm-warning, #FF9800); font-weight: 600; font-family: monospace;">3,600 XP/hr</span> <span style="color: var(--qpm-text-muted, #aaa);">(1 XP/second, always)</span><br/>
           • Ability Bonus: <span style="color: var(--qpm-warning, #FF9800); font-weight: 600; font-family: monospace;">+${formatCoins(abilityXpPerHour)} XP/hr</span> <span style="color: var(--qpm-text-muted, #aaa);">(shared by all pets)</span><br/>
-          • <strong style="color: var(--qpm-accent, #4CAF50);">Total: ${formatCoins(state.totalTeamXpPerHour)} XP/hr per pet</strong>
+          • <strong style="color: var(--qpm-accent, #4CAF50);">Total: ${formatCoins(state.totalTeamXpPerHour)} XP/hr per pet</strong><br/>
+          • <strong>Weather:</strong> ${weatherIcon} ${weatherLabel}
         </div>
       </div>
       <div style="margin-bottom: 8px;">
@@ -1030,7 +1045,17 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
 
   // Pet Name (with sprite, ALL ability badges, and MAX STR below in small grey text)
   const nameCell = row.insertCell();
-  const maxStr = pet.species && pet.targetScale ? calculateMaxStrength(pet.targetScale, pet.species) : null;
+
+  // Calculate maxStr with fallback for missing targetScale (slot 2 issue)
+  let maxStr: number | null = null;
+  if (pet.species && pet.targetScale) {
+    maxStr = calculateMaxStrength(pet.targetScale, pet.species);
+  } else if (pet.species && pet.strength && pet.strength >= 80 && pet.strength <= 100) {
+    // Fallback: If targetScale is missing but strength looks like max strength (80-100 range)
+    // Use strength as max (atom stores max achievable strength)
+    maxStr = pet.strength;
+  }
+
   const petNameDisplay = pet.name || pet.species || 'Unknown';
   const petSprite = pet.species ? getPetSpriteDataUrl(pet.species) : null;
   
@@ -1141,16 +1166,11 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
   if (pet.species && pet.xp !== null && pet.strength !== null) {
     const xpPerLevel = getSpeciesXpPerLevel(pet.species);
 
-    if (xpPerLevel) {
-      // Calculate MAX STR: hatch level + 30, capped at 100
-      // Note: Pets can only gain 30 levels max, even though XP can accumulate infinitely
-      // Max level is always capped at 100 (pets hatch at 50-70, max is 80-100)
-      const levelsGained = Math.floor(pet.xp / xpPerLevel);
-      const actualLevelsGained = Math.min(30, levelsGained); // Cap at 30
-      const hatchLevel = pet.strength - actualLevelsGained;
-      const maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
+    if (xpPerLevel && maxStr) {
+      // Use targetScale-based maxStr (already calculated at line 1034)
       const xpTowardsNext = pet.xp % xpPerLevel;
       const progress = (xpTowardsNext / xpPerLevel) * 100;
+      const levelsGained = Math.floor(pet.xp / xpPerLevel);
 
       // Check if pet is at MAX STR
       if (pet.strength >= maxStr) {
@@ -1190,15 +1210,8 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
     const xpPerLevel = getSpeciesXpPerLevel(pet.species);
     const hungerCap = getHungerCapOrDefault(pet.species);
 
-    if (xpPerLevel) {
-      // Calculate MAX STR: hatch level + 30, capped at 100
-      // Note: Pets can only gain 30 levels max, even though XP can accumulate infinitely
-      // Max level is always capped at 100 (pets hatch at 50-70, max is 80-100)
-      const levelsGained = Math.floor(pet.xp / xpPerLevel);
-      const actualLevelsGained = Math.min(30, levelsGained); // Cap at 30
-      const hatchLevel = pet.strength - actualLevelsGained;
-      const maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
-
+    if (xpPerLevel && maxStr) {
+      // Use targetScale-based maxStr (already calculated at line 1034)
       // Check if pet is at MAX STR
       if (pet.strength >= maxStr) {
         timeCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">—</span>`;
@@ -1249,15 +1262,8 @@ function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, t
   if (pet.species && pet.xp !== null && pet.strength !== null) {
     const xpPerLevel = getSpeciesXpPerLevel(pet.species);
 
-    if (xpPerLevel) {
-      // Calculate MAX STR: hatch level + 30, capped at 100
-      // Note: Pets can only gain 30 levels max, even though XP can accumulate infinitely
-      // Max level is always capped at 100 (pets hatch at 50-70, max is 80-100)
-      const levelsGained = Math.floor(pet.xp / xpPerLevel);
-      const actualLevelsGained = Math.min(30, levelsGained); // Cap at 30
-      const hatchLevel = pet.strength - actualLevelsGained;
-      const maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
-
+    if (xpPerLevel && maxStr) {
+      // Use targetScale-based maxStr (already calculated at line 1034)
       // Check if pet is at MAX STR
       if (pet.strength >= maxStr) {
         timeToMaxCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">—</span>`;

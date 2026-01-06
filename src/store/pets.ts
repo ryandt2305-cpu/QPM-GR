@@ -5,6 +5,7 @@ import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { getHungerCapForSpecies, DEFAULT_HUNGER_CAP } from '../data/petHungerCaps';
 import { log } from '../utils/logger';
 import { recordPetXP, estimatePetLevel } from './petLevelCalculator';
+import { calculateMaxStrength, getSpeciesXpPerLevel } from './xpTracker';
 
 export interface ActivePetInfo {
   slotIndex: number;
@@ -553,26 +554,14 @@ function normalizePetInfos(raw: unknown): ActivePetInfo[] {
       }
     }
 
-    const strengthCandidates = [slot.strength, stats?.strength, rawInfo.strength];
-    let strength: number | null = null;
-    for (const candidate of strengthCandidates) {
-      const parsed = parseNumeric(candidate);
-      if (parsed != null) {
-        strength = parsed;
-        break;
-      }
-    }
-
-    // Fallback: extract strength from DOM if not in Jotai data
-    if (strength == null && slotIndex < domStrengthValues.length) {
-      strength = domStrengthValues[slotIndex] ?? null;
-    }
-
+    // Extract targetScale early (needed for strength calculation)
     const targetScaleCandidates = [
       slot.targetScale,
       stats?.targetScale,
       rawInfo.targetScale,
       nestedPet?.targetScale,
+      (slot.pet as RawPetSlot | undefined)?.targetScale,
+      (rawInfo.pet as RawPetSlot | undefined)?.targetScale,
     ];
     let targetScale: number | null = null;
     for (const candidate of targetScaleCandidates) {
@@ -581,6 +570,73 @@ function normalizePetInfos(raw: unknown): ActivePetInfo[] {
         targetScale = parsed;
         break;
       }
+    }
+
+    const strengthCandidates = [slot.strength, stats?.strength, rawInfo.strength];
+    let atomStrength: number | null = null;
+    for (const candidate of strengthCandidates) {
+      const parsed = parseNumeric(candidate);
+      if (parsed != null) {
+        atomStrength = parsed;
+        break;
+      }
+    }
+
+    // Fallback: extract strength from DOM if not in Jotai data
+    if (atomStrength == null && slotIndex < domStrengthValues.length) {
+      atomStrength = domStrengthValues[slotIndex] ?? null;
+    }
+
+    // Calculate CURRENT strength from XP
+    // Slot 2 often has no strength field in atom, so we calculate from targetScale + XP
+    let strength: number | null = null;
+
+    // Primary method: Calculate from targetScale and XP
+    if (targetScale != null && xp != null && species) {
+      const maxStr = calculateMaxStrength(targetScale, species);
+      const xpPerLevel = getSpeciesXpPerLevel(species);
+
+      if (maxStr != null && xpPerLevel != null && xpPerLevel > 0) {
+        // Levels gained from XP (capped at 30)
+        const levelsGainedFromXp = Math.floor(xp / xpPerLevel);
+        const actualLevelsGained = Math.min(30, levelsGainedFromXp);
+
+        // Hatch strength = max - 30 levels
+        const hatchStrength = maxStr - 30;
+
+        // Current strength = hatch + actual levels gained
+        const calculatedCurrent = hatchStrength + actualLevelsGained;
+
+        // Use calculated value if it makes sense
+        if (calculatedCurrent >= hatchStrength && calculatedCurrent <= maxStr) {
+          strength = calculatedCurrent;
+        }
+      }
+    }
+
+    // Fallback: If targetScale is missing, try using atomStrength
+    if (strength == null && atomStrength != null && xp != null && species) {
+      if (atomStrength >= 80 && atomStrength <= 100) {
+        // Assume atomStrength is max strength, calculate current from XP
+        const maxStr = atomStrength;
+        const xpPerLevel = getSpeciesXpPerLevel(species);
+
+        if (xpPerLevel != null && xpPerLevel > 0) {
+          const levelsGainedFromXp = Math.floor(xp / xpPerLevel);
+          const actualLevelsGained = Math.min(30, levelsGainedFromXp);
+          const hatchStrength = maxStr - 30;
+          const calculatedCurrent = hatchStrength + actualLevelsGained;
+
+          if (calculatedCurrent >= hatchStrength && calculatedCurrent <= maxStr) {
+            strength = calculatedCurrent;
+          }
+        }
+      }
+    }
+
+    // Last resort: Use atom strength as-is (may be incorrect for slot 2)
+    if (strength == null) {
+      strength = atomStrength;
     }
 
     const petInfo: ActivePetInfo = {

@@ -370,8 +370,305 @@ function renderFilters(): void {
   viewRow.appendChild(refreshButton);
   filtersDiv.appendChild(viewRow);
 
+  // === STRICTNESS SETTINGS ===
+  const strictnessSection = createStrictnessSettings(config);
+  filtersDiv.appendChild(strictnessSection);
+
   globalState.filtersContainer.innerHTML = '';
   globalState.filtersContainer.appendChild(filtersDiv);
+}
+
+function createStrictnessSettings(config: ReturnType<typeof getOptimizerConfig>): HTMLElement {
+  const container = document.createElement('div');
+  container.style.cssText = `
+    background: rgba(255, 152, 0, 0.1);
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    border-radius: 8px;
+    padding: 16px;
+  `;
+
+  // Header with expand/collapse
+  const header = document.createElement('div');
+  header.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+  `;
+
+  const headerLabel = document.createElement('div');
+  headerLabel.style.cssText = 'font-size: 13px; font-weight: 600; color: #FF9800;';
+  headerLabel.innerHTML = '⚙️ Strictness Settings <span style="color: #aaa; font-weight: normal; font-size: 11px;">(Click to expand)</span>';
+
+  const expandIcon = document.createElement('span');
+  expandIcon.textContent = '▼';
+  expandIcon.style.cssText = 'font-size: 10px; color: #FF9800; transition: transform 0.2s;';
+
+  header.appendChild(headerLabel);
+  header.appendChild(expandIcon);
+  container.appendChild(header);
+
+  // Content (initially collapsed)
+  const content = document.createElement('div');
+  content.style.cssText = 'display: none; margin-top: 16px; display: flex; flex-direction: column; gap: 16px;';
+
+  // Toggle expand/collapse
+  let isExpanded = false;
+  header.addEventListener('click', () => {
+    isExpanded = !isExpanded;
+    content.style.display = isExpanded ? 'flex' : 'none';
+    expandIcon.style.transform = isExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
+  });
+
+  // === Mutation Protection ===
+  const mutationRow = document.createElement('div');
+  mutationRow.innerHTML = `
+    <label style="display: block; font-size: 12px; font-weight: 600; color: #ddd; margin-bottom: 8px;">
+      Mutation Protection
+    </label>
+  `;
+
+  const mutationButtons = document.createElement('div');
+  mutationButtons.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap;';
+
+  const mutationOptions = [
+    { value: 'both', label: '🌈💛 Protect Both', desc: 'Protect Rainbow & Gold' },
+    { value: 'rainbow', label: '🌈 Rainbow Only', desc: 'Only protect Rainbow' },
+    { value: 'none', label: '❌ None', desc: 'No mutation protection' },
+  ];
+
+  for (const option of mutationOptions) {
+    const isActive = config.mutationProtection === option.value;
+    const btn = document.createElement('button');
+    btn.textContent = option.label;
+    btn.title = option.desc;
+    btn.style.cssText = `
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid ${isActive ? '#FF9800' : '#555'};
+      background: ${isActive ? 'rgba(255, 152, 0, 0.3)' : 'rgba(0, 0, 0, 0.3)'};
+      color: ${isActive ? '#FF9800' : '#aaa'};
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.2s;
+    `;
+
+    btn.addEventListener('click', () => {
+      setOptimizerConfig({ mutationProtection: option.value as any });
+      renderFilters();
+      refreshAnalysis(true);
+    });
+
+    mutationButtons.appendChild(btn);
+  }
+
+  mutationRow.appendChild(mutationButtons);
+  content.appendChild(mutationRow);
+
+  // === Min Max Strength Slider ===
+  const strengthRow = document.createElement('div');
+  strengthRow.innerHTML = `
+    <label style="display: block; font-size: 12px; font-weight: 600; color: #ddd; margin-bottom: 8px;">
+      Min Max Strength: <span id="min-max-str-value" style="color: #FF9800;">${config.minMaxStrength > 0 ? config.minMaxStrength : 'Disabled'}</span>
+    </label>
+  `;
+
+  const strengthSlider = document.createElement('input');
+  strengthSlider.type = 'range';
+  strengthSlider.min = '0';
+  strengthSlider.max = '100';
+  strengthSlider.value = config.minMaxStrength.toString();
+  strengthSlider.style.cssText = 'width: 100%; cursor: pointer;';
+
+  strengthSlider.addEventListener('input', () => {
+    const value = parseInt(strengthSlider.value);
+    const valueSpan = document.getElementById('min-max-str-value');
+    if (valueSpan) {
+      valueSpan.textContent = value > 0 ? value.toString() : 'Disabled';
+    }
+  });
+
+  strengthSlider.addEventListener('change', () => {
+    const value = parseInt(strengthSlider.value);
+    setOptimizerConfig({ minMaxStrength: value });
+    refreshAnalysis(true);
+  });
+
+  strengthRow.appendChild(strengthSlider);
+  content.appendChild(strengthRow);
+
+  // === Min Target Scale Slider ===
+  const scaleRow = document.createElement('div');
+  scaleRow.innerHTML = `
+    <label style="display: block; font-size: 12px; font-weight: 600; color: #ddd; margin-bottom: 8px;">
+      Min Target Scale: <span id="min-scale-value" style="color: #FF9800;">${config.minTargetScale.toFixed(2)}</span>
+    </label>
+  `;
+
+  const scaleSlider = document.createElement('input');
+  scaleSlider.type = 'range';
+  scaleSlider.min = '100';
+  scaleSlider.max = '250';
+  scaleSlider.value = (config.minTargetScale * 100).toString();
+  scaleSlider.style.cssText = 'width: 100%; cursor: pointer;';
+
+  scaleSlider.addEventListener('input', () => {
+    const value = parseInt(scaleSlider.value) / 100;
+    const valueSpan = document.getElementById('min-scale-value');
+    if (valueSpan) {
+      valueSpan.textContent = value.toFixed(2);
+    }
+  });
+
+  scaleSlider.addEventListener('change', () => {
+    const value = parseInt(scaleSlider.value) / 100;
+    setOptimizerConfig({ minTargetScale: value });
+    refreshAnalysis(true);
+  });
+
+  scaleRow.appendChild(scaleSlider);
+  content.appendChild(scaleRow);
+
+  // === Min Ability Count ===
+  const abilityRow = document.createElement('div');
+  abilityRow.innerHTML = `
+    <label style="display: block; font-size: 12px; font-weight: 600; color: #ddd; margin-bottom: 8px;">
+      Minimum Abilities
+    </label>
+  `;
+
+  const abilityButtons = document.createElement('div');
+  abilityButtons.style.cssText = 'display: flex; gap: 8px;';
+
+  for (const count of [1, 2, 3]) {
+    const isActive = config.minAbilityCount === count;
+    const btn = document.createElement('button');
+    btn.textContent = `${count} ${count === 1 ? 'Ability' : 'Abilities'}`;
+    btn.style.cssText = `
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid ${isActive ? '#FF9800' : '#555'};
+      background: ${isActive ? 'rgba(255, 152, 0, 0.3)' : 'rgba(0, 0, 0, 0.3)'};
+      color: ${isActive ? '#FF9800' : '#aaa'};
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.2s;
+    `;
+
+    btn.addEventListener('click', () => {
+      setOptimizerConfig({ minAbilityCount: count as 1 | 2 | 3 });
+      renderFilters();
+      refreshAnalysis(true);
+    });
+
+    abilityButtons.appendChild(btn);
+  }
+
+  abilityRow.appendChild(abilityButtons);
+  content.appendChild(abilityRow);
+
+  // === Advanced Checkboxes ===
+  const advancedRow = document.createElement('div');
+  advancedRow.style.cssText = 'display: flex; flex-direction: column; gap: 8px;';
+
+  // Only Rare+ checkbox
+  const rarePlusContainer = createCheckbox(
+    'only-rare-plus',
+    '🌟 Only keep Rare/Legendary/Mythical species',
+    config.onlyRarePlus,
+    (checked) => {
+      setOptimizerConfig({ onlyRarePlus: checked });
+      refreshAnalysis(true);
+    }
+  );
+  advancedRow.appendChild(rarePlusContainer);
+
+  // Low-value abilities checkbox
+  const lowValueContainer = createCheckbox(
+    'mark-low-value',
+    '⬇️ Mark pets with only low-value abilities as obsolete',
+    config.markLowValueAbilities,
+    (checked) => {
+      setOptimizerConfig({ markLowValueAbilities: checked });
+      refreshAnalysis(true);
+    }
+  );
+  advancedRow.appendChild(lowValueContainer);
+
+  // Prioritize active pets checkbox
+  const activePetsContainer = createCheckbox(
+    'prioritize-active',
+    '⭐ Prioritize currently active pets',
+    config.prioritizeActivePets,
+    (checked) => {
+      setOptimizerConfig({ prioritizeActivePets: checked });
+      refreshAnalysis(true);
+    }
+  );
+  advancedRow.appendChild(activePetsContainer);
+
+  content.appendChild(advancedRow);
+
+  // Reset button
+  const resetButton = document.createElement('button');
+  resetButton.textContent = '🔄 Reset to Defaults';
+  resetButton.style.cssText = `
+    padding: 8px 16px;
+    background: rgba(244, 67, 54, 0.2);
+    border: 1px solid #f44336;
+    border-radius: 4px;
+    color: #f44336;
+    cursor: pointer;
+    font-size: 12px;
+    margin-top: 8px;
+  `;
+
+  resetButton.addEventListener('click', () => {
+    setOptimizerConfig({
+      mutationProtection: 'both',
+      minMaxStrength: 0,
+      minTargetScale: 1.0,
+      minAbilityCount: 1,
+      onlyRarePlus: false,
+      markLowValueAbilities: false,
+      prioritizeActivePets: true,
+    });
+    renderFilters();
+    refreshAnalysis(true);
+  });
+
+  content.appendChild(resetButton);
+  container.appendChild(content);
+
+  return container;
+}
+
+function createCheckbox(
+  id: string,
+  label: string,
+  checked: boolean,
+  onChange: (checked: boolean) => void
+): HTMLElement {
+  const container = document.createElement('div');
+  container.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = id;
+  checkbox.checked = checked;
+  checkbox.style.cssText = 'cursor: pointer;';
+  checkbox.addEventListener('change', () => onChange(checkbox.checked));
+
+  const labelEl = document.createElement('label');
+  labelEl.htmlFor = id;
+  labelEl.style.cssText = 'font-size: 12px; cursor: pointer; color: #ccc;';
+  labelEl.textContent = label;
+
+  container.appendChild(checkbox);
+  container.appendChild(labelEl);
+
+  return container;
 }
 
 function createStrategyButton(id: string, label: string, isActive: boolean): HTMLButtonElement {

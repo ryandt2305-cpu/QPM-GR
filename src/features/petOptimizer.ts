@@ -78,6 +78,42 @@ function hasHighValueAbilities(pet: CollectedPet): boolean {
   return pet.abilityIds.some(id => HIGH_VALUE_ABILITIES.has(id));
 }
 
+/**
+ * Low-value abilities (primarily Tier I abilities and unwanted ones)
+ * These are generally replaceable and not worth keeping late-game
+ */
+const LOW_VALUE_ABILITIES = new Set([
+  // Tier I abilities (all replaceable)
+  'PlantGrowthBoost', // Tier I
+  'EggGrowthBoost', // Tier I
+  'CoinFinder', // Tier I
+  'SeedFinder', // Tier I (also marked as SeedFinderI)
+  'SeedFinderI',
+  'SellBoostI',
+  'ProduceMutationBoost', // Tier I
+  'PetMutationBoost', // Tier I
+  'PetXpBoost', // Tier I
+  'ProduceScaleBoost', // Tier I
+  'PetHatchSizeBoost', // Tier I
+
+  // Unwanted abilities
+  'ProduceEater', // Crop Eater - generally unwanted
+]);
+
+/**
+ * Species rarity classification (from game source)
+ */
+const COMMON_SPECIES = new Set(['Worm', 'Snail', 'Bee']);
+const UNCOMMON_SPECIES = new Set(['Chicken', 'Bunny', 'Dragonfly']);
+const RARE_SPECIES = new Set(['Pig', 'Cow', 'Turkey']);
+const LEGENDARY_SPECIES = new Set(['Squirrel', 'Turtle', 'Goat']);
+const MYTHICAL_SPECIES = new Set(['Butterfly', 'Peacock', 'Capybara']);
+
+function isRarePlus(species: string | null): boolean {
+  if (!species) return false;
+  return RARE_SPECIES.has(species) || LEGENDARY_SPECIES.has(species) || MYTHICAL_SPECIES.has(species);
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -162,8 +198,17 @@ export interface OptimizerConfig {
   groupBySpecies: boolean; // Group pets by species within each status section
   sortBy: 'strength' | 'maxStrength' | 'score' | 'location';
   sortDirection: 'asc' | 'desc';
-  minStrengthThreshold: number; // Only show pets below this STR
+  minStrengthThreshold: number; // Only show pets below this STR (deprecated - use minMaxStrength)
   protectedPetIds: Set<string>; // User-marked as protected
+
+  // STRICTNESS CONTROLS
+  mutationProtection: 'both' | 'rainbow' | 'none'; // Which mutations to protect from obsolete status
+  minMaxStrength: number; // 0-100, pets below this max strength are obsolete (0 = disabled)
+  minTargetScale: number; // 1.0-2.5, pets below this target scale are obsolete (1.0 = disabled)
+  minAbilityCount: 1 | 2 | 3; // Minimum number of abilities required
+  onlyRarePlus: boolean; // Only keep Rare/Legendary/Mythical species
+  markLowValueAbilities: boolean; // Mark pets with ONLY low-value abilities as obsolete
+  prioritizeActivePets: boolean; // Give active pets priority in ranking
 }
 
 // ============================================================================
@@ -178,6 +223,15 @@ const DEFAULT_CONFIG: OptimizerConfig = {
   sortDirection: 'desc',
   minStrengthThreshold: 100,
   protectedPetIds: new Set(),
+
+  // STRICTNESS DEFAULTS (Early-game friendly)
+  mutationProtection: 'both', // Protect both Rainbow and Gold by default
+  minMaxStrength: 0, // Disabled by default
+  minTargetScale: 1.0, // Disabled by default (1.0 = minimum)
+  minAbilityCount: 1, // Keep all pets regardless of ability count
+  onlyRarePlus: false, // Keep all species rarities
+  markLowValueAbilities: false, // Don't mark low-value abilities
+  prioritizeActivePets: true, // Protect active pets by default
 };
 
 let config: OptimizerConfig = { ...DEFAULT_CONFIG, protectedPetIds: new Set() };
@@ -735,6 +789,34 @@ function groupPetsByAbilities(pets: CollectedPet[]): Map<string, PetGroup> {
   return groups;
 }
 
+/**
+ * Check if this pet is the only source of any of its abilities
+ * Returns the ability ID if it's the only source, null otherwise
+ */
+function getOnlySourceAbility(pet: CollectedPet, allPets: CollectedPet[]): string | null {
+  // Only check high-value abilities for "only source" protection
+  const highValueAbilitiesOnPet = pet.abilityIds.filter(id => HIGH_VALUE_ABILITIES.has(id));
+
+  if (highValueAbilitiesOnPet.length === 0) {
+    return null; // No high-value abilities to protect
+  }
+
+  // Check each high-value ability
+  for (const abilityId of highValueAbilitiesOnPet) {
+    // Count how many pets have this ability
+    const petsWithAbility = allPets.filter(p =>
+      p.id !== pet.id && p.abilityIds.includes(abilityId)
+    );
+
+    if (petsWithAbility.length === 0) {
+      // This pet is the ONLY source of this ability!
+      return abilityId;
+    }
+  }
+
+  return null; // Not the only source of any ability
+}
+
 function analyzePet(
   pet: CollectedPet,
   score: PetScore,
@@ -751,6 +833,95 @@ function analyzePet(
       betterAlternatives: [],
       upgradeOpportunities: [],
     };
+  }
+
+  // Check if this pet is the only source of a high-value ability
+  const onlySourceAbility = getOnlySourceAbility(pet, allPets);
+  if (onlySourceAbility) {
+    const def = getAbilityDefinition(onlySourceAbility);
+    const abilityName = def?.name || onlySourceAbility;
+    return {
+      pet,
+      score,
+      status: 'keep',
+      reason: `⭐ Only source of ${abilityName}`,
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+    };
+  }
+
+  // === STRICTNESS FILTERS ===
+  // Apply configured filters to mark pets obsolete early
+  // Skip filters if pet has high-value abilities, rainbow mutation, or is only source
+
+  const hasProtection = hasHighValueAbilities(pet) || pet.hasRainbow || onlySourceAbility !== null;
+
+  // Filter 1: Species rarity (only keep Rare+)
+  if (config.onlyRarePlus && !hasProtection && !isRarePlus(pet.species)) {
+    return {
+      pet,
+      score,
+      status: 'obsolete',
+      reason: '❌ Common/Uncommon species (filter: Rare+ only)',
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+    };
+  }
+
+  // Filter 2: Minimum ability count
+  if (!hasProtection && pet.abilityIds.length < config.minAbilityCount) {
+    return {
+      pet,
+      score,
+      status: 'obsolete',
+      reason: `❌ Only ${pet.abilityIds.length} ability(ies) (need ${config.minAbilityCount}+)`,
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+    };
+  }
+
+  // Filter 3: Minimum max strength
+  if (config.minMaxStrength > 0 && !hasProtection) {
+    const maxStr = pet.maxStrength || pet.strength;
+    if (maxStr < config.minMaxStrength) {
+      return {
+        pet,
+        score,
+        status: 'obsolete',
+        reason: `❌ Max strength too low (${maxStr} < ${config.minMaxStrength})`,
+        betterAlternatives: [],
+        upgradeOpportunities: [],
+      };
+    }
+  }
+
+  // Filter 4: Minimum target scale
+  if (config.minTargetScale > 1.0 && !hasProtection && pet.targetScale) {
+    if (pet.targetScale < config.minTargetScale) {
+      return {
+        pet,
+        score,
+        status: 'obsolete',
+        reason: `❌ Target scale too low (${pet.targetScale.toFixed(2)} < ${config.minTargetScale.toFixed(2)})`,
+        betterAlternatives: [],
+        upgradeOpportunities: [],
+      };
+    }
+  }
+
+  // Filter 5: Low-value abilities only (no mutations to protect)
+  if (config.markLowValueAbilities && !hasProtection && !pet.hasGold) {
+    const hasOnlyLowValue = pet.abilityIds.every(id => LOW_VALUE_ABILITIES.has(id));
+    if (hasOnlyLowValue && pet.abilityIds.length > 0) {
+      return {
+        pet,
+        score,
+        status: 'obsolete',
+        reason: '❌ Only has low-value abilities (Tier I or unwanted)',
+        betterAlternatives: [],
+        upgradeOpportunities: [],
+      };
+    }
   }
 
   // Find all pets with similar abilities (for comparison)
@@ -789,17 +960,24 @@ function analyzePet(
   let isInTop3 = false;
   if (group && group.pets.length > 1) {
     const sortedGroup = [...group.pets].sort((a, b) => {
-      // Sort by mutation first (rainbow > gold > none)
+      // Priority 1: Active pets get bonus if prioritizeActivePets is enabled
+      if (config.prioritizeActivePets) {
+        const aIsActive = a.location === 'active' ? 1 : 0;
+        const bIsActive = b.location === 'active' ? 1 : 0;
+        if (bIsActive !== aIsActive) return bIsActive - aIsActive;
+      }
+
+      // Priority 2: Sort by mutation (rainbow > gold > none)
       const aMutScore = a.hasRainbow ? 3 : a.hasGold ? 2 : 1;
       const bMutScore = b.hasRainbow ? 3 : b.hasGold ? 2 : 1;
       if (bMutScore !== aMutScore) return bMutScore - aMutScore;
 
-      // Then by max STR
+      // Priority 3: Then by max STR
       const aMaxStr = a.maxStrength || a.strength;
       const bMaxStr = b.maxStrength || b.strength;
       if (bMaxStr !== aMaxStr) return bMaxStr - aMaxStr;
 
-      // Finally by current STR
+      // Priority 4: Finally by current STR
       return b.strength - a.strength;
     });
 
@@ -810,14 +988,27 @@ function analyzePet(
   // Determine status based on better alternatives and top 3 status
   if (betterPets.length > 0 && !isInTop3) {
     // Pet has better alternatives AND is not in top 3
-    const reason = pet.hasRainbow || pet.hasGold
-      ? '💎 Lower stats but has mutation - consider keeping'
+    // Apply mutation protection based on config
+    let shouldProtect = false;
+    let mutationType = '';
+
+    if (config.mutationProtection === 'both') {
+      shouldProtect = pet.hasRainbow || pet.hasGold;
+      mutationType = pet.hasRainbow ? 'Rainbow' : 'Gold';
+    } else if (config.mutationProtection === 'rainbow') {
+      shouldProtect = pet.hasRainbow;
+      mutationType = 'Rainbow';
+    }
+    // 'none' = no protection
+
+    const reason = shouldProtect
+      ? `💎 Lower stats but has ${mutationType} mutation - consider keeping`
       : `❌ ${betterPets.length} better pet${betterPets.length > 1 ? 's' : ''} available`;
 
     return {
       pet,
       score,
-      status: pet.hasRainbow || pet.hasGold ? 'consider' : 'obsolete',
+      status: shouldProtect ? 'consider' : 'obsolete',
       reason,
       betterAlternatives: betterPets,
       upgradeOpportunities: [],

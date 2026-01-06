@@ -103,6 +103,7 @@ export function recordXpProc(
 
 /**
  * Calculate XP statistics for a given pet's XP ability
+ * @param currentWeather Current weather state (for weather-dependent abilities like SnowyPetXpBoost)
  */
 export function calculateXpStats(
   pet: ActivePetInfo,
@@ -110,10 +111,17 @@ export function calculateXpStats(
   abilityName: string,
   baseChance: number, // Base probability percentage per minute (e.g., 30 for XP Boost I)
   baseXp: number, // Base XP per proc (e.g., 300 for XP Boost I)
+  requiredWeather?: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | null,
+  currentWeather?: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | 'unknown' | null,
 ): XpAbilityStats {
   const strength = pet.strength ?? 100;
   const petId = pet.petId ?? '';
   const species = pet.species ?? 'Unknown';
+
+  // Check if weather requirement is met
+  const isWeatherSatisfied = !requiredWeather || !currentWeather || currentWeather === 'unknown'
+    ? true // No requirement or weather unknown - assume active
+    : currentWeather === requiredWeather;
 
   // Wiki formula: "X% × STR" means STR acts as a percentage multiplier
   // STR=100 → 100% = 1.0x, STR=89 → 89% = 0.89x
@@ -139,7 +147,11 @@ export function calculateXpStats(
 
   // Calculate XP values
   const actualXpPerProc = baseXp * multiplier;
-  const expectedXpPerHour = expectedProcsPerHour * actualXpPerProc;
+
+  // If weather requirement not met, ability doesn't proc (XP = 0)
+  const expectedXpPerHour = isWeatherSatisfied
+    ? expectedProcsPerHour * actualXpPerProc
+    : 0;
 
   // Find last proc for this pet's ability
   const relevantProcs = procHistory.filter(
@@ -218,11 +230,47 @@ export function setSpeciesXpPerLevel(species: string, xpPerLevel: number): void 
 }
 
 /**
- * Get XP required per level for a species (FUTUREPROOF - uses catalog!)
- * Priority:
- * 1. Catalog-based calculation (hoursToMature from pet catalog)
- * 2. User-configured value
- * 3. null if unknown
+ * Pet species hours to mature (from Magic Garden Wiki)
+ * Active pets get 3600 XP/hour
+ * Total XP = 3600 × hoursToMature
+ * XP per level = Total XP / 30
+ */
+const SPECIES_HOURS_TO_MATURE: Record<string, number> = {
+  // Common (12 hours)
+  'Worm': 12,
+  'Snail': 12,
+  'Bee': 12,
+
+  // Uncommon (24 hours)
+  'Chicken': 24,
+  'Bunny': 24,
+  'Dragonfly': 24,
+
+  // Rare (72 hours)
+  'Pig': 72,
+  'Cow': 72,
+  'Turkey': 72,
+
+  // Legendary (100 hours)
+  'Squirrel': 100,
+  'Turtle': 100,
+  'Goat': 100,
+
+  // Winter/Legendary (100 hours)
+  'SnowFox': 100,
+  'Stoat': 100,
+  'WhiteCaribou': 100,
+  'Caribou': 100, // Alias for WhiteCaribou
+
+  // Mythic (144 hours)
+  'Butterfly': 144,
+  'Peacock': 144,
+  'Capybara': 144,
+};
+
+/**
+ * Get XP required per level for a species
+ * Automatically calculated based on hours to mature
  */
 export function getSpeciesXpPerLevel(species: string): number | null {
   // Priority 1: Try catalog first (from inferXpPerLevel utility)
@@ -250,6 +298,7 @@ export function getAllSpeciesXpConfig(): Record<string, number> {
 /**
  * Species max scale catalog (from game data)
  * This is the maximum scale a species can have
+ * Source: GameSourceFiles/gg-preview-pr-2329/fauna/faunaSpeciesDex.ts
  */
 const SPECIES_MAX_SCALE: Record<string, number> = {
   // Common (12 hours)
@@ -266,6 +315,12 @@ const SPECIES_MAX_SCALE: Record<string, number> = {
   Pig: 2.5,
   Cow: 2.5,
   Turkey: 2.5,
+
+  // Winter/Legendary (100 hours)
+  SnowFox: 2.0,
+  Stoat: 2.0,
+  WhiteCaribou: 2.5,
+  Caribou: 2.5, // Alias for WhiteCaribou
 
   // Legendary (100 hours)
   Squirrel: 2.0,

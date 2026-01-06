@@ -39,12 +39,14 @@ import {
 } from '../sprite-v2/compat';
 import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
 import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
+import { getGardenFiltersConfig, updateGardenFiltersConfig, subscribeToGardenFiltersConfig, applyGardenFiltersNow, resetGardenFiltersNow, getAllPlantSpecies, getAllEggTypes } from '../features/gardenFilters';
 import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
 import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
 import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, UPDATE_URL, GITHUB_URL, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { visibleInterval, criticalInterval, timerManager } from '../utils/timerManager';
 import { throttle, yieldToBrowser } from '../utils/scheduling';
+import { getAllPetSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 // Display Tweaker removed
 
 // Helper function to get mutated crop sprite URL
@@ -3267,7 +3269,9 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   const speciesCheckboxContainer = document.createElement('div');
   speciesCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;';
 
-  const speciesOptions = [
+  // Get pet species dynamically from catalog (FUTUREPROOF!)
+  const speciesOptions = areCatalogsReady() ? getAllPetSpecies() : [
+    // Fallback list if catalogs not loaded yet
     'Worm', 'Snail', 'Bee', 'Chicken', 'Bunny', 'Dragonfly',
     'Pig', 'Cow', 'Turkey', 'Squirrel', 'Turtle', 'Goat',
     'Butterfly', 'Peacock', 'Capybara'
@@ -3316,9 +3320,15 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
   const cropTypeCheckboxContainer = document.createElement('div');
   cropTypeCheckboxContainer.style.cssText = 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;';
 
-  // Dynamically import all crop names from cropBaseStats.ts
-  const { getAllCropNames } = await import('../data/cropBaseStats');
-  const cropTypeOptions = getAllCropNames();
+  // Get plant species dynamically from catalog (FUTUREPROOF!)
+  // Fallback to hardcoded list if catalogs not ready
+  let cropTypeOptions: string[];
+  if (areCatalogsReady()) {
+    cropTypeOptions = getAllPlantSpecies();
+  } else {
+    const { getAllCropNames } = await import('../data/cropBaseStats');
+    cropTypeOptions = getAllCropNames();
+  }
 
   cropTypeOptions.forEach(cropName => {
     const checkbox = document.createElement('label');
@@ -3383,6 +3393,369 @@ async function createAutoFavoriteSection(): Promise<HTMLElement> {
       input.checked = (newConfig.filterByCropTypes || []).includes(cropTypeOptions[index] || '');
     });
   });
+
+  return root;
+}
+
+async function createGardenFiltersSection(): Promise<HTMLElement> {
+  const { root, body } = createCard('Garden Filters', {
+    subtitle: 'Filter visible crops and eggs in your garden',
+  });
+  root.dataset.qpmSection = 'garden-filters';
+
+  const config = getGardenFiltersConfig();
+
+  // === MAIN TOGGLE ===
+  const enableToggle = document.createElement('label');
+  enableToggle.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: var(--qpm-surface-1, #1a1a1a);
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 16px;
+  `;
+
+  const enableCheckbox = document.createElement('input');
+  enableCheckbox.type = 'checkbox';
+  enableCheckbox.checked = config.enabled;
+  enableCheckbox.style.cssText = `width: 20px; height: 20px; cursor: pointer;`;
+
+  enableCheckbox.addEventListener('change', () => {
+    updateGardenFiltersConfig({ enabled: enableCheckbox.checked });
+  });
+
+  const enableLabel = document.createElement('span');
+  enableLabel.textContent = 'Enable Garden Filters';
+  enableLabel.style.cssText = `font-weight: 600; font-size: 14px; color: var(--qpm-text, #fff);`;
+
+  enableToggle.appendChild(enableCheckbox);
+  enableToggle.appendChild(enableLabel);
+  body.appendChild(enableToggle);
+
+  // === INFO BOX ===
+  const infoBox = document.createElement('div');
+  infoBox.style.cssText = `
+    padding: 12px;
+    background: rgba(63, 81, 181, 0.1);
+    border-left: 3px solid rgba(63, 81, 181, 0.6);
+    border-radius: 4px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--qpm-text-muted, #aaa);
+  `;
+  infoBox.innerHTML = `
+    <strong>How it works:</strong><br>
+    • Dims non-matching crops to alpha 0.1 (barely visible)<br>
+    • Uses "ANY" logic: shows crops with ANY selected filter<br>
+    • Example: Rainbow filter shows Rainbow, Rainbow+Frozen, etc.<br>
+    • Future-proof: Uses catalog data (auto-updates with game)
+  `;
+  body.appendChild(infoBox);
+
+  // === MUTATION FILTERS SECTION ===
+  const mutationsSection = document.createElement('div');
+  mutationsSection.style.cssText = 'margin-bottom: 16px;';
+
+  const mutationsTitle = document.createElement('h4');
+  mutationsTitle.textContent = 'Mutation Filters';
+  mutationsTitle.style.cssText = `
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qpm-accent, #4CAF50);
+  `;
+  mutationsSection.appendChild(mutationsTitle);
+
+  // Get mutations from catalog (future-proof!)
+  const mutations = (window as any).__QPM_CATALOGS?.mutationCatalog || {};
+
+  for (const [mutationId, mutationData] of Object.entries(mutations)) {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+    `;
+    checkbox.addEventListener('mouseenter', () => {
+      checkbox.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    checkbox.addEventListener('mouseleave', () => {
+      checkbox.style.background = 'transparent';
+    });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = config.mutations.includes(mutationId);
+    input.style.cssText = 'width: 16px; height: 16px; cursor: pointer;';
+
+    input.addEventListener('change', () => {
+      const current = getGardenFiltersConfig().mutations;
+      const updated = input.checked
+        ? [...current, mutationId]
+        : current.filter(m => m !== mutationId);
+      updateGardenFiltersConfig({ mutations: updated });
+    });
+
+    // Use sprite instead of emoji (VERIFIED working!)
+    const spriteCanvas = getCropSpriteWithMutations('Sunflower', [mutationId]);
+    const spriteEl = document.createElement('img');
+    spriteEl.dataset.qpmSprite = `crop:Sunflower:${mutationId}`;
+    spriteEl.title = (mutationData as any).name || mutationId;
+    spriteEl.style.cssText = `
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      image-rendering: pixelated;
+      flex-shrink: 0;
+    `;
+
+    if (spriteCanvas) {
+      spriteEl.src = canvasToDataUrl(spriteCanvas);
+    }
+
+    const label = document.createElement('span');
+    label.textContent = (mutationData as any).name || mutationId;
+    label.style.cssText = 'font-size: 13px; color: var(--qpm-text, #fff);';
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(spriteEl);
+    checkbox.appendChild(label);
+    mutationsSection.appendChild(checkbox);
+  }
+
+  body.appendChild(mutationsSection);
+
+  // === CROP SPECIES FILTERS ===
+  const cropSection = document.createElement('div');
+  cropSection.style.cssText = 'margin-bottom: 16px;';
+
+  const cropTitle = document.createElement('h4');
+  cropTitle.textContent = 'Crop Species Filters';
+  cropTitle.style.cssText = `
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qpm-accent, #4CAF50);
+  `;
+  cropSection.appendChild(cropTitle);
+
+  // Get plant species from gardenFilters module
+  const plantSpecies = getAllPlantSpecies();
+
+  for (const species of plantSpecies) {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+    `;
+    checkbox.addEventListener('mouseenter', () => {
+      checkbox.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    checkbox.addEventListener('mouseleave', () => {
+      checkbox.style.background = 'transparent';
+    });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = config.cropSpecies.includes(species);
+    input.style.cssText = 'width: 16px; height: 16px; cursor: pointer;';
+
+    input.addEventListener('change', () => {
+      const current = getGardenFiltersConfig().cropSpecies;
+      const updated = input.checked
+        ? [...current, species]
+        : current.filter(s => s !== species);
+      updateGardenFiltersConfig({ cropSpecies: updated });
+    });
+
+    // Sprite (VERIFIED: QPM.spriteExtractor.getCropSprite works!)
+    const spriteCanvas = (window as any).QPM?.spriteExtractor?.getCropSprite(species);
+    const spriteEl = document.createElement('img');
+    spriteEl.dataset.qpmSprite = `crop:${species}`;
+    spriteEl.title = species;
+    spriteEl.style.cssText = `
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      image-rendering: pixelated;
+      flex-shrink: 0;
+    `;
+
+    if (spriteCanvas) {
+      spriteEl.src = canvasToDataUrl(spriteCanvas);
+    }
+
+    const label = document.createElement('span');
+    label.textContent = species;
+    label.style.cssText = 'font-size: 13px; color: var(--qpm-text, #fff);';
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(spriteEl);
+    checkbox.appendChild(label);
+    cropSection.appendChild(checkbox);
+  }
+
+  body.appendChild(cropSection);
+
+  // === EGG TYPE FILTERS ===
+  const eggSection = document.createElement('div');
+  eggSection.style.cssText = 'margin-bottom: 16px;';
+
+  const eggTitle = document.createElement('h4');
+  eggTitle.textContent = 'Egg Type Filters';
+  eggTitle.style.cssText = `
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qpm-accent, #4CAF50);
+  `;
+  eggSection.appendChild(eggTitle);
+
+  // Get egg types from catalog (future-proof!)
+  const eggTypes = getAllEggTypes();
+
+  for (const eggType of eggTypes) {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+    `;
+    checkbox.addEventListener('mouseenter', () => {
+      checkbox.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    checkbox.addEventListener('mouseleave', () => {
+      checkbox.style.background = 'transparent';
+    });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = config.eggTypes.includes(eggType);
+    input.style.cssText = 'width: 16px; height: 16px; cursor: pointer;';
+
+    input.addEventListener('change', () => {
+      const current = getGardenFiltersConfig().eggTypes;
+      const updated = input.checked
+        ? [...current, eggType]
+        : current.filter(e => e !== eggType);
+      updateGardenFiltersConfig({ eggTypes: updated });
+    });
+
+    // Get egg catalog data for display name
+    const eggCatalog = (window as any).__QPM_CATALOGS?.eggCatalog || {};
+    const eggData = eggCatalog[eggType];
+    const displayName = eggData?.name || eggType;
+
+    const label = document.createElement('span');
+    label.textContent = displayName;
+    label.style.cssText = 'font-size: 13px; color: var(--qpm-text, #fff);';
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(label);
+    eggSection.appendChild(checkbox);
+  }
+
+  body.appendChild(eggSection);
+
+  // === GROWTH STATE FILTERS ===
+  const growthSection = document.createElement('div');
+  growthSection.style.cssText = 'margin-bottom: 16px;';
+
+  const growthTitle = document.createElement('h4');
+  growthTitle.textContent = 'Growth State Filters';
+  growthTitle.style.cssText = `
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qpm-accent, #4CAF50);
+  `;
+  growthSection.appendChild(growthTitle);
+
+  const growthStates: Array<{id: 'mature' | 'growing'; label: string}> = [
+    { id: 'mature', label: 'Mature Only' },
+    { id: 'growing', label: 'Growing Only' },
+  ];
+
+  for (const state of growthStates) {
+    const checkbox = document.createElement('label');
+    checkbox.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+    `;
+    checkbox.addEventListener('mouseenter', () => {
+      checkbox.style.background = 'rgba(255, 255, 255, 0.05)';
+    });
+    checkbox.addEventListener('mouseleave', () => {
+      checkbox.style.background = 'transparent';
+    });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = config.growthStates.includes(state.id);
+    input.style.cssText = 'width: 16px; height: 16px; cursor: pointer;';
+
+    input.addEventListener('change', () => {
+      const current = getGardenFiltersConfig().growthStates;
+      const updated = input.checked
+        ? [...current, state.id]
+        : current.filter(s => s !== state.id);
+      updateGardenFiltersConfig({ growthStates: updated });
+    });
+
+    const label = document.createElement('span');
+    label.textContent = state.label;
+    label.style.cssText = 'font-size: 13px; color: var(--qpm-text, #fff);';
+
+    checkbox.appendChild(input);
+    checkbox.appendChild(label);
+    growthSection.appendChild(checkbox);
+  }
+
+  body.appendChild(growthSection);
+
+  // === ACTION BUTTONS ===
+  const actionsRow = document.createElement('div');
+  actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 16px;';
+
+  const applyButton = document.createElement('button');
+  applyButton.textContent = 'Apply Filters';
+  applyButton.className = 'qpm-button qpm-button--positive';
+  applyButton.addEventListener('click', () => {
+    applyGardenFiltersNow();
+  });
+
+  const resetButton = document.createElement('button');
+  resetButton.textContent = 'Reset All';
+  resetButton.className = 'qpm-button';
+  resetButton.addEventListener('click', () => {
+    resetGardenFiltersNow();
+  });
+
+  actionsRow.appendChild(applyButton);
+  actionsRow.appendChild(resetButton);
+  body.appendChild(actionsRow);
 
   return root;
 }
@@ -3901,6 +4274,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
       'achievements': 'rgba(255, 215, 64, 0.28)',  // Gold
       'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
+      'garden-filters': 'rgba(63, 81, 181, 0.28)', // Indigo
       'journal-checker': 'rgba(121, 85, 72, 0.28)', // Brown
       'guide': 'rgba(96, 125, 139, 0.28)',         // Blue Grey
       'weather': 'rgba(156, 39, 176, 0.28)',       // Purple (Reminders)
@@ -3933,6 +4307,9 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   // Auto-Favorite section
   const autoFavoriteSection = await createAutoFavoriteSection();
 
+  // Garden Filters section
+  const gardenFiltersSection = await createGardenFiltersSection();
+
   // Journal Checker section
   const journalCheckerSection = createJournalCheckerSection();
 
@@ -3951,6 +4328,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   registerTab('crop-boost', 'Crop Boosts', '🌱', []);
   registerTab('achievements', 'Achievements', '🏆', []);
   registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
+  registerTab('garden-filters', 'Garden Filters', '🔍', [gardenFiltersSection]);
   registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
   registerTab('guide', 'Guide', '📖', [guideSection]);
   registerTab('weather', 'Reminders', '🔔', [mutationSection]);

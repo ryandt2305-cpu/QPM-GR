@@ -57,6 +57,10 @@ const PLANT_MAX_SCALE: Record<string, number> = {
   mooncelestial: 2,
   moonbinderpod: 2,
   moonbinderbulb: 2,
+  // === CRITICAL FIX: Add FavaBean (was missing, causing size 69 to show as 88) ===
+  favabean: 3,            // 0.09 / 0.03 = 3 (from game source floraSpeciesDex.ts:120)
+  favabeanpod: 3,         // Alias for Fava Bean Pod
+  cacaofruit: 2.5,        // Cacao fruit alias
 };
 
 export function lookupMaxScale(normalizedKey: string): number | null {

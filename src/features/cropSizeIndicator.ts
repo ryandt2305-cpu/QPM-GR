@@ -6,11 +6,12 @@ import { lookupMaxScale } from '../utils/plantScales';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 import { onAdded, onRemoved, watch } from '../utils/dom';
-import { getCropStats, CROP_BASE_STATS } from '../data/cropBaseStats';
+import { getCropStats, CROP_BASE_STATS, type CropStats } from '../data/cropBaseStats';
 import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { getJournal, type Journal } from './journalChecker';
 import { VARIANT_BADGES } from '../data/variantBadges';
+import { getPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 
 interface CropSizeConfig {
   enabled: boolean;
@@ -42,6 +43,7 @@ const SPECIES_KEY_ALIASES: Record<string, string[]> = {
   passionfruit: ['passion fruit', 'passion-fruit', 'passionfruit'],
   dawncelestial: ['dawnbinder', 'dawn binder'],
   mooncelestial: ['moonbinder', 'moon binder'],
+  bamboo: ['bamboo shoot', 'bambooshoot'],
 };
 
 const resolveSpeciesKey = (raw: string): string => {
@@ -147,6 +149,100 @@ function loadConfig(): void {
 // Size Calculation
 // ============================================================================
 
+/**
+ * Get crop stats from catalog (FUTUREPROOF!)
+ * Falls back to hardcoded CROP_BASE_STATS if catalog not ready or species not found
+ */
+function getCropStatsFromCatalog(species: string): CropStats | null {
+  // If catalogs aren't ready, use hardcoded fallback
+  if (!areCatalogsReady()) {
+    return getCropStats(species);
+  }
+
+  // Try to get species from catalog - try multiple name variations
+  let plantEntry = getPlantSpecies(species);
+
+  // If exact match fails, try variations (handles "pine tree" -> "PineTree", etc.)
+  if (!plantEntry) {
+    const variations = [
+      normalizeSpeciesKey(species),                                          // "pinetree"
+      species.replace(/\s+/g, ''),                                          // "pinetree"
+      species.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''), // "PineTree"
+      species.charAt(0).toUpperCase() + species.slice(1).replace(/\s+/g, ''), // "Pinetree"
+      species.toLowerCase(),                                                  // "pine tree"
+    ];
+
+    for (const variant of variations) {
+      plantEntry = getPlantSpecies(variant);
+      if (plantEntry?.crop) {
+        break;
+      }
+    }
+  }
+
+  if (!plantEntry?.crop) {
+    // Species not in catalog, try hardcoded fallback
+    return getCropStats(species);
+  }
+
+  // Map catalog data to CropStats format (with proper type casting)
+  const baseSellPrice = typeof plantEntry.crop.baseSellPrice === 'number' ? plantEntry.crop.baseSellPrice : 0;
+  const baseWeight = typeof plantEntry.crop.baseWeight === 'number' ? plantEntry.crop.baseWeight : 1.0;
+  const maxScale = typeof plantEntry.crop.maxScale === 'number' ? plantEntry.crop.maxScale : 2.5;
+  const secondsToMature = typeof plantEntry.plant?.secondsToMature === 'number' ? plantEntry.plant.secondsToMature : 0;
+
+  const result: CropStats = {
+    name: plantEntry.crop.name || species,
+    seedPrice: plantEntry.seed?.coinPrice ?? 0,
+    baseSellPrice,
+    cropGrowTime: secondsToMature,
+    regrow: plantEntry.plant?.harvestType === 'Multiple' ? 'Multiple' : 'No',
+    baseWeight,
+    maxWeight: baseWeight * maxScale,
+  };
+
+  // Add optional fields if they exist
+  if (typeof plantEntry.seed?.creditPrice === 'number') {
+    result.rarity = plantEntry.seed.creditPrice;
+  }
+
+  return result;
+}
+
+/**
+ * FUTUREPROOF: Get maxScale from catalog first, fallback to hardcoded plantScales.ts
+ * This ensures the script automatically handles new crops added to the game!
+ */
+function getMaxScaleForCrop(species: string, speciesNormalized: string): number {
+  // Try catalog first (FUTUREPROOF!)
+  if (areCatalogsReady()) {
+    // Try multiple name variations to match catalog entries
+    const variations = [
+      species,                                                      // Original case
+      speciesNormalized,                                           // Normalized lowercase
+      species.replace(/\s+/g, ''),                                 // Remove spaces
+      species.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''), // PascalCase
+      species.charAt(0).toUpperCase() + species.slice(1).replace(/\s+/g, ''),       // Capitalized no spaces
+    ];
+
+    for (const variant of variations) {
+      const plantEntry = getPlantSpecies(variant);
+      if (plantEntry?.crop?.maxScale && typeof plantEntry.crop.maxScale === 'number') {
+        return plantEntry.crop.maxScale;
+      }
+    }
+  }
+
+  // Fallback to hardcoded plantScales.ts lookup
+  const hardcodedMaxScale = lookupMaxScale(speciesNormalized);
+  if (hardcodedMaxScale !== null) {
+    return hardcodedMaxScale;
+  }
+
+  // Final fallback to default of 2.0
+  return 2.0;
+}
+
 function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number; weight: number; value: number } | null {
   let species = slot.species;
   if (!species) return null;
@@ -162,14 +258,14 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
     species = mappedSpecies;
   }
 
-  // Get crop base stats first
-  const cropStats = getCropStats(species);
+  // Get crop base stats from catalog (FUTUREPROOF!)
+  const cropStats = getCropStatsFromCatalog(species);
   if (!cropStats) return null;
 
   // Calculate CURRENT scale from weight (weight = baseWeight * scale)
   const weight = slot.weight ?? 0;
   let currentScale: number;
-  
+
   if (weight > 0 && cropStats.baseWeight > 0) {
     // If we have weight, calculate actual current scale from it
     currentScale = weight / cropStats.baseWeight;
@@ -179,10 +275,11 @@ function calculateCropSizeInfo(slot: any): { sizePercent: number; scale: number;
     // Priority: slot.scale > targetScale > plantScale
     currentScale = slot.scale ?? slot.targetScale ?? slot.plantScale ?? 1.0;
   }
-  
-  // Get max scale for this crop (from plantScales.ts lookup)
-  const maxScale = lookupMaxScale(speciesNormalized) ?? 2.0;
-  
+
+  // FUTUREPROOF: Get max scale from catalog first, fallback to hardcoded table
+  // This automatically handles new crops added to the game!
+  const maxScale = getMaxScaleForCrop(species, speciesNormalized);
+
   // Size display formula: maps scale range (1.0 to maxScale) to display range (50 to 100)
   // Example: Pumpkin maxScale=3, so scale 1.0->50, scale 2.0->75, scale 3.0->100
   // Formula: size = 50 + ((currentScale - 1) / (maxScale - 1)) * 50
@@ -587,6 +684,8 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     'cacao bean': 'cacaobean',
     'cacao': 'cacaobean',
     'cocoa bean': 'cacaobean',
+    // Tooltip name differs from species name
+    'bamboo shoot': 'bamboo',
     // Multi-harvest fruit names
     'lychee fruit': 'lychee',
     'strawberry': 'strawberry',
@@ -604,8 +703,28 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   }
   
   // Check if this is actually a known crop name (skip decorations, eggs, etc)
-  const isKnownCrop = Object.keys(CROP_BASE_STATS).some(crop => crop.toLowerCase() === normalizedCropName);
-  
+  let isKnownCrop = Object.keys(CROP_BASE_STATS).some(crop => crop.toLowerCase() === normalizedCropName);
+
+  // If not in hardcoded list, check catalog (FUTUREPROOF!)
+  if (!isKnownCrop && areCatalogsReady()) {
+    // Try multiple variations to match catalog entries (handles "Pine Tree" -> "PineTree", etc.)
+    const variations = [
+      normalizedCropName,                                                      // "pine tree"
+      normalizeSpeciesKey(normalizedCropName),                                // "pinetree"
+      normalizedCropName.replace(/\s+/g, ''),                                 // "pinetree"
+      normalizedCropName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''), // "PineTree"
+      normalizedCropName.charAt(0).toUpperCase() + normalizedCropName.slice(1).replace(/\s+/g, ''), // "Pinetree"
+    ];
+
+    for (const variant of variations) {
+      const plantEntry = getPlantSpecies(variant);
+      if (plantEntry?.crop) {
+        isKnownCrop = true;
+        break;
+      }
+    }
+  }
+
   if (!isKnownCrop) {
     // Not a crop - remove any existing indicator
     removeSizeIndicator(tooltipContent);
@@ -668,7 +787,11 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
         }
         
         // Check if this is the matching crop
-        if (baseSpecies.toLowerCase() === normalizedCropName) {
+        // Normalize both sides to handle "PineTree" vs "pine tree" vs "pinetree"
+        const normalizedSlotSpecies = normalizeSpeciesKey(baseSpecies);
+        const normalizedSearchName = normalizeSpeciesKey(normalizedCropName);
+
+        if (normalizedSlotSpecies === normalizedSearchName) {
           const tileIndex = parseInt(tileKey, 10);
           const coords = tileIndexToCoords(tileIndex);
           matchingCrops.push({slot, tileKey, slotIndex, coords, tile});

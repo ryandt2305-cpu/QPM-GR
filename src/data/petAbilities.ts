@@ -1,6 +1,8 @@
 // src/data/petAbilities.ts
 // Ability metadata used for tracker projections.
 
+import { getAbilityDef, getAllAbilities, areCatalogsReady } from '../catalogs/gameCatalogs';
+
 export type AbilityCategory = 'plantGrowth' | 'eggGrowth' | 'xp' | 'coins' | 'misc';
 
 type AbilityTrigger = 'continuous' | 'hatchEgg' | 'sellAllCrops' | 'sellPet' | 'harvest';
@@ -502,12 +504,85 @@ export function getAbilityDefinition(raw: string | null | undefined): AbilityDef
   if (!raw) {
     return null;
   }
+
   const normalized = normalizeKey(raw);
-  return abilityLookup.get(normalized) ?? null;
+
+  // Priority 1: Try hardcoded definitions (has full metadata)
+  const hardcoded = abilityLookup.get(normalized);
+  if (hardcoded) {
+    return hardcoded;
+  }
+
+  // Priority 2: Try catalog (FUTUREPROOF - supports new abilities!)
+  if (areCatalogsReady()) {
+    const catalogEntry = getAbilityDef(raw);
+    if (catalogEntry) {
+      // Create basic definition from catalog data
+      const category: AbilityCategory =
+        catalogEntry.trigger === 'hatchEgg' ? 'eggGrowth' :
+        catalogEntry.trigger === 'continuous' ? 'misc' :
+        'misc';
+
+      const definition: AbilityDefinition = {
+        id: raw,
+        name: catalogEntry.name || raw,
+        category,
+        trigger: catalogEntry.trigger as any,
+        rollPeriodMinutes: 1,
+        notes: 'Auto-discovered from game catalog',
+      };
+
+      // Only add baseProbability if it exists
+      if (catalogEntry.baseProbability !== undefined) {
+        definition.baseProbability = catalogEntry.baseProbability;
+      }
+
+      return definition;
+    }
+  }
+
+  return null;
 }
 
 export function getAllAbilityDefinitions(): AbilityDefinition[] {
-  return [...ABILITY_DEFINITIONS];
+  const definitions = [...ABILITY_DEFINITIONS];
+
+  // Add catalog abilities that aren't in hardcoded list (FUTUREPROOF!)
+  if (areCatalogsReady()) {
+    const catalogAbilityIds = getAllAbilities();
+    const existingIds = new Set(ABILITY_DEFINITIONS.map(d => normalizeKey(d.id)));
+
+    for (const abilityId of catalogAbilityIds) {
+      if (!existingIds.has(normalizeKey(abilityId))) {
+        // New ability from catalog - create basic definition
+        const catalogEntry = getAbilityDef(abilityId);
+        if (catalogEntry) {
+          const category: AbilityCategory =
+            catalogEntry.trigger === 'hatchEgg' ? 'eggGrowth' :
+            catalogEntry.trigger === 'continuous' ? 'misc' :
+            'misc';
+
+          const definition: AbilityDefinition = {
+            id: abilityId,
+            name: catalogEntry.name || abilityId,
+            category,
+            trigger: catalogEntry.trigger as any,
+            rollPeriodMinutes: 1,
+            notes: 'Auto-discovered from game catalog',
+          };
+
+          // Only add baseProbability if it exists
+          if (catalogEntry.baseProbability !== undefined) {
+            definition.baseProbability = catalogEntry.baseProbability;
+          }
+
+          definitions.push(definition);
+        }
+      }
+    }
+  }
+
+  return definitions;
 }
 
 const STRENGTH_BASELINE = 100;

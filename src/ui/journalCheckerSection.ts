@@ -298,20 +298,14 @@ export function createJournalCheckerSection(): HTMLElement {
 
         const speciesCard = document.createElement('div');
 
-        // Add rainbow animation if all variants collected (11/11)
+        // Add rainbow animation if all variants collected (MATCHES PET CARDS!)
         if (isComplete) {
           speciesCard.classList.add('qpm-rainbow-complete');
           speciesCard.style.cssText = `
-            position: relative;
             border-radius: 10px;
             padding: 16px;
             margin-bottom: 10px;
-            border: 2px solid transparent;
-            background: linear-gradient(135deg, #1f1f1f, #1a1a1a) padding-box,
-                        linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9, #FF1744) border-box;
-            background-size: 100% 100%, 200% 200%;
-            animation: qpm-rainbow-border 3s linear infinite;
-            box-shadow: 0 0 20px rgba(255, 23, 68, 0.3);
+            border: 1px solid #333;
             transition: all 0.2s;
           `;
         } else {
@@ -568,7 +562,7 @@ export function createJournalCheckerSection(): HTMLElement {
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
-                  ${isComplete ? '<span style="font-size: 16px;">?o"</span>' : ''}
+                  ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
                 </div>
                 <span style="
                   background: ${isComplete ? '#42A5F5' : '#555'};

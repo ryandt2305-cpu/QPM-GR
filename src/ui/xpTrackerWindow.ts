@@ -789,7 +789,7 @@ function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
       const stats = calculateXpStats(
         pet,
         ability.id,
-        rawName, // Use the raw ability name as it appears in game
+        getAbilityName(ability.id), // Get ability name from catalog (FUTUREPROOF!)
         ability.baseProbability ?? 0,
         ability.effectValuePerProc ?? 0,
         ability.requiredWeather ?? null,

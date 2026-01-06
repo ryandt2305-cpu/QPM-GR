@@ -568,10 +568,66 @@ export function findAtomsByLabel(regex: RegExp): any[] {
   return matches;
 }
 
+/**
+ * Find atom by checking its value structure (fallback when labels are unavailable)
+ */
+function findAtomByStructure(matcher: (value: any) => boolean): any | null {
+  const cache = getAtomCache();
+  if (!cache) return null;
+
+  for (const atom of cache.values()) {
+    if (!atom) continue;
+
+    try {
+      const state = cache.get(atom) as { v?: unknown } | undefined;
+      if (state && Object.prototype.hasOwnProperty.call(state, 'v')) {
+        if (matcher(state.v)) {
+          return atom;
+        }
+      }
+    } catch {
+      // Ignore atoms that can't be read
+    }
+  }
+
+  return null;
+}
+
 export function getAtomByLabel(label: string): any | null {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`^${escaped}$`);
-  return findAtomsByLabel(regex)[0] ?? null;
+  const result = findAtomsByLabel(regex)[0] ?? null;
+
+  // Fallback: If label search fails, use structure-based detection
+  if (!result) {
+    if (label === 'myDataAtom') {
+      return findAtomByStructure((value) => {
+        // myDataAtom has structure: { garden: { tileObjects: {...}, boardwalkTileObjects: {...} } }
+        return !!(
+          value &&
+          typeof value === 'object' &&
+          'garden' in value &&
+          value.garden &&
+          typeof value.garden === 'object' &&
+          'tileObjects' in value.garden
+        );
+      });
+    } else if (label === 'mapAtom') {
+      return findAtomByStructure((value) => {
+        // mapAtom has structure: { cols: number, rows: number, globalTileIdxToDirtTile: {...}, ... }
+        return !!(
+          value &&
+          typeof value === 'object' &&
+          'cols' in value &&
+          'rows' in value &&
+          'globalTileIdxToDirtTile' in value &&
+          typeof value.globalTileIdxToDirtTile === 'object'
+        );
+      });
+    }
+  }
+
+  return result;
 }
 
 export async function readAtomValue<T = unknown>(atom: any): Promise<T> {

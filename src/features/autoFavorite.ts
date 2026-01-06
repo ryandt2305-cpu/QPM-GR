@@ -6,6 +6,8 @@ import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, isInventoryStoreActive } from '../store/inventory';
 import { criticalInterval } from '../utils/timerManager';
+import { getCropCategory, getAllCropCategories } from '../utils/cropCategorizer';
+import { getAllPlantSpecies, getAllAbilities, getAllMutations, areCatalogsReady } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY = 'qpm.autoFavorite.v1';
 
@@ -14,12 +16,70 @@ export interface AutoFavoriteConfig {
   species: string[]; // List of species names to auto-favorite
   mutations: string[]; // List of mutations to auto-favorite (Rainbow, Gold, Frozen, etc)
   petAbilities: string[]; // List of pet abilities to auto-favorite (Rainbow Granter, Gold Granter)
-  
+
   // Advanced filters - now all multi-select arrays
   filterByAbilities?: string[]; // Multiple ability names to filter by
   filterByAbilityCount?: number | null | undefined; // Number of abilities (1-4)
   filterBySpecies?: string[]; // Multiple species filter
   filterByCropTypes?: string[]; // Multiple crop category filters (Seed, Fruit, Vegetable, Flower)
+}
+
+/**
+ * FUTUREPROOF: Extract ability string from various ability object formats
+ */
+function extractAbilityId(ability: any): string {
+  if (typeof ability === 'string') return ability;
+  return ability?.type || ability?.abilityType || ability?.id || '';
+}
+
+/**
+ * FUTUREPROOF: Normalize ability ID for comparison (handles display names and IDs)
+ */
+function normalizeAbilityId(abilityId: string): string {
+  return abilityId.toLowerCase().replace(/\s+/g, '');
+}
+
+/**
+ * FUTUREPROOF: Check if pet has Gold or Rainbow Granter ability/mutation
+ * Centralized logic to avoid duplication
+ */
+function hasGranterAbility(
+  abilities: any[],
+  mutations: string[],
+  granterType: 'gold' | 'rainbow'
+): boolean {
+  // Check mutations first (direct mutation grants)
+  const mutationName = granterType === 'gold' ? 'Gold' : 'Rainbow';
+  if (mutations.includes(mutationName)) {
+    return true;
+  }
+
+  // Check abilities array for granter abilities
+  // Handle both ability ID format (e.g., "GoldGranter") and display name (e.g., "Gold Granter")
+  return abilities.some((a: any) => {
+    const abilityStr = extractAbilityId(a);
+    const normalized = normalizeAbilityId(abilityStr);
+
+    // Match both "GoldGranter" ID and "Gold Granter" display name
+    const granterPattern = `${granterType}granter`;
+    return normalized === granterPattern || normalized.includes(granterPattern);
+  });
+}
+
+/**
+ * FUTUREPROOF: Check if pet has specific ability using exact matching
+ * Supports both ability IDs (e.g., "ProduceEater") and display names (e.g., "Crop Eater")
+ */
+function petHasAbility(petAbilities: any[], filterAbilityId: string): boolean {
+  const normalizedFilter = normalizeAbilityId(filterAbilityId);
+
+  return petAbilities.some((a: any) => {
+    const abilityStr = extractAbilityId(a);
+    const normalizedAbility = normalizeAbilityId(abilityStr);
+
+    // Exact match only (no substring matching to avoid false positives)
+    return normalizedAbility === normalizedFilter;
+  });
 }
 
 let config: AutoFavoriteConfig = {
@@ -38,30 +98,28 @@ let cleanupInterval: (() => void) | null = null;
 let seenItemIds = new Set<string>();
 
 /**
- * Get crop type category for filtering
+ * Get crop type category for filtering (FUTUREPROOF - uses catalog!)
  */
 function getCropType(species: string | null | undefined): string | null {
   if (!species) return null;
-  
-  const normalized = species.toLowerCase();
-  
-  // Seed crops
-  const seeds = ['wheat', 'corn', 'rice', 'barley', 'oat', 'sunflower'];
-  if (seeds.some(s => normalized.includes(s))) return 'Seed';
-  
-  // Fruits
-  const fruits = ['apple', 'banana', 'strawberry', 'blueberry', 'grape', 'watermelon', 'lemon', 'coconut', 'lychee', 'passionfruit', 'dragonfruit', 'pumpkin'];
-  if (fruits.some(f => normalized.includes(f))) return 'Fruit';
-  
-  // Vegetables
-  const vegetables = ['carrot', 'tomato', 'pepper', 'aloe', 'mushroom', 'bamboo', 'favabean', 'squash'];
-  if (vegetables.some(v => normalized.includes(v))) return 'Vegetable';
-  
-  // Flowers
-  const flowers = ['daffodil', 'lily', 'tulip', 'chrysanthemum', 'camellia', 'echeveria', 'cactus', 'burrostail'];
-  if (flowers.some(f => normalized.includes(f))) return 'Flower';
-  
-  return 'Other';
+  return getCropCategory(species);
+}
+
+/**
+ * Get available filter options from catalogs (FUTUREPROOF!)
+ */
+export function getAvailableFilterOptions(): {
+  species: string[];
+  abilities: string[];
+  mutations: string[];
+  cropTypes: string[];
+} {
+  return {
+    species: areCatalogsReady() ? getAllPlantSpecies() : [],
+    abilities: areCatalogsReady() ? getAllAbilities() : [],
+    mutations: areCatalogsReady() ? Object.keys(getAllMutations()) : [],
+    cropTypes: getAllCropCategories(),
+  };
 }
 
 function loadConfig(): void {
@@ -147,20 +205,11 @@ function checkAndFavoriteNewItems(inventory: any): void {
         reason = 'filtered species';
       }
 
-      // Filter by ability types (multi-select)
+      // Filter by ability types (multi-select) - FUTUREPROOF with exact matching
       if (config.filterByAbilities && config.filterByAbilities.length > 0) {
         const petAbilities = item.abilities || [];
-        const hasAnyAbility = config.filterByAbilities.some(filterAbilityId => 
-          petAbilities.some((a: any) => {
-            // Get the ability string from the item
-            const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-            const abilityLower = abilityStr.toLowerCase();
-            const filterLower = filterAbilityId.toLowerCase();
-            
-            // Match if the pet's ability contains the filter ID (e.g., "ProduceEater" contains "produceeater")
-            // This handles ability IDs like "ProduceEater", "PlantGrowthBoost", etc.
-            return abilityLower.includes(filterLower) || abilityLower === filterLower;
-          })
+        const hasAnyAbility = config.filterByAbilities.some(filterAbilityId =>
+          petHasAbility(petAbilities, filterAbilityId)
         );
         if (!hasAnyAbility) continue; // Skip this pet if it doesn't have the filtered ability
         shouldFavoritePet = true;
@@ -179,36 +228,23 @@ function checkAndFavoriteNewItems(inventory: any): void {
         }
       }
       
-      // Check pet mutations for Gold or Rainbow
-      const petMutations = item.mutations || [];
-      const hasGoldMutation = petMutations.includes('Gold');
-      const hasRainbowMutation = petMutations.includes('Rainbow');
-
-      // Also check abilities array for granter abilities
-      const petAbilities = item.abilities || [];
-      const hasGoldGranterAbility = petAbilities.some((a: any) => {
-        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-        return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
-      });
-      const hasRainbowGranterAbility = petAbilities.some((a: any) => {
-        const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-        return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
-      });
-
-      // Check if Gold/Rainbow Granter filter is enabled
+      // Check if Gold/Rainbow Granter filter is enabled - FUTUREPROOF with centralized logic
       if (config.filterByAbilities && config.filterByAbilities.length > 0) {
-        const hasGoldGranterFilter = config.filterByAbilities.some(abilityId => 
-          abilityId.toLowerCase().includes('goldgranter') || abilityId.toLowerCase() === 'gold granter'
+        const petMutations = item.mutations || [];
+        const petAbilities = item.abilities || [];
+
+        const hasGoldGranterFilter = config.filterByAbilities.some(abilityId =>
+          normalizeAbilityId(abilityId) === 'goldgranter' || normalizeAbilityId(abilityId) === 'goldgranter'
         );
-        const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId => 
-          abilityId.toLowerCase().includes('rainbowgranter') || abilityId.toLowerCase() === 'rainbow granter'
+        const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId =>
+          normalizeAbilityId(abilityId) === 'rainbowgranter' || normalizeAbilityId(abilityId) === 'rainbowgranter'
         );
 
-        if (hasGoldGranterFilter && (hasGoldMutation || hasGoldGranterAbility)) {
+        if (hasGoldGranterFilter && hasGranterAbility(petAbilities, petMutations, 'gold')) {
           shouldFavoritePet = true;
           reason = 'Gold Granter';
         }
-        if (hasRainbowGranterFilter && (hasRainbowMutation || hasRainbowGranterAbility)) {
+        if (hasRainbowGranterFilter && hasGranterAbility(petAbilities, petMutations, 'rainbow')) {
           shouldFavoritePet = true;
           reason = 'Rainbow Granter';
         }
@@ -379,24 +415,13 @@ function favoritePetAbility(abilityName: string): void {
 
     if (favoritedIds.has(item.id)) continue; // Already favorited
 
-    // Check both mutations AND abilities array for granter abilities
+    // FUTUREPROOF: Use centralized granter ability checking
     const petMutations = item.mutations || [];
-    const hasGoldMutation = petMutations.includes('Gold');
-    const hasRainbowMutation = petMutations.includes('Rainbow');
-
     const petAbilities = item.abilities || [];
-    const hasGoldGranterAbility = petAbilities.some((a: any) => {
-      const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-      return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
-    });
-    const hasRainbowGranterAbility = petAbilities.some((a: any) => {
-      const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-      return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
-    });
 
     const shouldFavorite =
-      (abilityName === 'Gold Granter' && (hasGoldMutation || hasGoldGranterAbility)) ||
-      (abilityName === 'Rainbow Granter' && (hasRainbowMutation || hasRainbowGranterAbility));
+      (abilityName === 'Gold Granter' && hasGranterAbility(petAbilities, petMutations, 'gold')) ||
+      (abilityName === 'Rainbow Granter' && hasGranterAbility(petAbilities, petMutations, 'rainbow'));
 
     if (shouldFavorite) {
       log(`✨ [AUTO-FAVORITE-PET] Found matching pet: ${item.petSpecies || item.species} (${item.id}) - mutations: [${petMutations.join(', ')}], abilities: ${petAbilities.length}`);
@@ -542,15 +567,10 @@ function startAutoFavoritePolling(): void {
             reason = 'filtered species';
           }
 
-          // Filter by ability types (must have one of the filtered abilities)
+          // Filter by ability types (must have one of the filtered abilities) - FUTUREPROOF exact matching
           if (config.filterByAbilities && config.filterByAbilities.length > 0) {
             const hasAnyAbility = config.filterByAbilities.some(filterAbilityId =>
-              abilities.some((a: any) => {
-                const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-                const abilityLower = abilityStr.toLowerCase();
-                const filterLower = filterAbilityId.toLowerCase();
-                return abilityLower.includes(filterLower) || abilityLower === filterLower;
-              })
+              petHasAbility(abilities, filterAbilityId)
             );
             if (!hasAnyAbility) {
               continue; // Skip this pet if it doesn't have the filtered ability
@@ -570,31 +590,20 @@ function startAutoFavoritePolling(): void {
             }
           }
 
-          // Check for Rainbow/Gold Granter abilities if filter is active
+          // Check for Rainbow/Gold Granter abilities if filter is active - FUTUREPROOF centralized logic
           if (config.filterByAbilities && config.filterByAbilities.length > 0) {
-            const hasGoldMutation = mutations.includes('Gold');
-            const hasRainbowMutation = mutations.includes('Rainbow');
-            const hasGoldGranterAbility = abilities.some((a: any) => {
-              const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-              return abilityStr.toLowerCase().includes('gold') && abilityStr.toLowerCase().includes('grant');
-            });
-            const hasRainbowGranterAbility = abilities.some((a: any) => {
-              const abilityStr = typeof a === 'string' ? a : a?.type || a?.abilityType || '';
-              return abilityStr.toLowerCase().includes('rainbow') && abilityStr.toLowerCase().includes('grant');
-            });
-
             const hasGoldGranterFilter = config.filterByAbilities.some(abilityId =>
-              abilityId.toLowerCase().includes('goldgranter') || abilityId.toLowerCase() === 'gold granter'
+              normalizeAbilityId(abilityId) === 'goldgranter' || normalizeAbilityId(abilityId) === 'goldgranter'
             );
             const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId =>
-              abilityId.toLowerCase().includes('rainbowgranter') || abilityId.toLowerCase() === 'rainbow granter'
+              normalizeAbilityId(abilityId) === 'rainbowgranter' || normalizeAbilityId(abilityId) === 'rainbowgranter'
             );
 
-            if (hasGoldGranterFilter && (hasGoldMutation || hasGoldGranterAbility)) {
+            if (hasGoldGranterFilter && hasGranterAbility(abilities, mutations, 'gold')) {
               shouldFavorite = true;
               reason = 'Gold Granter';
             }
-            if (hasRainbowGranterFilter && (hasRainbowMutation || hasRainbowGranterAbility)) {
+            if (hasRainbowGranterFilter && hasGranterAbility(abilities, mutations, 'rainbow')) {
               shouldFavorite = true;
               reason = 'Rainbow Granter';
             }

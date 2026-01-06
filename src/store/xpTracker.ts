@@ -4,6 +4,8 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { debounce } from '../utils/helpers';
 import type { ActivePetInfo } from './pets';
+import { getAllPetXpEstimates, inferXpPerLevel } from '../utils/xpInference';
+import { areCatalogsReady, onCatalogsReady } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY_PROCS = 'qpm.xpTrackerProcs.v1';
 const STORAGE_KEY_CONFIG = 'qpm.xpTrackerConfig.v1';
@@ -271,18 +273,19 @@ const SPECIES_HOURS_TO_MATURE: Record<string, number> = {
  * Automatically calculated based on hours to mature
  */
 export function getSpeciesXpPerLevel(species: string): number | null {
-  const hoursToMature = SPECIES_HOURS_TO_MATURE[species];
-  if (!hoursToMature) {
-    return configData.speciesXpPerLevel[species] ?? null;
+  // Priority 1: Try catalog first (from inferXpPerLevel utility)
+  const catalogXp = inferXpPerLevel(species);
+  if (catalogXp !== null) {
+    return catalogXp;
   }
 
-  // Active pets get 3600 XP/hour
-  // Total XP = 3600 × hoursToMature
-  // XP per level = Total XP / 30
-  const totalXp = 3600 * hoursToMature;
-  const xpPerLevel = totalXp / 30;
+  // Priority 2: User-configured value
+  if (configData.speciesXpPerLevel[species] !== undefined) {
+    return configData.speciesXpPerLevel[species];
+  }
 
-  return xpPerLevel;
+  // Priority 3: Unknown
+  return null;
 }
 
 /**
@@ -412,6 +415,23 @@ function notifyListeners(): void {
 }
 
 /**
+ * Auto-populate XP estimates from catalog (FUTUREPROOF!)
+ */
+function autoPopulateXpEstimates(): void {
+  const catalogEstimates = getAllPetXpEstimates();
+
+  // Merge with existing config (don't overwrite user customizations)
+  for (const [species, xp] of Object.entries(catalogEstimates)) {
+    if (!(species in configData.speciesXpPerLevel)) {
+      // Only add if not already configured
+      configData.speciesXpPerLevel[species] = xp;
+    }
+  }
+
+  scheduleSaveConfig();
+}
+
+/**
  * Initialize XP tracker from storage
  */
 export function initializeXpTracker(): void {
@@ -427,6 +447,16 @@ export function initializeXpTracker(): void {
     }
   } catch (error) {
     log('⚠️ Failed to restore XP tracker data', error);
+  }
+
+  // Auto-populate XP estimates from catalog (FUTUREPROOF!)
+  if (areCatalogsReady()) {
+    autoPopulateXpEstimates();
+  } else {
+    // Wait for catalogs and populate once ready
+    onCatalogsReady(() => {
+      autoPopulateXpEstimates();
+    });
   }
 }
 

@@ -32,6 +32,7 @@ docs/
 .claude.md
 .kilocode.md
 CLAUDE.md
+.gitignore
 
 # OS files
 .DS_Store

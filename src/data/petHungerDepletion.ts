@@ -33,6 +33,9 @@ export const PET_HUNGER_DEPLETION_TIMES: Record<string, number> = {
   squirrel: 30,
   turtle: 90,
   goat: 60,
+  pony: 60,
+  horse: 75,
+  firehorse: 90,
 
   // Mythical pets
   butterfly: 30,

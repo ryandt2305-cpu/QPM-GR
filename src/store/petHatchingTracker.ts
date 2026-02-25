@@ -7,7 +7,7 @@ import { recordPetHatch } from './stats';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 
-const PET_INFOS_LABEL = 'myPetInfosAtom'; // Contains all owned pets
+const PET_INFOS_LABEL = 'myPetInventoryAtom'; // Contains all owned pets
 const STORAGE_KEY = 'qpm.petHatchingTracker.knownPetIds.v1';
 let started = false;
 let unsubscribe: (() => void) | null = null;

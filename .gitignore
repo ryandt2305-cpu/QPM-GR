@@ -23,6 +23,15 @@ dist/features/publicRooms/
 *.swp
 *.swo
 *~
+.claude/
+.kilocode/
+scripts/
+plans/
+scraped-data/
+docs/
+.claude.md
+.kilocode.md
+CLAUDE.md
 
 # OS files
 .DS_Store

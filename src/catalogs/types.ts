@@ -90,6 +90,9 @@ export interface PetCatalogEntry {
   name?: string;
   diet: string[];
   coinsToFullyReplenishHunger: number;
+  hoursToMature?: number;
+  maxScale?: number;
+  rarity?: string;
   [key: string]: unknown;
 }
 

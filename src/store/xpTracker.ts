@@ -5,7 +5,7 @@ import { log } from '../utils/logger';
 import { debounce } from '../utils/helpers';
 import type { ActivePetInfo } from './pets';
 import { getAllPetXpEstimates, inferXpPerLevel } from '../utils/xpInference';
-import { areCatalogsReady, onCatalogsReady } from '../catalogs/gameCatalogs';
+import { areCatalogsReady, onCatalogsReady, getPetMaxScale } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY_PROCS = 'qpm.xpTrackerProcs.v1';
 const STORAGE_KEY_CONFIG = 'qpm.xpTrackerConfig.v1';
@@ -229,44 +229,6 @@ export function setSpeciesXpPerLevel(species: string, xpPerLevel: number): void 
   notifyListeners();
 }
 
-/**
- * Pet species hours to mature (from Magic Garden Wiki)
- * Active pets get 3600 XP/hour
- * Total XP = 3600 × hoursToMature
- * XP per level = Total XP / 30
- */
-const SPECIES_HOURS_TO_MATURE: Record<string, number> = {
-  // Common (12 hours)
-  'Worm': 12,
-  'Snail': 12,
-  'Bee': 12,
-
-  // Uncommon (24 hours)
-  'Chicken': 24,
-  'Bunny': 24,
-  'Dragonfly': 24,
-
-  // Rare (72 hours)
-  'Pig': 72,
-  'Cow': 72,
-  'Turkey': 72,
-
-  // Legendary (100 hours)
-  'Squirrel': 100,
-  'Turtle': 100,
-  'Goat': 100,
-
-  // Winter/Legendary (100 hours)
-  'SnowFox': 100,
-  'Stoat': 100,
-  'WhiteCaribou': 100,
-  'Caribou': 100, // Alias for WhiteCaribou
-
-  // Mythic (144 hours)
-  'Butterfly': 144,
-  'Peacock': 144,
-  'Capybara': 144,
-};
 
 /**
  * Get XP required per level for a species
@@ -296,51 +258,11 @@ export function getAllSpeciesXpConfig(): Record<string, number> {
 }
 
 /**
- * Species max scale catalog (from game data)
- * This is the maximum scale a species can have
- * Source: GameSourceFiles/gg-preview-pr-2329/fauna/faunaSpeciesDex.ts
- */
-const SPECIES_MAX_SCALE: Record<string, number> = {
-  // Common (12 hours)
-  Worm: 2.0,
-  Snail: 2.0,
-  Bee: 2.5,
-
-  // Uncommon (24 hours)
-  Chicken: 2.0,
-  Bunny: 2.0,
-  Dragonfly: 2.5,
-
-  // Rare (72 hours)
-  Pig: 2.5,
-  Cow: 2.5,
-  Turkey: 2.5,
-
-  // Winter/Legendary (100 hours)
-  SnowFox: 2.0,
-  Stoat: 2.0,
-  WhiteCaribou: 2.5,
-  Caribou: 2.5, // Alias for WhiteCaribou
-
-  // Legendary (100 hours)
-  Squirrel: 2.0,
-  Turtle: 2.5,
-  Goat: 2.0,
-
-  // Mythic (144 hours)
-  Butterfly: 2.5,
-  Peacock: 2.5,
-  Capybara: 2.5,
-
-  // Legacy/fallback entries
-  Sheep: 2.0,
-};
-
-/**
- * Get max scale for a species
+ * Get max scale for a species — reads from the live petCatalog.
+ * Works automatically for any species the game adds.
  */
 export function getSpeciesMaxScale(species: string): number | null {
-  return SPECIES_MAX_SCALE[species] ?? null;
+  return getPetMaxScale(species);
 }
 
 /**

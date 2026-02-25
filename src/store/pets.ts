@@ -1,11 +1,12 @@
 // src/store/pets.ts
-// Bridge for active pet information via myPetInfosAtom.
+// Bridge for active pet information via myPrimitivePetSlotsAtom.
 
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { getHungerCapForSpecies, DEFAULT_HUNGER_CAP } from '../data/petHungerCaps';
 import { log } from '../utils/logger';
 import { recordPetXP, estimatePetLevel } from './petLevelCalculator';
 import { calculateMaxStrength, getSpeciesXpPerLevel } from './xpTracker';
+import { areCatalogsReady, onCatalogsReady } from '../catalogs/gameCatalogs';
 
 export interface ActivePetInfo {
   slotIndex: number;
@@ -35,12 +36,14 @@ type RawPetInfo = Record<string, unknown> & {
   slot?: RawPetSlot;
 };
 
-const PET_INFOS_LABEL = 'myPetInfosAtom';
+const PET_INFOS_LABEL = 'myPrimitivePetSlotsAtom';
 const PET_INFOS_RETRY_DELAY_MS = 1500;
 
 let cachedInfos: ActivePetInfo[] = [];
+let lastRawValue: unknown = null;
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
+let catalogReadyHooked = false;
 const listeners = new Set<(infos: ActivePetInfo[]) => void>();
 let retryTimer: number | null = null;
 
@@ -685,12 +688,26 @@ export async function startPetInfoStore(): Promise<void> {
   try {
     const atom = getAtomByLabel(PET_INFOS_LABEL);
     if (!atom) {
-      throw new Error('myPetInfosAtom not found in jotai cache');
+      throw new Error('myPrimitivePetSlotsAtom not found in jotai cache');
     }
     unsubscribe = await subscribeAtom(atom, (value) => {
+      lastRawValue = value;
       cachedInfos = normalizePetInfos(value);
       notify();
     });
+
+    // Re-normalize once catalogs load so strength/level calculations
+    // (which depend on petCatalog maxScale/hoursToMature) get correct values.
+    if (!catalogReadyHooked && !areCatalogsReady()) {
+      catalogReadyHooked = true;
+      onCatalogsReady(() => {
+        if (lastRawValue != null) {
+          cachedInfos = normalizePetInfos(lastRawValue);
+          notify();
+        }
+      });
+    }
+
     clearStartRetry();
   } catch (error) {
     log('⚠️ Failed to start pet info store', error);
@@ -708,6 +725,8 @@ export function stopPetInfoStore(): void {
   }
   unsubscribe = null;
   cachedInfos = [];
+  lastRawValue = null;
+  catalogReadyHooked = false;
   clearStartRetry();
 }
 

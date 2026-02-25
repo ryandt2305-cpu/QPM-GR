@@ -77,6 +77,24 @@ export function getPetHungerCost(species: string): number | null {
 }
 
 /**
+ * Get hours to mature for a pet species (from the live catalog)
+ */
+export function getPetHoursToMature(species: string): number | null {
+  const pet = getPetSpecies(species);
+  const hours = pet?.hoursToMature;
+  return typeof hours === 'number' && hours > 0 ? hours : null;
+}
+
+/**
+ * Get max scale for a pet species (from the live catalog)
+ */
+export function getPetMaxScale(species: string): number | null {
+  const pet = getPetSpecies(species);
+  const maxScale = pet?.maxScale;
+  return typeof maxScale === 'number' && maxScale > 1 ? maxScale : null;
+}
+
+/**
  * Check if a food is valid for a pet species
  */
 export function canPetEat(petSpecies: string, foodSpecies: string): boolean {

@@ -57,10 +57,10 @@ const MAX_TARGET_STRENGTH = 100;   // Maximum pet strength (from game)
  */
 async function getActivePetMutationBoost(): Promise<number> {
   try {
-    // Access myPetInfosAtom to get active pets
-    const petSlotsAtom = getAtomByLabel('myPetInfosAtom');
+    // Access myPrimitivePetSlotsAtom to get active pets
+    const petSlotsAtom = getAtomByLabel('myPrimitivePetSlotsAtom');
     if (!petSlotsAtom) {
-      log('?? [Mutation] myPetInfosAtom not found');
+      log('?? [Mutation] myPrimitivePetSlotsAtom not found');
       return 0;
     }
 

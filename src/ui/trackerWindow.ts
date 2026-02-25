@@ -1,525 +1,920 @@
-// src/ui/trackerWindow.ts - Detailed ability tracker window with live countdowns
+// src/ui/trackerWindow.ts - Ability Tracker floating window
 
-import { formatCoins, formatCoinsAbbreviated } from '../features/valueCalculator';
 import { log } from '../utils/logger';
-import { findBestMutationOpportunity, formatMutationOpportunity } from '../utils/gardenScanner';
+import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getAbilityDefinition, computeAbilityStats, type AbilityDefinition } from '../data/petAbilities';
 import { getAbilityColor } from '../utils/petCardRenderer';
-import type { ActivePetInfo } from '../store/pets';
-import type { AbilityContribution } from './originalPanel';
-import type { AbilityDefinition } from '../data/petAbilities';
+import { findAbilityHistoryForIdentifiers, onAbilityHistoryUpdate } from '../store/abilityLogs';
+import { formatCoinsAbbreviated } from '../features/valueCalculator';
+import { throttle } from '../utils/scheduling';
+import { storage } from '../utils/storage';
+import {
+  buildAbilityValuationContext,
+  resolveDynamicAbilityEffect,
+  type AbilityValuationContext,
+} from '../features/abilityValuation';
+import { onGardenSnapshot } from '../features/gardenBridge';
 
-export interface AbilityGroup {
-  definition: AbilityDefinition;
-  entries: AbilityContribution[];
-  totalProcsPerHour: number;
-  chancePerMinute: number;
-  combinedEtaMinutes: number | null;
-  effectPerHour: number;
-  totalSamples: number;
-  lastProcAt: number | null;
-  averageEffectPerProc: number | null;
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const LAYOUT_KEY = 'qpm.trackerWindow.layout.v1';
+const DEFAULT_WIDTH = 440;
+const DEFAULT_HEIGHT = 560;
+const MIN_WIDTH = 320;
+const MIN_HEIGHT = 200;
+const TICKER_INTERVAL_MS = 1000;
+
+// ============================================================================
+// PERSISTENT UI STATE — survives re-renders
+// ============================================================================
+
+/** Whether each pet card is collapsed. Keyed by pet id/slot. */
+const petCardCollapsed = new Map<string, boolean>();
+
+/** Per-pet set of ability IDs that the user has hidden (removed from view). */
+const hiddenAbilities = new Map<string, Set<string>>();
+
+/** Per-ability stats visibility. Key = `petKey:abilityId`. True = stats are hidden. */
+const abilityStatsHidden = new Map<string, boolean>();
+
+function getCardPetKey(pet: ActivePetInfo): string {
+  return pet.petId ?? pet.slotId ?? `slot:${pet.slotIndex}`;
 }
 
-export interface TrackerWindowState {
+// ============================================================================
+// TYPES
+// ============================================================================
+
+export interface AbilityTrackerWindowState {
   root: HTMLElement;
-  summaryText: HTMLElement;
-  tbody: HTMLElement;
-  footer: HTMLElement;
-  updateInterval: number | null;
-  latestAnalysis: any; // AbilityAnalysis type
-  latestInfos: ActivePetInfo[];
+  scrollContent: HTMLElement;
+  summaryStrip: HTMLElement;
+  cardsContainer: HTMLElement;
+  latestPets: ActivePetInfo[];
+  tickerInterval: ReturnType<typeof setInterval> | null;
+  unsubscribePets: (() => void) | null;
+  unsubscribeHistory: (() => void) | null;
+  unsubscribeGarden: (() => void) | null;
+  resizeListener: (() => void) | null;
+  scaleWrapper: HTMLElement;
+  scaleOuter: HTMLElement;
+  updateScale: (() => void) | null;
+  resizeObserver: ResizeObserver | null;
 }
 
-/**
- * Calculate per-second check probability from per-minute percentage
- * Ability checks happen every second (60 times per minute)
- */
-function calculatePerSecondProbability(perMinutePercent: number): number {
-  // For small probabilities: P(per second) ≈ P(per minute) / 60
-  // For larger probabilities use: 1 - (1 - P)^(1/60)
-  if (perMinutePercent < 10) {
-    return perMinutePercent / 60;
+interface WindowLayout {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+// ============================================================================
+// LAYOUT PERSISTENCE
+// ============================================================================
+
+function loadLayout(): WindowLayout | null {
+  try { return storage.get<WindowLayout | null>(LAYOUT_KEY, null); } catch { return null; }
+}
+
+function saveLayout(root: HTMLElement): void {
+  try {
+    storage.set(LAYOUT_KEY, {
+      top: parseFloat(root.style.top) || 80,
+      left: parseFloat(root.style.left) || (window.innerWidth - DEFAULT_WIDTH - 20),
+      width: root.offsetWidth || DEFAULT_WIDTH,
+      height: root.offsetHeight || DEFAULT_HEIGHT,
+    });
+  } catch { /* ignore */ }
+}
+
+// ============================================================================
+// WINDOW CHROME
+// ============================================================================
+
+function clampToViewport(root: HTMLElement): void {
+  const margin = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const w = root.offsetWidth;
+  const h = root.offsetHeight;
+  const top = Math.min(Math.max(parseFloat(root.style.top) || 0, margin), Math.max(margin, vh - h - margin));
+  const left = Math.min(Math.max(parseFloat(root.style.left) || 0, margin), Math.max(margin, vw - w - margin));
+  root.style.top = `${top}px`;
+  root.style.left = `${left}px`;
+}
+
+function makeDraggable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
+  let sx = 0, sy = 0;
+  const onMove = (e: MouseEvent) => {
+    root.style.top = `${root.offsetTop + e.clientY - sy}px`;
+    root.style.left = `${root.offsetLeft + e.clientX - sx}px`;
+    sx = e.clientX;
+    sy = e.clientY;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    clampToViewport(root);
+    onEnd();
+  };
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    sx = e.clientX;
+    sy = e.clientY;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+function makeResizable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
+  let sx = 0, sy = 0, sw = 0, sh = 0;
+  const onMove = (e: MouseEvent) => {
+    const maxW = window.innerWidth - parseFloat(root.style.left || '0') - 8;
+    const maxH = window.innerHeight - parseFloat(root.style.top || '0') - 8;
+    root.style.width = `${Math.max(MIN_WIDTH, Math.min(sw + e.clientX - sx, maxW))}px`;
+    root.style.height = `${Math.max(MIN_HEIGHT, Math.min(sh + e.clientY - sy, maxH))}px`;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    onEnd();
+  };
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    sx = e.clientX;
+    sy = e.clientY;
+    sw = root.offsetWidth;
+    sh = root.offsetHeight;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// ============================================================================
+// UTILITY HELPERS
+// ============================================================================
+
+function formatAgo(ts: number | null | undefined): string {
+  if (!ts) return '—';
+  const ms = Date.now() - ts;
+  if (ms < 5000) return 'just now';
+  if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m ago`;
+}
+
+/** Format the average interval between procs (shown when no history yet). */
+function formatAvgInterval(procsPerHour: number): string {
+  if (procsPerHour <= 0) return '—';
+  const avgMins = 60 / procsPerHour;
+  if (avgMins >= 60) {
+    const h = Math.floor(avgMins / 60);
+    const m = Math.round(avgMins % 60);
+    return m > 0 ? `~${h}h ${m}m` : `~${h}h`;
   }
-  const pMinute = perMinutePercent / 100;
-  const pSecond = 1 - Math.pow(1 - pMinute, 1 / 60);
-  return pSecond * 100; // Return as percentage
+  if (avgMins >= 1) return `~${Math.round(avgMins)}m`;
+  return `~${Math.round(avgMins * 60)}s`;
 }
 
 /**
- * Format live countdown ETA for next expected proc
+ * Exported utility kept for API compatibility.
  */
 export function calculateLiveETA(
   lastProcAt: number,
   expectedMinutesBetween: number | null,
   effectiveProcsPerHour?: number,
 ): { text: string; isOverdue: boolean } {
-  // Use effective proc rate if provided (for Rainbow/Gold waste calculation)
   const minutesBetween = effectiveProcsPerHour
-    ? effectiveProcsPerHour > 0
-      ? 60 / effectiveProcsPerHour
-      : null
+    ? effectiveProcsPerHour > 0 ? 60 / effectiveProcsPerHour : null
     : expectedMinutesBetween;
-
-  if (!minutesBetween || minutesBetween <= 0) {
-    return { text: '—', isOverdue: false };
-  }
-
-  const now = Date.now();
+  if (!minutesBetween || minutesBetween <= 0) return { text: '—', isOverdue: false };
   const expectedNextProc = lastProcAt + minutesBetween * 60 * 1000;
-  const msRemaining = expectedNextProc - now;
-
-  if (msRemaining < 0) {
-    // Overdue - show negative countdown
-    const overdue = Math.abs(msRemaining);
-    const hours = Math.floor(overdue / 3600000);
-    const minutes = Math.floor((overdue % 3600000) / 60000);
-    const seconds = Math.floor((overdue % 60000) / 1000);
-
-    if (hours > 0) {
-      return { text: `-${hours}h ${minutes}m ${seconds}s`, isOverdue: true };
-    } else if (minutes > 0) {
-      return { text: `-${minutes}m ${seconds}s`, isOverdue: true };
-    } else {
-      return { text: `-${seconds}s`, isOverdue: true };
-    }
-  }
-
-  const hours = Math.floor(msRemaining / 3600000);
-  const minutes = Math.floor((msRemaining % 3600000) / 60000);
-  const seconds = Math.floor((msRemaining % 60000) / 1000);
-
-  if (hours > 0) {
-    return { text: `${hours}h ${minutes}m ${seconds}s`, isOverdue: false };
-  } else if (minutes > 0) {
-    return { text: `${minutes}m ${seconds}s`, isOverdue: false };
-  } else {
-    return { text: `${seconds}s`, isOverdue: false };
-  }
+  const msRemaining = expectedNextProc - Date.now();
+  const abs = Math.abs(msRemaining);
+  const h = Math.floor(abs / 3600000);
+  const m = Math.floor((abs % 3600000) / 60000);
+  const s = Math.floor((abs % 60000) / 1000);
+  const prefix = msRemaining < 0 ? '-' : '';
+  const text = h > 0 ? `${prefix}${h}h ${m}m` : m > 0 ? `${prefix}${m}m ${s}s` : `${prefix}${s}s`;
+  return { text, isOverdue: msRemaining < 0 };
 }
 
 /**
- * Format the per-second check probability display
+ * Scale the scroll content proportionally to the window width using
+ * CSS transform: scale() so card backgrounds scale correctly alongside text.
+ * scaleOuter acts as a height-tracking wrapper (transform doesn't affect layout).
  */
-function formatCheckProbability(perMinutePercent: number): string {
-  const perSecond = calculatePerSecondProbability(perMinutePercent);
-  if (perSecond < 0.01) {
-    return `${perSecond.toFixed(4)}%/s`;
-  } else if (perSecond < 1) {
-    return `${perSecond.toFixed(3)}%/s`;
-  } else {
-    return `${perSecond.toFixed(2)}%/s`;
-  }
+function updateContentScale(scaleWrapper: HTMLElement, scaleOuter: HTMLElement, defaultWidth: number): void {
+  const parent = scaleOuter.parentElement;
+  if (!parent) return;
+  const w = parent.offsetWidth;
+  if (w <= 0) return;
+  const scale = Math.max(0.65, Math.min(2.5, w / defaultWidth));
+  scaleWrapper.style.transformOrigin = 'top left';
+  scaleWrapper.style.transform = `scale(${scale.toFixed(4)})`;
+  // Width compensation: after scaling, content visually fills the container exactly.
+  // (100/scale)% × scale = 100% of the parent width.
+  scaleWrapper.style.width = `${(100 / scale).toFixed(3)}%`;
+  // Sync outer height so the scroll container reflects the post-transform visual height.
+  scaleOuter.style.height = `${Math.ceil(scaleWrapper.scrollHeight * scale)}px`;
 }
 
-/**
- * Create a row for a pet ability in the tracker table
- */
-export function createAbilityRow(
-  entry: AbilityContribution,
-  abilityName: string,
-  tbody: HTMLTableSectionElement,
-  detailedView: boolean = false,
-  savedBaselines?: Map<string, number>,
-): HTMLTableRowElement {
-  const row = tbody.insertRow();
-  row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
+/** Grow/shrink the window height so content fits without vertical scrollbars. */
+function autoSizeToContent(root: HTMLElement, scrollEl: HTMLElement): void {
+  const topPx = parseFloat(root.style.top) || 80;
+  const maxH = window.innerHeight - topPx - 16;
+  const fixedH = root.offsetHeight - scrollEl.offsetHeight;
+  const idealH = Math.min(maxH, fixedH + scrollEl.scrollHeight);
+  root.style.height = `${Math.max(MIN_HEIGHT, idealH)}px`;
+}
 
-  // Add data attributes for tracking across re-renders
-  row.dataset.petIndex = String(entry.petIndex);
-  row.dataset.abilityId = entry.definition.id;
+// ============================================================================
+// PET CARD BUILDING
+// ============================================================================
 
-  // Use base proc rate (no waste adjustment)
-  const effectiveProcsPerHour = entry.procsPerHour;
+interface ActiveAbility {
+  def: AbilityDefinition;
+  raw: string;
+  procsPerHour: number;
+  coinsPerHour: number | null;
+}
 
-  // Pet Name (with sprite, ALL ability badges, and strength)
-  const nameCell = row.insertCell();
-  const petStrength = entry.pet.strength;
-  const strengthText = petStrength != null ? ` (STR ${petStrength})` : '';
-  
-  // Get pet sprite
-  const petSprite = entry.pet.species ? getPetSpriteDataUrl(entry.pet.species) : null;
-  
-  // Build ALL ability badges (up to 4)
-  const petAbilities = entry.pet.abilities || [];
-  const abilityBadgesHtml = petAbilities.slice(0, 4).map((abilityName, idx) => {
-    const color = getAbilityColor(abilityName);
-    return `<div style="width:8px;height:8px;border-radius:2px;background:${color.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${color.glow};" title="${abilityName}"></div>`;
-  }).join('');
-  
-  // Create sprite container with ability badges column on left (matching user's image style)
-  const spriteContainerHtml = petSprite
-    ? `<div style="position:relative;display:inline-flex;align-items:center;margin-right:6px;">
-        ${abilityBadgesHtml ? `<div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">${abilityBadgesHtml}</div>` : ''}
-        <img data-qpm-sprite="pet:${entry.pet.species}" src="${petSprite}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${entry.pet.species}" />
-      </div>`
-    : '';
-  
-  nameCell.innerHTML = `<div style="display:flex;align-items:center;">${spriteContainerHtml}<span>${entry.displayName}${strengthText}</span></div>`;
-  nameCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text, #fff);
-    font-weight: 500;
-    white-space: nowrap;
-  `;
-  nameCell.title = `Pet: ${entry.displayName}${petStrength != null ? `\nStrength: ${petStrength}` : '\nStrength: Unknown'}`;
-
-  // Ability
-  const abilityCell = row.insertCell();
-  abilityCell.textContent = abilityName;
-  abilityCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text, #fff);
-    white-space: nowrap;
-  `;
-
-  // Chance Per Minute - calculate actual percentage based on wiki formula
-  const chanceCell = row.insertCell();
-  const petStrengthValue = entry.pet.strength ?? 100;
-  const baseProb = entry.definition.baseProbability ?? 0;
-  const baseProbPerSecond = baseProb / 60; // Convert per-minute to per-second
-  const actualChancePerSecond = (baseProbPerSecond * petStrengthValue) / 100;
-  const actualChancePerMinute = actualChancePerSecond * 60;
-  const chanceText = `${actualChancePerMinute.toFixed(2)}%/min`;
-
-  chanceCell.textContent = chanceText;
-  chanceCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    font-family: monospace;
-    white-space: nowrap;
-  `;
-  chanceCell.title = `Base Chance: ${baseProb.toFixed(2)}%/min\nWith STR ${petStrengthValue}: ${actualChancePerMinute.toFixed(2)}%/min\nPer Second: ${actualChancePerSecond.toFixed(3)}%/sec (game checks every second)`;
-
-  // Procs Per Hour
-  const procsCell = row.insertCell();
-  procsCell.textContent = effectiveProcsPerHour.toFixed(2);
-  procsCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    font-family: monospace;
-  `;
-  procsCell.title = `${entry.procsPerHour.toFixed(2)} procs/hour`;
-
-  // Coins Per Proc
-  const coinsPerProcCell = row.insertCell();
-  const coinsPerProc = entry.effectPerProc ?? 0;
-  const formatFunc = detailedView ? formatCoins : formatCoinsAbbreviated;
-  coinsPerProcCell.textContent = coinsPerProc > 0 ? formatFunc(coinsPerProc) : '—';
-  coinsPerProcCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: ${coinsPerProc > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
-    font-family: monospace;
-    font-weight: 500;
-  `;
-  if (entry.effectDetail) {
-    coinsPerProcCell.title = entry.effectDetail;
-  }
-  if (!detailedView && coinsPerProc > 0) {
-    coinsPerProcCell.title = `Exact: ${formatCoins(coinsPerProc)}`;
-  }
-
-  // Coins Per Hour
-  const coinsPerHourCell = row.insertCell();
-  const coinsPerHour = effectiveProcsPerHour * (coinsPerProc > 0 ? coinsPerProc : 0);
-  coinsPerHourCell.textContent = coinsPerHour > 0 ? formatFunc(coinsPerHour) : '—';
-  coinsPerHourCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: ${coinsPerHour > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
-    font-family: monospace;
-    font-weight: 600;
-  `;
-  if (!detailedView && coinsPerHour > 0) {
-    coinsPerHourCell.title = `Exact: ${formatCoins(coinsPerHour)}/hr`;
-  }
-
-  // Next Proc ETA (Live Countdown)
-  const etaCell = row.insertCell();
-  etaCell.className = 'eta-countdown';
-  const avgMinutes = effectiveProcsPerHour > 0 ? 60 / effectiveProcsPerHour : 0;
-
-  if (effectiveProcsPerHour > 0) {
-    // Show live countdown (using last proc time or saved baseline or current time)
-    let baselineTime: number;
-    let isEstimate: boolean;
-
-    if (entry.lastProcAt && entry.lastProcAt > 0) {
-      // Has actual proc history - use it
-      baselineTime = entry.lastProcAt;
-      isEstimate = false;
-    } else {
-      // No proc history - try to use saved baseline from previous render
-      const baselineKey = `${entry.petIndex}:${entry.definition.id}`;
-      const savedBaseline = savedBaselines?.get(baselineKey);
-      baselineTime = savedBaseline || Date.now();
-      isEstimate = true;
-    }
-
-    etaCell.dataset.lastProc = String(baselineTime);
-    etaCell.dataset.effectiveRate = String(effectiveProcsPerHour);
-    etaCell.dataset.normalColor = 'var(--qpm-positive, #4CAF50)';
-    etaCell.dataset.isEstimate = isEstimate ? 'true' : 'false';
-    const etaResult = calculateLiveETA(baselineTime, entry.expectedMinutesBetween, effectiveProcsPerHour);
-    etaCell.textContent = etaResult.text;
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: ${etaResult.isOverdue ? 'var(--qpm-danger, #ef5350)' : 'var(--qpm-positive, #4CAF50)'};
-      font-family: monospace;
-      font-weight: 500;
-      white-space: nowrap;
-    `;
-    if (!isEstimate) {
-      etaCell.title = `Average ${avgMinutes.toFixed(1)} minutes between procs\nLast proc: ${new Date(entry.lastProcAt!).toLocaleTimeString()}`;
-    } else {
-      etaCell.title = `Estimated ${avgMinutes.toFixed(1)} minutes between procs\nNo proc history yet`;
-    }
-  } else {
-    // No rate available
-    etaCell.textContent = '—';
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: var(--qpm-text-muted, #aaa);
-      font-family: monospace;
-      font-weight: 500;
-      white-space: nowrap;
-    `;
-    etaCell.title = 'No proc rate available';
-  }
-
-  // Add detailed view row if enabled
-  if (detailedView) {
-    const detailRow = tbody.insertRow();
-    detailRow.style.cssText = `
-      background: var(--qpm-surface-2, #222);
-      border-bottom: 1px solid var(--qpm-border, #444);
-    `;
-
-    const detailCell = detailRow.insertCell();
-    detailCell.colSpan = 7;
-    detailCell.style.cssText = `
-      padding: 8px 12px;
-      font-size: 11px;
-      color: var(--qpm-text-muted, #aaa);
-      line-height: 1.6;
-    `;
-
-    const petStrengthVal = entry.pet.strength ?? 100;
-    const baseProbVal = entry.definition.baseProbability ?? 0;
-    const strMultiplier = petStrengthVal / 100;
-    const modifiedProb = baseProbVal * strMultiplier;
-
-    const detailParts: string[] = [];
-
-    // Chance per minute (wiki format: "X% × STR = Y%")
-    if (baseProbVal > 0) {
-      detailParts.push(`<strong>Chance Per Minute:</strong> ${baseProbVal.toFixed(2)}% × ${petStrengthVal} = ${modifiedProb.toFixed(2)}%`);
-    }
-
-    // Effect calculation (wiki format: "Effect: X × STR = Y")
-    if (entry.definition.effectLabel && entry.definition.effectBaseValue != null) {
-      const effectResult = entry.definition.effectBaseValue * strMultiplier;
-      const suffix = entry.definition.effectSuffix ?? '';
-      detailParts.push(`<strong>${entry.definition.effectLabel}:</strong> ${entry.definition.effectBaseValue}${suffix} × ${petStrengthVal} = ${effectResult.toFixed(1)}${suffix}`);
-    }
-
-    // Mutation opportunity for Crop Mutation Boost abilities
-    if (entry.definition.id === 'ProduceMutationBoost' || entry.definition.id === 'ProduceMutationBoostII') {
-      try {
-        const opportunity = findBestMutationOpportunity();
-        if (opportunity) {
-          const opportunityText = formatMutationOpportunity(opportunity, petStrengthVal);
-          detailParts.push(`<strong>🌟 Opportunity:</strong> ${opportunityText}`);
-        }
-      } catch (error) {
-        log('⚠️ Failed to calculate mutation opportunity', error);
+function resolvePetAbilities(pet: ActivePetInfo, gardenCtx?: AbilityValuationContext): ActiveAbility[] {
+  if (!pet.abilities?.length) return [];
+  const result: ActiveAbility[] = [];
+  for (const raw of pet.abilities) {
+    if (!raw) continue;
+    const def = getAbilityDefinition(raw);
+    if (!def || def.trigger !== 'continuous' || (def.baseProbability ?? 0) <= 0) continue;
+    const stats = computeAbilityStats(def, pet.strength);
+    let coinsPerHour: number | null = null;
+    if (def.effectUnit === 'coins' && stats.procsPerHour > 0) {
+      if (def.effectValuePerProc != null) {
+        // Static coins per proc (e.g. Coin Finder)
+        coinsPerHour = stats.procsPerHour * def.effectValuePerProc * (stats.multiplier ?? 1);
+      } else if (gardenCtx) {
+        // Dynamic value — depends on current garden (e.g. Crop Size Boost)
+        try {
+          const dynamic = resolveDynamicAbilityEffect(def.id, gardenCtx, pet.strength);
+          if (dynamic && dynamic.effectPerProc > 0) {
+            coinsPerHour = dynamic.effectPerProc * stats.procsPerHour;
+          }
+        } catch { /* ignore if garden not ready */ }
       }
     }
-
-    // Data source info
-    if (entry.procsPerHourSource === 'observed') {
-      detailParts.push(`<strong>Data Source:</strong> Observed (${entry.sampleCount} sample${entry.sampleCount !== 1 ? 's' : ''})`);
-    } else {
-      detailParts.push(`<strong>Data Source:</strong> Estimated from ability definition`);
-    }
-
-    // Last proc info
-    if (entry.lastProcAt) {
-      const lastProcDate = new Date(entry.lastProcAt);
-      const timeSince = Date.now() - entry.lastProcAt;
-      const minutesSince = Math.floor(timeSince / 60000);
-      const hoursSince = Math.floor(minutesSince / 60);
-      const timeStr = hoursSince > 0 ? `${hoursSince}h ${minutesSince % 60}m ago` : `${minutesSince}m ago`;
-      detailParts.push(`<strong>Last Proc:</strong> ${lastProcDate.toLocaleTimeString()} (${timeStr})`);
-    }
-
-    detailCell.innerHTML = detailParts.join(' • ');
+    result.push({ def, raw, procsPerHour: stats.procsPerHour, coinsPerHour });
   }
+  return result;
+}
+
+function buildAbilityRow(
+  pet: ActivePetInfo,
+  petKey: string,
+  ability: ActiveAbility,
+  onHide: (abilityId: string) => void,
+): HTMLElement {
+  const statsKey = `${petKey}:${ability.def.id}`;
+
+  const row = document.createElement('div');
+  row.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:8px',
+    'padding:5px 0',
+    'border-top:1px solid rgba(255,255,255,0.05)',
+    'cursor:pointer',
+    'border-radius:3px',
+    'transition:background 0.1s',
+  ].join(';');
+
+  // Color dot — click to hide this ability entirely (stopPropagation keeps row click separate)
+  const color = getAbilityColor(ability.def.id);
+  const dot = document.createElement('div');
+  dot.title = 'Click to hide this ability';
+  dot.style.cssText = [
+    `background:${color.base}`,
+    `box-shadow:0 0 4px ${color.glow}`,
+    'width:8px',
+    'height:8px',
+    'border-radius:50%',
+    'flex-shrink:0',
+    'cursor:pointer',
+    'transition:opacity 0.1s',
+  ].join(';');
+  dot.addEventListener('mouseenter', () => { dot.style.opacity = '0.4'; });
+  dot.addEventListener('mouseleave', () => { dot.style.opacity = '1'; });
+  dot.addEventListener('click', (e) => {
+    e.stopPropagation();
+    row.style.display = 'none'; // immediate feedback
+    onHide(ability.def.id);
+  });
+  row.appendChild(dot);
+
+  // Ability name
+  const name = document.createElement('span');
+  name.textContent = ability.def.name;
+  name.style.cssText = 'flex:1;font-size:11px;color:var(--qpm-text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  row.appendChild(name);
+
+  // Fixed-width stat columns — widths match the card column header for alignment.
+  const procsChip = document.createElement('span');
+  procsChip.textContent = `${ability.procsPerHour.toFixed(1)}/hr`;
+  procsChip.title = 'Expected procs per hour (based on strength)';
+  procsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-accent,#4CAF50);flex-shrink:0;width:52px;text-align:right;';
+  row.appendChild(procsChip);
+
+  const coinsChip = document.createElement('span');
+  if (ability.coinsPerHour != null && ability.coinsPerHour > 0) {
+    coinsChip.textContent = `${formatCoinsAbbreviated(ability.coinsPerHour)}/hr`;
+    coinsChip.title = 'Estimated coins per hour';
+    coinsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-warning,#ffa500);flex-shrink:0;width:62px;text-align:right;';
+  } else {
+    // Empty placeholder keeps column alignment intact for non-coin abilities.
+    coinsChip.style.cssText = 'flex-shrink:0;width:62px;';
+  }
+  row.appendChild(coinsChip);
+
+  // Timer cell: countdown when history known; avg interval when no history yet.
+  const history = findAbilityHistoryForIdentifiers(ability.def.id, {
+    petId: pet.petId,
+    slotId: pet.slotId,
+    slotIndex: pet.slotIndex,
+  });
+  const lastProcAt = history?.lastPerformedAt ?? null;
+
+  const timerEl = document.createElement('span');
+  timerEl.dataset.timerCell = '1';
+  timerEl.dataset.lastProc = lastProcAt ? String(lastProcAt) : '';
+  timerEl.dataset.procsPerHour = String(ability.procsPerHour);
+  timerEl.style.cssText = 'font-size:10px;white-space:nowrap;flex-shrink:0;width:76px;text-align:right;';
+  updateTimerCell(timerEl);
+  row.appendChild(timerEl);
+
+  // Stats visibility toggle — click the row to show/hide procs/coins/timer columns.
+  const applyStatsVisibility = () => {
+    const hidden = abilityStatsHidden.get(statsKey) ?? false;
+    const vis = hidden ? 'none' : '';
+    procsChip.style.display = vis;
+    coinsChip.style.display = vis;
+    timerEl.style.display = vis;
+    name.style.opacity = hidden ? '0.55' : '1';
+    row.title = hidden ? `${ability.def.name} — stats hidden (click to show)` : `${ability.def.name} — click to hide stats`;
+  };
+
+  applyStatsVisibility();
+
+  row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,0.04)'; });
+  row.addEventListener('mouseleave', () => { row.style.background = ''; });
+  row.addEventListener('click', () => {
+    const nowHidden = !(abilityStatsHidden.get(statsKey) ?? false);
+    abilityStatsHidden.set(statsKey, nowHidden);
+    applyStatsVisibility();
+  });
 
   return row;
 }
 
-/**
- * Create a total row for an ability group (showing combined stats for multiple pets with same ability)
- */
-export function createAbilityGroupTotalRow(
-  group: AbilityGroup,
-  tbody: HTMLTableSectionElement,
-  detailedView: boolean = false,
-  savedGroupBaselines?: Map<string, number>,
-): HTMLTableRowElement | null {
-  // Only create total row if there are 2+ pets with this ability
-  if (group.entries.length < 2) {
-    // Return the last row if it exists
-    const lastIndex = tbody.rows.length - 1;
-    return lastIndex >= 0 ? (tbody.rows[lastIndex] ?? null) : null;
-  }
+function updateTimerCell(el: HTMLElement): void {
+  const lastProc = el.dataset.lastProc ? parseInt(el.dataset.lastProc, 10) : null;
+  const procsPerHour = el.dataset.procsPerHour ? parseFloat(el.dataset.procsPerHour) : 0;
 
-  const row = tbody.insertRow();
-  row.style.cssText = `
-    border-bottom: 2px solid var(--qpm-border, #555);
-    background: var(--qpm-surface-2, #222);
-    font-weight: 600;
-  `;
-
-  // Add data attributes for tracking across re-renders
-  row.dataset.isGroupRow = 'true';
-  row.dataset.abilityId = group.definition.id;
-
-  // "Total" label
-  const nameCell = row.insertCell();
-  nameCell.textContent = `📊 Total (${group.entries.length})`;
-  nameCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-accent, #4CAF50);
-    font-weight: 600;
-    white-space: nowrap;
-  `;
-
-  // Ability name
-  const abilityCell = row.insertCell();
-  abilityCell.textContent = group.definition.name;
-  abilityCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-accent, #4CAF50);
-    white-space: nowrap;
-  `;
-
-  // Combined chance per minute
-  const chanceCell = row.insertCell();
-  chanceCell.textContent = `${group.chancePerMinute.toFixed(2)}%/min`;
-  chanceCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-accent, #4CAF50);
-    font-family: monospace;
-    white-space: nowrap;
-    font-weight: 600;
-  `;
-  chanceCell.title = `Combined chance from ${group.entries.length} pets`;
-
-  // Total procs per hour
-  const procsCell = row.insertCell();
-  procsCell.textContent = group.totalProcsPerHour.toFixed(2);
-  procsCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-accent, #4CAF50);
-    font-family: monospace;
-    font-weight: 600;
-  `;
-  procsCell.title = `Combined procs/hour from ${group.entries.length} pets`;
-
-  // Average coins per proc
-  const coinsPerProcCell = row.insertCell();
-  const avgCoinsPerProc = group.averageEffectPerProc ?? 0;
-  const formatFunc = detailedView ? formatCoins : formatCoinsAbbreviated;
-  coinsPerProcCell.textContent = avgCoinsPerProc > 0 ? formatFunc(avgCoinsPerProc) : '—';
-  coinsPerProcCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: ${avgCoinsPerProc > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
-    font-family: monospace;
-    font-weight: 600;
-  `;
-  if (avgCoinsPerProc > 0) {
-    coinsPerProcCell.title = detailedView ? 'Average coins per proc' : `Exact: ${formatCoins(avgCoinsPerProc)}`;
-  }
-
-  // Total coins per hour
-  const coinsPerHourCell = row.insertCell();
-  const totalCoinsPerHour = group.effectPerHour;
-  coinsPerHourCell.textContent = totalCoinsPerHour > 0 ? formatFunc(totalCoinsPerHour) : '—';
-  coinsPerHourCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: ${totalCoinsPerHour > 0 ? 'var(--qpm-warning, #ffa500)' : 'var(--qpm-text-muted, #aaa)'};
-    font-family: monospace;
-    font-weight: 600;
-  `;
-  if (totalCoinsPerHour > 0) {
-    coinsPerHourCell.title = detailedView ? `Combined coins/hour from ${group.entries.length} pets` : `Exact: ${formatCoins(totalCoinsPerHour)}/hr`;
-  }
-
-  // Combined Next ETA
-  const etaCell = row.insertCell();
-  etaCell.className = 'eta-countdown';
-  const avgMinutes = group.totalProcsPerHour > 0 ? 60 / group.totalProcsPerHour : 0;
-
-  if (group.totalProcsPerHour > 0) {
-    // Show live countdown (using last proc time or saved baseline or current time)
-    let baselineTime: number;
-    let isEstimate: boolean;
-
-    if (group.lastProcAt && group.lastProcAt > 0) {
-      // Has actual proc history - use it
-      baselineTime = group.lastProcAt;
-      isEstimate = false;
+  if (lastProc && procsPerHour > 0) {
+    const { text, isOverdue } = calculateLiveETA(lastProc, null, procsPerHour);
+    if (isOverdue) {
+      el.textContent = `Late ${text}`;
+      el.style.color = '#ef5350';
     } else {
-      // No proc history - try to use saved baseline from previous render
-      const baselineKey = `group:${group.definition.id}`;
-      const savedBaseline = savedGroupBaselines?.get(baselineKey);
-      baselineTime = savedBaseline || Date.now();
-      isEstimate = true;
+      el.textContent = `Next: ${text}`;
+      el.style.color = 'var(--qpm-accent,#4CAF50)';
     }
-
-    etaCell.dataset.lastProc = String(baselineTime);
-    etaCell.dataset.effectiveRate = String(group.totalProcsPerHour);
-    etaCell.dataset.normalColor = 'var(--qpm-accent, #4CAF50)';
-    etaCell.dataset.isEstimate = isEstimate ? 'true' : 'false';
-    const etaResult = calculateLiveETA(baselineTime, group.combinedEtaMinutes, group.totalProcsPerHour);
-    etaCell.textContent = etaResult.text;
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: ${etaResult.isOverdue ? 'var(--qpm-danger, #ef5350)' : 'var(--qpm-accent, #4CAF50)'};
-      font-family: monospace;
-      font-weight: 600;
-      white-space: nowrap;
-    `;
-    if (!isEstimate) {
-      etaCell.title = `Combined average: ${avgMinutes.toFixed(1)} minutes between procs\nLast proc: ${new Date(group.lastProcAt!).toLocaleTimeString()}`;
-    } else {
-      etaCell.title = `Estimated ${avgMinutes.toFixed(1)} minutes between procs\nNo proc history yet`;
-    }
+  } else if (lastProc) {
+    el.textContent = formatAgo(lastProc);
+    el.style.color = 'var(--qpm-text-muted,#666)';
+  } else if (procsPerHour > 0) {
+    // No proc history yet — show average interval so the column is immediately useful.
+    el.textContent = formatAvgInterval(procsPerHour);
+    el.style.color = 'var(--qpm-text-muted,#555)';
   } else {
-    // No rate available
-    etaCell.textContent = '—';
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: var(--qpm-text-muted, #aaa);
-      font-family: monospace;
-      font-weight: 600;
-      white-space: nowrap;
-    `;
-    etaCell.title = 'No proc rate available';
+    el.textContent = '—';
+    el.style.color = 'var(--qpm-text-muted,#555)';
+  }
+}
+
+function buildPetCard(pet: ActivePetInfo, gardenCtx?: AbilityValuationContext): HTMLElement | null {
+  const petKey = getCardPetKey(pet);
+  const allAbilities = resolvePetAbilities(pet, gardenCtx);
+  if (!allAbilities.length) return null;
+
+  const hiddenSet = hiddenAbilities.get(petKey) ?? new Set<string>();
+  const visibleAbilities = allAbilities.filter(a => !hiddenSet.has(a.def.id));
+
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'background:var(--qpm-surface-2,#1a1a1a)',
+    'border:1px solid var(--qpm-border,#2a2a2a)',
+    'border-radius:6px',
+    'padding:10px 12px',
+    'display:flex',
+    'flex-direction:column',
+    'gap:4px',
+  ].join(';');
+
+  // Card header
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;user-select:none;';
+
+  // Sprite
+  const spriteUrl = getPetSpriteDataUrl(pet.species ?? '');
+  if (spriteUrl) {
+    const img = document.createElement('img');
+    img.src = spriteUrl;
+    img.style.cssText = 'width:28px;height:28px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
+    img.alt = pet.species ?? '';
+    header.appendChild(img);
+  } else {
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = 'width:28px;height:28px;background:rgba(255,255,255,0.05);border-radius:4px;flex-shrink:0;';
+    header.appendChild(placeholder);
   }
 
-  return row;
+  // Pet name + strength
+  const nameWrap = document.createElement('div');
+  nameWrap.style.cssText = 'display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1;';
+
+  const petName = document.createElement('span');
+  petName.textContent = pet.name ?? pet.species ?? `Slot ${pet.slotIndex + 1}`;
+  petName.style.cssText = 'font-size:13px;font-weight:600;color:var(--qpm-text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  nameWrap.appendChild(petName);
+
+  const petMeta = document.createElement('span');
+  const strText = pet.strength != null ? `STR ${pet.strength}` : 'STR ?';
+  const speciesText = pet.species ? ` · ${pet.species}` : '';
+  petMeta.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#888);';
+  nameWrap.appendChild(petMeta);
+
+  header.appendChild(nameWrap);
+
+  // "N hidden" badge — click to restore all hidden abilities for this pet
+  let hiddenBadge: HTMLElement | null = null;
+  const updateHiddenBadge = () => {
+    const currentHidden = hiddenAbilities.get(petKey)?.size ?? 0;
+    if (currentHidden > 0) {
+      if (!hiddenBadge) {
+        hiddenBadge = document.createElement('button');
+        hiddenBadge.style.cssText = [
+          'background:rgba(255,255,255,0.07)',
+          'border:1px solid rgba(255,255,255,0.12)',
+          'border-radius:4px',
+          'color:var(--qpm-text-muted,#888)',
+          'font-size:9px',
+          'cursor:pointer',
+          'padding:1px 5px',
+          'flex-shrink:0',
+          'white-space:nowrap',
+        ].join(';');
+        hiddenBadge.title = 'Click to show all hidden abilities';
+        hiddenBadge.addEventListener('click', (e) => {
+          e.stopPropagation();
+          hiddenAbilities.delete(petKey);
+          // Rebuild abilities container
+          rebuildAbilities();
+          updateHiddenBadge();
+        });
+        header.insertBefore(hiddenBadge, header.lastChild);
+      }
+      hiddenBadge.textContent = `${currentHidden} hidden`;
+    } else if (hiddenBadge) {
+      hiddenBadge.remove();
+      hiddenBadge = null;
+    }
+  };
+
+  // Collapse toggle
+  const collapseBtn = document.createElement('button');
+  collapseBtn.style.cssText = [
+    'background:none',
+    'border:none',
+    'color:var(--qpm-text-muted,#666)',
+    'cursor:pointer',
+    'font-size:12px',
+    'padding:2px 4px',
+    'line-height:1',
+    'flex-shrink:0',
+    'transition:transform 0.15s ease',
+  ].join(';');
+  header.appendChild(collapseBtn);
+
+  card.appendChild(header);
+
+  // Column header row — labels align with the fixed-width stat columns.
+  // Widths match: [dot 8px] [gap 8px] [name flex:1] [procs 52px] [coins 62px] [timer 76px]
+  const colHeader = document.createElement('div');
+  colHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding-bottom:2px;';
+
+  const colHeaderSpacer = document.createElement('span');
+  colHeaderSpacer.style.cssText = 'width:8px;flex-shrink:0;';
+  colHeader.appendChild(colHeaderSpacer);
+
+  const colHeaderName = document.createElement('span');
+  colHeaderName.style.cssText = 'flex:1;';
+  colHeader.appendChild(colHeaderName);
+
+  const colHeaderProcs = document.createElement('span');
+  colHeaderProcs.textContent = 'procs/hr';
+  colHeaderProcs.style.cssText = 'font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;width:52px;text-align:right;';
+  colHeader.appendChild(colHeaderProcs);
+
+  const colHeaderCoins = document.createElement('span');
+  colHeaderCoins.textContent = 'coins/hr';
+  colHeaderCoins.style.cssText = 'font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;width:62px;text-align:right;';
+  colHeader.appendChild(colHeaderCoins);
+
+  const colHeaderTimer = document.createElement('span');
+  colHeaderTimer.textContent = 'next proc';
+  colHeaderTimer.style.cssText = 'font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;width:76px;text-align:right;';
+  colHeader.appendChild(colHeaderTimer);
+
+  card.appendChild(colHeader);
+
+  // Abilities container — rebuilt in place without re-rendering the card
+  const abilitiesContainer = document.createElement('div');
+  abilitiesContainer.style.cssText = 'display:flex;flex-direction:column;';
+  card.appendChild(abilitiesContainer);
+
+  const buildAbilityRows = () => {
+    abilitiesContainer.innerHTML = '';
+    const currentHidden = hiddenAbilities.get(petKey) ?? new Set<string>();
+    const currentVisible = allAbilities.filter(a => !currentHidden.has(a.def.id));
+    if (currentVisible.length === 0) {
+      const msg = document.createElement('div');
+      msg.textContent = 'All abilities hidden — click badge to restore';
+      msg.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#555);font-style:italic;padding:4px 0;';
+      abilitiesContainer.appendChild(msg);
+    } else {
+      for (const ability of currentVisible) {
+        abilitiesContainer.appendChild(buildAbilityRow(pet, petKey, ability, (id) => {
+          const set = hiddenAbilities.get(petKey) ?? new Set<string>();
+          set.add(id);
+          hiddenAbilities.set(petKey, set);
+          buildAbilityRows();
+          updateHiddenBadge();
+        }));
+      }
+    }
+  };
+
+  const rebuildAbilities = buildAbilityRows;
+  buildAbilityRows();
+
+  // Collapse/expand — persisted across re-renders
+  let expanded = !(petCardCollapsed.get(petKey) ?? false);
+
+  const applyCollapseState = () => {
+    abilitiesContainer.style.display = expanded ? 'flex' : 'none';
+    colHeader.style.display = expanded ? 'flex' : 'none';
+    collapseBtn.textContent = expanded ? '▾' : '▸';
+    collapseBtn.title = expanded ? 'Collapse abilities' : 'Expand abilities';
+    collapseBtn.style.transform = expanded ? 'rotate(0deg)' : 'rotate(-90deg)';
+    // Update meta text
+    const strLine = `${strText}${speciesText}`;
+    petMeta.textContent = expanded ? strLine : strLine;
+  };
+
+  const toggleCollapse = () => {
+    expanded = !expanded;
+    petCardCollapsed.set(petKey, !expanded); // store: true = collapsed
+    applyCollapseState();
+  };
+
+  applyCollapseState();
+  updateHiddenBadge();
+
+  collapseBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCollapse(); });
+  header.addEventListener('click', toggleCollapse);
+
+  return card;
+}
+
+// ============================================================================
+// RENDER LOGIC
+// ============================================================================
+
+function getTotals(pets: ActivePetInfo[], gardenCtx?: AbilityValuationContext): { procsPerHour: number; coinsPerHour: number; abilityCount: number; petCount: number } {
+  let procsPerHour = 0;
+  let coinsPerHour = 0;
+  let abilityCount = 0;
+  let petCount = 0;
+  for (const pet of pets) {
+    const abilities = resolvePetAbilities(pet, gardenCtx);
+    if (!abilities.length) continue;
+    petCount++;
+    for (const a of abilities) {
+      procsPerHour += a.procsPerHour;
+      coinsPerHour += a.coinsPerHour ?? 0;
+      abilityCount++;
+    }
+  }
+  return { procsPerHour, coinsPerHour, abilityCount, petCount };
+}
+
+function renderAbilityTracker(state: AbilityTrackerWindowState): void {
+  const activePets = state.latestPets;
+
+  // Build garden context once per render for dynamic abilities (e.g. Crop Size Boost).
+  let gardenCtx: AbilityValuationContext | undefined;
+  try { gardenCtx = buildAbilityValuationContext(); } catch { /* not ready yet */ }
+
+  const totals = getTotals(activePets, gardenCtx);
+  const summaryParts: string[] = [
+    `${totals.petCount} pet${totals.petCount !== 1 ? 's' : ''}`,
+    `${totals.abilityCount} abilit${totals.abilityCount !== 1 ? 'ies' : 'y'}`,
+    `${totals.procsPerHour.toFixed(1)} procs/hr`,
+  ];
+  if (totals.coinsPerHour > 0) {
+    summaryParts.push(`${formatCoinsAbbreviated(totals.coinsPerHour)}/hr coins`);
+  }
+  state.summaryStrip.textContent = summaryParts.join(' · ');
+
+  const container = state.cardsContainer;
+  container.innerHTML = '';
+
+  if (!activePets.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:24px;text-align:center;color:var(--qpm-text-muted,#666);font-size:12px;';
+    empty.textContent = 'No active pets found.';
+    container.appendChild(empty);
+    return;
+  }
+
+  let hasCards = false;
+  for (const pet of activePets) {
+    const card = buildPetCard(pet, gardenCtx);
+    if (card) {
+      container.appendChild(card);
+      hasCards = true;
+    }
+  }
+
+  if (!hasCards) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:24px;text-align:center;color:var(--qpm-text-muted,#666);font-size:12px;';
+    empty.textContent = 'No continuous abilities detected on active pets.';
+    container.appendChild(empty);
+  }
+
+  // Sync scaleOuter height after content changes so scrolling reflects visual size.
+  state.updateScale?.();
+}
+
+function tickAllTimers(state: AbilityTrackerWindowState): void {
+  const timerEls = state.cardsContainer.querySelectorAll<HTMLElement>('[data-timer-cell]');
+  for (const el of timerEls) {
+    updateTimerCell(el);
+  }
+}
+
+function startTicker(state: AbilityTrackerWindowState): void {
+  if (state.tickerInterval !== null) return;
+  state.tickerInterval = setInterval(() => tickAllTimers(state), TICKER_INTERVAL_MS);
+}
+
+function stopTicker(state: AbilityTrackerWindowState): void {
+  if (state.tickerInterval !== null) {
+    clearInterval(state.tickerInterval);
+    state.tickerInterval = null;
+  }
+}
+
+// ============================================================================
+// WINDOW CREATION
+// ============================================================================
+
+export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
+  const layout = loadLayout();
+  const savedTop = layout?.top ?? 80;
+  const savedLeft = layout?.left ?? Math.max(20, window.innerWidth - DEFAULT_WIDTH - 460);
+  const savedWidth = layout?.width ?? DEFAULT_WIDTH;
+  const savedHeight = layout?.height ?? DEFAULT_HEIGHT;
+
+  // Root
+  const root = document.createElement('div');
+  root.id = 'qpm-ability-tracker-window';
+  root.style.cssText = [
+    'position:fixed',
+    `top:${savedTop}px`,
+    `left:${savedLeft}px`,
+    `width:${savedWidth}px`,
+    `height:${savedHeight}px`,
+    'display:none',
+    'flex-direction:column',
+    'overflow:hidden',
+    'background:var(--qpm-surface-1,#141414)',
+    'border:1px solid var(--qpm-border,#2a2a2a)',
+    'border-radius:8px',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
+    'z-index:10002',
+    'font-family:system-ui,sans-serif',
+    'color:var(--qpm-text,#fff)',
+  ].join(';');
+
+  // Title bar
+  const titleBar = document.createElement('div');
+  titleBar.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:8px',
+    'padding:8px 12px',
+    'background:var(--qpm-surface-1,#141414)',
+    'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
+    'cursor:grab',
+    'user-select:none',
+    'flex-shrink:0',
+  ].join(';');
+
+  const titleText = document.createElement('span');
+  titleText.textContent = '📈 Ability Tracker';
+  titleText.style.cssText = 'font-size:13px;font-weight:600;color:var(--qpm-text,#fff);pointer-events:none;flex:1;';
+  titleBar.appendChild(titleText);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = [
+    'background:none',
+    'border:none',
+    'color:var(--qpm-text-muted,#888)',
+    'cursor:pointer',
+    'font-size:14px',
+    'padding:0 4px',
+    'line-height:1',
+  ].join(';');
+  titleBar.appendChild(closeBtn);
+  root.appendChild(titleBar);
+
+  // Summary strip
+  const summaryStrip = document.createElement('div');
+  summaryStrip.style.cssText = [
+    'padding:6px 14px',
+    'font-size:11px',
+    'color:var(--qpm-text-muted,#888)',
+    'background:var(--qpm-surface-1,#141414)',
+    'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
+    'flex-shrink:0',
+    'white-space:nowrap',
+    'overflow:hidden',
+    'text-overflow:ellipsis',
+  ].join(';');
+  summaryStrip.textContent = 'Loading…';
+  root.appendChild(summaryStrip);
+
+  // Scroll content
+  const scrollContent = document.createElement('div');
+  scrollContent.style.cssText = 'flex:1;overflow-y:auto;overflow-x:hidden;';
+
+  // scaleOuter: height-tracking wrapper (transform on scaleWrapper doesn't affect layout)
+  const scaleOuter = document.createElement('div');
+
+  // scaleWrapper: scaled via transform so card backgrounds grow/shrink with the window
+  const scaleWrapper = document.createElement('div');
+  scaleWrapper.style.cssText = 'padding:10px;display:flex;flex-direction:column;gap:8px;';
+
+  const cardsContainer = document.createElement('div');
+  cardsContainer.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+  scaleWrapper.appendChild(cardsContainer);
+  scaleOuter.appendChild(scaleWrapper);
+  scrollContent.appendChild(scaleOuter);
+  root.appendChild(scrollContent);
+
+  // Footer hint
+  const footerHint = document.createElement('div');
+  footerHint.textContent = 'Click an ability to show/hide its stats!';
+  footerHint.style.cssText = [
+    'padding:4px 12px',
+    'font-size:10px',
+    'color:var(--qpm-text-muted,#555)',
+    'text-align:center',
+    'border-top:1px solid var(--qpm-border,#1e1e1e)',
+    'flex-shrink:0',
+    'user-select:none',
+  ].join(';');
+  root.appendChild(footerHint);
+
+  // Resize handle
+  const resizeHandle = document.createElement('div');
+  resizeHandle.title = 'Drag to resize';
+  resizeHandle.style.cssText = [
+    'position:absolute',
+    'bottom:0',
+    'right:0',
+    'width:14px',
+    'height:14px',
+    'cursor:se-resize',
+    'z-index:1',
+    'background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,0.12) 50%)',
+    'border-radius:0 0 7px 0',
+  ].join(';');
+  root.appendChild(resizeHandle);
+
+  document.body.appendChild(root);
+
+  const state: AbilityTrackerWindowState = {
+    root,
+    scrollContent,
+    summaryStrip,
+    cardsContainer,
+    latestPets: [],
+    tickerInterval: null,
+    unsubscribePets: null,
+    unsubscribeHistory: null,
+    unsubscribeGarden: null,
+    resizeListener: null,
+    scaleWrapper,
+    scaleOuter,
+    updateScale: null,
+    resizeObserver: null,
+  };
+
+  // Window behaviours
+  const onLayoutChange = () => saveLayout(root);
+  makeDraggable(root, titleBar, onLayoutChange);
+  makeResizable(root, resizeHandle, onLayoutChange);
+
+  closeBtn.addEventListener('click', () => { hideAbilityTrackerWindow(state); });
+
+  const resizeListener = () => {
+    if (root.style.display !== 'none') clampToViewport(root);
+  };
+  window.addEventListener('resize', resizeListener);
+  state.resizeListener = resizeListener;
+
+  // Content scaling — live update as the user drags the resize handle
+  const doUpdateScale = () => updateContentScale(scaleWrapper, scaleOuter, DEFAULT_WIDTH);
+  state.updateScale = doUpdateScale;
+  const scaleObserver = new ResizeObserver(doUpdateScale);
+  scaleObserver.observe(root);
+  state.resizeObserver = scaleObserver;
+
+  // Pet subscription — render on update
+  const throttledRender = throttle((pets: ActivePetInfo[]) => {
+    state.latestPets = pets;
+    renderAbilityTracker(state);
+  }, 400);
+  state.unsubscribePets = onActivePetInfos(throttledRender);
+
+  // History subscription — update timer data-attrs when new procs arrive
+  state.unsubscribeHistory = onAbilityHistoryUpdate(() => {
+    renderAbilityTracker(state);
+  });
+
+  // Garden subscription — re-render when crops change so dynamic ability
+  // values (e.g. Crop Size Boost coins/hr) stay current.
+  const throttledGardenRender = throttle(() => {
+    renderAbilityTracker(state);
+  }, 2000);
+  state.unsubscribeGarden = onGardenSnapshot(() => {
+    throttledGardenRender();
+  });
+
+  return state;
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+export function showAbilityTrackerWindow(state: AbilityTrackerWindowState): void {
+  const firstOpen = !loadLayout();
+  state.root.style.display = 'flex';
+  clampToViewport(state.root);
+  renderAbilityTracker(state); // calls state.updateScale?.() internally
+  startTicker(state);
+  if (firstOpen) {
+    autoSizeToContent(state.root, state.scrollContent);
+    saveLayout(state.root);
+  }
+}
+
+export function hideAbilityTrackerWindow(state: AbilityTrackerWindowState): void {
+  state.root.style.display = 'none';
+  stopTicker(state);
+}
+
+export function destroyAbilityTrackerWindow(state: AbilityTrackerWindowState): void {
+  stopTicker(state);
+  state.resizeObserver?.disconnect();
+  if (state.resizeListener) window.removeEventListener('resize', state.resizeListener);
+  state.unsubscribePets?.();
+  state.unsubscribeHistory?.();
+  state.unsubscribeGarden?.();
+  state.root.remove();
+}
+
+/** No-op — kept for API compatibility. */
+export function setGlobalAbilityTrackerState(_state: AbilityTrackerWindowState): void {
+  // intentionally empty
 }

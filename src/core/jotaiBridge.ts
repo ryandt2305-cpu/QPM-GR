@@ -36,6 +36,7 @@ const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
 type AtomCacheLike = {
   get: (key: unknown) => unknown;
   values: () => IterableIterator<any>;
+  entries?: () => IterableIterator<[any, any]>;
 };
 
 function isAtomCacheLike(value: unknown): value is AtomCacheLike {
@@ -558,6 +559,30 @@ export function findAtomsByLabel(regex: RegExp): any[] {
   if (!cache) return [];
 
   const matches: any[] = [];
+
+  // Prefer entries() — returns [atomKey, atomMeta] pairs.
+  // The KEY is the actual atom object the jotai store recognizes.
+  // Derived atoms (e.g. myPetSlotInfosAtom) only work when we pass the KEY,
+  // not the metadata value, to store.get() / store.sub().
+  if (typeof cache.entries === 'function') {
+    for (const [atom, meta] of cache.entries()) {
+      if (!atom || typeof atom !== 'object') continue;
+      const metaObj = meta as Record<string, unknown>;
+      const atomObj = atom as Record<string, unknown>;
+      // debugLabel may live on the meta object (derived atoms) or the atom itself (primitive atoms)
+      const label = String(
+        metaObj?.debugLabel ?? metaObj?.label ??
+        atomObj.debugLabel ?? atomObj.label ?? ''
+      );
+      if (regex.test(label)) {
+        matches.push(atom);
+      }
+    }
+    if (matches.length > 0) return matches;
+  }
+
+  // Fallback: values() iteration (works when atom objects are stored as values,
+  // as in some jotai versions where primitive atoms are their own metadata).
   for (const atom of cache.values()) {
     if (!atom) continue;
     const label = String((atom as Record<string, unknown>).debugLabel ?? (atom as Record<string, unknown>).label ?? '');

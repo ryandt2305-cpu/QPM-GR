@@ -40,6 +40,15 @@ const QPM_STORAGE_KEYS = [
   // Pet Food Rules
   'quinoa-pet-food-rules',
 
+  // XP Tracker window layout
+  'qpm.xpTrackerWindow.layout.v1',
+
+  // Ability Tracker window layout
+  'qpm.trackerWindow.layout.v1',
+
+  // Turtle Timer window layout
+  'qpm.turtleTimerWindow.layout.v1',
+
   // UI State
   'quinoa-ui-panel-position',
   'quinoa-ui-panel-collapsed',

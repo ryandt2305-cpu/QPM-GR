@@ -1,450 +1,935 @@
-// src/ui/xpTrackerWindow.ts - XP Tracker window with live XP rate calculations
+// src/ui/xpTrackerWindow.ts - XP Tracker window (redesigned)
 
 import { formatCoins } from '../features/valueCalculator';
 import { log } from '../utils/logger';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
-import { getPetSpriteCanvas, getPetSpriteDataUrl, onSpritesReady } from '../sprite-v2/compat';
-import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { getPetSpriteDataUrl } from '../sprite-v2/compat';
 import {
   calculateXpStats,
   getCombinedXpStats,
-  setSpeciesXpPerLevel,
   getSpeciesXpPerLevel,
-  getAllSpeciesXpConfig,
   calculateMaxStrength,
   calculateTimeToLevel,
   onXpTrackerUpdate,
   type XpAbilityStats,
 } from '../store/xpTracker';
-import { calculateLiveETA } from './trackerWindow';
 import { getAbilityDefinition, type AbilityDefinition } from '../data/petAbilities';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { getHungerCapOrDefault } from '../data/petHungerCaps';
-import { calculateFeedsPerLevel, calculateFeedsForLevels } from '../data/petHungerDepletion';
-import { criticalInterval } from '../utils/timerManager';
+import { calculateFeedsPerLevel } from '../data/petHungerDepletion';
 import { throttle } from '../utils/scheduling';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import type { DetailedWeather } from '../utils/weatherDetection';
 import { getAbilityName } from '../utils/catalogHelpers';
+import { storage } from '../utils/storage';
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const LAYOUT_KEY = 'qpm.xpTrackerWindow.layout.v1';
+const DEFAULT_WIDTH = 520;
+const DEFAULT_HEIGHT = 540;
+const WEATHER_ICONS: Record<string, string> = {
+  snow: '❄️', rain: '🌧️', dawn: '🌅', amber: '🌕', sunny: '☀️',
+};
+
+// ============================================================================
+// TYPES
+// ============================================================================
 
 export interface XpTrackerWindowState {
   root: HTMLElement;
-  summaryText: HTMLElement;
-  petLevelTbody: HTMLTableSectionElement; // All active pets level progress
-  tbody: HTMLTableSectionElement; // XP generation abilities
-  combinedTbody: HTMLTableSectionElement;
-  nearMaxLevelContainer: HTMLElement; // Near max level pets list
-  updateInterval: (() => void) | null;
+  scrollContent: HTMLElement;
+  summaryStrip: HTMLElement;
+  petCardsContainer: HTMLElement;
+  nearMaxContainer: HTMLElement;
   latestPets: ActivePetInfo[];
   latestStats: XpAbilityStats[];
-  totalTeamXpPerHour: number; // Total XP/hour for the whole team
-  lastKnownSpecies: Set<string>; // Track species to detect when config table needs updating
+  totalTeamXpPerHour: number;
+  lastKnownSpecies: Set<string>;
   unsubscribePets: (() => void) | null;
   unsubscribeXpTracker: (() => void) | null;
   resizeListener: (() => void) | null;
-  currentWeather: DetailedWeather; // Track current weather for weather-dependent abilities
+  currentWeather: DetailedWeather;
+  updateInterval: (() => void) | null; // kept for API compat (unused)
+  scaleWrapper: HTMLElement;
+  scaleOuter: HTMLElement;
+  updateScale: (() => void) | null;
+  resizeObserver: ResizeObserver | null;
 }
-
-// XP ability IDs we're tracking (continuous only, excludes hatch XP)
-// Source: GameSourceFiles/gg-preview-pr-2329/fauna/faunaAbilitiesDex.ts
-const XP_ABILITY_IDS = ['PetXpBoost', 'PetXpBoostII', 'PetXpBoostIII', 'SnowyPetXpBoost'];
-
-// Max level for all pets
-const MAX_LEVEL = 30;
 
 interface PetWithLevel {
   name: string;
   species: string;
   level: number;
   xp: number;
-  maxStr: number | null;
+  maxStr: number;
   xpNeeded: number;
   xpPerLevel: number;
   source: 'active' | 'inventory' | 'hutch';
 }
 
-/**
- * Parse max level from pet name (e.g., "Food (99)" -> 99)
- * Users often put max level in parentheses for easy viewing
- */
+interface WindowLayout {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+// Module-level filter state — no window globals
+const nearMaxSources = new Set<'active' | 'inventory' | 'hutch'>(['active', 'inventory', 'hutch']);
+
+// ============================================================================
+// ABILITY DETECTION — dynamic, catalog-driven (no hardcoded ID list)
+// ============================================================================
+
+function findXpAbilities(pet: ActivePetInfo): AbilityDefinition[] {
+  if (!pet.abilities?.length) return [];
+  return pet.abilities
+    .map(id => getAbilityDefinition(id))
+    .filter((def): def is AbilityDefinition =>
+      def?.category === 'xp' && def.trigger === 'continuous'
+    );
+}
+
+// ============================================================================
+// UTILITY HELPERS
+// ============================================================================
+
 function parseMaxLevelFromName(name: string | null | undefined): number | null {
   if (!name) return null;
   const match = name.match(/\((\d+)\)/);
-  return match && match[1] ? parseInt(match[1], 10) : null;
+  return match?.[1] ? parseInt(match[1], 10) : null;
+}
+
+/** Format total minutes into a compact human-readable string */
+function formatTime(totalMinutes: number): string {
+  if (totalMinutes >= 1440) {
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = Math.round(totalMinutes % 60);
+  return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+}
+
+function getMaxStr(pet: ActivePetInfo): number | null {
+  if (pet.species && pet.targetScale) return calculateMaxStrength(pet.targetScale, pet.species);
+  if (pet.strength != null && pet.strength >= 80 && pet.strength <= 100) return pet.strength;
+  return null;
+}
+
+// ============================================================================
+// LAYOUT PERSISTENCE
+// ============================================================================
+
+function loadLayout(): WindowLayout | null {
+  try { return storage.get<WindowLayout | null>(LAYOUT_KEY, null); } catch { return null; }
+}
+
+function saveLayout(root: HTMLElement): void {
+  try {
+    storage.set(LAYOUT_KEY, {
+      top: parseFloat(root.style.top) || 80,
+      left: parseFloat(root.style.left) || (window.innerWidth - DEFAULT_WIDTH - 20),
+      width: root.offsetWidth || DEFAULT_WIDTH,
+      height: root.offsetHeight || DEFAULT_HEIGHT,
+    });
+  } catch { /* ignore */ }
+}
+
+// ============================================================================
+// WINDOW CHROME — drag, resize, clamp
+// ============================================================================
+
+function clampToViewport(root: HTMLElement): void {
+  const margin = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const w = root.offsetWidth;
+  const h = root.offsetHeight;
+  const top = Math.min(Math.max(parseFloat(root.style.top) || 0, margin), Math.max(margin, vh - h - margin));
+  const left = Math.min(Math.max(parseFloat(root.style.left) || 0, margin), Math.max(margin, vw - w - margin));
+  root.style.top = `${top}px`;
+  root.style.left = `${left}px`;
+}
+
+function makeDraggable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
+  let sx = 0, sy = 0;
+  const onMove = (e: MouseEvent) => {
+    root.style.top = `${root.offsetTop + e.clientY - sy}px`;
+    root.style.left = `${root.offsetLeft + e.clientX - sx}px`;
+    sx = e.clientX;
+    sy = e.clientY;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    clampToViewport(root);
+    onEnd();
+  };
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    sx = e.clientX;
+    sy = e.clientY;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+/** Resize from bottom-right corner handle — adjusts width AND height */
+function makeResizable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
+  let sx = 0, sy = 0, sw = 0, sh = 0;
+  const onMove = (e: MouseEvent) => {
+    const maxW = window.innerWidth - parseFloat(root.style.left || '0') - 8;
+    const maxH = window.innerHeight - parseFloat(root.style.top || '0') - 8;
+    root.style.width = `${Math.max(320, Math.min(sw + e.clientX - sx, maxW))}px`;
+    root.style.height = `${Math.max(200, Math.min(sh + e.clientY - sy, maxH))}px`;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    onEnd();
+  };
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    sx = e.clientX;
+    sy = e.clientY;
+    sw = root.offsetWidth;
+    sh = root.offsetHeight;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 /**
- * Get all pets from inventory, hutch, and active slots
+ * Scale the scroll content proportionally to the window width using
+ * CSS transform: scale() so card backgrounds scale correctly alongside text.
+ * scaleOuter acts as a height-tracking wrapper (transform doesn't affect layout).
  */
+function updateContentScale(scaleWrapper: HTMLElement, scaleOuter: HTMLElement, defaultWidth: number): void {
+  const parent = scaleOuter.parentElement;
+  if (!parent) return;
+  const w = parent.offsetWidth;
+  if (w <= 0) return;
+  const scale = Math.max(0.65, Math.min(2.5, w / defaultWidth));
+  scaleWrapper.style.transformOrigin = 'top left';
+  scaleWrapper.style.transform = `scale(${scale.toFixed(4)})`;
+  scaleWrapper.style.width = `${(100 / scale).toFixed(3)}%`;
+  scaleOuter.style.height = `${Math.ceil(scaleWrapper.scrollHeight * scale)}px`;
+}
+
+/** Grow/shrink the window height so content fits without vertical scrollbars. */
+function autoSizeToContent(root: HTMLElement, scrollEl: HTMLElement): void {
+  const topPx = parseFloat(root.style.top) || 80;
+  const maxH = window.innerHeight - topPx - 16;
+  const fixedH = root.offsetHeight - scrollEl.offsetHeight;
+  const idealH = Math.min(maxH, fixedH + scrollEl.scrollHeight);
+  root.style.height = `${Math.max(200, idealH)}px`;
+}
+
+// ============================================================================
+// UI PRIMITIVES
+// ============================================================================
+
+function makeChip(text: string, color: string): HTMLElement {
+  const el = document.createElement('span');
+  el.textContent = text;
+  el.style.cssText = [
+    `color:${color}`,
+    'font-size:11px',
+    'font-family:monospace',
+    'background:rgba(255,255,255,0.05)',
+    'padding:2px 8px',
+    'border-radius:10px',
+    'border:1px solid rgba(255,255,255,0.08)',
+    'white-space:nowrap',
+  ].join(';');
+  return el;
+}
+
+function makePillButton(text: string, active: boolean): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.textContent = text;
+  btn.style.cssText = [
+    'padding:3px 10px',
+    'font-size:11px',
+    'border-radius:10px',
+    'cursor:pointer',
+    `font-weight:${active ? '600' : '400'}`,
+    `background:${active ? 'var(--qpm-accent,#4CAF50)' : 'rgba(255,255,255,0.06)'}`,
+    `color:${active ? '#fff' : 'var(--qpm-text-muted,#888)'}`,
+    `border:1px solid ${active ? 'var(--qpm-accent,#4CAF50)' : 'rgba(255,255,255,0.12)'}`,
+    'transition:all 0.15s ease',
+  ].join(';');
+  return btn;
+}
+
+function createCollapsible(titleText: string, startExpanded: boolean): { wrapper: HTMLElement; content: HTMLElement } {
+  const wrapper = document.createElement('div');
+  wrapper.style.borderTop = '1px solid var(--qpm-border,#2a2a2a)';
+
+  const header = document.createElement('div');
+  header.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'justify-content:space-between',
+    'padding:8px 14px',
+    'cursor:pointer',
+    'user-select:none',
+    'background:var(--qpm-surface-1,#141414)',
+  ].join(';');
+
+  const titleEl = document.createElement('span');
+  titleEl.textContent = titleText;
+  titleEl.style.cssText = 'color:var(--qpm-text,#fff);font-size:12px;font-weight:600;pointer-events:none;';
+
+  const chevron = document.createElement('span');
+  chevron.textContent = startExpanded ? '▼' : '▶';
+  chevron.style.cssText = 'color:var(--qpm-text-muted,#555);font-size:9px;pointer-events:none;';
+
+  header.appendChild(titleEl);
+  header.appendChild(chevron);
+
+  const content = document.createElement('div');
+  content.style.display = startExpanded ? 'block' : 'none';
+
+  header.addEventListener('click', () => {
+    const open = content.style.display !== 'none';
+    content.style.display = open ? 'none' : 'block';
+    chevron.textContent = open ? '▶' : '▼';
+  });
+
+  wrapper.appendChild(header);
+  wrapper.appendChild(content);
+  return { wrapper, content };
+}
+
+// ============================================================================
+// PET CARD
+// ============================================================================
+
+function createPetCard(pet: ActivePetInfo, teamXpPerHour: number): HTMLElement {
+  const maxStr = getMaxStr(pet);
+  const xpPerLevel = pet.species ? getSpeciesXpPerLevel(pet.species) : null;
+
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'background:var(--qpm-surface-2,#1a1a1a)',
+    'border:1px solid var(--qpm-border,#2a2a2a)',
+    'border-radius:6px',
+    'padding:10px 12px',
+    'display:flex',
+    'flex-direction:column',
+    'gap:7px',
+  ].join(';');
+
+  // ── Header row: [ability badges] [sprite] [name block] [STR badge] ──
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+  // Ability badge column (colored squares, one per ability)
+  const petAbilities = pet.abilities ?? [];
+  if (petAbilities.length > 0) {
+    const col = document.createElement('div');
+    col.style.cssText = 'display:flex;flex-direction:column;gap:2px;flex-shrink:0;';
+    for (const id of petAbilities.slice(0, 4)) {
+      const c = getAbilityColor(id);
+      const sq = document.createElement('div');
+      sq.title = id;
+      sq.style.cssText = [
+        'width:8px',
+        'height:8px',
+        'border-radius:2px',
+        `background:${c.base}`,
+        'border:1px solid rgba(255,255,255,0.2)',
+        `box-shadow:0 0 3px ${c.glow}`,
+      ].join(';');
+      col.appendChild(sq);
+    }
+    header.appendChild(col);
+  }
+
+  // Sprite
+  if (pet.species) {
+    const img = document.createElement('img');
+    img.src = getPetSpriteDataUrl(pet.species) ?? '';
+    img.dataset.qpmSprite = `pet:${pet.species}`;
+    img.alt = pet.species;
+    img.style.cssText = 'width:36px;height:36px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
+    header.appendChild(img);
+  }
+
+  // Name + species
+  const nameBlock = document.createElement('div');
+  nameBlock.style.cssText = 'flex:1;min-width:0;';
+
+  const nameEl = document.createElement('div');
+  nameEl.textContent = pet.name || pet.species || 'Unknown';
+  nameEl.style.cssText = 'font-weight:600;color:var(--qpm-text,#fff);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  nameBlock.appendChild(nameEl);
+
+  if (pet.name && pet.species) {
+    const sub = document.createElement('div');
+    sub.textContent = pet.species;
+    sub.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#555);margin-top:1px;';
+    nameBlock.appendChild(sub);
+  }
+  header.appendChild(nameBlock);
+
+  // STR badge
+  if (pet.strength != null) {
+    const badge = document.createElement('div');
+    badge.style.cssText = 'text-align:right;flex-shrink:0;';
+
+    const strEl = document.createElement('div');
+    strEl.textContent = `STR ${pet.strength}`;
+    strEl.style.cssText = 'font-weight:700;font-family:monospace;font-size:13px;color:var(--qpm-accent,#4CAF50);';
+    badge.appendChild(strEl);
+
+    if (maxStr) {
+      const maxEl = document.createElement('div');
+      maxEl.textContent = `MAX ${maxStr}`;
+      maxEl.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#666);font-family:monospace;margin-top:1px;';
+      badge.appendChild(maxEl);
+    }
+    header.appendChild(badge);
+  }
+
+  card.appendChild(header);
+
+  // ── Progress bar + time chips ──
+  if (pet.xp !== null && pet.strength !== null && xpPerLevel && maxStr) {
+    if (pet.strength >= maxStr) {
+      const maxMsg = document.createElement('div');
+      maxMsg.textContent = `🌟 MAX STR ${maxStr} — fully levelled`;
+      maxMsg.style.cssText = 'font-size:11px;color:var(--qpm-accent,#4CAF50);font-weight:600;';
+      card.appendChild(maxMsg);
+    } else {
+      const xpToNext = pet.xp % xpPerLevel;
+      const pct = Math.min(100, (xpToNext / xpPerLevel) * 100);
+
+      // Progress bar
+      const barWrap = document.createElement('div');
+      barWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+
+      const track = document.createElement('div');
+      track.style.cssText = 'height:8px;background:rgba(255,255,255,0.07);border-radius:4px;overflow:hidden;';
+
+      const fill = document.createElement('div');
+      fill.style.cssText = `width:${pct.toFixed(1)}%;height:100%;background:linear-gradient(90deg,var(--qpm-accent,#4CAF50),#8BC34A);border-radius:4px;`;
+      track.appendChild(fill);
+      barWrap.appendChild(track);
+
+      const lbl = document.createElement('div');
+      lbl.style.cssText = 'display:flex;justify-content:space-between;font-size:10px;color:var(--qpm-text-muted,#666);font-family:monospace;';
+      lbl.innerHTML = `<span>${formatCoins(xpToNext)} / ${formatCoins(xpPerLevel)}</span><span>${pct.toFixed(1)}%</span>`;
+      barWrap.appendChild(lbl);
+      card.appendChild(barWrap);
+
+      // Time chips row
+      const chips = document.createElement('div');
+      chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
+
+      if (teamXpPerHour > 0) {
+        const timeToNext = calculateTimeToLevel(xpToNext, xpPerLevel, teamXpPerHour);
+        if (timeToNext) {
+          chips.appendChild(makeChip(`⏱ Next: ${formatTime(timeToNext.totalMinutes)}`, 'var(--qpm-positive,#4CAF50)'));
+        }
+
+        const levelsLeft = maxStr - pet.strength;
+        const xpToMax = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
+        const minsToMax = (xpToMax / teamXpPerHour) * 60;
+        chips.appendChild(makeChip(`🏁 Max: ${formatTime(minsToMax)}`, 'var(--qpm-warning,#FF9800)'));
+
+        if (pet.species) {
+          const hungerCap = getHungerCapOrDefault(pet.species);
+          const feeds = calculateFeedsPerLevel(pet.species, hungerCap, xpPerLevel, teamXpPerHour);
+          if (feeds && feeds > 0) {
+            chips.appendChild(makeChip(`🍖 ${feeds} feeds/lvl`, 'rgba(255,255,255,0.4)'));
+          }
+        }
+      } else {
+        chips.appendChild(makeChip('No XP rate', 'var(--qpm-text-muted,#555)'));
+      }
+
+      if (chips.children.length > 0) card.appendChild(chips);
+    }
+  } else if (!xpPerLevel && pet.species) {
+    const note = document.createElement('div');
+    note.textContent = 'XP/level loading from catalog…';
+    note.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#444);font-style:italic;';
+    card.appendChild(note);
+  }
+
+  return card;
+}
+
+// ============================================================================
+// SUMMARY STRIP
+// ============================================================================
+
+function updateSummaryStrip(
+  el: HTMLElement,
+  stats: XpAbilityStats[],
+  teamXpPerHour: number,
+  weather: DetailedWeather,
+  petCount: number,
+): void {
+  el.innerHTML = '';
+  const abilityXp = teamXpPerHour - 3600;
+  const weatherIcon = WEATHER_ICONS[weather] ?? '';
+  const weatherLabel = weather === 'unknown' ? '' : weather;
+
+  const frag = (html: string, color?: string) => {
+    const s = document.createElement('span');
+    s.innerHTML = html;
+    if (color) s.style.color = color;
+    return s;
+  };
+
+  if (stats.length === 0) {
+    el.appendChild(frag(`${petCount} pet${petCount !== 1 ? 's' : ''}`, 'var(--qpm-text-muted,#666)'));
+    el.appendChild(frag('·', 'var(--qpm-border,#444)'));
+    el.appendChild(frag('3,600 XP/hr', 'var(--qpm-warning,#FF9800)'));
+    el.appendChild(frag('(base, no XP abilities)', 'var(--qpm-text-muted,#444)'));
+  } else {
+    el.appendChild(frag('Base', 'var(--qpm-text-muted,#666)'));
+    el.appendChild(frag('3,600', 'var(--qpm-warning,#FF9800)'));
+    el.appendChild(frag('+', 'var(--qpm-text-muted,#444)'));
+    el.appendChild(frag('Ability', 'var(--qpm-text-muted,#666)'));
+    el.appendChild(frag(`+${formatCoins(abilityXp)}`, 'var(--qpm-warning,#FF9800)'));
+    el.appendChild(frag('=', 'var(--qpm-text-muted,#444)'));
+
+    const total = frag(formatCoins(teamXpPerHour) + ' XP/hr', 'var(--qpm-accent,#4CAF50)');
+    total.style.fontWeight = '700';
+    total.style.fontSize = '12px';
+    el.appendChild(total);
+
+    el.appendChild(frag(`· ${stats.length} XP ${stats.length === 1 ? 'pet' : 'pets'}`, 'var(--qpm-text-muted,#555)'));
+  }
+
+  if (weatherLabel) {
+    const wChip = document.createElement('span');
+    wChip.textContent = `${weatherIcon} ${weatherLabel}`;
+    wChip.style.cssText = 'margin-left:auto;color:var(--qpm-text-muted,#666);font-size:11px;';
+    el.appendChild(wChip);
+  }
+}
+
+// ============================================================================
+// MAIN DISPLAY UPDATE
+// ============================================================================
+
+function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
+  state.currentWeather = getWeatherSnapshot().kind;
+
+  // Build XP stats for pets with XP abilities
+  const allStats: XpAbilityStats[] = [];
+  for (const pet of state.latestPets) {
+    for (const def of findXpAbilities(pet)) {
+      allStats.push(calculateXpStats(
+        pet,
+        def.id,
+        getAbilityName(def.id),
+        def.baseProbability ?? 0,
+        def.effectValuePerProc ?? 0,
+        def.requiredWeather ?? null,
+        state.currentWeather,
+      ));
+    }
+  }
+
+  state.latestStats = allStats;
+  const abilityXp = allStats.length > 0 ? getCombinedXpStats(allStats).totalXpPerHour : 0;
+  state.totalTeamXpPerHour = 3600 + abilityXp;
+
+  updateSummaryStrip(state.summaryStrip, allStats, state.totalTeamXpPerHour, state.currentWeather, state.latestPets.length);
+  renderPetCards(state);
+  void updateNearMaxLevelDisplay(state);
+}
+
+function renderPetCards(state: XpTrackerWindowState): void {
+  state.petCardsContainer.innerHTML = '';
+  if (state.latestPets.length === 0) {
+    const empty = document.createElement('div');
+    empty.textContent = 'No active pets detected.';
+    empty.style.cssText = 'padding:18px;color:var(--qpm-text-muted,#555);font-style:italic;text-align:center;font-size:12px;';
+    state.petCardsContainer.appendChild(empty);
+    state.updateScale?.();
+    return;
+  }
+  for (const pet of state.latestPets) {
+    state.petCardsContainer.appendChild(createPetCard(pet, state.totalTeamXpPerHour));
+  }
+  // Sync scaleOuter height after content changes so scrolling reflects visual size.
+  state.updateScale?.();
+}
+
+// ============================================================================
+// NEAR MAX LEVEL — get pets data
+// ============================================================================
+
 async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> {
   const allPets: PetWithLevel[] = [];
 
-  // Add active pets
+  // Active pets
   for (const pet of activePets) {
     if (!pet.species || pet.xp === null || pet.strength === null) continue;
-
     const xpPerLevel = getSpeciesXpPerLevel(pet.species);
     if (!xpPerLevel) continue;
-
-    // Calculate actual max level: hatch level + 30, capped at 100
-    // Hatch level = current strength - levels gained from XP
-    // Note: Pets can only gain 30 levels max, even though XP can accumulate infinitely
-    // Max level is always capped at 100 (pets hatch at 50-70, max is 80-100)
-    const levelsGainedFromXp = Math.floor(pet.xp / xpPerLevel);
-    const actualLevelsGained = Math.min(30, levelsGainedFromXp); // Cap at 30
-    const hatchLevel = pet.strength - actualLevelsGained;
-    const maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
-
-    // Skip if already at max strength
+    const levelsGained = Math.min(30, Math.floor(pet.xp / xpPerLevel));
+    const hatchLevel = pet.strength - levelsGained;
+    const maxStr = Math.min(hatchLevel + 30, 100);
     if (pet.strength >= maxStr) continue;
-
-    // Calculate XP needed to reach max strength
-    const levelsRemaining = maxStr - pet.strength;
-    const xpTowardsNext = pet.xp % xpPerLevel;
-    const xpNeededForNextLevel = xpPerLevel - xpTowardsNext;
-    const xpNeeded = xpNeededForNextLevel + (xpPerLevel * (levelsRemaining - 1));
-
-    allPets.push({
-      name: pet.name || pet.species,
-      species: pet.species,
-      level: pet.strength,  // Use actual strength, not calculated level
-      xp: pet.xp,
-      maxStr,
-      xpNeeded,
-      xpPerLevel,
-      source: 'active',
-    });
+    const xpToNext = pet.xp % xpPerLevel;
+    const levelsLeft = maxStr - pet.strength;
+    const xpNeeded = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
+    allPets.push({ name: pet.name || pet.species, species: pet.species, level: pet.strength, xp: pet.xp, maxStr, xpNeeded, xpPerLevel, source: 'active' });
   }
 
-  // Add inventory pets
-  try {
-    const inventoryAtom = getAtomByLabel('myInventoryAtom');
-    if (inventoryAtom) {
-      const inventoryData = await readAtomValue(inventoryAtom) as any;
+  // Shared item processor for inventory and hutch
+  const processItems = (items: unknown[], source: 'inventory' | 'hutch') => {
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const i = item as Record<string, unknown>;
+      const species = (i.petSpecies ?? i.species) as string | undefined;
+      if (source === 'inventory' && i.itemType !== 'Pet') continue;
+      if (!species || i.xp == null) continue;
+      const xp = i.xp as number;
+      const xpPerLevel = getSpeciesXpPerLevel(species);
+      if (!xpPerLevel) continue;
 
-      if (inventoryData && Array.isArray(inventoryData.items)) {
-        for (const item of inventoryData.items) {
-          // Use petSpecies if available, otherwise species
-          const species = item.petSpecies || item.species;
-          if (item.itemType !== 'Pet' || !species || item.xp === null || item.xp === undefined) continue;
-
-          const xpPerLevel = getSpeciesXpPerLevel(species);
-          if (!xpPerLevel) continue;
-
-          let currentStrength: number;
-          let maxStr: number;
-
-          // Try to get current strength from game data first
-          if (item.strength !== null && item.strength !== undefined) {
-            currentStrength = item.strength;
-
-            // Calculate max level from current strength and XP
-            const levelsGainedFromXp = Math.floor(item.xp / xpPerLevel);
-            const actualLevelsGained = Math.min(30, levelsGainedFromXp); // Cap at 30
-            const hatchLevel = currentStrength - actualLevelsGained;
-            maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
-          } else {
-            // If no strength data, try to derive from max level in name and XP
-            const parsedMaxLevel = parseMaxLevelFromName(item.name);
-            if (!parsedMaxLevel || parsedMaxLevel < 80 || parsedMaxLevel > 100) {
-              continue; // Skip if no valid max level in name
-            }
-
-            maxStr = parsedMaxLevel;
-
-            // Derive hatch level from max level (max = hatch + 30, capped at 100)
-            const hatchLevel = maxStr - 30;
-
-            // Calculate current strength from hatch level + XP gained
-            const levelsGainedFromXp = Math.floor(item.xp / xpPerLevel);
-            const actualLevelsGained = Math.min(30, levelsGainedFromXp);
-            currentStrength = hatchLevel + actualLevelsGained;
-          }
-
-          // Skip if already at max strength
-          if (currentStrength >= maxStr) continue;
-
-          // Calculate XP needed to reach max strength
-          const levelsRemaining = maxStr - currentStrength;
-          const xpTowardsNext = item.xp % xpPerLevel;
-          const xpNeededForNextLevel = xpPerLevel - xpTowardsNext;
-          const xpNeeded = xpNeededForNextLevel + (xpPerLevel * (levelsRemaining - 1));
-
-          allPets.push({
-            name: item.name || species,
-            species: species,
-            level: currentStrength,
-            xp: item.xp,
-            maxStr,
-            xpNeeded,
-            xpPerLevel,
-            source: 'inventory',
-          });
-        }
+      let currentStr: number, maxStr: number;
+      if (i.strength != null) {
+        currentStr = i.strength as number;
+        const levelsGained = Math.min(30, Math.floor(xp / xpPerLevel));
+        maxStr = Math.min(currentStr - levelsGained + 30, 100);
+      } else {
+        const parsedMax = parseMaxLevelFromName(i.name as string);
+        if (!parsedMax || parsedMax < 80 || parsedMax > 100) continue;
+        maxStr = parsedMax;
+        currentStr = (maxStr - 30) + Math.min(30, Math.floor(xp / xpPerLevel));
       }
-    }
-  } catch (error) {
-    log('⚠️ Failed to read inventory for near max level pets:', error);
-  }
 
-  // Add hutch pets
+      if (currentStr >= maxStr) continue;
+      const xpToNext = xp % xpPerLevel;
+      const levelsLeft = maxStr - currentStr;
+      const xpNeeded = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
+      allPets.push({ name: (i.name as string) || species, species, level: currentStr, xp, maxStr, xpNeeded, xpPerLevel, source });
+    }
+  };
+
+  try {
+    const invAtom = getAtomByLabel('myInventoryAtom');
+    if (invAtom) {
+      const invData = await readAtomValue(invAtom) as { items?: unknown[] } | null;
+      processItems(invData?.items ?? [], 'inventory');
+    }
+  } catch (e) { log('⚠️ Near max: inventory read failed', e); }
+
   try {
     const hutchAtom = getAtomByLabel('myPetHutchPetItemsAtom');
     if (hutchAtom) {
-      const hutchData = await readAtomValue(hutchAtom) as any;
-
-      if (Array.isArray(hutchData)) {
-        for (const item of hutchData) {
-          // Use petSpecies if available, otherwise species
-          const species = item.petSpecies || item.species;
-
-          if (!species || item.xp === null || item.xp === undefined) continue;
-
-          const xpPerLevel = getSpeciesXpPerLevel(species);
-          if (!xpPerLevel) continue;
-
-          let currentStrength: number;
-          let maxStr: number;
-
-          // Try to get current strength from game data first
-          if (item.strength !== null && item.strength !== undefined) {
-            currentStrength = item.strength;
-
-            // Calculate max level from current strength and XP
-            const levelsGainedFromXp = Math.floor(item.xp / xpPerLevel);
-            const actualLevelsGained = Math.min(30, levelsGainedFromXp); // Cap at 30
-            const hatchLevel = currentStrength - actualLevelsGained;
-            maxStr = Math.min(hatchLevel + 30, 100); // Cap at 100
-          } else {
-            // If no strength data, try to derive from max level in name and XP
-            const parsedMaxLevel = parseMaxLevelFromName(item.name);
-            if (!parsedMaxLevel || parsedMaxLevel < 80 || parsedMaxLevel > 100) {
-              continue; // Skip if no valid max level in name
-            }
-
-            maxStr = parsedMaxLevel;
-
-            // Derive hatch level from max level (max = hatch + 30, capped at 100)
-            const hatchLevel = maxStr - 30;
-
-            // Calculate current strength from hatch level + XP gained
-            const levelsGainedFromXp = Math.floor(item.xp / xpPerLevel);
-            const actualLevelsGained = Math.min(30, levelsGainedFromXp);
-            currentStrength = hatchLevel + actualLevelsGained;
-          }
-
-          // Skip if already at max strength
-          if (currentStrength >= maxStr) continue;
-
-          // Calculate XP needed to reach max strength
-          const levelsRemaining = maxStr - currentStrength;
-          const xpTowardsNext = item.xp % xpPerLevel;
-          const xpNeededForNextLevel = xpPerLevel - xpTowardsNext;
-          const xpNeeded = xpNeededForNextLevel + (xpPerLevel * (levelsRemaining - 1));
-
-          allPets.push({
-            name: item.name || species,
-            species: species,
-            level: currentStrength,
-            xp: item.xp,
-            maxStr,
-            xpNeeded,
-            xpPerLevel,
-            source: 'hutch',
-          });
-        }
-      }
+      const hutchData = await readAtomValue(hutchAtom) as unknown;
+      processItems(Array.isArray(hutchData) ? hutchData : [], 'hutch');
     }
-  } catch (error) {
-    log('⚠️ Failed to read hutch for near max level pets:', error);
-  }
+  } catch (e) { log('⚠️ Near max: hutch read failed', e); }
 
   return allPets;
 }
 
-/**
- * Get pets closest to max level, sorted by proximity
- */
-async function getPetsNearMaxLevel(activePets: ActivePetInfo[], teamXpPerHour: number, limit: number = 10): Promise<PetWithLevel[]> {
-  const allPets = await getAllPets(activePets);
+// ============================================================================
+// NEAR MAX LEVEL — display
+// ============================================================================
 
-  // Sort by XP needed (ascending) - closest to max first
-  const sorted = allPets
-    .sort((a, b) => a.xpNeeded - b.xpNeeded)
-    .slice(0, limit);
+async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<void> {
+  const container = state.nearMaxContainer;
+  try {
+    const allPets = (await getAllPets(state.latestPets))
+      .sort((a, b) => a.xpNeeded - b.xpNeeded)
+      .slice(0, 50);
 
-  return sorted;
-}
+    container.innerHTML = '';
 
-/**
- * Find XP abilities for a pet
- */
-function findXpAbilities(pet: ActivePetInfo): Array<{ ability: AbilityDefinition; rawName: string }> {
-  const abilities: Array<{ ability: AbilityDefinition; rawName: string }> = [];
+    // Source filter pills
+    const filterRow = document.createElement('div');
+    filterRow.style.cssText = 'display:flex;gap:6px;padding:10px 14px 4px;flex-wrap:wrap;align-items:center;';
 
-  if (!pet.abilities || pet.abilities.length === 0) {
-    return abilities;
-  }
+    const filterLbl = document.createElement('span');
+    filterLbl.textContent = 'Show:';
+    filterLbl.style.cssText = 'font-size:11px;color:var(--qpm-text-muted,#666);';
+    filterRow.appendChild(filterLbl);
 
-  for (const rawName of pet.abilities) {
-    if (!rawName) continue;
+    const sourceDefs: Array<{ key: 'active' | 'inventory' | 'hutch'; label: string }> = [
+      { key: 'active', label: '🟢 Active' },
+      { key: 'inventory', label: '📦 Inventory' },
+      { key: 'hutch', label: '🏠 Hutch' },
+    ];
 
-    // Use the same lookup function as the ability tracker
-    const definition = getAbilityDefinition(rawName);
-    if (!definition) continue;
-
-    // Only include continuous XP boost abilities (exclude hatch XP)
-    if (definition.trigger === 'continuous' && XP_ABILITY_IDS.includes(definition.id)) {
-      abilities.push({ ability: definition, rawName });
+    for (const s of sourceDefs) {
+      const btn = makePillButton(s.label, nearMaxSources.has(s.key));
+      btn.addEventListener('click', () => {
+        if (nearMaxSources.has(s.key)) nearMaxSources.delete(s.key);
+        else nearMaxSources.add(s.key);
+        void updateNearMaxLevelDisplay(state);
+      });
+      filterRow.appendChild(btn);
     }
-  }
+    container.appendChild(filterRow);
 
-  return abilities;
+    const filtered = allPets.filter(p => nearMaxSources.has(p.source)).slice(0, 10);
+
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.textContent = allPets.length === 0
+        ? 'No pets near max level.'
+        : 'No pets match current filters.';
+      empty.style.cssText = 'padding:10px 14px 12px;font-size:12px;color:var(--qpm-text-muted,#555);font-style:italic;';
+      container.appendChild(empty);
+      return;
+    }
+
+    // Column header row — aligned with near-max pet row columns
+    const nearMaxColHeader = document.createElement('div');
+    nearMaxColHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 14px 4px;border-bottom:1px solid rgba(255,255,255,0.06);';
+    const nmchSpacer = document.createElement('div');
+    nmchSpacer.style.cssText = 'width:20px;flex-shrink:0;';
+    const nmchName = document.createElement('span');
+    nmchName.textContent = 'Pet';
+    nmchName.style.cssText = 'flex:1;font-size:9px;color:var(--qpm-text-muted,#555);';
+    const nmchBar = document.createElement('div');
+    nmchBar.style.cssText = 'width:56px;flex-shrink:0;'; // progress bar column — no text label
+    const nmchLvl = document.createElement('span');
+    nmchLvl.textContent = 'Level';
+    nmchLvl.style.cssText = 'width:44px;text-align:right;font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;';
+    const nmchTime = document.createElement('span');
+    nmchTime.textContent = 'To max';
+    nmchTime.style.cssText = 'min-width:56px;text-align:right;font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;';
+    nearMaxColHeader.append(nmchSpacer, nmchName, nmchBar, nmchLvl, nmchTime);
+    container.appendChild(nearMaxColHeader);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'padding:4px 14px 12px;display:flex;flex-direction:column;gap:6px;';
+
+    const sourceIcons = { active: '🟢', inventory: '📦', hutch: '🏠' } as const;
+
+    for (const pet of filtered) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;';
+
+      // Sprite
+      const img = document.createElement('img');
+      img.src = getPetSpriteDataUrl(pet.species) ?? '';
+      img.dataset.qpmSprite = `pet:${pet.species}`;
+      img.alt = pet.species;
+      img.style.cssText = 'width:20px;height:20px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
+
+      // Name
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = 'flex:1;min-width:0;font-size:12px;color:var(--qpm-text,#ddd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      nameEl.textContent = `${sourceIcons[pet.source]} ${pet.name}`;
+
+      // Mini progress bar
+      const totalXpForRange = pet.xpPerLevel * (pet.maxStr - pet.level);
+      const xpDone = totalXpForRange - pet.xpNeeded;
+      const pct = Math.max(0, Math.min(100, (xpDone / totalXpForRange) * 100));
+      const barWrap = document.createElement('div');
+      barWrap.style.cssText = 'width:56px;flex-shrink:0;';
+      const track = document.createElement('div');
+      track.style.cssText = 'height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;';
+      const fill = document.createElement('div');
+      fill.style.cssText = `width:${pct.toFixed(0)}%;height:100%;background:var(--qpm-accent,#4CAF50);border-radius:3px;`;
+      track.appendChild(fill);
+      barWrap.appendChild(track);
+
+      // Level range
+      const lvlEl = document.createElement('div');
+      lvlEl.textContent = `${pet.level}→${pet.maxStr}`;
+      lvlEl.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#666);font-family:monospace;flex-shrink:0;width:44px;text-align:right;';
+
+      // Time to max
+      const xpRate = pet.source === 'active' ? state.totalTeamXpPerHour : 3600;
+      const minsToMax = xpRate > 0 ? (pet.xpNeeded / xpRate) * 60 : 0;
+      const timeEl = document.createElement('div');
+      timeEl.textContent = xpRate > 0 ? formatTime(minsToMax) : '—';
+      timeEl.style.cssText = 'font-size:11px;color:var(--qpm-warning,#FF9800);font-family:monospace;flex-shrink:0;min-width:56px;text-align:right;';
+
+      row.append(img, nameEl, barWrap, lvlEl, timeEl);
+      list.appendChild(row);
+    }
+
+    container.appendChild(list);
+  } catch (e) {
+    log('⚠️ Near max update failed', e);
+    container.innerHTML = '<div style="padding:12px 14px;color:var(--qpm-danger,#f44);font-size:12px;">Failed to load near max pets</div>';
+  }
+  // Sync scaleOuter height after async content update.
+  state.updateScale?.();
 }
 
-/**
- * Create XP tracker window
- */
+// ============================================================================
+// CREATE WINDOW
+// ============================================================================
+
 export function createXpTrackerWindow(): XpTrackerWindowState {
+  const layout = loadLayout();
+  const initWidth = Math.max(320, Math.min(layout?.width ?? DEFAULT_WIDTH, window.innerWidth - 32));
+  const initHeight = Math.max(200, Math.min(layout?.height ?? DEFAULT_HEIGHT, window.innerHeight - 48));
+  const initTop = layout?.top ?? 80;
+  const initLeft = layout?.left ?? (window.innerWidth - initWidth - 20);
+
+  // ── Root window ──
   const root = document.createElement('div');
-  root.style.cssText = `
-    position: fixed;
-    top: 80px;
-    right: 20px;
-    width: 850px;
-    max-height: 80vh;
-    overflow-y: auto;
-    background: var(--qpm-background, rgba(0, 0, 0, 0.92));
-    border: 2px solid var(--qpm-border, #555);
-    border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-    z-index: 10002;
-    font-family: Arial, sans-serif;
-    display: none;
-  `;
+  root.style.cssText = [
+    'position:fixed',
+    `top:${initTop}px`,
+    `left:${initLeft}px`,
+    `width:${initWidth}px`,
+    `height:${initHeight}px`,
+    'min-width:320px',
+    'min-height:200px',
+    'max-width:calc(100vw - 16px)',
+    'max-height:calc(100vh - 16px)',
+    'background:var(--qpm-background,rgba(10,10,10,0.97))',
+    'border:1px solid var(--qpm-border,#2a2a2a)',
+    'border-radius:8px',
+    'box-shadow:0 8px 40px rgba(0,0,0,0.75)',
+    'z-index:10002',
+    'font-family:Arial,sans-serif',
+    'display:none',
+    'flex-direction:column',
+    'overflow:hidden',
+  ].join(';');
 
-  // Title bar with close button
+  // ── Title bar (drag handle, always visible) ──
   const titleBar = document.createElement('div');
-  titleBar.style.cssText = `
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    background: var(--qpm-surface-1, #1a1a1a);
-    border-bottom: 2px solid var(--qpm-border, #555);
-    cursor: move;
-  `;
+  titleBar.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:10px',
+    'padding:9px 12px',
+    'background:var(--qpm-surface-1,#141414)',
+    'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
+    'cursor:move',
+    'flex-shrink:0',
+    'user-select:none',
+  ].join(';');
 
-  const title = document.createElement('h3');
-  title.textContent = '✨ XP Tracker';
-  title.style.cssText = `
-    margin: 0;
-    color: var(--qpm-text, #fff);
-    font-size: 16px;
-    font-weight: 600;
-  `;
+  const titleText = document.createElement('span');
+  titleText.textContent = '✨ XP Tracker';
+  titleText.style.cssText = 'color:var(--qpm-text,#fff);font-size:14px;font-weight:700;flex:1;pointer-events:none;';
 
   const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕';
-  closeBtn.style.cssText = `
-    background: transparent;
-    border: none;
-    color: var(--qpm-text, #fff);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 0 8px;
-    line-height: 1;
-  `;
-  closeBtn.onclick = () => {
-    root.style.display = 'none';
-  };
+  closeBtn.innerHTML = '&#x2715;';
+  closeBtn.title = 'Close';
+  closeBtn.style.cssText = [
+    'background:transparent',
+    'border:none',
+    'color:var(--qpm-text-muted,#777)',
+    'font-size:15px',
+    'cursor:pointer',
+    'padding:0 4px',
+    'line-height:1',
+    'border-radius:4px',
+    'flex-shrink:0',
+  ].join(';');
+  closeBtn.addEventListener('mouseenter', () => { closeBtn.style.color = '#fff'; });
+  closeBtn.addEventListener('mouseleave', () => { closeBtn.style.color = 'var(--qpm-text-muted,#777)'; });
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); root.style.display = 'none'; });
 
-  titleBar.appendChild(title);
+  titleBar.appendChild(titleText);
   titleBar.appendChild(closeBtn);
   root.appendChild(titleBar);
 
-  // Summary section
-  const summary = document.createElement('div');
-  summary.style.cssText = `
-    padding: 12px 16px;
-    background: var(--qpm-surface-1, #1a1a1a);
-    border-bottom: 1px solid var(--qpm-border, #444);
-  `;
+  // ── Summary strip (XP rate — compact, always visible) ──
+  const summaryStrip = document.createElement('div');
+  summaryStrip.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:6px',
+    'flex-wrap:wrap',
+    'padding:6px 14px',
+    'background:var(--qpm-surface-1,#111)',
+    'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
+    'font-size:11px',
+    'font-family:monospace',
+    'color:var(--qpm-text-muted,#777)',
+    'flex-shrink:0',
+  ].join(';');
+  summaryStrip.textContent = 'Loading…';
+  root.appendChild(summaryStrip);
 
-  const summaryText = document.createElement('div');
-  summaryText.style.cssText = `
-    color: var(--qpm-text, #fff);
-    font-size: 13px;
-    line-height: 1.6;
-  `;
-  summaryText.textContent = 'Loading XP data...';
+  // ── Scrollable content area ──
+  const scrollContent = document.createElement('div');
+  scrollContent.style.cssText = [
+    'flex:1',
+    'overflow-y:auto',
+    'overflow-x:hidden',
+    'min-height:0',
+    'scrollbar-width:thin',
+    'scrollbar-color:rgba(255,255,255,0.1) transparent',
+  ].join(';');
 
-  summary.appendChild(summaryText);
-  root.appendChild(summary);
+  // scaleOuter: height-tracking wrapper (transform on scaleWrapper doesn't affect layout)
+  const scaleOuter = document.createElement('div');
 
-  // Individual Pets Section - ALL active pets with level progress (PRIMARY TABLE)
-  const individualSection = createCollapsibleSection(
-    '🐾 All Active Pets',
-    'individual-pets-section'
-  );
-  const individualTable = createPetLevelTable();
-  const petLevelTbody = individualTable.querySelector('tbody') as HTMLTableSectionElement;
-  individualSection.content.appendChild(individualTable);
-  root.appendChild(individualSection.root);
+  // scaleWrapper: scaled via transform so card backgrounds grow/shrink with the window
+  const scaleWrapper = document.createElement('div');
+  scaleWrapper.style.cssText = 'display:flex;flex-direction:column;';
 
-  // XP Generation Summary Section - Simplified summary (not a full table)
-  const xpGenSection = createCollapsibleSection(
-    '✨ XP Generation Summary',
-    'xp-gen-section'
-  );
-  const xpGenSummary = document.createElement('div');
-  xpGenSummary.style.cssText = `
-    padding: 12px 16px;
-    color: var(--qpm-text, #fff);
-    font-size: 12px;
-    line-height: 1.6;
-  `;
-  xpGenSection.content.appendChild(xpGenSummary);
-  root.appendChild(xpGenSection.root);
+  // Active pets section
+  const activeSec = createCollapsible('🐾 Active Pets', true);
+  const petCardsContainer = document.createElement('div');
+  petCardsContainer.style.cssText = 'display:flex;flex-direction:column;gap:8px;padding:8px 12px 10px;';
 
-  // Near Max Level Section
-  const nearMaxSection = createCollapsibleSection(
-    '🏆 Near Max Level',
-    'near-max-level-section',
-    false // Start collapsed
-  );
-  const nearMaxLevelContainer = document.createElement('div');
-  nearMaxLevelContainer.style.cssText = `
-    padding: 12px 16px;
-    color: var(--qpm-text, #fff);
-    font-size: 12px;
-    line-height: 1.8;
-    font-family: monospace;
-  `;
-  nearMaxLevelContainer.textContent = 'Loading...';
-  nearMaxSection.content.appendChild(nearMaxLevelContainer);
-  root.appendChild(nearMaxSection.root);
+  const loadingCard = document.createElement('div');
+  loadingCard.textContent = 'Loading…';
+  loadingCard.style.cssText = 'padding:12px;color:var(--qpm-text-muted,#555);font-style:italic;font-size:12px;';
+  petCardsContainer.appendChild(loadingCard);
 
-  // Store reference to summary div (we'll use tbody slot for this)
-  const tbody = xpGenSummary as unknown as HTMLTableSectionElement;
+  activeSec.content.appendChild(petCardsContainer);
+  scaleWrapper.appendChild(activeSec.wrapper);
 
-  // Combined Totals Section (info now shown in XP Generation Summary)
-  const combinedTbody = document.createElement('tbody') as HTMLTableSectionElement;
+  // Near Max Level section (collapsed by default)
+  const nearMaxSec = createCollapsible('🏆 Near Max Level', false);
+  const nearMaxContainer = document.createElement('div');
+  nearMaxSec.content.appendChild(nearMaxContainer);
+  scaleWrapper.appendChild(nearMaxSec.wrapper);
+
+  scaleOuter.appendChild(scaleWrapper);
+  scrollContent.appendChild(scaleOuter);
+  root.appendChild(scrollContent);
+
+  // ── Resize handle (corner grip) ──
+  const resizeHandle = document.createElement('div');
+  resizeHandle.title = 'Drag to resize';
+  resizeHandle.style.cssText = [
+    'position:absolute',
+    'bottom:0',
+    'right:0',
+    'width:14px',
+    'height:14px',
+    'cursor:se-resize',
+    'z-index:1',
+    'background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,0.12) 50%)',
+    'border-radius:0 0 7px 0',
+  ].join(';');
+  root.appendChild(resizeHandle);
 
   document.body.appendChild(root);
 
-  // Make draggable
-  makeDraggable(root, titleBar);
-
+  // ── State ──
   const state: XpTrackerWindowState = {
     root,
-    summaryText,
-    petLevelTbody,
-    tbody,
-    combinedTbody,
-    nearMaxLevelContainer,
-    updateInterval: null,
+    scrollContent,
+    summaryStrip,
+    petCardsContainer,
+    nearMaxContainer,
     latestPets: [],
     latestStats: [],
     totalTeamXpPerHour: 0,
@@ -453,1049 +938,79 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     unsubscribeXpTracker: null,
     resizeListener: null,
     currentWeather: 'unknown',
+    updateInterval: null, // unused, kept for API compat
+    scaleWrapper,
+    scaleOuter,
+    updateScale: null,
+    resizeObserver: null,
   };
 
-  // Add resize listener to keep window visible when viewport changes
+  // ── Window behaviours ──
+  const onLayoutChange = () => saveLayout(root);
+
+  makeDraggable(root, titleBar, onLayoutChange);
+  makeResizable(root, resizeHandle, onLayoutChange);
+
   const resizeListener = () => {
-    if (root.style.display !== 'none') {
-      clampWindowPosition(root);
-    }
+    if (root.style.display !== 'none') clampToViewport(root);
   };
   window.addEventListener('resize', resizeListener);
   state.resizeListener = resizeListener;
 
-  // Subscribe to pet updates (throttled to prevent excessive re-renders)
+  // Content scaling — live update as the user drags the resize handle
+  const doUpdateScale = () => updateContentScale(scaleWrapper, scaleOuter, DEFAULT_WIDTH);
+  state.updateScale = doUpdateScale;
+  const scaleObserver = new ResizeObserver(doUpdateScale);
+  scaleObserver.observe(root);
+  state.resizeObserver = scaleObserver;
+
+  // ── Subscriptions ──
   const throttledPetUpdate = throttle((pets: ActivePetInfo[]) => {
     state.latestPets = pets;
     updateXpTrackerDisplay(state);
   }, 500);
   state.unsubscribePets = onActivePetInfos(throttledPetUpdate);
 
-  // Subscribe to XP tracker updates (for when XP config changes)
+  // Re-render cards when XP config changes (no new full stats calculation needed)
   state.unsubscribeXpTracker = onXpTrackerUpdate(() => {
-    // Only update level progress, not the entire display (to avoid rebuilding inputs)
-    updateLevelProgressDisplays(state);
+    renderPetCards(state);
   });
-
-  // Start live countdown updates (every second) - pauses when page is hidden
-  state.updateInterval = criticalInterval('xp-tracker-countdown', () => {
-    updateLiveCountdowns(state);
-  }, 1000);
 
   return state;
 }
 
-/**
- * Create collapsible section
- */
-function createCollapsibleSection(
-  titleText: string,
-  id: string,
-  startExpanded: boolean = true
-): { root: HTMLElement; content: HTMLElement; toggle: () => void } {
-  const root = document.createElement('div');
-  root.style.cssText = `
-    border-bottom: 1px solid var(--qpm-border, #444);
-  `;
+// ============================================================================
+// PUBLIC API
+// ============================================================================
 
-  const header = document.createElement('div');
-  header.style.cssText = `
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    background: var(--qpm-surface-2, #222);
-    cursor: pointer;
-    user-select: none;
-  `;
-
-  const headerTitle = document.createElement('div');
-  headerTitle.textContent = titleText;
-  headerTitle.style.cssText = `
-    color: var(--qpm-text, #fff);
-    font-size: 13px;
-    font-weight: 600;
-  `;
-
-  const indicator = document.createElement('span');
-  indicator.textContent = startExpanded ? '▼' : '▲';
-  indicator.style.cssText = `
-    color: var(--qpm-text-muted, #aaa);
-    font-size: 10px;
-  `;
-
-  header.appendChild(headerTitle);
-  header.appendChild(indicator);
-
-  const content = document.createElement('div');
-  content.style.cssText = `
-    display: ${startExpanded ? 'block' : 'none'};
-    padding: 0;
-  `;
-
-  const toggle = () => {
-    const isVisible = content.style.display === 'block';
-    content.style.display = isVisible ? 'none' : 'block';
-    indicator.textContent = isVisible ? '▲' : '▼';
-  };
-
-  header.onclick = toggle;
-
-  root.appendChild(header);
-  root.appendChild(content);
-
-  return { root, content, toggle };
-}
-
-/**
- * Create pet level progress table (for ALL active pets)
- */
-function createPetLevelTable(): HTMLTableElement {
-  const table = document.createElement('table');
-  table.style.cssText = `
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  `;
-
-  const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr style="background: var(--qpm-surface-2, #222); border-bottom: 2px solid var(--qpm-border, #555);">
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">Pet</th>
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">Species</th>
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">XP Ability</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Strength</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Current XP</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Progress to Next STR</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Time to Next STR</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Time to Max STR</th>
-    </tr>
-  `;
-
-  const tbody = document.createElement('tbody');
-
-  table.appendChild(thead);
-  table.appendChild(tbody);
-
-  return table;
-}
-
-/**
- * Create XP tracking table (for XP boost abilities)
- */
-function createXpTable(): HTMLTableElement {
-  const table = document.createElement('table');
-  table.style.cssText = `
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  `;
-
-  const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr style="background: var(--qpm-surface-2, #222); border-bottom: 2px solid var(--qpm-border, #555);">
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">Pet</th>
-      <th style="padding: 10px 12px; text-align: left; color: var(--qpm-text, #fff); font-weight: 600;">Ability</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Chance/Sec</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">XP/Proc</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">XP/Hour</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">STR Progress</th>
-      <th style="padding: 10px 12px; text-align: right; color: var(--qpm-text, #fff); font-weight: 600;">Next Proc</th>
-    </tr>
-  `;
-
-  const tbody = document.createElement('tbody');
-
-  table.appendChild(thead);
-  table.appendChild(tbody);
-
-  return table;
-}
-
-/**
- * Near Max Level filters
- */
-let nearMaxFilters = {
-  species: new Set<string>(), // Empty = all species shown
-  sources: new Set<'active' | 'inventory' | 'hutch'>(['active', 'inventory', 'hutch']), // All sources by default
-};
-
-/**
- * Update Near Max Level display
- */
-async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<void> {
-  try {
-    const nearMaxPets = await getPetsNearMaxLevel(state.latestPets, state.totalTeamXpPerHour, 50); // Get more pets for filtering
-
-    if (nearMaxPets.length === 0) {
-      state.nearMaxLevelContainer.innerHTML = `
-        <div style="color: var(--qpm-text-muted, #aaa); font-style: italic;">
-          No pets near max level (all pets are either at max level or don't have enough data)
-        </div>
-      `;
-      return;
-    }
-
-    // Get unique species
-    const allSpecies = [...new Set(nearMaxPets.map(p => p.species))].sort();
-
-    // Build filter UI
-    let html = '<div style="font-weight: 600; margin-bottom: 8px; color: var(--qpm-accent, #4CAF50);">Pets Closest to Max Level:</div>';
-
-    // Species filter
-    html += '<div style="margin-bottom: 12px; padding: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 4px;">';
-    html += '<div style="font-size: 11px; font-weight: 600; margin-bottom: 4px; color: var(--qpm-text-muted, #aaa);">Filter by Species:</div>';
-    html += '<div style="display: flex; flex-wrap: wrap; gap: 6px;">';
-
-    // Add "All" button
-    const allSelected = nearMaxFilters.species.size === 0;
-    html += `<button
-      onclick="window.qpmNearMaxToggleSpecies('__ALL__')"
-      style="
-        padding: 4px 8px;
-        font-size: 11px;
-        background: ${allSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.1)'};
-        color: var(--qpm-text, #fff);
-        border: 1px solid ${allSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.2)'};
-        border-radius: 4px;
-        cursor: pointer;
-        font-weight: ${allSelected ? '600' : '400'};
-      ">All</button>`;
-
-    for (const species of allSpecies) {
-      const isSelected = nearMaxFilters.species.size === 0 || nearMaxFilters.species.has(species);
-      html += `<button
-        onclick="window.qpmNearMaxToggleSpecies('${species}')"
-        style="
-          padding: 4px 8px;
-          font-size: 11px;
-          background: ${isSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.1)'};
-          color: var(--qpm-text, #fff);
-          border: 1px solid ${isSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.2)'};
-          border-radius: 4px;
-          cursor: pointer;
-          font-weight: ${isSelected ? '600' : '400'};
-        ">${species}</button>`;
-    }
-    html += '</div>';
-
-    // Source filter
-    html += '<div style="font-size: 11px; font-weight: 600; margin: 8px 0 4px 0; color: var(--qpm-text-muted, #aaa);">Filter by Location:</div>';
-    html += '<div style="display: flex; flex-wrap: wrap; gap: 6px;">';
-
-    const sources: Array<{key: 'active' | 'inventory' | 'hutch', label: string, icon: string}> = [
-      { key: 'active', label: 'Active', icon: '🟢' },
-      { key: 'inventory', label: 'Inventory', icon: '📦' },
-      { key: 'hutch', label: 'Hutch', icon: '🏠' },
-    ];
-
-    for (const source of sources) {
-      const isSelected = nearMaxFilters.sources.has(source.key);
-      html += `<button
-        onclick="window.qpmNearMaxToggleSource('${source.key}')"
-        style="
-          padding: 4px 8px;
-          font-size: 11px;
-          background: ${isSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.1)'};
-          color: var(--qpm-text, #fff);
-          border: 1px solid ${isSelected ? 'var(--qpm-accent, #4CAF50)' : 'rgba(255, 255, 255, 0.2)'};
-          border-radius: 4px;
-          cursor: pointer;
-          font-weight: ${isSelected ? '600' : '400'};
-        ">${source.icon} ${source.label}</button>`;
-    }
-    html += '</div>';
-    html += '</div>';
-
-    // Apply filters
-    const filteredPets = nearMaxPets.filter(pet => {
-      // Species filter
-      if (nearMaxFilters.species.size > 0 && !nearMaxFilters.species.has(pet.species)) {
-        return false;
-      }
-      // Source filter
-      if (!nearMaxFilters.sources.has(pet.source)) {
-        return false;
-      }
-      return true;
-    }).slice(0, 10); // Limit to top 10 after filtering
-
-    if (filteredPets.length === 0) {
-      html += '<div style="color: var(--qpm-text-muted, #aaa); font-style: italic; margin-top: 8px;">No pets match the current filters</div>';
-      state.nearMaxLevelContainer.innerHTML = html;
-      return;
-    }
-
-    html += `<div style="margin-top: 8px; font-size: 10px; color: var(--qpm-text-muted, #aaa);">Showing ${filteredPets.length} of ${nearMaxPets.length} pets</div>`;
-
-    for (const pet of filteredPets) {
-      const sourceIcon = pet.source === 'active' ? '🟢' : pet.source === 'inventory' ? '📦' : '🏠';
-      const xpPerHourDisplay = pet.source === 'active' ? state.totalTeamXpPerHour : 3600;
-
-      // Calculate time to max level (using xpNeeded which is already correctly calculated)
-      let timeDisplay = '—';
-      if (xpPerHourDisplay > 0 && pet.xpNeeded > 0 && pet.maxStr) {
-        const timeToMax = calculateTimeToLevel(0, pet.xpNeeded, xpPerHourDisplay);
-        if (timeToMax) {
-          if (timeToMax.hours >= 24) {
-            const days = Math.floor(timeToMax.hours / 24);
-            const remainingHours = timeToMax.hours % 24;
-            timeDisplay = `${days}d ${remainingHours}h ${timeToMax.minutes}m`;
-          } else {
-            timeDisplay = `${timeToMax.hours}h ${timeToMax.minutes}m`;
-          }
-        }
-      }
-
-      html += `
-        <div style="padding: 4px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
-          <span style="color: var(--qpm-text, #fff);">${sourceIcon} ${pet.name} (${pet.species})</span>
-          <span style="color: var(--qpm-text-muted, #aaa); margin-left: 8px;">Lv${pet.level} → Lv${pet.maxStr || '?'}</span>
-          <span style="color: var(--qpm-warning, #FF9800); margin-left: 8px;">(${timeDisplay})</span>
-          <span style="color: var(--qpm-positive, #4CAF50); margin-left: 8px;">(${formatCoins(pet.xp)} XP, needs ${formatCoins(pet.xpNeeded)})</span>
-        </div>
-      `;
-    }
-
-    state.nearMaxLevelContainer.innerHTML = html;
-  } catch (error) {
-    log('⚠️ Failed to update near max level display:', error);
-    state.nearMaxLevelContainer.innerHTML = `
-      <div style="color: var(--qpm-danger, #f44336);">
-        Failed to load near max level pets
-      </div>
-    `;
-  }
-}
-
-/**
- * Update XP tracker display
- */
-function updateXpTrackerDisplay(state: XpTrackerWindowState): void {
-  // Get current weather
-  const weatherSnapshot = getWeatherSnapshot();
-  state.currentWeather = weatherSnapshot.kind;
-
-  // Clear tables and summary
-  state.petLevelTbody.innerHTML = '';
-  (state.tbody as unknown as HTMLDivElement).innerHTML = '';
-
-  const allStats: XpAbilityStats[] = [];
-
-  // Process pets for XP generation abilities
-  for (const pet of state.latestPets) {
-    const xpAbilities = findXpAbilities(pet);
-
-    for (const { ability, rawName } of xpAbilities) {
-      const stats = calculateXpStats(
-        pet,
-        ability.id,
-        getAbilityName(ability.id), // Get ability name from catalog (FUTUREPROOF!)
-        ability.baseProbability ?? 0,
-        ability.effectValuePerProc ?? 0,
-        ability.requiredWeather ?? null,
-        state.currentWeather
-      );
-
-      allStats.push(stats);
-    }
-  }
-
-  state.latestStats = allStats;
-
-  // Calculate total team XP/hour that each pet receives
-  //
-  // XP RATE FORMULA (per pet):
-  // - Base: 3,600 XP/hr (1 XP/second) - ALWAYS, never changes, regardless of pet count
-  // - Ability Bonus: Sum of all XP Boost abilities' XP generation (shared by ALL pets)
-  //
-  // Example with 3 pets:
-  //   Pet 1 has XP Boost I (316 XP/proc, 10 procs/hr) = 3,160 XP/hr from this ability
-  //   Pet 2 has XP Boost II (633 XP/proc, 5 procs/hr) = 3,165 XP/hr from this ability
-  //   Total ability XP = 3,160 + 3,165 = 6,325 XP/hr
-  //
-  //   EACH of the 3 pets receives:
-  //     3,600 (base) + 6,325 (ability bonus) = 9,925 XP/hr
-  //
-  // When an XP Boost ability procs, ALL active pets receive the XP from that proc.
-  const combined = allStats.length > 0 ? getCombinedXpStats(allStats) : null;
-  const abilityXpPerHour = combined ? combined.totalXpPerHour : 0;
-  const baseXpPerHour = 3600; // Always 3600 per pet, never changes
-  state.totalTeamXpPerHour = baseXpPerHour + abilityXpPerHour;
-
-  // Weather indicator for display
-  const weatherIcon = state.currentWeather === 'snow' ? '❄️' : state.currentWeather === 'rain' ? '🌧️' : state.currentWeather === 'dawn' ? '🌅' : state.currentWeather === 'amber' ? '🌕' : '☀️';
-  const weatherLabel = state.currentWeather === 'unknown' ? 'Unknown' : state.currentWeather.charAt(0).toUpperCase() + state.currentWeather.slice(1);
-
-  // Update XP Generation Summary (text only, not a table)
-  if (allStats.length === 0) {
-    (state.tbody as unknown as HTMLDivElement).innerHTML = `
-      <div style="color: var(--qpm-warning, #FF9800); font-style: italic;">
-        ⚠️ No pets with XP Boost abilities detected. Equip pets with XP Boost I or XP Boost II to generate team-wide XP.
-      </div>
-      <div style="margin-top: 8px; color: var(--qpm-text-muted, #aaa); font-size: 11px;">
-        Each active pet still receives 3,600 XP/hour base (1 XP/second).
-      </div>
-    `;
-  } else {
-    const xpGenPets = allStats.map(s => `${s.petName} (${s.abilityName}, ${s.actualChancePerMinute.toFixed(2)}%/min)`).join(', ');
-    (state.tbody as unknown as HTMLDivElement).innerHTML = `
-      <div style="margin-bottom: 12px; padding: 10px; background: var(--qpm-surface-2, #1a1a1a); border-left: 3px solid var(--qpm-accent, #4CAF50); border-radius: 4px;">
-        <div style="font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--qpm-accent, #4CAF50);">XP Rate Per Pet (Each Active Pet Receives):</div>
-        <div style="margin-left: 8px; font-size: 11px; color: var(--qpm-text, #fff); line-height: 1.6;">
-          • Base: <span style="color: var(--qpm-warning, #FF9800); font-weight: 600; font-family: monospace;">3,600 XP/hr</span> <span style="color: var(--qpm-text-muted, #aaa);">(1 XP/second, always)</span><br/>
-          • Ability Bonus: <span style="color: var(--qpm-warning, #FF9800); font-weight: 600; font-family: monospace;">+${formatCoins(abilityXpPerHour)} XP/hr</span> <span style="color: var(--qpm-text-muted, #aaa);">(shared by all pets)</span><br/>
-          • <strong style="color: var(--qpm-accent, #4CAF50);">Total: ${formatCoins(state.totalTeamXpPerHour)} XP/hr per pet</strong><br/>
-          • <strong>Weather:</strong> ${weatherIcon} ${weatherLabel}
-        </div>
-      </div>
-      <div style="margin-bottom: 8px;">
-        <strong style="color: var(--qpm-accent, #4CAF50);">Combined Chance:</strong>
-        <span style="color: var(--qpm-accent, #4CAF50); font-weight: 600; font-family: monospace;">${combined!.combinedChancePerMinute.toFixed(2)}%/min</span>
-        <span style="color: var(--qpm-text-muted, #aaa); font-size: 11px; margin-left: 8px;">(~${combined!.totalProcsPerHour.toFixed(1)} procs/hr)</span>
-      </div>
-      <div style="margin-bottom: 6px; color: var(--qpm-text-muted, #aaa); font-size: 11px; font-style: italic;">
-        Note: Each ability rolls independently every second. When an XP Boost procs, all active pets receive the XP.
-      </div>
-      <div>
-        <strong style="color: var(--qpm-accent, #4CAF50);">XP Boost Pets:</strong>
-        <span style="color: var(--qpm-text, #fff);">${xpGenPets}</span>
-      </div>
-    `;
-  }
-
-  // Update main summary
-  if (allStats.length === 0) {
-    state.summaryText.textContent = '⚠️ No pets with XP Boost abilities detected. Each pet receives 3,600 XP/hr base only.';
-  } else {
-    state.summaryText.innerHTML = `
-      <strong>Each Pet Receives:</strong> ${formatCoins(state.totalTeamXpPerHour)} XP/hr (${formatCoins(baseXpPerHour)} base + ${formatCoins(abilityXpPerHour)} ability bonus) •
-      <strong>Active Pets:</strong> ${state.latestPets.length} (${allStats.length} with XP Boost)
-    `;
-  }
-
-  // Display ALL active pets with level progress
-  for (const pet of state.latestPets) {
-    createPetLevelRow(state.petLevelTbody, pet, state.totalTeamXpPerHour);
-  }
-
-  // Only update config table if species list changed
-  const currentSpecies = new Set<string>();
-  for (const pet of state.latestPets) {
-    if (pet.species) {
-      currentSpecies.add(pet.species);
-    }
-  }
-
-  // Add species from config
-  const config = getAllSpeciesXpConfig();
-  for (const species of Object.keys(config)) {
-    currentSpecies.add(species);
-  }
-
-  // Check if species list changed
-  state.lastKnownSpecies = currentSpecies;
-
-  // Update Near Max Level display
-  updateNearMaxLevelDisplay(state);
-}
-
-/**
- * Create individual XP row
- */
-function createXpRow(tbody: HTMLTableSectionElement, stats: XpAbilityStats): void {
-  const row = tbody.insertRow();
-  row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
-
-  // Pet Name (with sprite and ability badge)
-  const nameCell = row.insertCell();
-  const petSprite = getPetSpriteDataUrl(stats.species);
-  const abilityColor = getAbilityColor(stats.abilityName);
-  
-  // Create sprite container with ability badge
-  const spriteContainerHtml = `
-    <div style="position:relative;width:20px;height:20px;display:inline-block;vertical-align:middle;margin-right:6px;">
-      <img data-qpm-sprite="pet:${stats.species}" src="${petSprite || ''}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${stats.species}" />
-      <div style="position:absolute;bottom:-2px;right:-2px;width:8px;height:8px;border-radius:2px;background:${abilityColor.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${abilityColor.glow};" title="${stats.abilityName}"></div>
-    </div>
-  `;
-  nameCell.innerHTML = spriteContainerHtml + `${stats.petName} (STR ${stats.strength})`;
-  nameCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text, #fff);
-    font-weight: 500;
-  `;
-  nameCell.title = `Pet: ${stats.petName}\nSpecies: ${stats.species}\nStrength: ${stats.strength}`;
-
-  // Ability
-  const abilityCell = row.insertCell();
-  abilityCell.textContent = stats.abilityName;
-  abilityCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text, #fff);
-  `;
-
-  // Chance Per Minute
-  const chanceCell = row.insertCell();
-  chanceCell.textContent = `${stats.actualChancePerMinute.toFixed(2)}%/min`;
-  chanceCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-accent, #4CAF50);
-    font-family: monospace;
-  `;
-  chanceCell.title = `Base: ${(stats.baseChancePerSecond * 60).toFixed(2)}%/min × ${stats.strength}/100 = ${stats.actualChancePerMinute.toFixed(2)}%/min (game checks every second)`;
-
-  // XP Per Proc
-  const xpProcCell = row.insertCell();
-  xpProcCell.textContent = formatCoins(stats.actualXpPerProc);
-  xpProcCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-warning, #FF9800);
-    font-family: monospace;
-    font-weight: 500;
-  `;
-  xpProcCell.title = `Base: ${stats.baseXpPerProc} XP × ${stats.strength} = ${stats.actualXpPerProc.toFixed(1)} XP`;
-
-  // XP Per Hour
-  const xpHourCell = row.insertCell();
-  xpHourCell.textContent = formatCoins(stats.expectedXpPerHour);
-  xpHourCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-warning, #FF9800);
-    font-family: monospace;
-    font-weight: 600;
-  `;
-
-  // Strength Progress
-  const progressCell = row.insertCell();
-  progressCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    font-family: monospace;
-  `;
-
-  if (stats.strength !== null && stats.currentXp !== null) {
-    const xpPerLevel = getSpeciesXpPerLevel(stats.species);
-    if (xpPerLevel) {
-      // Calculate XP towards next STR level (using modulo)
-      const xpTowardsNext = stats.currentXp % xpPerLevel;
-      const progress = (xpTowardsNext / xpPerLevel) * 100;
-      const timeToLevel = calculateTimeToLevel(xpTowardsNext, xpPerLevel, stats.expectedXpPerHour);
-      const nextStr = stats.strength + 1;
-
-      progressCell.innerHTML = `
-        <div style="font-size: 11px; margin-bottom: 4px;">STR ${stats.strength} → ${nextStr}: ${formatCoins(xpTowardsNext)}/${formatCoins(xpPerLevel)}</div>
-        <div style="width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden;">
-          <div style="width: ${Math.min(100, progress).toFixed(1)}%; height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A);"></div>
-        </div>
-        ${timeToLevel ? `<div style="font-size: 10px; color: #aaa; margin-top: 2px;">~${timeToLevel.hours}h ${timeToLevel.minutes}m</div>` : ''}
-      `;
-    } else {
-      progressCell.textContent = `STR ${stats.strength}`;
-      progressCell.title = 'Configure XP per level to see progress';
-    }
-  } else {
-    progressCell.textContent = '—';
-  }
-
-  // Next Proc ETA
-  const etaCell = row.insertCell();
-  etaCell.className = 'eta-countdown';
-  if (stats.lastProcAt) {
-    etaCell.dataset.lastProc = String(stats.lastProcAt);
-    etaCell.dataset.effectiveRate = String(stats.expectedProcsPerHour);
-    const etaResult = calculateLiveETA(stats.lastProcAt, stats.expectedProcsPerHour > 0 ? 60 / stats.expectedProcsPerHour : null, stats.expectedProcsPerHour);
-    etaCell.textContent = etaResult.text;
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: ${etaResult.isOverdue ? 'var(--qpm-danger, #f44336)' : 'var(--qpm-positive, #4CAF50)'};
-      font-family: monospace;
-      font-weight: 500;
-    `;
-  } else {
-    // No proc history - show static estimate
-    const avgMinutes = stats.expectedProcsPerHour > 0 ? 60 / stats.expectedProcsPerHour : 0;
-    if (avgMinutes > 0) {
-      const hours = Math.floor(avgMinutes / 60);
-      const mins = Math.round(avgMinutes % 60);
-      etaCell.textContent = hours > 0 ? `${hours}h ${mins}m Est.` : `${mins}m Est.`;
-    } else {
-      etaCell.textContent = '—';
-    }
-    etaCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: var(--qpm-text-muted, rgba(255,255,255,0.5));
-      font-family: monospace;
-      font-weight: 500;
-    `;
-  }
-}
-
-/**
- * Create individual pet level row (for ALL active pets)
- */
-function createPetLevelRow(tbody: HTMLTableSectionElement, pet: ActivePetInfo, teamXpPerHour: number): void {
-  const row = tbody.insertRow();
-  row.style.cssText = 'border-bottom: 1px solid var(--qpm-border, #444);';
-
-  // Pet Name (with sprite, ALL ability badges, and MAX STR below in small grey text)
-  const nameCell = row.insertCell();
-
-  // Calculate maxStr with fallback for missing targetScale (slot 2 issue)
-  let maxStr: number | null = null;
-  if (pet.species && pet.targetScale) {
-    maxStr = calculateMaxStrength(pet.targetScale, pet.species);
-  } else if (pet.species && pet.strength && pet.strength >= 80 && pet.strength <= 100) {
-    // Fallback: If targetScale is missing but strength looks like max strength (80-100 range)
-    // Use strength as max (atom stores max achievable strength)
-    maxStr = pet.strength;
-  }
-
-  const petNameDisplay = pet.name || pet.species || 'Unknown';
-  const petSprite = pet.species ? getPetSpriteDataUrl(pet.species) : null;
-  
-  // Check for XP abilities (for the XP Ability column)
-  const xpAbilities = findXpAbilities(pet);
-  
-  // Build ALL ability badges (up to 4) - displayed as column left of sprite
-  const petAbilities = pet.abilities || [];
-  const abilityBadgesHtml = petAbilities.slice(0, 4).map((abilityName) => {
-    const color = getAbilityColor(abilityName);
-    return `<div style="width:8px;height:8px;border-radius:2px;background:${color.base};border:1px solid rgba(255,255,255,0.4);box-shadow:0 0 3px ${color.glow};" title="${abilityName}"></div>`;
-  }).join('');
-  
-  // Create sprite container with ability badges column on left (matching user's image style)
-  const spriteContainerHtml = pet.species
-    ? `<div style="display:inline-flex;align-items:center;vertical-align:middle;margin-right:6px;">
-        ${abilityBadgesHtml ? `<div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">${abilityBadgesHtml}</div>` : ''}
-        <img data-qpm-sprite="pet:${pet.species}" src="${petSprite || ''}" style="width:20px;height:20px;object-fit:contain;image-rendering:pixelated;" alt="${pet.species}" />
-      </div>`
-    : '';
-
-  if (maxStr) {
-    nameCell.innerHTML = `
-      ${spriteContainerHtml}<div style="display:inline-block;vertical-align:middle;"><div style="font-weight: 500; color: var(--qpm-text, #fff);">${petNameDisplay}</div>
-      <div style="font-size: 10px; color: var(--qpm-text-muted, #888); margin-top: 2px;">MAX STR ${maxStr}</div></div>
-    `;
-  } else {
-    nameCell.innerHTML = spriteContainerHtml + petNameDisplay;
-  }
-
-  nameCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text, #fff);
-  `;
-  nameCell.title = `Slot: ${pet.slotIndex}\nPet ID: ${pet.petId || 'N/A'}\nStrength: ${pet.strength ?? 'N/A'}${maxStr ? `\nMAX STR: ${maxStr}` : ''}${pet.targetScale ? `\nTarget Scale: ${pet.targetScale.toFixed(2)}` : ''}`;
-
-  // Species
-  const speciesCell = row.insertCell();
-  speciesCell.textContent = pet.species || '—';
-  speciesCell.style.cssText = `
-    padding: 10px 12px;
-    color: var(--qpm-text-muted, #aaa);
-  `;
-
-  // XP Ability (reuse xpAbilities from above)
-  const abilityCell = row.insertCell();
-  if (xpAbilities.length > 0) {
-    const abilityNames = xpAbilities.map(a => a.rawName).join(', ');
-    abilityCell.textContent = abilityNames;
-    abilityCell.style.cssText = `
-      padding: 10px 12px;
-      color: var(--qpm-accent, #4CAF50);
-      font-size: 11px;
-    `;
-    abilityCell.title = `This pet generates XP for the team`;
-  } else {
-    abilityCell.textContent = '—';
-    abilityCell.style.cssText = `
-      padding: 10px 12px;
-      color: var(--qpm-text-muted, #666);
-      font-size: 11px;
-    `;
-  }
-
-  // Strength (this is the actual "level" in Magic Garden)
-  const strengthCell = row.insertCell();
-  if (pet.strength !== null && pet.strength !== undefined) {
-    strengthCell.textContent = String(pet.strength);
-    strengthCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: var(--qpm-accent, #4CAF50);
-      font-family: monospace;
-      font-weight: 600;
-    `;
-    strengthCell.title = `Current Strength: ${pet.strength}\n(Strength increases by 1 each time XP threshold is reached)`;
-  } else {
-    strengthCell.textContent = '⚠️ —';
-    strengthCell.style.cssText = `
-      padding: 10px 12px;
-      text-align: right;
-      color: var(--qpm-warning, #FF9800);
-      font-family: monospace;
-      font-weight: 600;
-    `;
-    strengthCell.title = 'Strength data not available';
-  }
-
-  // Current XP
-  const xpCell = row.insertCell();
-  xpCell.textContent = pet.xp !== null ? formatCoins(pet.xp) : '—';
-  xpCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-warning, #FF9800);
-    font-family: monospace;
-  `;
-
-  // Level Progress
-  const progressCell = row.insertCell();
-  progressCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    min-width: 200px;
-  `;
-
-  if (pet.species && pet.xp !== null && pet.strength !== null) {
-    const xpPerLevel = getSpeciesXpPerLevel(pet.species);
-
-    if (xpPerLevel && maxStr) {
-      // Use targetScale-based maxStr (already calculated at line 1034)
-      const xpTowardsNext = pet.xp % xpPerLevel;
-      const progress = (xpTowardsNext / xpPerLevel) * 100;
-      const levelsGained = Math.floor(pet.xp / xpPerLevel);
-
-      // Check if pet is at MAX STR
-      if (pet.strength >= maxStr) {
-        progressCell.innerHTML = `
-          <div style="color: var(--qpm-accent, #4CAF50); font-weight: 600; font-size: 12px;">🌟 MAX STR ${maxStr}</div>
-          <div style="font-size: 10px; color: var(--qpm-text-muted, #aaa); margin-top: 2px;">No further STR gains</div>
-        `;
-        progressCell.title = `Pet is at MAX Strength (${maxStr})\nTotal XP: ${formatCoins(pet.xp)}\nLevels gained from hatch: ${levelsGained}${pet.targetScale ? `\nTarget Scale: ${pet.targetScale.toFixed(2)}` : ''}`;
-      } else {
-        // Calculate XP towards next STR level (using modulo to get current progress)
-        progressCell.innerHTML = `
-          <div style="font-size: 11px; margin-bottom: 4px;">${formatCoins(xpTowardsNext)} / ${formatCoins(xpPerLevel)} (${Math.min(100, progress).toFixed(1)}%)</div>
-          <div style="width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden;">
-            <div style="width: ${Math.min(100, progress).toFixed(1)}%; height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A);"></div>
-          </div>
-        `;
-        progressCell.title = `Total XP: ${formatCoins(pet.xp)}\nLevels gained from hatch: ${levelsGained}${maxStr ? `\nMAX STR: ${maxStr}` : ''}${pet.targetScale ? `\nTarget Scale: ${pet.targetScale.toFixed(2)}` : ''}`;
-      }
-    } else {
-      progressCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">Configure XP/level</span>`;
-    }
-  } else {
-    progressCell.textContent = '—';
-  }
-
-  // Time to Level
-  const timeCell = row.insertCell();
-  timeCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    font-family: monospace;
-    font-weight: 500;
-  `;
-
-  if (pet.species && pet.xp !== null && pet.strength !== null) {
-    const xpPerLevel = getSpeciesXpPerLevel(pet.species);
-    const hungerCap = getHungerCapOrDefault(pet.species);
-
-    if (xpPerLevel && maxStr) {
-      // Use targetScale-based maxStr (already calculated at line 1034)
-      // Check if pet is at MAX STR
-      if (pet.strength >= maxStr) {
-        timeCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">—</span>`;
-        timeCell.title = 'Pet is at MAX Strength - no further STR gains possible';
-      } else if (teamXpPerHour > 0) {
-        // Calculate XP towards next level (modulo)
-        const xpTowardsNext = pet.xp % xpPerLevel;
-        const timeToLevel = calculateTimeToLevel(xpTowardsNext, xpPerLevel, teamXpPerHour);
-        
-        // Calculate feeds per level
-        const feedsPerLevel = calculateFeedsPerLevel(pet.species, hungerCap, xpPerLevel, teamXpPerHour);
-        const feedsDisplay = feedsPerLevel && feedsPerLevel > 0 ? `🍖 ${feedsPerLevel}` : '';
-        
-        if (timeToLevel) {
-          timeCell.innerHTML = `
-            <div style="color: var(--qpm-positive, #4CAF50);">${timeToLevel.hours}h ${timeToLevel.minutes}m</div>
-            <div style="font-size: 10px; color: var(--qpm-text-muted, #aaa); margin-top: 2px;">${formatCoins(teamXpPerHour)} XP/hr</div>
-            ${feedsDisplay ? `<div style="font-size: 10px; color: var(--qpm-warning, #FF9800); margin-top: 2px;">${feedsDisplay}</div>` : ''}
-          `;
-          timeCell.title = `This pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus shared by all pets)${feedsDisplay ? `\n~${feedsPerLevel} feeds per level` : ''}`;
-        } else if (xpTowardsNext >= xpPerLevel) {
-          timeCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">Ready!</span>`;
-        } else {
-          timeCell.textContent = '—';
-        }
-      } else if (teamXpPerHour === 0) {
-        timeCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">No XP boost</span>`;
-      } else {
-        timeCell.textContent = '—';
-      }
-    } else {
-      timeCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">—</span>`;
-    }
-  } else {
-    timeCell.textContent = '—';
-  }
-
-  // Time to Max STR
-  const timeToMaxCell = row.insertCell();
-  timeToMaxCell.style.cssText = `
-    padding: 10px 12px;
-    text-align: right;
-    color: var(--qpm-text, #fff);
-    font-family: monospace;
-    font-weight: 500;
-  `;
-
-  if (pet.species && pet.xp !== null && pet.strength !== null) {
-    const xpPerLevel = getSpeciesXpPerLevel(pet.species);
-
-    if (xpPerLevel && maxStr) {
-      // Use targetScale-based maxStr (already calculated at line 1034)
-      // Check if pet is at MAX STR
-      if (pet.strength >= maxStr) {
-        timeToMaxCell.innerHTML = `<span style="color: var(--qpm-accent, #4CAF50); font-weight: 600;">—</span>`;
-        timeToMaxCell.title = 'Pet is already at MAX Strength';
-      } else if (teamXpPerHour > 0) {
-        // Calculate total XP needed to reach MAX STR
-        const levelsRemaining = maxStr - pet.strength;
-        const xpTowardsNext = pet.xp % xpPerLevel;
-        const xpNeededForNextLevel = xpPerLevel - xpTowardsNext;
-        const totalXpNeeded = xpNeededForNextLevel + (xpPerLevel * (levelsRemaining - 1));
-
-        // Calculate time
-        const hoursToMax = totalXpNeeded / teamXpPerHour;
-        const days = Math.floor(hoursToMax / 24);
-        const hours = Math.floor(hoursToMax % 24);
-        const minutes = Math.floor((hoursToMax % 1) * 60);
-
-        let timeText = '';
-        if (days > 0) {
-          timeText = `${days}d ${hours}h`;
-        } else if (hours > 0) {
-          timeText = `${hours}h ${minutes}m`;
-        } else {
-          timeText = `${minutes}m`;
-        }
-
-        // Calculate feeds to max
-        const hungerCap = getHungerCapOrDefault(pet.species);
-        const feedsToMax = hungerCap ? calculateFeedsForLevels(pet.species, hungerCap, xpPerLevel, teamXpPerHour, levelsRemaining) : null;
-        const feedsDisplay = feedsToMax && feedsToMax > 0 ? `🍖 ${feedsToMax}` : '';
-
-        timeToMaxCell.innerHTML = `
-          <div style="color: var(--qpm-warning, #FF9800); font-weight: 600;">${timeText}</div>
-          <div style="font-size: 10px; color: var(--qpm-text-muted, #aaa); margin-top: 2px;">${levelsRemaining} STR left</div>
-          ${feedsDisplay ? `<div style="font-size: 10px; color: var(--qpm-warning, #FF9800); margin-top: 2px;">${feedsDisplay}</div>` : ''}
-        `;
-        timeToMaxCell.title = `${levelsRemaining} STR levels remaining\n${formatCoins(totalXpNeeded)} XP needed\nThis pet receives ${formatCoins(teamXpPerHour)} XP/hr\n(3,600 base + ability bonus)${feedsDisplay ? `\n~${feedsToMax} total feeds to max` : ''}`;
-      } else if (teamXpPerHour === 0) {
-        timeToMaxCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">No XP boost</span>`;
-      } else {
-        timeToMaxCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">—</span>`;
-        timeToMaxCell.title = 'Max STR unknown';
-      }
-    } else {
-      timeToMaxCell.innerHTML = `<span style="color: var(--qpm-text-muted, #aaa); font-size: 11px;">—</span>`;
-    }
-  } else {
-    timeToMaxCell.textContent = '—';
-  }
-}
-
-/**
- * Update only the level progress displays without rebuilding tables
- */
-function updateLevelProgressDisplays(state: XpTrackerWindowState): void {
-  // Re-render the pet level progress rows
-  state.petLevelTbody.innerHTML = '';
-
-  for (const pet of state.latestPets) {
-    createPetLevelRow(state.petLevelTbody, pet, state.totalTeamXpPerHour);
-  }
-}
-
-/**
- * Update live countdowns
- */
-function updateLiveCountdowns(state: XpTrackerWindowState): void {
-  const etaCells = state.root.querySelectorAll<HTMLElement>('.eta-countdown');
-
-  etaCells.forEach((cell) => {
-    const lastProc = parseInt(cell.dataset.lastProc ?? '0', 10);
-    const effectiveRate = parseFloat(cell.dataset.effectiveRate ?? '0');
-
-    // Skip only if there's no rate data at all
-    if (!effectiveRate || effectiveRate <= 0) {
-      return;
-    }
-
-    const minutesBetween = 60 / effectiveRate;
-    const etaResult = calculateLiveETA(lastProc, minutesBetween, effectiveRate);
-
-    cell.textContent = etaResult.text;
-    cell.style.color = etaResult.isOverdue
-      ? 'var(--qpm-danger, #f44336)'
-      : cell.classList.contains('combined')
-      ? 'var(--qpm-accent, #4CAF50)'
-      : 'var(--qpm-positive, #4CAF50)';
-  });
-}
-
-/**
- * Clamp window position to ensure it stays visible within viewport
- */
-function clampWindowPosition(element: HTMLElement): void {
-  const rect = element.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const margin = 8; // Minimum margin from viewport edges
-
-  let top = parseFloat(element.style.top) || rect.top;
-  let left = parseFloat(element.style.left) || rect.left;
-  let right = parseFloat(element.style.right);
-
-  // If using right positioning, convert to left
-  if (!isNaN(right) && element.style.right !== '') {
-    left = vw - rect.right;
-    element.style.right = '';
-  }
-
-  // Clamp position to keep window visible
-  const maxLeft = Math.max(margin, vw - rect.width - margin);
-  const maxTop = Math.max(margin, vh - rect.height - margin);
-
-  left = Math.min(Math.max(left, margin), maxLeft);
-  top = Math.min(Math.max(top, margin), maxTop);
-
-  element.style.left = `${left}px`;
-  element.style.top = `${top}px`;
-}
-
-/**
- * Make window draggable
- */
-function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
-  let pos1 = 0,
-    pos2 = 0,
-    pos3 = 0,
-    pos4 = 0;
-
-  handle.onmousedown = dragMouseDown;
-
-  function dragMouseDown(e: MouseEvent) {
-    e.preventDefault();
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    document.onmouseup = closeDragElement;
-    document.onmousemove = elementDrag;
-  }
-
-  function elementDrag(e: MouseEvent) {
-    e.preventDefault();
-    pos1 = pos3 - e.clientX;
-    pos2 = pos4 - e.clientY;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    element.style.top = element.offsetTop - pos2 + 'px';
-    element.style.left = element.offsetLeft - pos1 + 'px';
-  }
-
-  function closeDragElement() {
-    document.onmouseup = null;
-    document.onmousemove = null;
-    // Clamp position after dragging to ensure window stays visible
-    clampWindowPosition(element);
-  }
-}
-
-/**
- * Show XP tracker window
- */
 export function showXpTrackerWindow(state: XpTrackerWindowState): void {
-  state.root.style.display = 'block';
-  updateXpTrackerDisplay(state);
+  const firstOpen = !loadLayout();
+  state.root.style.display = 'flex';
+  clampToViewport(state.root);
+  updateXpTrackerDisplay(state); // calls state.updateScale?.() internally
+  if (firstOpen) {
+    autoSizeToContent(state.root, state.scrollContent);
+    saveLayout(state.root);
+  }
 }
 
-/**
- * Hide XP tracker window
- */
 export function hideXpTrackerWindow(state: XpTrackerWindowState): void {
   state.root.style.display = 'none';
 }
 
-/**
- * Destroy XP tracker window
- */
 export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
-  if (state.updateInterval) {
-    state.updateInterval();
-  }
-  if (state.resizeListener) {
-    window.removeEventListener('resize', state.resizeListener);
-    state.resizeListener = null;
-  }
+  if (state.updateInterval) state.updateInterval();
+  state.resizeObserver?.disconnect();
+  if (state.resizeListener) window.removeEventListener('resize', state.resizeListener);
   state.unsubscribePets?.();
   state.unsubscribeXpTracker?.();
   state.root.remove();
 }
 
 /**
- * Global XP tracker state for filter callbacks
+ * No-op — kept for API compatibility with originalPanel.ts.
+ * Global window callbacks have been replaced with proper event listeners.
  */
-let globalXpTrackerState: XpTrackerWindowState | null = null;
-
-/**
- * Set global XP tracker state
- */
-export function setGlobalXpTrackerState(state: XpTrackerWindowState): void {
-  globalXpTrackerState = state;
-
-  // Expose filter toggle functions to window
-  (window as any).qpmNearMaxToggleSpecies = (species: string) => {
-    if (!globalXpTrackerState) return;
-
-    if (species === '__ALL__') {
-      nearMaxFilters.species.clear();
-    } else {
-      if (nearMaxFilters.species.has(species)) {
-        nearMaxFilters.species.delete(species);
-      } else {
-        // First click on a species when showing all: only show this species
-        if (nearMaxFilters.species.size === 0) {
-          nearMaxFilters.species.add(species);
-        } else {
-          // Subsequent clicks: add to selection
-          nearMaxFilters.species.add(species);
-        }
-      }
-    }
-
-    updateNearMaxLevelDisplay(globalXpTrackerState);
-  };
-
-  (window as any).qpmNearMaxToggleSource = (source: 'active' | 'inventory' | 'hutch') => {
-    if (!globalXpTrackerState) return;
-
-    if (nearMaxFilters.sources.has(source)) {
-      nearMaxFilters.sources.delete(source);
-    } else {
-      nearMaxFilters.sources.add(source);
-    }
-
-    updateNearMaxLevelDisplay(globalXpTrackerState);
-  };
+export function setGlobalXpTrackerState(_state: XpTrackerWindowState): void {
+  // intentionally empty
 }

@@ -26,7 +26,7 @@ import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryFor
 import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type DynamicAbilityEffect } from '../features/abilityValuation';
 import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
-import { createAbilityRow, createAbilityGroupTotalRow, calculateLiveETA } from './trackerWindow';
+import { calculateLiveETA } from './trackerWindow';
 import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
 import { renderCompactPetSprite, renderPetSpeciesIcon, getAbilityColor } from '../utils/petCardRenderer';
 import {
@@ -126,6 +126,8 @@ export interface UIState {
   trackerAbilityHistoryUnsubscribe: (() => void) | null;
   trackerAbilityTicker: (() => void) | null;
   xpTrackerWindow: any | null; // XpTrackerWindowState from xpTrackerWindow.ts
+  abilityTrackerWindow: any | null; // AbilityTrackerWindowState from trackerWindow.ts
+  turtleTimerWindow: any | null; // TurtleTimerWindowState from turtleTimerWindow.ts
   shopRestockWindow: any | null; // ShopRestockWindowState from shopRestockWindow.ts
   mutationTrackerUnsubscribe: (() => void) | null;
   mutationTrackerTicker: (() => void) | null;
@@ -217,6 +219,8 @@ let uiState: UIState = {
   trackerAbilityHistoryUnsubscribe: null,
   trackerAbilityTicker: null,
   xpTrackerWindow: null,
+  abilityTrackerWindow: null,
+  turtleTimerWindow: null,
   shopRestockWindow: null,
   mutationTrackerUnsubscribe: null,
   mutationTrackerTicker: null,
@@ -4339,9 +4343,24 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   const trackersButton = tabButtons.get('trackers');
   if (trackersButton) {
     const newTrackersButton = trackersButton.cloneNode(true) as HTMLButtonElement;
-    newTrackersButton.dataset.windowId = 'trackers-detail';
-    newTrackersButton.addEventListener('click', () => {
-      toggleWindow('trackers-detail', '📊 Ability & Mutation Trackers', renderTrackersWindow);
+    newTrackersButton.addEventListener('click', async () => {
+      try {
+        const { createAbilityTrackerWindow, showAbilityTrackerWindow, hideAbilityTrackerWindow, setGlobalAbilityTrackerState } = await import('./trackerWindow');
+
+        if (!uiState.abilityTrackerWindow) {
+          uiState.abilityTrackerWindow = createAbilityTrackerWindow();
+          setGlobalAbilityTrackerState(uiState.abilityTrackerWindow);
+        }
+
+        const isCurrentlyVisible = uiState.abilityTrackerWindow.root.style.display !== 'none';
+        if (isCurrentlyVisible) {
+          hideAbilityTrackerWindow(uiState.abilityTrackerWindow);
+        } else {
+          showAbilityTrackerWindow(uiState.abilityTrackerWindow);
+        }
+      } catch (error) {
+        log('⚠️ Failed to toggle Ability Tracker window', error);
+      }
     });
     trackersButton.replaceWith(newTrackersButton);
     tabButtons.set('trackers', newTrackersButton);
@@ -4467,9 +4486,23 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   const turtleButton = tabButtons.get('turtle');
   if (turtleButton) {
     const newTurtleButton = turtleButton.cloneNode(true) as HTMLButtonElement;
-    newTurtleButton.dataset.windowId = 'turtle-timer';
-    newTurtleButton.addEventListener('click', () => {
-      toggleWindow('turtle-timer', '🐢 Bella\'s Turtle Temple', renderTurtleTimerWindow);
+    newTurtleButton.addEventListener('click', async () => {
+      try {
+        const { createTurtleTimerWindow, showTurtleTimerWindow, hideTurtleTimerWindow } = await import('./turtleTimerWindow');
+
+        if (!uiState.turtleTimerWindow) {
+          uiState.turtleTimerWindow = createTurtleTimerWindow();
+        }
+
+        const isCurrentlyVisible = uiState.turtleTimerWindow.root.style.display !== 'none';
+        if (isCurrentlyVisible) {
+          hideTurtleTimerWindow(uiState.turtleTimerWindow);
+        } else {
+          showTurtleTimerWindow(uiState.turtleTimerWindow);
+        }
+      } catch (error) {
+        log('⚠️ Failed to toggle Turtle Timer window', error);
+      }
     });
     turtleButton.replaceWith(newTurtleButton);
     tabButtons.set('turtle', newTurtleButton);
@@ -8179,24 +8212,6 @@ function createTrackersSection(): HTMLElement[] {
   return [];
 }
 
-// Track the latest pet analysis for the modal window
-let modalLatestAnalysis: AbilityAnalysis = createEmptyAbilityAnalysis();
-let modalLatestInfos: ActivePetInfo[] = [];
-
-// Tracker window settings
-interface TrackerSettings {
-  detailedView: boolean;
-  filterCoinOnly: boolean;
-  selectedAbilities: string[]; // Specific ability IDs to show (empty = show all)
-}
-
-const DEFAULT_TRACKER_SETTINGS: TrackerSettings = {
-  detailedView: false,
-  filterCoinOnly: false,
-  selectedAbilities: [],
-};
-
-let currentTrackerSettings: TrackerSettings = { ...DEFAULT_TRACKER_SETTINGS };
 
 /**
  * Create a toggle option for the settings panel
@@ -8260,603 +8275,6 @@ function createToggleOption(
 
   container.appendChild(toggle);
   return container;
-}
-
-/**
- * Render function for the trackers modal window
- */
-function renderTrackersWindow(root: HTMLElement): void {
-  // Load saved settings
-  const savedSettings = storage.get<TrackerSettings>('qpm-tracker-settings');
-  if (savedSettings) {
-    currentTrackerSettings = { ...DEFAULT_TRACKER_SETTINGS, ...savedSettings };
-  }
-
-  root.style.cssText = 'display: flex; flex-direction: column; gap: 12px; min-width: 900px; max-width: 1200px;';
-
-  // Summary section (matching XP Tracker style)
-  const summary = document.createElement('div');
-  summary.style.cssText = `
-    padding: 12px 16px;
-    background: var(--qpm-surface-1, #1a1a1a);
-    border-bottom: 1px solid var(--qpm-border, #444);
-    border-radius: 6px 6px 0 0;
-  `;
-
-  const summaryText = document.createElement('div');
-  summaryText.className = 'tracker-summary';
-  summaryText.style.cssText = `
-    color: var(--qpm-text, #fff);
-    font-size: 13px;
-    line-height: 1.6;
-    font-weight: 500;
-  `;
-  summaryText.textContent = 'Loading pet data...';
-  summary.appendChild(summaryText);
-  root.appendChild(summary);
-
-  // Settings panel container (collapsible section matching XP Tracker style)
-  const settingsSection = document.createElement('div');
-  settingsSection.style.cssText = `border-bottom: 1px solid var(--qpm-border, #444);`;
-
-  const settingsHeader = document.createElement('div');
-  settingsHeader.style.cssText = `
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    background: var(--qpm-surface-2, #222);
-    cursor: pointer;
-    user-select: none;
-  `;
-
-  const settingsTitle = document.createElement('div');
-  settingsTitle.textContent = '⚙️ Filters & Settings';
-  settingsTitle.style.cssText = `
-    color: var(--qpm-text, #fff);
-    font-size: 13px;
-    font-weight: 600;
-  `;
-
-  const settingsIndicator = document.createElement('span');
-  settingsIndicator.textContent = '▲';
-  settingsIndicator.style.cssText = `
-    color: var(--qpm-text-muted, #aaa);
-    font-size: 10px;
-  `;
-
-  settingsHeader.appendChild(settingsTitle);
-  settingsHeader.appendChild(settingsIndicator);
-
-  const settingsPanel = document.createElement('div');
-  settingsPanel.className = 'tracker-settings-panel';
-  settingsPanel.style.cssText = 'display: none; padding: 0;';
-
-  // Toggle settings visibility
-  settingsHeader.addEventListener('click', () => {
-    const isVisible = settingsPanel.style.display === 'block';
-    settingsPanel.style.display = isVisible ? 'none' : 'block';
-    settingsIndicator.textContent = isVisible ? '▲' : '▼';
-  });
-
-  settingsSection.appendChild(settingsHeader);
-  settingsSection.appendChild(settingsPanel);
-  root.appendChild(settingsSection);
-
-  // Settings panel content area
-  const settingsPanelContent = document.createElement('div');
-  settingsPanelContent.style.cssText = `
-    padding: 16px;
-    background: var(--qpm-surface-1, #1a1a1a);
-  `;
-
-  const settingsGrid = document.createElement('div');
-  settingsGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;';
-
-  // Detailed View toggle
-  const detailedViewContainer = createToggleOption(
-    '📊 Detailed View',
-    'Show additional statistics and context',
-    currentTrackerSettings.detailedView,
-    (enabled) => {
-      currentTrackerSettings.detailedView = enabled;
-      storage.set('qpm-tracker-settings', currentTrackerSettings);
-      updateTrackerWindow({ summaryText, tbody, footer, abilityCheckboxGrid });
-    },
-  );
-  settingsGrid.appendChild(detailedViewContainer);
-
-  // Coin-only filter
-  const coinOnlyContainer = createToggleOption(
-    '💰 Coin Abilities Only',
-    'Show only coin-generating abilities',
-    currentTrackerSettings.filterCoinOnly,
-    (enabled) => {
-      currentTrackerSettings.filterCoinOnly = enabled;
-      storage.set('qpm-tracker-settings', currentTrackerSettings);
-      updateTrackerWindow({ summaryText, tbody, footer, abilityCheckboxGrid });
-    },
-  );
-  settingsGrid.appendChild(coinOnlyContainer);
-
-  // Ability filter - will be populated with actual abilities
-  const abilityFilterContainer = document.createElement('div');
-  abilityFilterContainer.className = 'ability-filter-container';
-  abilityFilterContainer.style.cssText = 'grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px;';
-
-  const abilityFilterLabel = document.createElement('div');
-  abilityFilterLabel.textContent = '✨ Filter by Ability';
-  abilityFilterLabel.style.cssText = 'font-size: 12px; color: rgba(255, 255, 255, 0.9); font-weight: 500;';
-  abilityFilterContainer.appendChild(abilityFilterLabel);
-
-  const abilityCheckboxGrid = document.createElement('div');
-  abilityCheckboxGrid.className = 'ability-checkbox-grid';
-  abilityCheckboxGrid.style.cssText = `
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 6px;
-    max-height: 200px;
-    overflow-y: auto;
-    padding: 8px;
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
-  `;
-  abilityFilterContainer.appendChild(abilityCheckboxGrid);
-  settingsGrid.appendChild(abilityFilterContainer);
-
-  settingsPanelContent.appendChild(settingsGrid);
-  settingsPanel.appendChild(settingsPanelContent);
-
-  // Main table container (matching XP Tracker style)
-  const tableContainer = document.createElement('div');
-  tableContainer.style.cssText = `
-    overflow-x: auto;
-    background: var(--qpm-surface-1, #1a1a1a);
-    max-height: 60vh;
-    overflow-y: auto;
-  `;
-
-  const table = document.createElement('table');
-  table.className = 'tracker-detail-table';
-  table.style.cssText = `
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  `;
-
-  // Table header (matching XP Tracker style)
-  const thead = table.createTHead();
-  thead.style.cssText = 'position: sticky; top: 0; z-index: 10;';
-  const headerRow = thead.insertRow();
-  headerRow.style.cssText = `
-    background: var(--qpm-surface-2, #222);
-    border-bottom: 2px solid var(--qpm-border, #555);
-  `;
-
-  const headers = [
-    { text: 'Pet', tooltip: 'Pet name or species' },
-    { text: 'Ability', tooltip: 'Pet ability name' },
-    { text: 'Chance %', tooltip: 'Calculated proc chance per minute (baseProbability × STR)' },
-    { text: 'Procs/Hr', tooltip: 'Expected procs per hour' },
-    { text: 'Per Proc', tooltip: 'Coins earned per successful proc' },
-    { text: 'Per Hour', tooltip: 'Total coins per hour from this ability' },
-    { text: 'Next ETA', tooltip: 'Live countdown to next expected proc' },
-  ];
-
-  headers.forEach(({ text, tooltip }) => {
-    const th = document.createElement('th');
-    th.textContent = text;
-    th.title = tooltip;
-    th.style.cssText = `
-      padding: 10px 12px;
-      text-align: left;
-      font-weight: 600;
-      color: var(--qpm-text, #fff);
-      white-space: nowrap;
-      cursor: help;
-    `;
-    headerRow.appendChild(th);
-  });
-
-  // Table body
-  const tbody: HTMLTableSectionElement = table.createTBody();
-  tbody.className = 'tracker-tbody';
-
-  tableContainer.appendChild(table);
-  root.appendChild(tableContainer);
-
-  // Footer with totals (matching XP Tracker style)
-  const footer = document.createElement('div');
-  footer.className = 'tracker-footer';
-  footer.style.cssText = `
-    padding: 12px 16px;
-    background: var(--qpm-surface-2, #222);
-    border-top: 1px solid var(--qpm-border, #444);
-    border-radius: 0 0 6px 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--qpm-text, #fff);
-  `;
-  footer.textContent = 'Total: Loading...';
-  root.appendChild(footer);
-
-  // Store references for updates
-  const trackerState = {
-    root,
-    summaryText,
-    tbody,
-    footer,
-    abilityCheckboxGrid,
-    updateInterval: null as (() => void) | null,
-  };
-
-  // Subscribe to pet updates (throttled to prevent excessive re-renders)
-  const throttledPetUpdate = throttle((infos: ActivePetInfo[]) => {
-    modalLatestInfos = infos;
-    modalLatestAnalysis = analyzeActivePetAbilities(infos);
-    updateTrackerWindow(trackerState);
-  }, 500);
-  onActivePetInfos(throttledPetUpdate);
-
-  // Initial render
-  updateTrackerWindow(trackerState);
-
-  // Auto-update every second for live countdowns - pauses when page is hidden
-  trackerState.updateInterval = criticalInterval('tracker-window-countdown', () => {
-    updateTrackerWindowCountdowns(trackerState.tbody);
-  }, 1000);
-
-  // Cleanup on window close
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(root)) {
-      if (trackerState.updateInterval !== null) {
-        trackerState.updateInterval();
-      }
-      observer.disconnect();
-      log('Tracker window cleanup: interval cleared');
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  log('Trackers window rendered with live updates');
-}
-
-/**
- * Update ability filter checkboxes based on available abilities
- */
-function updateAbilityFilterCheckboxes(container: HTMLElement, analysis: AbilityAnalysis): void {
-  // Get unique abilities from analysis
-  const abilities = analysis.groups.map((g) => ({
-    id: g.definition.id,
-    name: g.definition.name,
-    count: g.entries.length,
-  }));
-
-  // Only update if abilities have changed
-  const currentAbilityIds = abilities.map((a) => a.id).sort().join(',');
-  const previousAbilityIds = container.dataset.abilityIds || '';
-
-  if (currentAbilityIds === previousAbilityIds && container.children.length > 0) {
-    return; // No changes, skip update
-  }
-
-  container.dataset.abilityIds = currentAbilityIds;
-  container.innerHTML = '';
-
-  if (abilities.length === 0) {
-    const emptyText = document.createElement('div');
-    emptyText.textContent = 'No abilities available';
-    emptyText.style.cssText = 'padding: 8px; color: rgba(255, 255, 255, 0.5); font-size: 11px;';
-    container.appendChild(emptyText);
-    return;
-  }
-
-  // Create dropdown select
-  const selectWrapper = document.createElement('div');
-  selectWrapper.style.cssText = 'display: flex; align-items: center; gap: 8px;';
-
-  const label = document.createElement('span');
-  label.textContent = 'Filter Ability:';
-  label.style.cssText = 'font-size: 12px; color: var(--qpm-text-muted);';
-  selectWrapper.appendChild(label);
-
-  const select = document.createElement('select');
-  select.className = 'qpm-select';
-  select.style.cssText = 'flex: 1; min-width: 200px; padding: 6px 8px; font-size: 12px;';
-
-  // Add "All abilities" option
-  const allOption = document.createElement('option');
-  allOption.value = '';
-  allOption.textContent = 'All abilities';
-  select.appendChild(allOption);
-
-  // Add option for each ability
-  abilities.forEach(({ id, name, count }) => {
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = `${name} (${count})`;
-    select.appendChild(option);
-  });
-
-  // Set current value
-  if (currentTrackerSettings.selectedAbilities.length === 1) {
-    select.value = currentTrackerSettings.selectedAbilities[0] || '';
-  } else {
-    select.value = '';
-  }
-
-  // Handle selection change
-  select.addEventListener('change', () => {
-    if (select.value === '') {
-      // Show all abilities
-      currentTrackerSettings.selectedAbilities = [];
-    } else {
-      // Show only selected ability
-      currentTrackerSettings.selectedAbilities = [select.value];
-    }
-    storage.set('qpm-tracker-settings', currentTrackerSettings);
-    updateTrackerWindow({
-      summaryText: container.closest('.qpm-modal-window')?.querySelector('.tracker-summary') as HTMLElement,
-      tbody: container.closest('.qpm-modal-window')?.querySelector('.tracker-tbody') as HTMLTableSectionElement,
-      footer: container.closest('.qpm-modal-window')?.querySelector('.tracker-footer') as HTMLElement,
-      abilityCheckboxGrid: container,
-    });
-  });
-
-  selectWrapper.appendChild(select);
-  container.appendChild(selectWrapper);
-}
-
-/**
- * Update tracker window with current pet data
- */
-function updateTrackerWindow(state: {
-  summaryText: HTMLElement;
-  tbody: HTMLTableSectionElement;
-  footer: HTMLElement;
-  abilityCheckboxGrid: HTMLElement;
-}): void {
-  const analysis = modalLatestAnalysis;
-  const infos = modalLatestInfos;
-
-  // Update ability filter checkboxes
-  updateAbilityFilterCheckboxes(state.abilityCheckboxGrid, analysis);
-
-  // Save baseline timestamps for estimated countdowns before clearing
-  const savedBaselines = new Map<string, number>();
-  const savedGroupBaselines = new Map<string, number>();
-  const countdownCells = state.tbody.querySelectorAll('.eta-countdown[data-is-estimate="true"]');
-  countdownCells.forEach((cell) => {
-    if (!(cell instanceof HTMLElement)) return;
-    const lastProc = cell.dataset.lastProc;
-    const row = cell.closest('tr');
-    const petIndex = row?.dataset.petIndex;
-    const abilityId = row?.dataset.abilityId;
-    const isGroupRow = row?.dataset.isGroupRow === 'true';
-
-    if (lastProc && abilityId) {
-      if (isGroupRow) {
-        // Group total row
-        const key = `group:${abilityId}`;
-        savedGroupBaselines.set(key, parseInt(lastProc, 10));
-      } else if (petIndex !== undefined) {
-        // Individual ability row
-        const key = `${petIndex}:${abilityId}`;
-        savedBaselines.set(key, parseInt(lastProc, 10));
-      }
-    }
-  });
-
-  // Clear table
-  state.tbody.innerHTML = '';
-
-  if (analysis.groups.length === 0) {
-    const emptyRow = state.tbody.insertRow();
-    const emptyCell = emptyRow.insertCell();
-    emptyCell.colSpan = 7;
-    emptyCell.style.cssText = 'padding: 40px; text-align: center; color: rgba(255, 255, 255, 0.5);';
-    emptyCell.innerHTML = `
-      <div style="font-size: 48px; margin-bottom: 12px;">🐢</div>
-      <div style="font-size: 14px; font-weight: 600; margin-bottom: 6px;">No Active Pet Abilities</div>
-      <div style="font-size: 12px; opacity: 0.7;">Make sure pets are active and assigned in your garden</div>
-    `;
-    state.footer.textContent = '📊 Total: No data';
-    state.summaryText.textContent = '🐾 No Active Pets';
-    return;
-  }
-
-  // Apply filters from settings
-  let filteredGroups = analysis.groups;
-
-  // Filter by coin-only
-  if (currentTrackerSettings.filterCoinOnly) {
-    filteredGroups = filteredGroups.filter((g) => g.definition.effectUnit === 'coins' || g.definition.category === 'coins');
-  }
-
-  // Filter by selected abilities
-  if (currentTrackerSettings.selectedAbilities.length > 0) {
-    filteredGroups = filteredGroups.filter((g) => currentTrackerSettings.selectedAbilities.includes(g.definition.id));
-  }
-
-  // Update summary with more detail
-  const activePets = infos.length;
-  const totalAbilities = analysis.groups.length;
-  const filteredAbilities = filteredGroups.length;
-  const coinAbilitiesCount = filteredGroups.filter((g) => g.definition.effectUnit === 'coins' || g.definition.category === 'coins').length;
-
-  let summaryParts = [`🐾 ${activePets} Active Pet${activePets !== 1 ? 's' : ''}`];
-
-  if (currentTrackerSettings.filterCoinOnly || currentTrackerSettings.selectedAbilities.length > 0) {
-    summaryParts.push(`📊 ${filteredAbilities}/${totalAbilities} Abilities (filtered)`);
-  } else {
-    summaryParts.push(`📊 ${totalAbilities} Abilit${totalAbilities !== 1 ? 'ies' : 'y'}`);
-  }
-
-  if (coinAbilitiesCount > 0) {
-    summaryParts.push(`💰 ${coinAbilitiesCount} Coin-Generating`);
-  }
-
-  state.summaryText.textContent = summaryParts.join(' • ');
-
-  let totalProcsPerHour = 0;
-  let totalChancePerMinute = 0;
-  let totalCoinsPerHour = 0;
-  let rowCount = 0;
-
-  // Check if filters resulted in no matches
-  if (filteredGroups.length === 0) {
-    const emptyRow = state.tbody.insertRow();
-    const emptyCell = emptyRow.insertCell();
-    emptyCell.colSpan = 7;
-    emptyCell.style.cssText = 'padding: 40px; text-align: center; color: rgba(255, 255, 255, 0.5);';
-    emptyCell.innerHTML = `
-      <div style="font-size: 48px; margin-bottom: 12px;">🔍</div>
-      <div style="font-size: 14px; font-weight: 600; margin-bottom: 6px;">No Abilities Match Filter</div>
-      <div style="font-size: 12px; opacity: 0.7;">Try adjusting your filter settings above</div>
-    `;
-    state.footer.innerHTML = `<strong>📊 Total:</strong> 0 abilities (filtered)`;
-    return;
-  }
-
-  // Render each ability group (prioritize coin-generating, then show others)
-  const coinAbilities = filteredGroups.filter((g) => g.definition.effectUnit === 'coins' || g.definition.category === 'coins');
-  const otherAbilities = filteredGroups.filter((g) => g.definition.effectUnit !== 'coins' && g.definition.category !== 'coins');
-
-  [...coinAbilities, ...otherAbilities].forEach((group) => {
-    for (const entry of group.entries) {
-      createAbilityRow(entry, group.definition.name, state.tbody, currentTrackerSettings.detailedView, savedBaselines);
-
-      const coinsPerHour = entry.procsPerHour * (entry.effectPerProc ?? 0);
-
-      totalProcsPerHour += entry.procsPerHour;
-      totalChancePerMinute += entry.chancePerMinute;
-      // Include all abilities with coin effects, not just those in 'coins' category
-      if ((group.definition.effectUnit === 'coins' || group.definition.category === 'coins') && entry.effectPerProc && entry.effectPerProc > 0) {
-        totalCoinsPerHour += coinsPerHour;
-      }
-      rowCount++;
-    }
-
-    // Add total row for this group if it has 2+ pets
-    createAbilityGroupTotalRow(group, state.tbody, currentTrackerSettings.detailedView, savedGroupBaselines);
-  });
-
-  // Totals row
-  if (rowCount > 0) {
-    const totalRow = state.tbody.insertRow();
-    totalRow.style.cssText = `
-      background: var(--qpm-surface-2);
-      border-top: 2px solid var(--qpm-border);
-      font-weight: 600;
-      position: sticky;
-      bottom: 0;
-      z-index: 5;
-    `;
-
-    const totalLabelCell = totalRow.insertCell();
-    totalLabelCell.textContent = '📊 TOTAL';
-    totalLabelCell.colSpan = 2;
-    totalLabelCell.style.cssText = 'padding: 12px; color: var(--qpm-accent); font-weight: 700; font-size: 13px; text-transform: uppercase;';
-
-    const totalChanceCell = totalRow.insertCell();
-    totalChanceCell.textContent = `${totalChancePerMinute.toFixed(2)}%/min`;
-    totalChanceCell.style.cssText = 'padding: 12px; text-align: right; color: var(--qpm-accent); font-family: monospace;';
-
-    const totalProcsCell = totalRow.insertCell();
-    totalProcsCell.textContent = totalProcsPerHour.toFixed(2);
-    totalProcsCell.style.cssText = 'padding: 12px; text-align: right; color: var(--qpm-accent); font-family: monospace;';
-
-    const totalCoinsPerProcCell = totalRow.insertCell();
-    totalCoinsPerProcCell.textContent = '—';
-    totalCoinsPerProcCell.style.cssText = 'padding: 12px; text-align: right; color: rgba(255, 255, 255, 0.5);';
-
-    const totalCoinsPerHourCell = totalRow.insertCell();
-    totalCoinsPerHourCell.textContent = formatCoins(totalCoinsPerHour);
-    totalCoinsPerHourCell.style.cssText = 'padding: 12px; text-align: right; color: #ffa500; font-family: monospace; font-weight: 700; font-size: 14px;';
-
-    const totalEtaCell = totalRow.insertCell();
-    totalEtaCell.textContent = '—';
-    totalEtaCell.style.cssText = 'padding: 12px; text-align: right; color: rgba(255, 255, 255, 0.5);';
-
-    // Update footer
-    const coinAbilityCount = coinAbilities.reduce((sum, g) => sum + g.entries.length, 0);
-    const footerParts = [`<strong>📊 Total:</strong> ${rowCount} abilit${rowCount !== 1 ? 'ies' : 'y'}`];
-
-    // Calculate total session earnings from coin ability events
-    if (coinAbilityCount > 0) {
-      let sessionEarnings = 0;
-      for (const group of coinAbilities) {
-        for (const entry of group.entries) {
-          // Get recent events for this ability
-          const history = findAbilityHistoryForIdentifiers(group.definition.id, {
-            petId: entry.pet.petId,
-            slotId: entry.pet.slotId,
-            slotIndex: typeof entry.pet.slotIndex === 'number' && Number.isFinite(entry.pet.slotIndex) ? entry.pet.slotIndex : null,
-            fallbackKeys: [],
-          });
-          if (history) {
-            const recent = getRecentAbilityEvents(history);
-            for (const event of recent) {
-              const effect = extractAbilityEventEffect(group.definition, event);
-              if (effect != null && Number.isFinite(effect) && effect > 0) {
-                sessionEarnings += effect;
-              }
-            }
-          }
-        }
-      }
-      if (sessionEarnings > 0) {
-        footerParts.push(`<span style="color: #ffd700;">💰 ${formatCoins(sessionEarnings)} earned</span>`);
-      } else {
-        footerParts.push(`<span style="color: #ffd700;">💰 ${coinAbilityCount} coin</span>`);
-      }
-    }
-
-    if (totalCoinsPerHour > 0) {
-      footerParts.push(`<span style="color: #ffa500; font-size: 14px; font-weight: 700;">💸 ${formatCoins(totalCoinsPerHour)}/hr</span>`);
-    }
-
-    if (totalProcsPerHour > 0) {
-      footerParts.push(`<span style="color: var(--qpm-accent); font-size: 12px;">⚡ ${totalProcsPerHour.toFixed(1)} procs/hr</span>`);
-    }
-
-    state.footer.innerHTML = footerParts.join(' • ');
-  }
-}
-
-/**
- * Update only the countdown cells (called every second)
- */
-function updateTrackerWindowCountdowns(tbody: HTMLTableSectionElement): void {
-  const countdownCells = tbody.querySelectorAll('.eta-countdown');
-  countdownCells.forEach((cell) => {
-    if (!(cell instanceof HTMLElement)) return;
-
-    const lastProc = parseInt(cell.dataset.lastProc || '0', 10);
-    const effectiveRate = parseFloat(cell.dataset.effectiveRate || '0');
-    const normalColor = cell.dataset.normalColor || 'var(--qpm-positive)';
-
-    // Only update cells with actual proc history (have data attributes)
-    if (!lastProc || !effectiveRate || lastProc === 0 || effectiveRate === 0) {
-      return;
-    }
-
-    const expectedMinutesBetween = effectiveRate > 0 ? 60 / effectiveRate : null;
-    const etaResult = calculateLiveETA(lastProc, expectedMinutesBetween, effectiveRate);
-    cell.textContent = etaResult.text;
-    cell.style.color = etaResult.isOverdue ? 'var(--qpm-danger)' : normalColor;
-  });
-}
-
-/**
- * Render function for the turtle timer modal window
- */
-function renderTurtleTimerWindow(root: HTMLElement): void {
-  root.style.cssText = 'display: flex; flex-direction: column; gap: 16px; min-width: 600px;';
-
-  const turtleSection = createTurtleTimerSection();
-  turtleSection.style.margin = '0';
-  root.appendChild(turtleSection);
 }
 
 /**

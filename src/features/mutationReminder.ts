@@ -32,7 +32,7 @@ interface MutationBadge {
 }
 
 const MUTATION_LETTERS: MutationLetter[] = ['F', 'W', 'C', 'D', 'A', 'R', 'G'];
-const DEBUG_MUTATION_DECISIONS = true;
+const DEBUG_MUTATION_DECISIONS = false;
 
 export type MutationStage = 'wet' | 'dawn' | 'amber';
 
@@ -53,6 +53,8 @@ export interface PlantSlotState {
   hasRainbow: boolean;
   hasGold: boolean;
   progress: Partial<Record<MutationStage, MutationStageProgress>>;
+  /** Any mutation names from the game catalog not matched by the known set above */
+  unknownMutations: string[];
 }
 
 export interface PlantData {
@@ -89,6 +91,9 @@ let isSimulatingWeather = false; // Flag to prevent auto-detection from overridi
 let currentWeatherForHighlights: WeatherType = 'unknown'; // Track which weather the current highlights are for
 let highlightedPlantIds: Set<string> = new Set(); // Track which plants are currently highlighted (by ID)
 let inventoryObserverStarted = false;
+let _simEndTimer: ReturnType<typeof setTimeout> | null = null;
+let _highlightTimer: ReturnType<typeof setTimeout> | null = null;
+let _checkTimer: ReturnType<typeof setTimeout> | null = null;
 let inventoryAccessFailureLogged = false;
 let inventoryLookupStatsLogged = false;
 let inventoryDebugSamples = 0;
@@ -165,6 +170,7 @@ export function setMutationReminderEnabled(enabled: boolean): void {
     updateStatus('Mutation reminder enabled');
   } else {
     tearDownWeatherSubscription();
+    stopInventoryObserver();
     updateStatus('Mutation reminder disabled');
   }
 }
@@ -215,7 +221,9 @@ export async function simulateWeather(weather: WeatherType): Promise<void> {
   }
   
   // Clear the simulation flag after a delay to allow testing
-  setTimeout(() => {
+  if (_simEndTimer !== null) clearTimeout(_simEndTimer);
+  _simEndTimer = setTimeout(() => {
+    _simEndTimer = null;
     isSimulatingWeather = false;
     log('🧪 [DEBUG] Simulation mode ended, auto-detection resuming');
   }, 30000); // 30 seconds to test
@@ -244,6 +252,15 @@ function updateStatus(status: string): void {
 }
 
 /**
+ * Reset inventory observer state so startInventoryObserver() can run again after disable/re-enable
+ */
+function stopInventoryObserver(): void {
+  inventoryObserverStarted = false;
+  if (_highlightTimer !== null) { clearTimeout(_highlightTimer); _highlightTimer = null; }
+  if (_checkTimer !== null) { clearTimeout(_checkTimer); _checkTimer = null; }
+}
+
+/**
  * Watch for inventory opening/closing to check for pending notifications
  */
 function startInventoryObserver(): void {
@@ -256,9 +273,11 @@ function startInventoryObserver(): void {
     // Always reapply highlights if we have tracked plants
     if (highlightedPlantIds.size > 0) {
       log(`🔄 Inventory reopened, reapplying ${highlightedPlantIds.size} plant highlights...`);
-      
+
       // Wait for plant items to render, then reapply highlights
-      setTimeout(() => {
+      if (_highlightTimer !== null) clearTimeout(_highlightTimer);
+      _highlightTimer = setTimeout(() => {
+        _highlightTimer = null;
         reapplyHighlights();
       }, 300);
     }
@@ -298,6 +317,7 @@ function startInventoryObserver(): void {
         });
         
         if (plantItems.length > 0 || attempts >= maxAttempts) {
+          _checkTimer = null;
           if (plantItems.length > 0) {
             log(`✅ Found ${plantItems.length} plant items after ${attempts * delay}ms`);
           } else {
@@ -306,7 +326,8 @@ function startInventoryObserver(): void {
           checkInventoryForMutations();
         } else {
           log(`⏳ No plants found yet, waiting... (attempt ${attempts + 1}/${maxAttempts})`);
-          setTimeout(() => attemptCheck(attempts + 1), delay);
+          if (_checkTimer !== null) clearTimeout(_checkTimer);
+          _checkTimer = setTimeout(() => attemptCheck(attempts + 1), delay);
         }
       };
       
@@ -1483,6 +1504,7 @@ export function computeSlotStateFromMutationNames(mutations: string[]): PlantSlo
   let hasAmberbound = false;
   let hasRainbow = false;
   let hasGold = false;
+  const unknownMutations: string[] = [];
   const progress: Partial<Record<MutationStage, MutationStageProgress>> = {};
   let wetOccurrences = 0;
   let dawnOccurrences = 0;
@@ -1566,6 +1588,12 @@ export function computeSlotStateFromMutationNames(mutations: string[]): PlantSlo
       letters.add('G');
     }
 
+    // Track any mutation names not matched by the known set above
+    const isKnown = frozenLike || wetLike || chilledLike || isDawnbound || isAmberbound || dawnLike || amberLike || rainbowLike || goldLike;
+    if (!isKnown && raw && typeof raw === 'string') {
+      unknownMutations.push(raw);
+    }
+
     const progressMatch = normalized.match(/(\d+)\s*\/\s*(\d+)/);
     if (progressMatch) {
       const complete = Number.parseInt(progressMatch[1] ?? '0', 10);
@@ -1605,6 +1633,7 @@ export function computeSlotStateFromMutationNames(mutations: string[]): PlantSlo
     hasAmberbound,
     hasRainbow,
     hasGold,
+    unknownMutations,
     progress,
   };
 }
@@ -1621,6 +1650,7 @@ function cloneSlotState(slot: PlantSlotState): PlantSlotState {
     hasAmberbound: slot.hasAmberbound,
     hasRainbow: slot.hasRainbow,
     hasGold: slot.hasGold,
+    unknownMutations: [...(slot.unknownMutations ?? [])],
     progress: { ...(slot.progress ?? {}) },
   };
 }
@@ -1975,7 +2005,8 @@ function evaluatePlantFromInventory(
     slot.hasDawnbound ||
     slot.hasAmberbound ||
     slot.hasRainbow ||
-    slot.hasGold,
+    slot.hasGold ||
+    (slot.unknownMutations?.length ?? 0) > 0,
   );
 
   if (!hasSlotMutationInfo) {
@@ -2635,10 +2666,14 @@ function showSimpleNotification(title: string, message: string, type: 'success' 
     transition: top 0.3s ease-out;
   `;
   
-  notification.innerHTML = `
-    <div style="font-size: 16px; font-weight: bold; margin-bottom: 4px;">${title}</div>
-    <div style="font-size: 13px; opacity: 0.95;">${message}</div>
-  `;
+  notification.innerHTML = '';
+  const titleDiv = document.createElement('div');
+  titleDiv.style.cssText = 'font-size: 16px; font-weight: bold; margin-bottom: 4px;';
+  titleDiv.textContent = title;
+  const msgDiv = document.createElement('div');
+  msgDiv.style.cssText = 'font-size: 13px; opacity: 0.95;';
+  msgDiv.textContent = message;
+  notification.append(titleDiv, msgDiv);
   
   // Add animation CSS if not already added
   if (!document.getElementById('quinoa-notification-styles')) {

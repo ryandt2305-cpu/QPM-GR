@@ -11,6 +11,34 @@ import { getAllPlantSpecies, getAllAbilities, getAllMutations, areCatalogsReady 
 
 const STORAGE_KEY = 'qpm.autoFavorite.v1';
 
+interface QPMInventoryItem {
+  id?: string;
+  itemType?: string;
+  category?: string;
+  species?: string;
+  petSpecies?: string;
+  mutations?: string[];
+  abilities?: Array<{ id?: string; name?: string }>;
+  favorited?: boolean;
+}
+
+interface QPMPageWindow {
+  MagicCircle_RoomConnection?: { sendMessage?(payload: unknown): void };
+  __mga_lastScopePath?: string[];
+  qpm_favoriteSpecies?: (species: string) => void;
+  qpm_unfavoriteSpecies?: (species: string) => void;
+  qpm_favoriteMutation?: (mutationId: string) => void;
+  qpm_unfavoriteMutation?: (mutationId: string) => void;
+  qpm_favoritePetAbility?: (abilityId: string) => void;
+  qpm_unfavoritePetAbility?: (abilityId: string) => void;
+  myData?: {
+    inventory?: {
+      items?: QPMInventoryItem[];
+      favoritedItemIds?: Set<string>;
+    };
+  };
+}
+
 export interface AutoFavoriteConfig {
   enabled: boolean;
   species: string[]; // List of species names to auto-favorite
@@ -117,7 +145,7 @@ export function getAvailableFilterOptions(): {
   return {
     species: areCatalogsReady() ? getAllPlantSpecies() : [],
     abilities: areCatalogsReady() ? getAllAbilities() : [],
-    mutations: areCatalogsReady() ? Object.keys(getAllMutations()) : [],
+    mutations: areCatalogsReady() ? getAllMutations() : [],
     cropTypes: getAllCropCategories(),
   };
 }
@@ -234,10 +262,10 @@ function checkAndFavoriteNewItems(inventory: any): void {
         const petAbilities = item.abilities || [];
 
         const hasGoldGranterFilter = config.filterByAbilities.some(abilityId =>
-          normalizeAbilityId(abilityId) === 'goldgranter' || normalizeAbilityId(abilityId) === 'goldgranter'
+          normalizeAbilityId(abilityId) === 'goldgranter'
         );
         const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId =>
-          normalizeAbilityId(abilityId) === 'rainbowgranter' || normalizeAbilityId(abilityId) === 'rainbowgranter'
+          normalizeAbilityId(abilityId) === 'rainbowgranter'
         );
 
         if (hasGoldGranterFilter && hasGranterAbility(petAbilities, petMutations, 'gold')) {
@@ -300,7 +328,7 @@ function checkAndFavoriteNewItems(inventory: any): void {
 
 // Function to favorite ALL items of a species (called when checkbox is checked)
 function favoriteSpecies(speciesName: string): void {
-  const typedPageWindow = pageWindow as any;
+  const typedPageWindow = pageWindow as QPMPageWindow;
 
   if (!typedPageWindow?.myData?.inventory?.items) {
     log('🌟 [AUTO-FAVORITE] No myData available yet - waiting for game to load');
@@ -314,12 +342,11 @@ function favoriteSpecies(speciesName: string): void {
   for (const item of items) {
     // CRITICAL: Multiple checks to ensure ONLY crops are favorited
     if (item.itemType !== 'Produce') continue;
-    if (item.itemType === 'Pet' || item.itemType === 'Egg' || item.itemType === 'Tool') continue;
     if (item.category === 'Pet' || item.category === 'Egg' || item.category === 'Tool') continue;
     if (item.species && (item.species.includes('Pet') || item.species.includes('Egg'))) continue;
 
-    if (item.species === speciesName && !favoritedIds.has(item.id)) {
-      if (sendFavoriteMessage(item.id)) {
+    if (item.species === speciesName && !favoritedIds.has(item.id ?? '')) {
+      if (sendFavoriteMessage(item.id ?? '')) {
         count++;
       }
     }
@@ -341,7 +368,7 @@ function unfavoriteSpecies(speciesName: string): void {
 
 // Function to favorite ALL items with a specific mutation (called when mutation checkbox is checked)
 function favoriteMutation(mutationName: string): void {
-  const typedPageWindow = pageWindow as any;
+  const typedPageWindow = pageWindow as QPMPageWindow;
 
   if (!typedPageWindow?.myData?.inventory?.items) {
     log('🌟 [AUTO-FAVORITE] No myData available yet - waiting for game to load');
@@ -355,13 +382,12 @@ function favoriteMutation(mutationName: string): void {
   for (const item of items) {
     // CRITICAL: Multiple checks to ensure ONLY crops are favorited
     if (item.itemType !== 'Produce') continue;
-    if (item.itemType === 'Pet' || item.itemType === 'Egg' || item.itemType === 'Tool') continue;
     if (item.category === 'Pet' || item.category === 'Egg' || item.category === 'Tool') continue;
     if (item.species && (item.species.includes('Pet') || item.species.includes('Egg'))) continue;
 
     const itemMutations = item.mutations || [];
-    if (itemMutations.includes(mutationName) && !favoritedIds.has(item.id)) {
-      if (sendFavoriteMessage(item.id)) {
+    if (itemMutations.includes(mutationName) && !favoritedIds.has(item.id ?? '')) {
+      if (sendFavoriteMessage(item.id ?? '')) {
         count++;
       }
     }
@@ -383,7 +409,7 @@ function unfavoriteMutation(mutationName: string): void {
 
 // Favorite ALL pets with a specific ability (called when checkbox is checked)
 function favoritePetAbility(abilityName: string): void {
-  const typedPageWindow = pageWindow as any;
+  const typedPageWindow = pageWindow as QPMPageWindow;
 
   if (!typedPageWindow?.myData?.inventory?.items) {
     log('🌟 [AUTO-FAVORITE-PET] No myData available yet - waiting for game to load');
@@ -413,7 +439,7 @@ function favoritePetAbility(abilityName: string): void {
     if (item.itemType !== 'Pet') continue;
     petsChecked++;
 
-    if (favoritedIds.has(item.id)) continue; // Already favorited
+    if (favoritedIds.has(item.id ?? '')) continue; // Already favorited
 
     // FUTUREPROOF: Use centralized granter ability checking
     const petMutations = item.mutations || [];
@@ -426,7 +452,7 @@ function favoritePetAbility(abilityName: string): void {
     if (shouldFavorite) {
       log(`✨ [AUTO-FAVORITE-PET] Found matching pet: ${item.petSpecies || item.species} (${item.id}) - mutations: [${petMutations.join(', ')}], abilities: ${petAbilities.length}`);
 
-      if (sendFavoriteMessage(item.id)) {
+      if (sendFavoriteMessage(item.id ?? '')) {
         count++;
       }
     }
@@ -447,7 +473,7 @@ function unfavoritePetAbility(abilityName: string): void {
  */
 function getScopePath(): string[] {
   try {
-    const typedPageWindow = pageWindow as any;
+    const typedPageWindow = pageWindow as QPMPageWindow;
     return typedPageWindow?.__mga_lastScopePath?.slice() ?? ['Room', 'Quinoa'];
   } catch {
     return ['Room', 'Quinoa'];
@@ -457,7 +483,7 @@ function getScopePath(): string[] {
 // Function to actually send the favorite message via websocket
 function sendFavoriteMessage(itemId: string): boolean {
   try {
-    const typedPageWindow = pageWindow as any;
+    const typedPageWindow = pageWindow as QPMPageWindow;
     const maybeConnection = typedPageWindow?.MagicCircle_RoomConnection;
 
     if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
@@ -593,10 +619,10 @@ function startAutoFavoritePolling(): void {
           // Check for Rainbow/Gold Granter abilities if filter is active - FUTUREPROOF centralized logic
           if (config.filterByAbilities && config.filterByAbilities.length > 0) {
             const hasGoldGranterFilter = config.filterByAbilities.some(abilityId =>
-              normalizeAbilityId(abilityId) === 'goldgranter' || normalizeAbilityId(abilityId) === 'goldgranter'
+              normalizeAbilityId(abilityId) === 'goldgranter'
             );
             const hasRainbowGranterFilter = config.filterByAbilities.some(abilityId =>
-              normalizeAbilityId(abilityId) === 'rainbowgranter' || normalizeAbilityId(abilityId) === 'rainbowgranter'
+              normalizeAbilityId(abilityId) === 'rainbowgranter'
             );
 
             if (hasGoldGranterFilter && hasGranterAbility(abilities, mutations, 'gold')) {
@@ -680,7 +706,7 @@ export function initializeAutoFavorite(): void {
   startAutoFavoritePolling();
 
   // Expose helper functions on pageWindow for UI integration
-  const typedPageWindow = pageWindow as any;
+  const typedPageWindow = pageWindow as QPMPageWindow;
   typedPageWindow.qpm_favoriteSpecies = favoriteSpecies;
   typedPageWindow.qpm_unfavoriteSpecies = unfavoriteSpecies;
   typedPageWindow.qpm_favoriteMutation = favoriteMutation;

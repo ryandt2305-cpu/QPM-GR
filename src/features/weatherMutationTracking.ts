@@ -531,7 +531,7 @@ export function initializeWeatherMutationTracking(): void {
 export function clearAllWeatherMutationHistory(): void {
   // Completely wipe all stored data
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    storage.remove(STORAGE_KEY);
     console.log('[QPM] 🗑️ All weather mutation history cleared from storage');
   } catch (error) {
     console.error('[weatherMutationTracking] Failed to clear storage:', error);

@@ -21,7 +21,7 @@
 
 **QPM-GR** is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, and tracking utilities. The project is currently in **ALPHA** - expect frequent updates and improvements as new features are integrated.
 
-**Current Version:** 2.0.0
+**Current Version:** 3.0.62
 
 ### Focus Areas
 
@@ -190,7 +190,7 @@ The Tampermonkey-ready userscript will be generated at `dist/QPM.user.js`.
 
 - Navigate to Magic Garden
 - Look for the QPM panel in the game UI
-- Check version number shows "2.0.0"
+- Check version number shows "3.0.62"
 
 ---
 
@@ -287,25 +287,42 @@ The Tampermonkey-ready userscript will be generated at `dist/QPM.user.js`.
 
 ```
 QPM-GR/
-├── src/                     # TypeScript source code
-│   ├── core/               # Core functionality (init, setup, etc.)
-│   ├── features/           # Feature modules
-│   ├── ui/                 # UI components and windows
-│   ├── store/              # State management (pets, weather, stats)
-│   ├── utils/              # Utility functions
-│   ├── data/               # Data helpers
-│   └── types/              # TypeScript type definitions
-├── scripts/                # Build and maintenance scripts
-│   ├── build-userscript.js # Wraps build with Tampermonkey header
-│   ├── scrape-game-data.js # Extracts pet/crop data from game
-│   └── parse-discord-html.js # Parses Discord exports
-├── scraped-data/           # JSON data files (pets, crops, abilities)
-├── dist/                   # Build output
-│   ├── quinoa-pet-manager.iife.js  # Vite build output
-│   └── QPM.user.js                  # Final userscript
-├── package.json            # npm configuration
-├── tsconfig.json           # TypeScript configuration
-└── vite.config.ts          # Vite bundler configuration
+├── src/
+│   ├── main.ts              # Entry point — full initialization sequence
+│   ├── core/                # Jotai bridge, page context, atom registry
+│   ├── catalogs/            # Runtime game data capture (Object.* hook)
+│   ├── sprite-v2/           # Sprite rendering (PIXI hook + atlas extraction)
+│   ├── features/            # Feature modules — one file per feature
+│   ├── store/               # Derived state (pets, inventory, stats, XP, weather)
+│   ├── ui/                  # Windows, panels, section builders
+│   │   ├── sections/        # Individual panel section components
+│   │   ├── panelHelpers.ts  # Shared UI helpers and formatters
+│   │   ├── panelState.ts    # UIState interface and factory
+│   │   ├── panelStyles.ts   # CSS injection
+│   │   ├── abilityAnalysis.ts
+│   │   ├── turtleTimerLogic.ts
+│   │   ├── notificationSection.ts
+│   │   └── shopHistoryWindow.ts
+│   ├── data/                # Static reference tables (abilities, pet metadata)
+│   ├── utils/               # Shared helpers (storage, DOM, scheduling, logger)
+│   ├── types/               # Shared TypeScript types
+│   ├── debug/               # QPM_DEBUG_API global
+│   └── integrations/        # Aries Mod bridge
+├── scripts/
+│   └── build-userscript.js  # Wraps Vite IIFE output with Tampermonkey metadata
+├── docs/
+│   └── product/
+│       └── DOCUMENTATION.md # This file
+├── dist/
+│   ├── quinoa-pet-manager.iife.js  # Vite bundle
+│   └── QPM.user.js                 # Final userscript (install this)
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── README.md
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+└── LICENSE
 ```
 
 ### Key Conventions
@@ -347,10 +364,10 @@ QPM-GR/
 - Test edge cases (empty states, large datasets, etc.)
 
 **Adding New Features**:
-1. Create new file in `src/features/`
-2. Export initialization and public API functions
+1. Create new file in `src/features/<feature>.ts`
+2. Export an explicit `init` / `start` function and a `stop` / `destroy` if it allocates resources
 3. Add UI components in `src/ui/` if needed
-4. Register feature in `src/core/init.ts`
+4. Register the init call in `src/main.ts` (the canonical initialization sequence)
 5. Update types in `src/types/` if needed
 6. Document the feature in this file
 

@@ -28,6 +28,7 @@ export const MUT_META: Record<MutationName, MutationMeta> = {
   Ambershine: { overlayTall: null, tallIconOverride: 'sprite/mutation/Amberlit' },
   Dawncharged: { overlayTall: null, tallIconOverride: null },
   Ambercharged: { overlayTall: null, tallIconOverride: null },
+  Thunderstruck: { overlayTall: null, tallIconOverride: null },
 };
 
 export const MUT_NAMES: MutationName[] = Object.keys(MUT_META) as MutationName[];
@@ -35,6 +36,7 @@ export const MUT_NAMES: MutationName[] = Object.keys(MUT_META) as MutationName[]
 export const MUT_G1 = ['', 'Gold', 'Rainbow'].filter(Boolean) as MutationName[];
 export const MUT_G2 = ['', 'Wet', 'Chilled', 'Frozen'].filter(Boolean) as MutationName[];
 export const MUT_G3 = ['', 'Dawnlit', 'Ambershine', 'Dawncharged', 'Ambercharged'].filter(Boolean) as MutationName[];
+export const MUT_G4 = ['', 'Thunderstruck'].filter(Boolean) as MutationName[];
 
 // Mutation rendering constants
 export const TILE_SIZE_WORLD = 256;
@@ -72,6 +74,7 @@ export const MUTATION_ORDER: MutationName[] = [
   'Dawnlit',
   'Dawncharged',
   'Ambercharged',
+  'Thunderstruck',
 ];
 
 export const MUTATION_INDEX = new Map(MUTATION_ORDER.map((m, idx) => [m, idx]));

@@ -26,9 +26,9 @@ dist/features/publicRooms/
 .claude/
 .kilocode/
 scripts/
+!scripts/build-userscript.js
 plans/
 scraped-data/
-docs/
 .claude.md
 .kilocode.md
 CLAUDE.md

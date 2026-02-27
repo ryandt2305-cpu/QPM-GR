@@ -414,7 +414,7 @@ export function initializeMutationValueTracking(): void {
 export function clearAllMutationValueHistory(): void {
   // Completely wipe all stored data
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    storage.remove(STORAGE_KEY);
     log('🗑️ [MUTATION-VALUE] All history cleared from storage');
   } catch (error) {
     console.error('[mutationValueTracking] Failed to clear storage:', error);

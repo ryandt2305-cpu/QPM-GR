@@ -495,13 +495,9 @@ function attachWeatherTracking(): void {
   lastWeatherTickAt = Date.now();
 
   weatherUnsubscribe = onWeatherSnapshot((snapshot: WeatherSnapshot) => {
-    const changed = recordWeatherDuration(snapshot.timestamp);
+    recordWeatherDuration(snapshot.timestamp);
     state.weather.activeKind = snapshot.kind ?? 'unknown';
-    if (changed) {
-      commitState();
-    } else {
-      commitState();
-    }
+    commitState();
   }, true);
 
   weatherTickTimerCleanup = visibleInterval('stats-weather-tick', () => {

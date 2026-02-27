@@ -9,6 +9,7 @@ import {
   setSearchTerm,
   setSortBy,
 } from '../features/publicRooms';
+import { escapeHtml } from './panelHelpers';
 import type { RoomsMap, Room, RoomUserSlot, PublicRoomsState, PlayerView } from '../types/publicRooms';
 import { getPlayerView, getCachedFriendsSet, resetFriendsCache } from '../services/ariesPlayers';
 import { storage } from '../utils/storage';
@@ -31,6 +32,17 @@ const inspectorState = {
   targetPlayerName: '',
   targetRoomId: '',
 };
+
+const inspectorDragCleanups: Array<() => void> = [];
+
+export function destroyPublicRoomsInspector(): void {
+  for (const cleanup of inspectorDragCleanups) {
+    cleanup();
+  }
+  inspectorDragCleanups.length = 0;
+  const shell = document.getElementById('pr-inspector-shell');
+  shell?.remove();
+}
 
 const spriteReadyPromise = serviceReady;
 let spriteService: SpriteService | null = null;
@@ -379,33 +391,40 @@ function ensureInspectorShell(): HTMLDivElement {
         dragHandle.style.cursor = 'grabbing';
       });
       
-      document.addEventListener('mousemove', (e: MouseEvent) => {
+      const onMouseMove = (e: MouseEvent): void => {
         if (!isDragging) return;
-        
+
         e.preventDefault();
         currentX = e.clientX - initialX;
         currentY = e.clientY - initialY;
-        
+
         // Constrain to viewport bounds
         const panelRect = panel.getBoundingClientRect();
         const maxX = window.innerWidth - panelRect.width;
         const maxY = window.innerHeight - panelRect.height;
-        
+
         currentX = Math.max(0, Math.min(currentX, maxX));
         currentY = Math.max(0, Math.min(currentY, maxY));
-        
+
         panel.style.left = `${currentX}px`;
         panel.style.top = `${currentY}px`;
         panel.style.transform = 'none'; // Remove centering transform when dragged
-      });
-      
-      document.addEventListener('mouseup', () => {
+      };
+
+      const onMouseUp = (): void => {
         if (isDragging) {
           isDragging = false;
           panel.style.transition = '';
           dragHandle.style.cursor = '';
         }
-      });
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      inspectorDragCleanups.push(
+        () => document.removeEventListener('mousemove', onMouseMove),
+        () => document.removeEventListener('mouseup', onMouseUp),
+      );
     }
     
     shell.dataset.prDraggableBound = '1';
@@ -422,7 +441,8 @@ function openInspector(slot: RoomUserSlot | null, room: Room): void {
 
   if (avatarEl) {
     if (slot?.avatarUrl) {
-      avatarEl.style.backgroundImage = `url(${slot.avatarUrl})`;
+      const isHttp = /^https?:\/\//.test(slot.avatarUrl);
+      avatarEl.style.backgroundImage = isHttp ? `url('${encodeURI(slot.avatarUrl)}')` : '';
       avatarEl.textContent = '';
       avatarEl.classList.add('has-img');
     } else {
@@ -522,10 +542,13 @@ function safeArray(value: any): any[] {
 }
 
 function renderAvatarBlock(view: PlayerView, name: string): string {
-  const avatar = view.avatarUrl
-    ? `<div class="pr-avatar-block-img" style="background-image:url(${view.avatarUrl})"></div>`
-    : `<div class="pr-avatar-block-fallback">${avatarInitials(name)}</div>`;
-  return `<div class="pr-avatar-block">${avatar}<div><div class="pr-avatar-name">${name}</div><div class="pr-avatar-id">${view.playerId}</div></div></div>`;
+  const safeAvatarUrl = view.avatarUrl && /^https?:\/\//.test(view.avatarUrl)
+    ? `url('${encodeURI(view.avatarUrl)}')`
+    : '';
+  const avatar = safeAvatarUrl
+    ? `<div class="pr-avatar-block-img" style="background-image:${safeAvatarUrl}"></div>`
+    : `<div class="pr-avatar-block-fallback">${escapeHtml(avatarInitials(name))}</div>`;
+  return `<div class="pr-avatar-block">${avatar}<div><div class="pr-avatar-name">${escapeHtml(name)}</div><div class="pr-avatar-id">${escapeHtml(view.playerId ?? '')}</div></div></div>`;
 }
 
 function normalizeMillis(value: any): number | null {
@@ -1785,13 +1808,16 @@ function createAppContainer(): HTMLElement {
 }
 
 function playerChip(slot: RoomUserSlot): string {
-  const avatar = slot.avatarUrl
-    ? `<span style="width: 20px; height: 20px; border-radius: 50%; background-image: url(${slot.avatarUrl}); background-size: cover; background-position: center; border: 1px solid rgba(255,255,255,0.15);"></span>`
+  const safeAvatarUrl = slot.avatarUrl && /^https?:\/\//.test(slot.avatarUrl)
+    ? `url('${encodeURI(slot.avatarUrl)}')`
+    : '';
+  const avatar = safeAvatarUrl
+    ? `<span style="width: 20px; height: 20px; border-radius: 50%; background-image: ${safeAvatarUrl}; background-size: cover; background-position: center; border: 1px solid rgba(255,255,255,0.15);"></span>`
     : '<span style="font-size: 12px; opacity: 0.7;">👤</span>';
   return `
-    <span class="pr-player-chip" data-player-name="${slot.name || ''}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 12px; font-weight: 600;">
+    <span class="pr-player-chip" data-player-name="${escapeHtml(slot.name || '')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 12px; font-weight: 600;">
       ${avatar}
-      ${slot.name || 'Unknown'}
+      ${escapeHtml(slot.name || 'Unknown')}
     </span>
   `;
 }
@@ -1944,7 +1970,9 @@ function renderRooms(rooms: RoomsMap): void {
   roomsList.querySelectorAll('.pr-join-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const roomCode = (e.target as HTMLElement).getAttribute('data-room-code');
-      if (roomCode) window.location.href = `/r/${roomCode}`;
+      if (roomCode && /^[a-zA-Z0-9_-]{1,64}$/.test(roomCode)) {
+        window.location.href = `/r/${roomCode}`;
+      }
     });
   });
 

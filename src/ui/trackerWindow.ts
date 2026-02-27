@@ -15,6 +15,7 @@ import {
   type AbilityValuationContext,
 } from '../features/abilityValuation';
 import { onGardenSnapshot } from '../features/gardenBridge';
+import { visibleInterval } from '../utils/timerManager';
 
 // ============================================================================
 // CONSTANTS
@@ -54,7 +55,7 @@ export interface AbilityTrackerWindowState {
   summaryStrip: HTMLElement;
   cardsContainer: HTMLElement;
   latestPets: ActivePetInfo[];
-  tickerInterval: ReturnType<typeof setInterval> | null;
+  tickerInterval: (() => void) | null;
   unsubscribePets: (() => void) | null;
   unsubscribeHistory: (() => void) | null;
   unsubscribeGarden: (() => void) | null;
@@ -681,12 +682,12 @@ function tickAllTimers(state: AbilityTrackerWindowState): void {
 
 function startTicker(state: AbilityTrackerWindowState): void {
   if (state.tickerInterval !== null) return;
-  state.tickerInterval = setInterval(() => tickAllTimers(state), TICKER_INTERVAL_MS);
+  state.tickerInterval = visibleInterval('ability-tracker-tick', () => tickAllTimers(state), TICKER_INTERVAL_MS);
 }
 
 function stopTicker(state: AbilityTrackerWindowState): void {
   if (state.tickerInterval !== null) {
-    clearInterval(state.tickerInterval);
+    state.tickerInterval();
     state.tickerInterval = null;
   }
 }

@@ -4,7 +4,7 @@
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
-import { criticalInterval } from '../utils/timerManager';
+import { visibleInterval } from '../utils/timerManager';
 import { getGardenSnapshot, getMapSnapshot } from './gardenBridge';
 
 // Declare unsafeWindow for TypeScript
@@ -437,12 +437,12 @@ function notifyListeners(): void {
 
 /**
  * Start polling interval to apply filters
- * Uses criticalInterval which is visibility-aware and pauses when tab is hidden
+ * Uses visibleInterval which pauses when tab is hidden (purely visual update)
  */
 function startFilteringPolling(): void {
   if (cleanupInterval !== null) return;
 
-  cleanupInterval = criticalInterval(
+  cleanupInterval = visibleInterval(
     'garden-filters-poll',
     () => {
       if (!config.enabled) return;

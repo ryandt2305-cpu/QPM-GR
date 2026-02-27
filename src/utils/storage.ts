@@ -7,6 +7,7 @@ declare const GM_listValues: (() => string[]) | undefined;
 export interface Storage {
   get<T = any>(key: string, fallback?: T): T;
   set(key: string, value: any): void;
+  remove(key: string): void;
   clear(): void;
 }
 
@@ -64,6 +65,9 @@ const QPM_STORAGE_KEYS = [
   // Main data
   'quinoa-pet-manager',
   'quinoaData',
+
+  // Player identity
+  'quinoa:selfPlayerId',
 ];
 
 export const storage: Storage = {
@@ -99,6 +103,19 @@ export const storage: Storage = {
 
     try {
       localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  },
+
+  remove(key: string): void {
+    try {
+      if (typeof GM_deleteValue === 'function') {
+        GM_deleteValue(key);
+        return;
+      }
+    } catch {}
+
+    try {
+      localStorage.removeItem(key);
     } catch {}
   },
 

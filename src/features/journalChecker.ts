@@ -132,12 +132,11 @@ function getPetCatalog(): Record<string, string[]> {
   // Get mutation names from catalog
   const mutations = getAllMutations(); // Already returns string[]
 
-  // Pets only track Rainbow and Gold (not weather mutations)
-  // Check for these specific mutations in the catalog
+  // Include all mutations from the catalog (auto-discovers new mutations like Thunderstruck)
   for (const mutationName of mutations) {
-    if (mutationName === 'Rainbow' || mutationName === 'Gold') {
-      variants.push(mutationName);
-    }
+    if (typeof mutationName !== 'string') continue;
+    if (mutationName.toLowerCase().includes('maxweight')) continue;
+    variants.push(mutationName);
   }
 
   // Add max weight (always present for pets)

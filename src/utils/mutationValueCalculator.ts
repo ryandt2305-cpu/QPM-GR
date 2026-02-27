@@ -43,7 +43,7 @@ export function getAllMutationValues(): Record<string, number> {
   if (!areCatalogsReady()) return values;
 
   const mutations = getAllMutations();
-  for (const mutationId of Object.keys(mutations)) {
+  for (const mutationId of mutations) {
     const value = calculateMutationValue(mutationId);
     if (value !== null) {
       values[mutationId] = value;

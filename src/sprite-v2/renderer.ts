@@ -32,6 +32,7 @@ const FILTERS: Record<string, SpriteFilterConfig> = {
   Ambershine: { op: 'source-atop', colors: ['rgb(190,100,40)'], a: 0.5 },
   Dawncharged: { op: 'source-atop', colors: ['rgb(140,80,200)'], a: 0.5 },
   Ambercharged: { op: 'source-atop', colors: ['rgb(170,60,25)'], a: 0.5 },
+  Thunderstruck: { op: 'source-atop', colors: ['rgb(255,220,50)'], a: 0.5 },
 };
 
 // Detect supported blend operations
@@ -116,7 +117,7 @@ function normalizeMutListOverlay(list: string[]): MutationName[] {
 
 interface MutationStep {
   name: MutationName;
-  meta: typeof MUT_META[MutationName];
+  meta: typeof MUT_META[MutationName] | undefined;
   overlayTall: string | null;
   isTall: boolean;
 }
@@ -573,10 +574,14 @@ export function processVariantJobs(state: SpriteState, cfg: SpriteConfig): boole
 }
 
 export function buildVariantFromMutations(list: string[]): VariantInfo {
+  // Color tint pipeline: only mutations with a defined FILTERS entry get a tint
   const raw = list.filter((value) => hasMutationFilter(value));
-  const selected = sortMutations(raw);
   const muts = normalizeMutListColor(raw);
   const overlayMuts = normalizeMutListOverlay(raw);
+
+  // Icon pipeline: allow ALL mutation names so atlas icons are found dynamically
+  // (findIconTexture and applyFilterOnto handle unknown names gracefully)
+  const selected = sortMutations(list.filter(Boolean) as MutationName[]);
 
   return {
     mode: 'M',

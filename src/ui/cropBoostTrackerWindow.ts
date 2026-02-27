@@ -471,8 +471,13 @@ function renderCropBoostSection(root: HTMLElement): void {
       
       // Text content
       const textSpan = document.createElement('span');
-      const mutations = crop.mutations.length > 0 ? ` <span style="color: #FFD700;">(${crop.mutations.join(', ')})</span>` : '';
-      textSpan.innerHTML = `${capitalize(crop.species)}${mutations}`;
+      textSpan.textContent = capitalize(crop.species);
+      if (crop.mutations.length > 0) {
+        const mutSpan = document.createElement('span');
+        mutSpan.style.color = '#FFD700';
+        mutSpan.textContent = ` (${crop.mutations.join(', ')})`;
+        textSpan.appendChild(mutSpan);
+      }
       
       nameCell.appendChild(statusEmoji);
       nameCell.appendChild(cropImage);

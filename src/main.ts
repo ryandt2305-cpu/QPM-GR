@@ -29,7 +29,7 @@ import { initSpriteSystem } from './sprite-v2/index';
 import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
-import { initEggProbabilityIndicator } from './features/eggProbabilityIndicator';
+
 import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
@@ -40,6 +40,7 @@ import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindo
 import { resetFriendsCache } from './services/ariesPlayers';
 import { exposeValidationCommands } from './utils/validationCommands';
 import { storage } from './utils/storage';
+import { timerManager } from './utils/timerManager';
 // Data Catalog Loader
 import { initCatalogLoader, logCatalogStatus, diagnoseCatalogs, getCatalogs, areCatalogsReady, waitForCatalogs, onCatalogsReady } from './catalogs/gameCatalogs';
 
@@ -1006,7 +1007,7 @@ function registerInspectFriendHelper(): void {
       return;
     }
     try {
-      localStorage.setItem('quinoa:selfPlayerId', pid);
+      storage.set('quinoa:selfPlayerId', pid);
       resetFriendsCache();
       console.log('[QPM Inspector] self playerId set to', pid, 'friend cache cleared.');
     } catch (err) {
@@ -1099,12 +1100,9 @@ const defaultCfg = {
   },
 };
 
-function loadCfg() {
-  try {
-    return JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-  } catch {
-    return {};
-  }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function loadCfg(): any {
+  return storage.get<any>(LS_KEY, {});
 }
 
 const loadedCfg = loadCfg();
@@ -1129,7 +1127,7 @@ const cfg = {
 };
 
 // Global error filter to silence noisy external proxy errors
-window.addEventListener('error', (event) => {
+const _errorHandler = (event: ErrorEvent): boolean => {
   try {
     const message = String(event?.message || '');
     if (message.includes("Failed to execute 'contains' on 'Node'")) {
@@ -1139,7 +1137,12 @@ window.addEventListener('error', (event) => {
     }
   } catch {}
   return true;
-}, true);
+};
+window.addEventListener('error', _errorHandler, true);
+window.addEventListener('beforeunload', () => {
+  window.removeEventListener('error', _errorHandler, true);
+  timerManager.destroy();
+}, { once: true });
 
 async function waitForGame(): Promise<void> {
   log('⏳ Waiting for game to load...');
@@ -1268,8 +1271,6 @@ async function initialize(): Promise<void> {
   // Phase 8: Non-critical features (can load after UI is visible)
   startCropBoostTracker();
   initCropSizeIndicator();
-  initEggProbabilityIndicator();
-  log('✅ Egg Probability Indicator initialized');
   await yieldToBrowser();
 
   // Phase 9: Achievements (heavy, do later)
@@ -1313,14 +1314,6 @@ async function initialize(): Promise<void> {
     applyGardenFiltersNow,
   };
 
-  // Expose egg probability indicator functions
-  const { getEggProbabilityConfig, setEggProbabilityConfig, startEggProbabilityIndicator, stopEggProbabilityIndicator } = await import('./features/eggProbabilityIndicator');
-  (QPM_DEBUG_API as any).eggProbability = {
-    getConfig: getEggProbabilityConfig,
-    setConfig: setEggProbabilityConfig,
-    start: startEggProbabilityIndicator,
-    stop: stopEggProbabilityIndicator,
-  };
 
   // Also expose to window for easy console access
   if (typeof window !== 'undefined') {

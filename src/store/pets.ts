@@ -483,7 +483,12 @@ function extractPosition(entry: RawPetInfo): { x: number | null; y: number | nul
   return null;
 }
 
+let _strengthCache: number[] = [];
+let _strengthCacheTs = 0;
+
 function extractStrengthFromDOM(): number[] {
+  if (Date.now() - _strengthCacheTs < 2000) return _strengthCache;
+
   const strengthValues: number[] = [];
 
   try {
@@ -505,6 +510,8 @@ function extractStrengthFromDOM(): number[] {
     // Silently fail if DOM extraction doesn't work
   }
 
+  _strengthCache = strengthValues;
+  _strengthCacheTs = Date.now();
   return strengthValues;
 }
 

@@ -38,6 +38,7 @@ export interface ShopRestockWindowState {
   contentContainer: HTMLElement;
   countdownInterval: (() => void) | null;
   resizeListener: (() => void) | null;
+  restockUnsubscribe: (() => void) | null;
 }
 
 /**
@@ -136,6 +137,7 @@ export function createShopRestockWindow(): ShopRestockWindowState {
     contentContainer,
     countdownInterval: null,
     resizeListener: null,
+    restockUnsubscribe: null,
   };
 
   // Add resize listener to keep window visible when viewport changes
@@ -160,7 +162,7 @@ export function createShopRestockWindow(): ShopRestockWindowState {
 
   // Subscribe to updates with debouncing to prevent excessive re-renders
   let debounceTimer: number | null = null;
-  onRestockUpdate(() => {
+  state.restockUnsubscribe = onRestockUpdate(() => {
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer);
     }
@@ -210,7 +212,9 @@ function renderContent(state: ShopRestockWindowState): void {
 
     // Defer heavy rendering to next frame to prevent UI blocking
     requestAnimationFrame(() => {
-      state.contentContainer.removeChild(loadingPlaceholder);
+      if (state.contentContainer.contains(loadingPlaceholder)) {
+        state.contentContainer.removeChild(loadingPlaceholder);
+      }
 
       // Prediction section (expensive - uses cached data but still creates DOM)
       const predictionSection = createPredictionSection(state);
@@ -1566,6 +1570,12 @@ export function destroyShopRestockWindow(state: ShopRestockWindowState): void {
   if (state.resizeListener !== null) {
     window.removeEventListener('resize', state.resizeListener);
     state.resizeListener = null;
+  }
+
+  // Unsubscribe from restock updates
+  if (state.restockUnsubscribe !== null) {
+    state.restockUnsubscribe();
+    state.restockUnsubscribe = null;
   }
 
   // Stop live tracking

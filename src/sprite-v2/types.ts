@@ -11,7 +11,8 @@ export type MutationName =
   | 'Dawnlit'
   | 'Ambershine'
   | 'Dawncharged'
-  | 'Ambercharged';
+  | 'Ambercharged'
+  | 'Thunderstruck';
 
 export type SpriteCategory = 'plant' | 'tallplant' | 'crop' | 'decor' | 'item' | 'pet' | 'seed' | 'mutation' | 'mutation-overlay' | 'any';
 

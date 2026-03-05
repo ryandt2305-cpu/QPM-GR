@@ -11,7 +11,7 @@ import {
   type TurtleFocusOption,
   type TurtleTimerFocus,
 } from '../features/turtleTimer';
-import { getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
 import { throttle } from '../utils/scheduling';
 import { storage } from '../utils/storage';
 
@@ -218,7 +218,9 @@ function buildTurtleRow(contribution: TurtleContribution): HTMLElement {
   ].join(';');
 
   // Sprite
-  const spriteUrl = contribution.species ? getPetSpriteDataUrl(contribution.species) : null;
+  const spriteUrl = contribution.species
+    ? getPetSpriteDataUrlWithMutations(contribution.species, contribution.mutations ?? [])
+    : null;
   if (spriteUrl) {
     const img = document.createElement('img');
     img.src = spriteUrl;

@@ -2,7 +2,7 @@
 
 **QPM-GR** is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, and tracking utilities.
 
-**Current Version:** 3.0.62 · **Status:** Active development
+**Current Version:** 3.0.64 · **Status:** Active development
 
 Compatible with:
 - [magiccircle.gg](https://magiccircle.gg/r/*)
@@ -206,3 +206,4 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 ## License
 
 [MIT](LICENSE) — Copyright (c) 2025 TOKYO.#6464
+

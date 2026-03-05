@@ -4,7 +4,7 @@ import { formatCoins } from '../features/valueCalculator';
 import { log } from '../utils/logger';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
-import { getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
 import {
   calculateXpStats,
   getCombinedXpStats,
@@ -63,6 +63,7 @@ export interface XpTrackerWindowState {
 interface PetWithLevel {
   name: string;
   species: string;
+  mutations: string[];
   level: number;
   xp: number;
   maxStr: number;
@@ -120,6 +121,100 @@ function getMaxStr(pet: ActivePetInfo): number | null {
   if (pet.species && pet.targetScale) return calculateMaxStrength(pet.targetScale, pet.species);
   if (pet.strength != null && pet.strength >= 80 && pet.strength <= 100) return pet.strength;
   return null;
+}
+
+function splitMutationTokens(value: string): string[] {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const tokens = /[,|/;]/.test(trimmed) ? trimmed.split(/[,|/;]/g) : [trimmed];
+  return tokens.map((token) => token.trim()).filter((token) => token.length > 0 && /[a-z]/i.test(token));
+}
+
+function collectMutationNames(value: unknown, out: string[], seen = new WeakSet<object>(), depth = 0): void {
+  if (value == null || depth > 4) return;
+  if (typeof value === 'string') {
+    out.push(...splitMutationTokens(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectMutationNames(item, out, seen, depth + 1);
+    }
+    return;
+  }
+  if (value instanceof Set) {
+    collectMutationNames(Array.from(value.values()), out, seen, depth + 1);
+    return;
+  }
+  if (value instanceof Map) {
+    collectMutationNames(Array.from(value.values()), out, seen, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  collectMutationNames(record.mutation, out, seen, depth + 1);
+  collectMutationNames(record.mutations, out, seen, depth + 1);
+
+  const descriptorKeys = new Set(['id', 'name', 'displayName', 'label', 'value', 'variant', 'key', 'type', 'slug', '__typename']);
+  const isDescriptorObject = keys.length > 0 && keys.every((key) => descriptorKeys.has(key));
+  if (isDescriptorObject) {
+    const namedFields = [record.name, record.displayName, record.label, record.value, record.variant, record.key, record.id];
+    for (const field of namedFields) {
+      if (typeof field === 'string') {
+        out.push(...splitMutationTokens(field));
+      }
+    }
+  } else {
+    const isFlagMap =
+      keys.length > 0 &&
+      keys.length <= 8 &&
+      keys.every((key) => typeof record[key] === 'boolean' || typeof record[key] === 'number');
+    if (isFlagMap) {
+      for (const key of keys) {
+        const flag = record[key];
+        if (flag) {
+          out.push(...splitMutationTokens(key));
+        }
+      }
+    }
+  }
+}
+
+function extractItemMutations(entry: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  collectMutationNames(entry.mutation, out);
+  collectMutationNames(entry.mutations, out);
+  const rawEntry = entry.raw;
+  if (rawEntry && typeof rawEntry === 'object') {
+    const rawRecord = rawEntry as Record<string, unknown>;
+    collectMutationNames(rawRecord.mutation, out);
+    collectMutationNames(rawRecord.mutations, out);
+    const rawNestedPet = rawRecord.pet;
+    if (rawNestedPet && typeof rawNestedPet === 'object') {
+      const petRecord = rawNestedPet as Record<string, unknown>;
+      collectMutationNames(petRecord.mutation, out);
+      collectMutationNames(petRecord.mutations, out);
+    }
+  }
+  const nestedPet = entry.pet;
+  if (nestedPet && typeof nestedPet === 'object') {
+    const petRecord = nestedPet as Record<string, unknown>;
+    collectMutationNames(petRecord.mutation, out);
+    collectMutationNames(petRecord.mutations, out);
+  }
+  const deduped = new Map<string, string>();
+  for (const name of out) {
+    const key = name.toLowerCase();
+    if (!deduped.has(key)) {
+      deduped.set(key, name);
+    }
+  }
+  return Array.from(deduped.values());
 }
 
 // ============================================================================
@@ -356,7 +451,7 @@ function createPetCard(pet: ActivePetInfo, teamXpPerHour: number): HTMLElement {
   // Sprite
   if (pet.species) {
     const img = document.createElement('img');
-    img.src = getPetSpriteDataUrl(pet.species) ?? '';
+    img.src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []) ?? '';
     img.dataset.qpmSprite = `pet:${pet.species}`;
     img.alt = pet.species;
     img.style.cssText = 'width:36px;height:36px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
@@ -588,7 +683,17 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
     const xpToNext = pet.xp % xpPerLevel;
     const levelsLeft = maxStr - pet.strength;
     const xpNeeded = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
-    allPets.push({ name: pet.name || pet.species, species: pet.species, level: pet.strength, xp: pet.xp, maxStr, xpNeeded, xpPerLevel, source: 'active' });
+    allPets.push({
+      name: pet.name || pet.species,
+      species: pet.species,
+      mutations: Array.isArray(pet.mutations) ? [...pet.mutations] : [],
+      level: pet.strength,
+      xp: pet.xp,
+      maxStr,
+      xpNeeded,
+      xpPerLevel,
+      source: 'active',
+    });
   }
 
   // Shared item processor for inventory and hutch
@@ -601,6 +706,7 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
       if (source === 'inventory' && i.itemType !== 'Pet') continue;
       if (!species || i.xp == null) continue;
       const xp = i.xp as number;
+      const mutations = extractItemMutations(i);
       const xpPerLevel = getSpeciesXpPerLevel(species);
       if (!xpPerLevel) continue;
 
@@ -620,7 +726,17 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
       const xpToNext = xp % xpPerLevel;
       const levelsLeft = maxStr - currentStr;
       const xpNeeded = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
-      allPets.push({ name: (i.name as string) || species, species, level: currentStr, xp, maxStr, xpNeeded, xpPerLevel, source });
+      allPets.push({
+        name: (i.name as string) || species,
+        species,
+        mutations,
+        level: currentStr,
+        xp,
+        maxStr,
+        xpNeeded,
+        xpPerLevel,
+        source,
+      });
     }
   };
 
@@ -724,7 +840,7 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
 
       // Sprite
       const img = document.createElement('img');
-      img.src = getPetSpriteDataUrl(pet.species) ?? '';
+      img.src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []) ?? '';
       img.dataset.qpmSprite = `pet:${pet.species}`;
       img.alt = pet.species;
       img.style.cssText = 'width:20px;height:20px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';

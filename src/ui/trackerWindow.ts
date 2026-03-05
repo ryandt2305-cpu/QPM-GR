@@ -2,7 +2,7 @@
 
 import { log } from '../utils/logger';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
-import { getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
 import { getAbilityDefinition, computeAbilityStats, type AbilityDefinition } from '../data/petAbilities';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { findAbilityHistoryForIdentifiers, onAbilityHistoryUpdate } from '../store/abilityLogs';
@@ -431,7 +431,7 @@ function buildPetCard(pet: ActivePetInfo, gardenCtx?: AbilityValuationContext): 
   header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;user-select:none;';
 
   // Sprite
-  const spriteUrl = getPetSpriteDataUrl(pet.species ?? '');
+  const spriteUrl = getPetSpriteDataUrlWithMutations(pet.species ?? '', pet.mutations ?? []);
   if (spriteUrl) {
     const img = document.createElement('img');
     img.src = spriteUrl;

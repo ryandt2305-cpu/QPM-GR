@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.0.62] — Current
+## [3.0.64] — Current
 
 ### Changed
 - XP Tracker, Ability Tracker, and Turtle Timer windows rebuilt with cleaner, smarter layouts
@@ -79,3 +79,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Runtime catalog capture via Object.* hook — no hardcoded game data
 - Jotai store bridge for reactive state access
 - GM_* storage wrapper with localStorage fallback
+

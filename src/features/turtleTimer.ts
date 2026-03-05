@@ -242,6 +242,7 @@ export interface TurtleContribution {
   slotIndex: number;
   name: string | null;
   species: string | null;
+  mutations: string[];
   hungerPct: number | null;
   xp: number | null;
   targetScale: number;
@@ -866,6 +867,7 @@ function computeContribution(
     slotIndex: pet.slotIndex,
     name: pet.name,
     species: pet.species,
+    mutations: Array.isArray(pet.mutations) ? [...pet.mutations] : [],
     hungerPct: pet.hungerPct,
     xp,
     targetScale,

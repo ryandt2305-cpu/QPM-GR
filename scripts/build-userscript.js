@@ -1,12 +1,11 @@
 // scripts/build-userscript.js
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         QPM (ALPHA)
 // @namespace    Quinoa
-// @version      3.0.63
+// @version      3.0.64
 // @description  Quality-of-life enhancements for Magic Garden: crop type locking, mutation tracking, value calculator, harvest reminders, journal species checker, and persistent feed statistics.
 // @author       TOKYO.#6464
 // @match        https://1227719606223765687.discordsays.com/*
@@ -40,42 +39,32 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 const USERSCRIPT_FOOTER = `
 })();`;
 
-async function buildUserscript() {
-  console.log('🔨 Building userscript...');
-  
+function buildUserscript() {
+  console.log('Building userscript wrapper...');
+
   try {
-    // Run Vite build
-    console.log('📦 Running Vite build...');
-    execSync('npx vite build', { stdio: 'inherit' });
-    
-    // Read the built file
     const builtFile = path.join(__dirname, '..', 'dist', 'quinoa-pet-manager.iife.js');
-    
+
     if (!fs.existsSync(builtFile)) {
-      throw new Error(`Built file not found: ${builtFile}`);
+      throw new Error(`Bundle not found: ${builtFile}. Run "npm run build" (or "npm run build:bundle") first.`);
     }
-    
+
     const builtCode = fs.readFileSync(builtFile, 'utf8');
-    
-    // Clean up the code (remove any UMD wrapper if present)
-    let cleanedCode = builtCode;
-    
+
     // Remove any source map references
-    cleanedCode = cleanedCode.replace(/\/\/# sourceMappingURL=.*$/gm, '');
-    
-    // Create the final userscript
+    const cleanedCode = builtCode.replace(/\/\/# sourceMappingURL=.*$/gm, '');
+
     const userscript = USERSCRIPT_HEADER + cleanedCode + USERSCRIPT_FOOTER;
-    
-    // Write the userscript
+
     const outputPath = path.join(__dirname, '..', 'dist', 'QPM.user.js');
     fs.writeFileSync(outputPath, userscript, 'utf8');
 
-    console.log('✅ Userscript built successfully!');
-    console.log(`📄 Output: ${outputPath}`);
-    console.log(`📊 Size: ${Math.round(userscript.length / 1024)}KB`);
-    
+    console.log('Userscript built successfully.');
+    console.log(`Output: ${outputPath}`);
+    console.log(`Size: ${Math.round(userscript.length / 1024)}KB`);
   } catch (error) {
-    console.error('❌ Build failed:', error.message);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Build failed:', message);
     process.exit(1);
   }
 }

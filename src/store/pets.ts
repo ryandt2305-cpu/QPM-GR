@@ -402,6 +402,96 @@ function toStringList(value: unknown): string[] {
   return [];
 }
 
+function splitMutationTokens(value: string): string[] {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const tokens = /[,|/;]/.test(trimmed) ? trimmed.split(/[,|/;]/g) : [trimmed];
+  const result: string[] = [];
+  for (const token of tokens) {
+    const candidate = token.trim();
+    if (!candidate || !/[a-z]/i.test(candidate)) continue;
+    result.push(candidate);
+  }
+  return result;
+}
+
+function toMutationStringList(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet<object>(),
+  depth = 0,
+): string[] {
+  if (value == null || depth > 4) return [];
+  if (typeof value === 'string') {
+    return splitMutationTokens(value);
+  }
+  if (Array.isArray(value)) {
+    const result: string[] = [];
+    for (const entry of value) {
+      result.push(...toMutationStringList(entry, seen, depth + 1));
+    }
+    return result;
+  }
+  if (value instanceof Set) {
+    return toMutationStringList(Array.from(value.values()), seen, depth + 1);
+  }
+  if (value instanceof Map) {
+    return toMutationStringList(Array.from(value.values()), seen, depth + 1);
+  }
+  if (typeof value === 'object') {
+    if (seen.has(value)) {
+      return [];
+    }
+    seen.add(value);
+
+    const record = value as Record<string, unknown>;
+    const result: string[] = [];
+    const keys = Object.keys(record);
+
+    if ('mutations' in record) {
+      result.push(...toMutationStringList(record.mutations, seen, depth + 1));
+    }
+    if ('mutation' in record) {
+      result.push(...toMutationStringList(record.mutation, seen, depth + 1));
+    }
+
+    const descriptorKeys = new Set(['id', 'name', 'displayName', 'label', 'value', 'variant', 'key', 'type', 'slug', '__typename']);
+    const isDescriptorObject = keys.length > 0 && keys.every((key) => descriptorKeys.has(key));
+    if (isDescriptorObject) {
+      const namedFields = [
+        record.name,
+        record.displayName,
+        record.label,
+        record.value,
+        record.variant,
+        record.key,
+        record.id,
+      ];
+      for (const field of namedFields) {
+        if (typeof field === 'string') {
+          result.push(...splitMutationTokens(field));
+        }
+      }
+    } else {
+      const isFlagMap =
+        keys.length > 0 &&
+        keys.length <= 8 &&
+        keys.every((key) => typeof record[key] === 'boolean' || typeof record[key] === 'number');
+      if (isFlagMap) {
+        for (const key of keys) {
+          const flag = record[key];
+          if (flag) {
+            result.push(...splitMutationTokens(key));
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+  return [];
+}
+
 function extractSlotId(entry: RawPetInfo): string | null {
   const slot = getSlotRecord(entry);
   const nested = (slot.pet as RawPetSlot | undefined) ?? (entry.pet as RawPetSlot | undefined) ?? null;
@@ -447,9 +537,12 @@ function extractMutations(entry: RawPetInfo): string[] {
   const slot = getSlotRecord(entry);
   const nested = (slot.pet as RawPetSlot | undefined) ?? (entry.pet as RawPetSlot | undefined) ?? null;
   const combined = [
-    ...toStringList(entry.mutations),
-    ...toStringList(slot.mutations),
-    ...toStringList(nested?.mutations),
+    ...toMutationStringList(entry.mutation),
+    ...toMutationStringList(entry.mutations),
+    ...toMutationStringList(slot.mutation),
+    ...toMutationStringList(slot.mutations),
+    ...toMutationStringList(nested?.mutation),
+    ...toMutationStringList(nested?.mutations),
   ];
   return dedupeStrings(combined);
 }

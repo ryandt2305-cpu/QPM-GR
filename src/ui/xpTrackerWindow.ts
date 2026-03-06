@@ -24,6 +24,7 @@ import type { DetailedWeather } from '../utils/weatherDetection';
 import { getAbilityName } from '../utils/catalogHelpers';
 import { storage } from '../utils/storage';
 import { swapPetIntoActiveSlot, type SwapPetFailureReason } from '../features/petSwap';
+import { onCatalogsReady } from '../catalogs/gameCatalogs';
 
 // ============================================================================
 // CONSTANTS
@@ -809,27 +810,57 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
     });
   }
 
+  // Extract items array from an atom value — handles both plain arrays and {items:[]} wrappers
+  function extractAtomItems(data: unknown): unknown[] {
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+      const record = data as Record<string, unknown>;
+      if (Array.isArray(record.items)) return record.items;
+    }
+    return [];
+  }
+
   // Shared item processor for inventory and hutch
   const processItems = (items: unknown[], source: 'inventory' | 'hutch') => {
     if (!Array.isArray(items)) return;
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const i = item as Record<string, unknown>;
-      const species = (i.petSpecies ?? i.species) as string | undefined;
-      if (source === 'inventory' && i.itemType !== 'Pet') continue;
-      if (!species || i.xp == null) continue;
-      const xp = i.xp as number;
+      // Support game's nested pet sub-object (entry.pet.species, entry.pet.xp, etc.)
+      const nested = (i.pet && typeof i.pet === 'object') ? i.pet as Record<string, unknown> : null;
+
+      const species = (i.petSpecies ?? i.species ?? nested?.petSpecies ?? nested?.species) as string | undefined;
+
+      // For inventory, require pet itemType (case-insensitive, checks both itemType and type fields)
+      if (source === 'inventory') {
+        const itemType = String(i.itemType ?? i.type ?? '').toLowerCase();
+        if (!itemType.includes('pet') && !species) continue;
+      }
+
+      if (!species) continue;
+
+      const xp = (i.xp ?? nested?.xp) as number | null | undefined;
+      if (xp == null) continue;
+
       const mutations = extractItemMutations(i);
       const xpPerLevel = getSpeciesXpPerLevel(species);
       if (!xpPerLevel) continue;
 
+      // Determine strength: prefer direct/nested strength, then targetScale, then name parse
+      const rawStrength = (i.strength ?? nested?.strength) as number | null | undefined;
+      const rawTargetScale = (i.targetScale ?? nested?.targetScale) as number | null | undefined;
+
       let currentStr: number, maxStr: number;
-      if (i.strength != null) {
-        currentStr = i.strength as number;
+      if (rawStrength != null) {
+        currentStr = rawStrength;
         const levelsGained = Math.min(30, Math.floor(xp / xpPerLevel));
         maxStr = Math.min(currentStr - levelsGained + 30, 100);
+      } else if (rawTargetScale != null) {
+        const calcMax = calculateMaxStrength(rawTargetScale, species);
+        maxStr = calcMax ?? 100;
+        currentStr = (maxStr - 30) + Math.min(30, Math.floor(xp / xpPerLevel));
       } else {
-        const parsedMax = parseMaxLevelFromName(i.name as string);
+        const parsedMax = parseMaxLevelFromName((i.name ?? nested?.name) as string | undefined);
         if (!parsedMax || parsedMax < 80 || parsedMax > 100) continue;
         maxStr = parsedMax;
         currentStr = (maxStr - 30) + Math.min(30, Math.floor(xp / xpPerLevel));
@@ -840,7 +871,7 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
       const levelsLeft = maxStr - currentStr;
       const xpNeeded = (xpPerLevel - xpToNext) + xpPerLevel * (levelsLeft - 1);
       allPets.push({
-        name: (i.name as string) || species,
+        name: ((i.name ?? nested?.name) as string | undefined) || species,
         species,
         mutations,
         level: currentStr,
@@ -857,10 +888,11 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
   };
 
   try {
-    const invAtom = getAtomByLabel('myInventoryAtom');
+    // Prefer myPetInventoryAtom (dedicated pet inventory slot), fall back to myInventoryAtom
+    const invAtom = getAtomByLabel('myPetInventoryAtom') ?? getAtomByLabel('myInventoryAtom');
     if (invAtom) {
-      const invData = await readAtomValue(invAtom) as { items?: unknown[] } | null;
-      processItems(invData?.items ?? [], 'inventory');
+      const invData = await readAtomValue(invAtom) as unknown;
+      processItems(extractAtomItems(invData), 'inventory');
     }
   } catch (e) { log('⚠️ Near max: inventory read failed', e); }
 
@@ -868,7 +900,7 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
     const hutchAtom = getAtomByLabel('myPetHutchPetItemsAtom');
     if (hutchAtom) {
       const hutchData = await readAtomValue(hutchAtom) as unknown;
-      processItems(Array.isArray(hutchData) ? hutchData : [], 'hutch');
+      processItems(extractAtomItems(hutchData), 'hutch');
     }
   } catch (e) { log('⚠️ Near max: hutch read failed', e); }
 
@@ -1365,6 +1397,11 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
   state.unsubscribeXpTracker = onXpTrackerUpdate(() => {
     renderPetCards(state);
   });
+
+  // If catalogs weren't ready when the window first rendered, re-populate the near max
+  // list once they arrive (getSpeciesXpPerLevel returns null without catalogs, silently
+  // skipping every inventory/hutch pet).
+  onCatalogsReady(() => { void updateNearMaxLevelDisplay(state); });
 
   return state;
 }

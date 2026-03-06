@@ -1,5 +1,5 @@
 import { getGardenFiltersConfig, updateGardenFiltersConfig, getAllPlantSpecies, getAllEggTypes, applyGardenFiltersNow, resetGardenFiltersNow } from '../../features/gardenFilters';
-import { getMutationCatalog, getEggCatalog } from '../../catalogs/gameCatalogs';
+import { getMutationCatalog, getEggCatalog, waitForCatalogs } from '../../catalogs/gameCatalogs';
 import { getCropSpriteWithMutations } from '../../sprite-v2/compat';
 import { canvasToDataUrl } from '../../utils/canvasHelpers';
 import { createCard } from '../panelHelpers';
@@ -77,8 +77,17 @@ export async function createGardenFiltersSection(): Promise<HTMLElement> {
   `;
   mutationsSection.appendChild(mutationsTitle);
 
-  // Get mutations from catalog (future-proof!)
-  const mutations = getMutationCatalog() ?? {};
+  // Get mutations from catalog — wait for catalogs first since the mutation catalog
+  // may arrive slightly after the pet catalog (separate Object.keys() call from the game).
+  await waitForCatalogs(8000).catch(() => {});
+  let mutCatalog = getMutationCatalog();
+  if (!mutCatalog) {
+    for (let i = 0; i < 10 && !mutCatalog; i++) {
+      await new Promise(r => setTimeout(r, 300));
+      mutCatalog = getMutationCatalog();
+    }
+  }
+  const mutations = mutCatalog ?? {};
 
   for (const [mutationId, mutationData] of Object.entries(mutations)) {
     const checkbox = document.createElement('label');

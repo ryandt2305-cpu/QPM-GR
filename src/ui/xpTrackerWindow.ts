@@ -23,6 +23,7 @@ import { getWeatherSnapshot } from '../store/weatherHub';
 import type { DetailedWeather } from '../utils/weatherDetection';
 import { getAbilityName } from '../utils/catalogHelpers';
 import { storage } from '../utils/storage';
+import { swapPetIntoActiveSlot, type SwapPetFailureReason } from '../features/petSwap';
 
 // ============================================================================
 // CONSTANTS
@@ -58,6 +59,10 @@ export interface XpTrackerWindowState {
   scaleOuter: HTMLElement;
   updateScale: (() => void) | null;
   resizeObserver: ResizeObserver | null;
+  nearMaxExpandedPetKey: string | null;
+  nearMaxBusyPetKey: string | null;
+  nearMaxStatus: { key: string; text: string; tone: 'success' | 'error' | 'info' } | null;
+  nearMaxStatusTimer: number | null;
 }
 
 interface PetWithLevel {
@@ -70,6 +75,9 @@ interface PetWithLevel {
   xpNeeded: number;
   xpPerLevel: number;
   source: 'active' | 'inventory' | 'hutch';
+  itemId: string | null;
+  storageId: string | null;
+  activeSlotId: string | null;
 }
 
 interface WindowLayout {
@@ -215,6 +223,108 @@ function extractItemMutations(entry: Record<string, unknown>): string[] {
     }
   }
   return Array.from(deduped.values());
+}
+
+function normalizeId(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function extractItemId(entry: Record<string, unknown>): string | null {
+  const nestedPet = entry.pet && typeof entry.pet === 'object'
+    ? (entry.pet as Record<string, unknown>)
+    : null;
+  const nestedRaw = entry.raw && typeof entry.raw === 'object'
+    ? (entry.raw as Record<string, unknown>)
+    : null;
+  const nestedRawPet = nestedRaw?.pet && typeof nestedRaw.pet === 'object'
+    ? (nestedRaw.pet as Record<string, unknown>)
+    : null;
+
+  const candidates = [
+    normalizeId(entry.id),
+    normalizeId(entry.itemId),
+    normalizeId(entry.petId),
+    normalizeId(entry.slotId),
+    normalizeId(nestedPet?.id),
+    normalizeId(nestedPet?.itemId),
+    normalizeId(nestedPet?.petId),
+    normalizeId(nestedRaw?.id),
+    normalizeId(nestedRaw?.itemId),
+    normalizeId(nestedRaw?.petId),
+    normalizeId(nestedRawPet?.id),
+    normalizeId(nestedRawPet?.itemId),
+    normalizeId(nestedRawPet?.petId),
+  ];
+  return candidates.find((value): value is string => Boolean(value)) ?? null;
+}
+
+function extractStorageId(entry: Record<string, unknown>): string | null {
+  const nestedStorage = entry.storage && typeof entry.storage === 'object'
+    ? (entry.storage as Record<string, unknown>)
+    : null;
+  const nestedRaw = entry.raw && typeof entry.raw === 'object'
+    ? (entry.raw as Record<string, unknown>)
+    : null;
+  const nestedRawStorage = nestedRaw?.storage && typeof nestedRaw.storage === 'object'
+    ? (nestedRaw.storage as Record<string, unknown>)
+    : null;
+
+  const candidates = [
+    normalizeId(entry.storageId),
+    normalizeId(entry.storageID),
+    normalizeId(entry.storageType),
+    normalizeId(nestedStorage?.id),
+    normalizeId(nestedStorage?.storageId),
+    normalizeId(nestedRaw?.storageId),
+    normalizeId(nestedRaw?.storageID),
+    normalizeId(nestedRawStorage?.id),
+    normalizeId(nestedRawStorage?.storageId),
+  ];
+  return candidates.find((value): value is string => Boolean(value)) ?? null;
+}
+
+function getNearMaxPetKey(pet: PetWithLevel): string {
+  const idPart = pet.itemId ?? `${pet.species}:${pet.xp}:${pet.level}:${pet.maxStr}`;
+  return `${pet.source}:${idPart}`;
+}
+
+function mapSwapErrorReason(reason: SwapPetFailureReason | undefined): string {
+  switch (reason) {
+    case 'missing_connection':
+      return 'Swap unavailable: connection missing.';
+    case 'missing_ids':
+      return 'Swap unavailable: pet identifiers missing.';
+    case 'retrieve_failed_or_inventory_full':
+      return 'Cannot retrieve from hutch (inventory may be full).';
+    case 'swap_failed_or_timeout':
+      return 'Swap failed or timed out.';
+    default:
+      return 'Swap failed.';
+  }
+}
+
+function setNearMaxStatus(
+  state: XpTrackerWindowState,
+  key: string,
+  text: string,
+  tone: 'success' | 'error' | 'info',
+): void {
+  state.nearMaxStatus = { key, text, tone };
+  if (state.nearMaxStatusTimer != null) {
+    window.clearTimeout(state.nearMaxStatusTimer);
+  }
+  state.nearMaxStatusTimer = window.setTimeout(() => {
+    state.nearMaxStatus = null;
+    state.nearMaxStatusTimer = null;
+    void updateNearMaxLevelDisplay(state);
+  }, 2600);
 }
 
 // ============================================================================
@@ -693,6 +803,9 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
       xpNeeded,
       xpPerLevel,
       source: 'active',
+      itemId: normalizeId(pet.petId) ?? normalizeId(pet.slotId),
+      storageId: null,
+      activeSlotId: normalizeId(pet.slotId) ?? normalizeId(pet.petId),
     });
   }
 
@@ -736,6 +849,9 @@ async function getAllPets(activePets: ActivePetInfo[]): Promise<PetWithLevel[]> 
         xpNeeded,
         xpPerLevel,
         source,
+        itemId: extractItemId(i),
+        storageId: source === 'hutch' ? extractStorageId(i) : null,
+        activeSlotId: null,
       });
     }
   };
@@ -770,9 +886,31 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
       .sort((a, b) => a.xpNeeded - b.xpNeeded)
       .slice(0, 50);
 
+    const observedSlotIndexes = Array.from(new Set(
+      state.latestPets
+        .map((pet) => pet.slotIndex)
+        .filter((value) => Number.isFinite(value))
+    )).sort((a, b) => a - b);
+    const slotIndexes: number[] = observedSlotIndexes.length > 0
+      ? observedSlotIndexes.slice(0, 3)
+      : [0, 1, 2];
+    let fallbackSlotIndex = slotIndexes.length > 0 ? Math.max(...slotIndexes) + 1 : 0;
+    while (slotIndexes.length < 3) {
+      if (!slotIndexes.includes(fallbackSlotIndex)) {
+        slotIndexes.push(fallbackSlotIndex);
+      }
+      fallbackSlotIndex += 1;
+    }
+
+    const activeSlots = slotIndexes.map((slotIndex, visualIndex) => {
+      const activePet = state.latestPets.find((p) => p.slotIndex === slotIndex) ?? null;
+      const targetSlotId = normalizeId(activePet?.slotId) ?? normalizeId(activePet?.petId);
+      return { slotIndex, visualIndex: visualIndex + 1, activePet, targetSlotId };
+    });
+    const hasAnyTargetSlot = activeSlots.some((slot) => Boolean(slot.targetSlotId));
+
     container.innerHTML = '';
 
-    // Source filter pills
     const filterRow = document.createElement('div');
     filterRow.style.cssText = 'display:flex;gap:6px;padding:10px 14px 4px;flex-wrap:wrap;align-items:center;';
 
@@ -782,24 +920,26 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
     filterRow.appendChild(filterLbl);
 
     const sourceDefs: Array<{ key: 'active' | 'inventory' | 'hutch'; label: string }> = [
-      { key: 'active', label: '🟢 Active' },
-      { key: 'inventory', label: '📦 Inventory' },
-      { key: 'hutch', label: '🏠 Hutch' },
+      { key: 'active', label: 'Active' },
+      { key: 'inventory', label: 'Inventory' },
+      { key: 'hutch', label: 'Hutch' },
     ];
 
-    for (const s of sourceDefs) {
-      const btn = makePillButton(s.label, nearMaxSources.has(s.key));
+    for (const sourceDef of sourceDefs) {
+      const btn = makePillButton(sourceDef.label, nearMaxSources.has(sourceDef.key));
       btn.addEventListener('click', () => {
-        if (nearMaxSources.has(s.key)) nearMaxSources.delete(s.key);
-        else nearMaxSources.add(s.key);
+        if (nearMaxSources.has(sourceDef.key)) {
+          nearMaxSources.delete(sourceDef.key);
+        } else {
+          nearMaxSources.add(sourceDef.key);
+        }
         void updateNearMaxLevelDisplay(state);
       });
       filterRow.appendChild(btn);
     }
     container.appendChild(filterRow);
 
-    const filtered = allPets.filter(p => nearMaxSources.has(p.source)).slice(0, 10);
-
+    const filtered = allPets.filter((pet) => nearMaxSources.has(pet.source)).slice(0, 10);
     if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.textContent = allPets.length === 0
@@ -810,7 +950,6 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
       return;
     }
 
-    // Column header row — aligned with near-max pet row columns
     const nearMaxColHeader = document.createElement('div');
     nearMaxColHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 14px 4px;border-bottom:1px solid rgba(255,255,255,0.06);';
     const nmchSpacer = document.createElement('div');
@@ -819,38 +958,46 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
     nmchName.textContent = 'Pet';
     nmchName.style.cssText = 'flex:1;font-size:9px;color:var(--qpm-text-muted,#555);';
     const nmchBar = document.createElement('div');
-    nmchBar.style.cssText = 'width:56px;flex-shrink:0;'; // progress bar column — no text label
+    nmchBar.style.cssText = 'width:56px;flex-shrink:0;';
     const nmchLvl = document.createElement('span');
     nmchLvl.textContent = 'Level';
     nmchLvl.style.cssText = 'width:44px;text-align:right;font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;';
     const nmchTime = document.createElement('span');
     nmchTime.textContent = 'To max';
     nmchTime.style.cssText = 'min-width:56px;text-align:right;font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;';
-    nearMaxColHeader.append(nmchSpacer, nmchName, nmchBar, nmchLvl, nmchTime);
+    const nmchAction = document.createElement('span');
+    nmchAction.textContent = 'Action';
+    nmchAction.style.cssText = 'width:58px;text-align:right;font-size:9px;color:var(--qpm-text-muted,#555);flex-shrink:0;';
+    nearMaxColHeader.append(nmchSpacer, nmchName, nmchBar, nmchLvl, nmchTime, nmchAction);
     container.appendChild(nearMaxColHeader);
 
     const list = document.createElement('div');
     list.style.cssText = 'padding:4px 14px 12px;display:flex;flex-direction:column;gap:6px;';
-
-    const sourceIcons = { active: '🟢', inventory: '📦', hutch: '🏠' } as const;
+    const sourceIcons = { active: 'A', inventory: 'I', hutch: 'H' } as const;
 
     for (const pet of filtered) {
+      const petKey = getNearMaxPetKey(pet);
+      const canSwap = (pet.source === 'inventory' || pet.source === 'hutch') && Boolean(pet.itemId) && hasAnyTargetSlot;
+      const isExpanded = canSwap && state.nearMaxExpandedPetKey === petKey;
+      const isBusy = state.nearMaxBusyPetKey === petKey;
+      const hasBusyOperation = state.nearMaxBusyPetKey !== null;
+
+      const rowShell = document.createElement('div');
+      rowShell.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;';
 
-      // Sprite
       const img = document.createElement('img');
       img.src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []) ?? '';
       img.dataset.qpmSprite = `pet:${pet.species}`;
       img.alt = pet.species;
       img.style.cssText = 'width:20px;height:20px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
 
-      // Name
       const nameEl = document.createElement('div');
       nameEl.style.cssText = 'flex:1;min-width:0;font-size:12px;color:var(--qpm-text,#ddd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
       nameEl.textContent = `${sourceIcons[pet.source]} ${pet.name}`;
 
-      // Mini progress bar
       const totalXpForRange = pet.xpPerLevel * (pet.maxStr - pet.level);
       const xpDone = totalXpForRange - pet.xpNeeded;
       const pct = Math.max(0, Math.min(100, (xpDone / totalXpForRange) * 100));
@@ -863,28 +1010,151 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
       track.appendChild(fill);
       barWrap.appendChild(track);
 
-      // Level range
       const lvlEl = document.createElement('div');
-      lvlEl.textContent = `${pet.level}→${pet.maxStr}`;
+      lvlEl.textContent = `${pet.level}->${pet.maxStr}`;
       lvlEl.style.cssText = 'font-size:10px;color:var(--qpm-text-muted,#666);font-family:monospace;flex-shrink:0;width:44px;text-align:right;';
 
-      // Time to max
       const xpRate = pet.source === 'active' ? state.totalTeamXpPerHour : 3600;
       const minsToMax = xpRate > 0 ? (pet.xpNeeded / xpRate) * 60 : 0;
       const timeEl = document.createElement('div');
-      timeEl.textContent = xpRate > 0 ? formatTime(minsToMax) : '—';
+      timeEl.textContent = xpRate > 0 ? formatTime(minsToMax) : '--';
       timeEl.style.cssText = 'font-size:11px;color:var(--qpm-warning,#FF9800);font-family:monospace;flex-shrink:0;min-width:56px;text-align:right;';
 
-      row.append(img, nameEl, barWrap, lvlEl, timeEl);
-      list.appendChild(row);
+      const actionWrap = document.createElement('div');
+      actionWrap.style.cssText = 'width:58px;display:flex;justify-content:flex-end;flex-shrink:0;';
+
+      if (canSwap) {
+        const swapButton = document.createElement('button');
+        swapButton.type = 'button';
+        swapButton.textContent = isBusy ? 'Swapping...' : 'Swap';
+        swapButton.disabled = hasBusyOperation;
+        swapButton.style.cssText = [
+          'min-height:24px',
+          'padding:0 10px',
+          'border-radius:999px',
+          'border:1px solid rgba(255,255,255,0.2)',
+          'font-size:11px',
+          `background:${isExpanded ? 'var(--qpm-accent,#4CAF50)' : 'rgba(255,255,255,0.08)'}`,
+          `color:${isExpanded ? '#fff' : 'var(--qpm-text,#ddd)'}`,
+          `cursor:${hasBusyOperation ? 'not-allowed' : 'pointer'}`,
+          `opacity:${hasBusyOperation ? '0.65' : '1'}`,
+        ].join(';');
+        swapButton.addEventListener('click', () => {
+          if (hasBusyOperation) {
+            return;
+          }
+          state.nearMaxExpandedPetKey = isExpanded ? null : petKey;
+          void updateNearMaxLevelDisplay(state);
+        });
+        actionWrap.appendChild(swapButton);
+      }
+
+      row.append(img, nameEl, barWrap, lvlEl, timeEl, actionWrap);
+      rowShell.appendChild(row);
+
+      if (isExpanded && canSwap) {
+        const picker = document.createElement('div');
+        picker.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding-left:28px;';
+
+        for (const slot of activeSlots) {
+          const targetSlotId = slot.targetSlotId;
+          const slotPet = slot.activePet;
+          const slotDisabled = hasBusyOperation || !targetSlotId || !pet.itemId;
+          const slotButton = document.createElement('button');
+          slotButton.type = 'button';
+          slotButton.disabled = slotDisabled;
+          slotButton.style.cssText = [
+            'min-height:44px',
+            'display:flex',
+            'align-items:center',
+            'gap:6px',
+            'padding:6px 8px',
+            'border-radius:8px',
+            `border:1px solid ${slotDisabled ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.2)'}`,
+            `background:${slotDisabled ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.08)'}`,
+            `color:${slotDisabled ? 'var(--qpm-text-muted,#666)' : 'var(--qpm-text,#ddd)'}`,
+            `cursor:${slotDisabled ? 'not-allowed' : 'pointer'}`,
+          ].join(';');
+
+          const slotNumber = document.createElement('span');
+          slotNumber.textContent = String(slot.visualIndex);
+          slotNumber.style.cssText = 'font-size:10px;font-family:monospace;min-width:10px;color:var(--qpm-text-muted,#777);';
+          slotButton.appendChild(slotNumber);
+
+          if (slotPet?.species) {
+            const slotImg = document.createElement('img');
+            slotImg.src = getPetSpriteDataUrlWithMutations(slotPet.species, slotPet.mutations ?? []) ?? '';
+            slotImg.dataset.qpmSprite = `pet:${slotPet.species}`;
+            slotImg.alt = slotPet.species;
+            slotImg.style.cssText = 'width:18px;height:18px;object-fit:contain;image-rendering:pixelated;flex-shrink:0;';
+            slotButton.appendChild(slotImg);
+          } else {
+            const slotSpacer = document.createElement('span');
+            slotSpacer.style.cssText = 'width:18px;height:18px;display:inline-block;flex-shrink:0;';
+            slotButton.appendChild(slotSpacer);
+          }
+
+          const slotName = document.createElement('span');
+          slotName.textContent = (slotPet?.name || slotPet?.species || 'Empty').slice(0, 14);
+          slotName.style.cssText = 'font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;';
+          slotButton.appendChild(slotName);
+
+          slotButton.addEventListener('click', async () => {
+            if (state.nearMaxBusyPetKey || !targetSlotId || !pet.itemId) {
+              return;
+            }
+
+            state.nearMaxBusyPetKey = petKey;
+            void updateNearMaxLevelDisplay(state);
+
+            const result = await swapPetIntoActiveSlot({
+              source: pet.source,
+              itemId: pet.itemId,
+              targetSlotId,
+              storageId: pet.source === 'hutch' ? pet.storageId : null,
+            });
+
+            state.nearMaxBusyPetKey = null;
+            if (result.ok) {
+              state.nearMaxExpandedPetKey = null;
+              setNearMaxStatus(state, petKey, 'Swapped into active slot.', 'success');
+            } else {
+              state.nearMaxExpandedPetKey = petKey;
+              setNearMaxStatus(state, petKey, mapSwapErrorReason(result.reason), 'error');
+            }
+            void updateNearMaxLevelDisplay(state);
+          });
+
+          picker.appendChild(slotButton);
+        }
+
+        rowShell.appendChild(picker);
+      }
+
+      if (state.nearMaxStatus?.key === petKey) {
+        const status = document.createElement('div');
+        status.textContent = state.nearMaxStatus.text;
+        const tone = state.nearMaxStatus.tone;
+        status.style.cssText = [
+          'padding-left:28px',
+          'font-size:11px',
+          `color:${tone === 'success'
+            ? 'var(--qpm-positive,#4CAF50)'
+            : tone === 'error'
+              ? 'var(--qpm-danger,#f44)'
+              : 'var(--qpm-text-muted,#777)'}`,
+        ].join(';');
+        rowShell.appendChild(status);
+      }
+
+      list.appendChild(rowShell);
     }
 
     container.appendChild(list);
   } catch (e) {
-    log('⚠️ Near max update failed', e);
+    log('Near max update failed', e);
     container.innerHTML = '<div style="padding:12px 14px;color:var(--qpm-danger,#f44);font-size:12px;">Failed to load near max pets</div>';
   }
-  // Sync scaleOuter height after async content update.
   state.updateScale?.();
 }
 
@@ -1059,6 +1329,10 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     scaleOuter,
     updateScale: null,
     resizeObserver: null,
+    nearMaxExpandedPetKey: null,
+    nearMaxBusyPetKey: null,
+    nearMaxStatus: null,
+    nearMaxStatusTimer: null,
   };
 
   // ── Window behaviours ──
@@ -1116,6 +1390,10 @@ export function hideXpTrackerWindow(state: XpTrackerWindowState): void {
 
 export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
   if (state.updateInterval) state.updateInterval();
+  if (state.nearMaxStatusTimer != null) {
+    window.clearTimeout(state.nearMaxStatusTimer);
+    state.nearMaxStatusTimer = null;
+  }
   state.resizeObserver?.disconnect();
   if (state.resizeListener) window.removeEventListener('resize', state.resizeListener);
   state.unsubscribePets?.();
@@ -1130,3 +1408,5 @@ export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
 export function setGlobalXpTrackerState(_state: XpTrackerWindowState): void {
   // intentionally empty
 }
+
+

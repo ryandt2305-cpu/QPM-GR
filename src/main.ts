@@ -29,10 +29,13 @@ import { initSpriteSystem } from './sprite-v2/index';
 import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
 
-import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
+import { initPetTeamsStore, stopPetTeamsStore } from './store/petTeams';
+import { initPetTeamsLogs, stopPetTeamsLogs } from './store/petTeamsLogs';
+import { initPetsWindow, stopPetsWindow, togglePetsWindow } from './ui/petsWindow';
 import { toggleWindow } from './ui/modalWindow';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
@@ -780,18 +783,6 @@ const QPM_DEBUG_API = {
     console.log('• Check console for detection logs');
   },
 
-  toggleBadgePreview: async (force?: boolean) => {
-    try {
-      const { toggleBadgePreview } = await import('./ui/achievementsWindow');
-      const result = toggleBadgePreview(force);
-      log(`QPM badge preview ${result ? 'enabled' : 'disabled'}${force === undefined ? '' : ` (forced ${force})`}`);
-      return result;
-    } catch (error) {
-      console.error('Failed to toggle badge preview', error);
-      return null;
-    }
-  },
-
   // Debug helpers (inventory + seeds + rainbow + Pet Hub)
   debugInventoryAtoms: async (labels: string[] = ['myInventoryAtom', 'myCropInventoryAtom', 'seedInventoryAtom']) => {
     const cache = (window as any).__qpmJotaiAtomCache__;
@@ -993,6 +984,21 @@ const QPM_DEBUG_API = {
     const { showTutorialPopup } = await import('./ui/tutorialPopup');
     showTutorialPopup();
   },
+
+  // Pet Teams debug helpers
+  togglePetsWindow,
+  getPetTeams: async () => {
+    const { getTeamsConfig } = await import('./store/petTeams');
+    return getTeamsConfig();
+  },
+  applyPetTeam: async (teamId: string) => {
+    const { applyTeam } = await import('./store/petTeams');
+    return applyTeam(teamId);
+  },
+  getPetPool: async () => {
+    const { getAllPooledPets } = await import('./store/petTeams');
+    return getAllPooledPets();
+  },
 };
 
 registerInspectFriendHelper();
@@ -1142,6 +1148,10 @@ window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
   timerManager.destroy();
+  stopNativeFeedIntercept();
+  stopPetTeamsStore();
+  stopPetTeamsLogs();
+  stopPetsWindow();
 }, { once: true });
 
 async function waitForGame(): Promise<void> {
@@ -1233,6 +1243,11 @@ async function initialize(): Promise<void> {
   await startSellSnapshotWatcher();
   await yieldToBrowser();
 
+  // Phase 3b: Pet Teams (needs inventory + pet stores ready)
+  initPetTeamsLogs();
+  initPetTeamsStore();
+  await yieldToBrowser();
+
   // Phase 4: Garden bridge (needed for reminders)
   await startGardenBridge();
   await yieldToBrowser();
@@ -1271,10 +1286,10 @@ async function initialize(): Promise<void> {
   // Phase 8: Non-critical features (can load after UI is visible)
   startCropBoostTracker();
   initCropSizeIndicator();
+  startNativeFeedIntercept();
   await yieldToBrowser();
 
-  // Phase 9: Achievements (heavy, do later)
-  initializeAchievements();
+  // Phase 9: Expose Aries bridge
   exposeAriesBridge();
   await yieldToBrowser();
 
@@ -1333,6 +1348,7 @@ async function initialize(): Promise<void> {
 
   // Create UI (needs sprites to be ready)
   await createOriginalUI();
+  initPetsWindow();
 
   // Start version checker (checks for updates periodically)
   startVersionChecker();

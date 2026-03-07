@@ -51,7 +51,7 @@ export function openPetOptimizerWindow(): void {
   );
 }
 
-function renderPetOptimizerWindow(body: HTMLElement): void {
+export function renderPetOptimizerWindow(body: HTMLElement): void {
   // Clear any existing content
   body.innerHTML = '';
 

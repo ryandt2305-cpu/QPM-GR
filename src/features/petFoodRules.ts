@@ -39,6 +39,11 @@ export interface FoodSelection {
 
 export interface FoodSelectionOptions {
   avoidFavorited?: boolean;
+  /**
+   * Per-pet-item override. When provided, takes precedence over the species-level override.
+   * Callers (e.g. instantFeed.ts) should read this from the Pet Teams feed policy.
+   */
+  itemOverride?: SpeciesOverride | null;
 }
 
 const STORAGE_KEY = 'quinoa-pet-food-rules';
@@ -579,7 +584,8 @@ export function selectFoodForPet(
   }
 
   const diet = resolveDiet(petSpecies);
-  const override = resolveOverride(petSpecies);
+  // Per-item override takes precedence over species-level override
+  const override = options.itemOverride !== undefined ? options.itemOverride : resolveOverride(petSpecies);
 
   const allowedNormalized = new Set<string>(diet.normalized);
 

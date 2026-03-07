@@ -4,7 +4,6 @@
 import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getActivePetInfos, type ActivePetInfo } from '../store/pets';
-import { recordInstantFeedUse } from '../store/achievements';
 import { readInventoryDirect, type InventoryItem } from '../store/inventory';
 import { selectFoodForPet, type InventorySnapshot } from './petFoodRules';
 
@@ -71,6 +70,12 @@ function sendFeedPetMessage(petItemId: string, cropItemId: string): boolean {
 
     log('📤 Sending FeedPet WebSocket message', payload);
     connection.sendMessage(payload);
+
+    // Dispatch event so petTeamsLogs can record feed events without direct coupling
+    try {
+      window.dispatchEvent(new CustomEvent('qpm:feedPet', { detail: { petItemId, cropItemId } }));
+    } catch {}
+
     return true;
   } catch (error) {
     log('❌ Failed to send FeedPet message', error);
@@ -199,7 +204,6 @@ export async function feedPetInstantly(
     }
 
     log(`✅ Fed ${pet.name || pet.species || 'pet'} with ${crop.species || 'food'}`);
-    recordInstantFeedUse(1);
     return {
       success: true,
       petName: pet.name,
@@ -246,7 +250,6 @@ export async function feedPetByIds(
     }
 
     log(`✅ Fed pet ${petId} with crop ${cropId}`);
-    recordInstantFeedUse(1);
     return {
       success: true,
       petName: pet?.name ?? null,

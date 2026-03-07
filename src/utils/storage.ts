@@ -68,6 +68,16 @@ const QPM_STORAGE_KEYS = [
 
   // Player identity
   'quinoa:selfPlayerId',
+
+  // Pet Teams
+  'qpm.petTeams.config.v1',
+  'qpm.petTeams.feedPolicy.v1',
+  'qpm.petTeams.logs.v1',
+  'qpm.petTeams.uiState.v1',
+
+  // Shop Restock (Supabase)
+  'qpm.restockCache',
+  'qpm.dashboardModules',
 ];
 
 export const storage: Storage = {

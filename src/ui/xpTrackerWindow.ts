@@ -1139,6 +1139,7 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
             state.nearMaxBusyPetKey = petKey;
             void updateNearMaxLevelDisplay(state);
 
+            if (pet.source !== 'hutch' && pet.source !== 'inventory') return;
             const result = await swapPetIntoActiveSlot({
               source: pet.source,
               itemId: pet.itemId,

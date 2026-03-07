@@ -1,22 +1,9 @@
 // src/integrations/ariesBridge.ts
-// Exposes lightweight data snapshots for Aries Mod to consume (achievements + pet teams)
+// Exposes lightweight data snapshots for Aries Mod to consume (pet teams)
 
-import { getAchievementDefinitions, getAchievementProgress } from '../store/achievements';
 import { getActivePetInfos } from '../store/pets';
 import { log } from '../utils/logger';
 import { shareGlobal } from '../core/pageContext';
-
-export type AriesBridgeAchievement = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  rarity: string;
-  target: number | null;
-  current: number;
-  completedAt: number | null;
-  ineligible: boolean;
-};
 
 export type AriesBridgeTeam = {
   id: string;
@@ -72,7 +59,7 @@ function normalizeTeam(entry: any): AriesBridgeTeam | null {
   };
 }
 
-function readTeamsFromLocalStorage(): AriesBridgeTeam[] {
+export function readTeamsFromLocalStorage(): AriesBridgeTeam[] {
   const teams: AriesBridgeTeam[] = [];
   TEAM_STORAGE_KEYS.forEach((key) => {
     try {
@@ -117,25 +104,6 @@ function buildActivePetsTeam(): AriesBridgeTeam | null {
   };
 }
 
-function buildAchievementPayload(): AriesBridgeAchievement[] {
-  const defs = getAchievementDefinitions();
-  const progress = getAchievementProgress();
-  return defs.map((def) => {
-    const prog = progress.get(def.id);
-    return {
-      id: def.id,
-      title: def.title,
-      description: def.description,
-      category: def.category,
-      rarity: def.rarity,
-      target: typeof def.target === 'number' ? def.target : null,
-      current: prog?.current ?? 0,
-      completedAt: prog?.completedAt ?? null,
-      ineligible: !!prog?.ineligible,
-    } satisfies AriesBridgeAchievement;
-  });
-}
-
 function buildTeamsPayload(): AriesBridgeTeam[] {
   const teams: AriesBridgeTeam[] = [];
   teams.push(...readTeamsFromLocalStorage());
@@ -146,13 +114,12 @@ function buildTeamsPayload(): AriesBridgeTeam[] {
 
 export function exposeAriesBridge(): void {
   const payload = {
-    getAchievements: (): AriesBridgeAchievement[] => buildAchievementPayload(),
     getTeams: (): AriesBridgeTeam[] => buildTeamsPayload(),
   };
 
   try {
     shareGlobal('QPM_ARIES_BRIDGE', payload);
-    log('✅ AriesBridge: exposed QPM_ARIES_BRIDGE with achievements and teams');
+    log('✅ AriesBridge: exposed QPM_ARIES_BRIDGE with teams');
   } catch (error) {
     log('⚠️ AriesBridge: failed to expose bridge', error);
   }

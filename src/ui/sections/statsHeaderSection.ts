@@ -1,37 +1,91 @@
 // src/ui/sections/statsHeaderSection.ts — Dashboard stats header section
 import { type UIState } from '../panelState';
-import { ensureTurtleTimerConfig, updateTurtleTimerViews } from '../turtleTimerLogic';
-import { btn, parseFocusTargetKey, formatDurationPretty } from '../panelHelpers';
-import {
-  onTurtleTimerState,
-  setTurtleTimerEnabled,
-  configureTurtleTimer,
-  getTurtleTimerState,
-} from '../../features/turtleTimer.ts';
-import type { TurtleTimerState } from '../../features/turtleTimer.ts';
-import { calculateItemStats, initializeRestockTracker, onRestockUpdate } from '../../features/shopRestockTracker';
-import { startLiveShopTracking } from '../../features/shopRestockLiveTracker';
-import { canvasToDataUrl } from '../../utils/canvasHelpers';
-import { getCropSpriteCanvas, getPetSpriteCanvas, onSpritesReady } from '../../sprite-v2/compat';
+import { btn } from '../panelHelpers';
 import { log } from '../../utils/logger';
+import { storage } from '../../utils/storage';
+import { fetchRestockData, getRestockDataSync, getItemProbability, type RestockItem } from '../../utils/restockDataService';
+import { getActivePetInfos } from '../../store/pets';
+import { onTurtleTimerState } from '../../features/turtleTimer.ts';
+import type { TurtleTimerState } from '../../features/turtleTimer.ts';
+import { visibleInterval } from '../../utils/timerManager';
 
-function createMinimalCard(icon: string, title: string, bgColor: string): HTMLElement {
-  const card = document.createElement('div');
-  card.style.cssText = `padding:8px 10px;border-radius:6px;background:${bgColor};border:1px solid ${bgColor.replace('0.15', '0.25')};display:flex;flex-direction:column;gap:4px;`;
+// ---------------------------------------------------------------------------
+// Changelog (hardcoded — most practical for userscript)
+// ---------------------------------------------------------------------------
 
-  const header = document.createElement('div');
-  header.className = 'indicator-header';
-  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:2px;';
+const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  { version: '3.0.67', date: '2026-03', notes: [
+    'Consolidated tabs into hub windows (Trackers, Utility, Pets)',
+    'Shop Restock rewritten with Supabase data',
+    'Dashboard: Changelog card, shop restock cards, dashboard modules',
+    'Removed Achievements tab',
+  ]},
+  { version: '3.0.66', date: '2026-03', notes: [
+    'Fix XP tracker catalog race condition',
+    'Fix garden filter mutations display',
+  ]},
+  { version: '3.0.65', date: '2026-03', notes: [
+    'XP Tracker swap button',
+    'Garden filters improvements',
+  ]},
+  { version: '3.0.64', date: '2026-02', notes: [
+    'Sprite mutations + garden filters (amberlit)',
+  ]},
+];
 
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size:11px;font-weight:600;color:#b0b0b0;letter-spacing:0.3px;';
-  titleEl.textContent = `${icon} ${title}`;
+// ---------------------------------------------------------------------------
+// Dashboard modules
+// ---------------------------------------------------------------------------
 
-  header.appendChild(titleEl);
-  card.appendChild(header);
+const DASHBOARD_MODULES_KEY = 'qpm.dashboardModules';
 
-  return card;
+type ModuleId = 'xp-near-max' | 'turtle-timer' | 'active-pets' | 'next-restock';
+
+interface DashboardModule {
+  id: ModuleId;
+  label: string;
+  icon: string;
 }
+
+const ALL_MODULES: DashboardModule[] = [
+  { id: 'xp-near-max', label: 'XP Near Max', icon: '✨' },
+  { id: 'turtle-timer', label: 'Turtle Timer', icon: '🐢' },
+  { id: 'active-pets', label: 'Active Pets', icon: '🐾' },
+  { id: 'next-restock', label: 'Next Restock', icon: '🏪' },
+];
+
+function loadEnabledModules(): Set<ModuleId> {
+  const saved = storage.get<ModuleId[] | null>(DASHBOARD_MODULES_KEY, null);
+  return new Set(saved ?? []);
+}
+
+function saveEnabledModules(ids: Set<ModuleId>): void {
+  storage.set(DASHBOARD_MODULES_KEY, [...ids]);
+}
+
+// ---------------------------------------------------------------------------
+// Shop restock card helpers
+// ---------------------------------------------------------------------------
+
+const SHOP_TYPES = [
+  { key: 'Starweaver', emoji: '⭐', color: 'rgba(255,215,0,0.12)', accent: '#FFD700' },
+  { key: 'Dawnbinder', emoji: '🌅', color: 'rgba(255,152,0,0.12)', accent: '#FF9800' },
+  { key: 'Moonbinder', emoji: '🌙', color: 'rgba(156,39,176,0.12)', accent: '#CE93D8' },
+  { key: 'Mythical Eggs', emoji: '🥚', color: 'rgba(66,165,245,0.12)', accent: '#42A5F5' },
+];
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return 'Soon™';
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
+// ---------------------------------------------------------------------------
+// createStatsHeader
+// ---------------------------------------------------------------------------
 
 export function createStatsHeader(
   uiState: UIState,
@@ -42,355 +96,456 @@ export function createStatsHeader(
   const container = document.createElement('div');
   container.className = 'qpm-card';
   container.dataset.qpmSection = 'header';
-  container.style.cssText = 'background: linear-gradient(135deg, rgba(143,130,255,0.08), rgba(143,130,255,0.03)); border: 1px solid rgba(143,130,255,0.15);';
+  container.style.cssText = 'background:linear-gradient(135deg,rgba(143,130,255,0.08),rgba(143,130,255,0.03));border:1px solid rgba(143,130,255,0.15);';
 
+  // ── Header row ──
   const headerRow = document.createElement('div');
   headerRow.className = 'qpm-card__header';
 
   const headerTitle = document.createElement('div');
   headerTitle.className = 'qpm-card__title';
-  headerTitle.textContent = 'Session Overview';
-  headerTitle.style.cssText = 'font-size: 14px; font-weight: 700; letter-spacing: 0.3px;';
+  headerTitle.textContent = 'Dashboard';
+  headerTitle.style.cssText = 'font-size:14px;font-weight:700;letter-spacing:0.3px;';
 
   const resetButton = btn('♻ Reset Stats', resetAllStats);
   resetButton.classList.add('qpm-button--accent');
   resetButton.style.fontSize = '11px';
-  resetButton.title = 'Reset header and detailed stats counters';
+  resetButton.title = 'Reset session stats counters';
 
   headerRow.append(headerTitle, resetButton);
   container.appendChild(headerRow);
 
-  // Create indicators grid - clean, minimal cards
-  const indicatorsGrid = document.createElement('div');
-  indicatorsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:10px;';
-  container.appendChild(indicatorsGrid);
+  // ── Shop Restock summary ──
+  const shopSection = buildShopRestockSection();
+  container.appendChild(shopSection);
 
-  // === Bella's Turtle Temple Indicator ===
-  const turtleCfg = ensureTurtleTimerConfig(cfg);
-  const turtleCard = createMinimalCard('🐢', 'Bella\'s Turtle Temple', 'rgba(0,150,136,0.15)');
+  // ── Changelog ──
+  const changelogCard = buildChangelogCard();
+  container.appendChild(changelogCard);
 
-  // Enable/Disable toggle in card header
-  const turtleHeader = turtleCard.querySelector('.indicator-header') as HTMLElement;
-  const turtleToggle = document.createElement('button');
-  turtleToggle.type = 'button';
-  turtleToggle.className = 'qpm-chip';
-  turtleToggle.style.cssText = 'cursor:pointer;user-select:none;font-size:9px;padding:2px 6px;';
-  turtleHeader.appendChild(turtleToggle);
+  // ── Dashboard Modules ──
+  const modulesSection = buildModulesSection(uiState);
+  container.appendChild(modulesSection);
 
-  // Plant name (clickable)
-  const plantNameRow = document.createElement('div');
-  plantNameRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;cursor:pointer;padding:4px 6px;background:rgba(255,255,255,0.04);border-radius:4px;margin:4px 0;transition:background 0.2s;';
-  plantNameRow.title = 'Click to select a different plant';
+  return container;
+}
 
-  const plantNameText = document.createElement('div');
-  plantNameText.style.cssText = 'font-size:12px;font-weight:600;color:#e0f2f1;flex:1;';
-  plantNameText.textContent = 'Loading...';
-  plantNameRow.appendChild(plantNameText);
+// ---------------------------------------------------------------------------
+// Shop restock summary
+// ---------------------------------------------------------------------------
 
-  const plantDropdownIcon = document.createElement('span');
-  plantDropdownIcon.style.cssText = 'font-size:9px;color:#80cbc4;';
-  plantDropdownIcon.textContent = '▼';
-  plantNameRow.appendChild(plantDropdownIcon);
+function buildShopRestockSection(): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-top:14px;';
 
-  turtleCard.appendChild(plantNameRow);
+  const sectionTitle = document.createElement('div');
+  sectionTitle.style.cssText = 'font-size:11px;font-weight:600;color:#64b5f6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;';
+  sectionTitle.textContent = '🏪 Shop Restock';
+  section.appendChild(sectionTitle);
 
-  // Plant selector dropdown
-  const plantSelector = document.createElement('select');
-  plantSelector.className = 'qpm-select';
-  plantSelector.style.cssText = 'display:none;width:100%;padding:4px 6px;font-size:10px;background:rgba(0,0,0,0.3);border:1px solid rgba(0,150,136,0.3);border-radius:4px;color:#e0e0e0;margin-bottom:6px;';
-  turtleCard.appendChild(plantSelector);
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;';
+  section.appendChild(grid);
 
-  const plantPlaceholder = document.createElement('option');
-  plantPlaceholder.value = '';
-  plantPlaceholder.textContent = 'Select a plant...';
-  plantPlaceholder.disabled = true;
-  plantSelector.appendChild(plantPlaceholder);
+  // One card per shop type
+  const cardEls: Array<{ el: HTMLElement; nextEl: HTMLElement; topEl: HTMLElement }> = [];
 
-  // Toggle dropdown
-  plantNameRow.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isHidden = plantSelector.style.display === 'none';
-    plantSelector.style.display = isHidden ? 'block' : 'none';
-    plantDropdownIcon.textContent = isHidden ? '▲' : '▼';
-    if (isHidden) updatePlantSelectorOptions();
-  });
+  for (const shop of SHOP_TYPES) {
+    const card = document.createElement('div');
+    card.style.cssText = [
+      `padding:8px 10px`,
+      `background:${shop.color}`,
+      `border:1px solid ${shop.accent}30`,
+      `border-radius:6px`,
+      `display:flex`,
+      `flex-direction:column`,
+      `gap:3px`,
+      `min-width:0`,
+    ].join(';');
 
-  plantNameRow.addEventListener('mouseenter', () => {
-    plantNameRow.style.background = 'rgba(255,255,255,0.08)';
-  });
-  plantNameRow.addEventListener('mouseleave', () => {
-    plantNameRow.style.background = 'rgba(255,255,255,0.04)';
-  });
+    const shopName = document.createElement('div');
+    shopName.style.cssText = `font-size:10px;font-weight:700;color:${shop.accent};text-transform:uppercase;letter-spacing:0.4px;`;
+    shopName.textContent = `${shop.emoji} ${shop.key}`;
 
-  plantSelector.addEventListener('change', () => {
-    const selectedKey = plantSelector.value;
-    if (selectedKey) {
-      const { tileId, slotIndex } = parseFocusTargetKey(selectedKey);
-      cfg.turtleTimer = {
-        ...ensureTurtleTimerConfig(cfg),
-        focus: 'specific',
-        focusTargetTileId: tileId,
-        focusTargetSlotIndex: slotIndex,
-      };
-      saveCfg();
-      configureTurtleTimer({
-        focus: 'specific',
-        focusTargetTileId: tileId,
-        focusTargetSlotIndex: slotIndex,
-      });
-      plantSelector.style.display = 'none';
-      plantDropdownIcon.textContent = '▼';
-    }
-  });
+    const nextEl = document.createElement('div');
+    nextEl.style.cssText = 'font-size:12px;font-weight:600;color:#e0e0e0;';
+    nextEl.textContent = '—';
 
-  const updatePlantSelectorOptions = () => {
-    const state = getTurtleTimerState();
-    while (plantSelector.options.length > 1) {
-      plantSelector.remove(1);
-    }
-    for (const target of state.plantTargets) {
-      const option = document.createElement('option');
-      option.value = target.key;
-      const speciesLabel = target.species ?? 'Unknown';
-      const timingLabel = target.remainingMs != null ? formatDurationPretty(target.remainingMs) : 'Ready';
-      option.textContent = `${speciesLabel} - ${timingLabel}`;
-      plantSelector.appendChild(option);
-    }
-  };
+    const topEl = document.createElement('div');
+    topEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    topEl.textContent = 'Loading...';
 
-  const turtleStatus = document.createElement('div');
-  turtleStatus.style.cssText = 'font-size:11px;color:#e0f2f1;font-weight:500;margin-bottom:2px;';
-  turtleCard.appendChild(turtleStatus);
-
-  const turtleDetail = document.createElement('div');
-  turtleDetail.style.cssText = 'font-size:10px;color:#b2dfdb;line-height:1.4;';
-  turtleCard.appendChild(turtleDetail);
-
-  const turtleFooter = document.createElement('div');
-  turtleFooter.style.cssText = 'font-size:9px;color:#80cbc4;margin-top:4px;';
-  turtleCard.appendChild(turtleFooter);
-
-  // Boardwalk checkbox removed (no longer needed)
-
-  turtleToggle.addEventListener('click', () => {
-    const nextEnabled = !(cfg.turtleTimer?.enabled ?? true);
-    cfg.turtleTimer = { ...ensureTurtleTimerConfig(cfg), enabled: nextEnabled };
-    saveCfg();
-    setTurtleTimerEnabled(nextEnabled);
-  });
-
-  uiState.turtleStatus = turtleStatus;
-  uiState.turtleDetail = turtleDetail;
-  uiState.turtleFooter = turtleFooter;
-  uiState.turtleEnableButtons.push(turtleToggle);
-
-  uiState.turtlePlantNameText = plantNameText;
-
-  if (uiState.turtleUnsubscribe) {
-    uiState.turtleUnsubscribe();
+    card.append(shopName, nextEl, topEl);
+    grid.appendChild(card);
+    cardEls.push({ el: card, nextEl, topEl });
   }
-  uiState.turtleUnsubscribe = onTurtleTimerState((snapshot: TurtleTimerState) => {
-    updateTurtleTimerViews(uiState, snapshot);
-  });
 
-  indicatorsGrid.appendChild(turtleCard);
+  // Update card contents with data
+  const updateCards = (items: RestockItem[]): void => {
+    SHOP_TYPES.forEach((shop, i) => {
+      const card = cardEls[i];
+      if (!card) return;
+      const { nextEl, topEl } = card;
+      const shopItems = items.filter(it =>
+        (it.shop_type ?? '').toLowerCase() === shop.key.toLowerCase()
+      );
 
-  // === Shop Restock Tracker Cards ===
-  const shopRestockTitle = document.createElement('div');
-  shopRestockTitle.style.cssText = 'font-size:12px;font-weight:600;color:#64b5f6;margin-top:16px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;';
-  shopRestockTitle.textContent = '🏪 Shop Restock Tracker';
-  container.appendChild(shopRestockTitle);
-
-  const shopRestockGrid = document.createElement('div');
-  shopRestockGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;';
-  container.appendChild(shopRestockGrid);
-
-  const trackedShopItems = [
-    { name: 'Starweaver', emoji: '⭐', color: 'rgba(255,215,0,0.2)', textColor: '#FFD700' },
-    { name: 'Dawnbinder', emoji: '🌅', color: 'rgba(255,152,0,0.2)', textColor: '#FF9800' },
-    { name: 'Moonbinder', emoji: '🌙', color: 'rgba(156,39,176,0.2)', textColor: '#CE93D8' },
-    { name: 'Mythical Eggs', emoji: '🥚', color: 'rgba(66,165,245,0.2)', textColor: '#42A5F5' },
-  ];
-
-  const formatDaysAgo = (timestamp: number): string => {
-    const now = Date.now();
-    const diff = now - timestamp;
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor(diff / (1000 * 60));
-
-    if (days > 0) {
-      return days === 1 ? '1 day ago' : `${days} days ago`;
-    } else if (hours > 0) {
-      return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
-    } else if (minutes > 0) {
-      return minutes === 1 ? '1 min ago' : `${minutes} mins ago`;
-    } else {
-      return 'Just now';
-    }
-  };
-
-  const updateShopRestockCards = () => {
-    // Clear existing cards
-    shopRestockGrid.innerHTML = '';
-
-    const itemStats = calculateItemStats();
-
-    trackedShopItems.forEach(itemConfig => {
-      // Try exact match first, then fuzzy match (e.g., "Moonbinder" matches "Moonbinder Pod")
-      let stat = itemStats.get(itemConfig.name);
-      if (!stat) {
-        // Try finding by partial match
-        for (const [itemName, itemStat] of itemStats.entries()) {
-          if (itemName.includes(itemConfig.name) || itemConfig.name.includes(itemName)) {
-            stat = itemStat;
-            break;
-          }
-        }
+      if (!shopItems.length) {
+        nextEl.textContent = '—';
+        topEl.textContent = 'No data';
+        return;
       }
-      const card = document.createElement('div');
-      card.style.cssText = `
-        padding:12px;
-        background:${itemConfig.color};
-        border-radius:8px;
-        border:2px solid ${itemConfig.textColor}40;
-        box-shadow:0 2px 8px rgba(0,0,0,0.2);
-        transition:all 0.2s ease;
-        cursor:default;
-      `;
 
-      // Hover effect
-      card.addEventListener('mouseenter', () => {
-        card.style.transform = 'translateY(-2px)';
-        card.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
-      });
-      card.addEventListener('mouseleave', () => {
-        card.style.transform = 'translateY(0)';
-        card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
-      });
+      // Find soonest next restock
+      const now = Date.now();
+      const withNext = shopItems
+        .filter(it => it.estimated_next_timestamp != null)
+        .sort((a, b) => (a.estimated_next_timestamp ?? 0) - (b.estimated_next_timestamp ?? 0));
 
-      // Header with sprite icon
-      const header = document.createElement('div');
-      header.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:8px;';
-
-      // Get sprite based on item name
-      let spriteUrl: string | null = null;
-      let spriteType: 'pet' | 'crop' = 'crop';
-      let spriteId = itemConfig.name;
-
-      if (itemConfig.name === 'Mythical Eggs') {
-        spriteType = 'pet';
-        spriteId = 'MythicalEgg';
-        spriteUrl = canvasToDataUrl(getPetSpriteCanvas('MythicalEgg'));
+      if (withNext.length) {
+        const soonest = withNext[0]!;
+        const remaining = (soonest.estimated_next_timestamp ?? 0) - now;
+        nextEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
+        const prob = getItemProbability(soonest);
+        const probText = prob != null ? ` (${prob.toFixed(0)}%)` : '';
+        topEl.textContent = `${soonest.item_id ?? '?'}${probText}`;
+        nextEl.dataset.ts = String(soonest.estimated_next_timestamp ?? '');
       } else {
-        // Starweaver, Dawnbinder, Moonbinder are crops
-        spriteUrl = canvasToDataUrl(getCropSpriteCanvas(itemConfig.name));
+        nextEl.textContent = '—';
+        // Show highest prob item
+        const byProb = [...shopItems].sort((a, b) =>
+          (getItemProbability(b) ?? -1) - (getItemProbability(a) ?? -1)
+        );
+        topEl.textContent = byProb[0]?.item_id ?? '—';
       }
-
-      const iconContainer = document.createElement('div');
-      iconContainer.style.cssText = 'width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;';
-
-      // Always create img element with data attribute for sprite refresh
-      const spriteImg = document.createElement('img');
-      spriteImg.dataset.qpmSprite = `${spriteType}:${spriteId}`;
-      spriteImg.alt = itemConfig.name;
-      spriteImg.style.cssText = 'width:100%;height:100%;object-fit:contain;image-rendering:pixelated;';
-
-      if (spriteUrl) {
-        spriteImg.src = spriteUrl;
-        iconContainer.appendChild(spriteImg);
-      } else {
-        // Show emoji initially, sprite will be loaded when ready
-        spriteImg.style.display = 'none';
-        iconContainer.appendChild(spriteImg);
-        const emojiSpan = document.createElement('span');
-        emojiSpan.textContent = itemConfig.emoji;
-        emojiSpan.style.fontSize = '18px';
-        emojiSpan.className = 'qpm-sprite-fallback';
-        iconContainer.appendChild(emojiSpan);
-      }
-
-      const title = document.createElement('div');
-      title.style.cssText = `font-size:11px;font-weight:700;color:${itemConfig.textColor};text-transform:uppercase;letter-spacing:0.5px;`;
-      title.textContent = itemConfig.name;
-
-      header.appendChild(iconContainer);
-      header.appendChild(title);
-      card.appendChild(header);
-
-      if (stat && stat.lastSeen) {
-        const lastSeenDate = new Date(stat.lastSeen);
-        const timeString = lastSeenDate.toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        });
-        const dateString = lastSeenDate.toLocaleDateString([], {
-          month: 'short',
-          day: 'numeric',
-        });
-        const daysAgo = formatDaysAgo(stat.lastSeen);
-
-        // Date and time
-        const dateTimeDiv = document.createElement('div');
-        dateTimeDiv.style.cssText = 'margin-bottom:4px;';
-
-        const dateDiv = document.createElement('div');
-        dateDiv.style.cssText = 'font-size:13px;color:#fff;font-weight:600;';
-        dateDiv.textContent = `${dateString} ${timeString}`;
-        dateTimeDiv.appendChild(dateDiv);
-
-        card.appendChild(dateTimeDiv);
-
-        // Days ago badge
-        const daysAgoDiv = document.createElement('div');
-        daysAgoDiv.style.cssText = `font-size:10px;color:${itemConfig.textColor};font-weight:600;background:rgba(0,0,0,0.2);padding:3px 8px;border-radius:4px;display:inline-block;`;
-        daysAgoDiv.textContent = daysAgo;
-        card.appendChild(daysAgoDiv);
-      } else {
-        const noDataDiv = document.createElement('div');
-        noDataDiv.style.cssText = 'font-size:11px;color:#999;font-style:italic;text-align:center;padding:12px 0;';
-        noDataDiv.textContent = 'No data yet';
-        card.appendChild(noDataDiv);
-      }
-
-      shopRestockGrid.appendChild(card);
     });
   };
 
-  // Initialize the shop restock tracker
-  initializeRestockTracker();
-
-  // Start live tracking (async - shop stock store initialization)
-  startLiveShopTracking().catch(error => {
-    log('⚠️ Failed to start live shop tracking', error);
-  });
-
-  // Subscribe to restock updates to refresh cards (with debouncing)
-  let debounceTimer: number | null = null;
-  if (uiState.headerRestockCleanup) {
-    uiState.headerRestockCleanup();
-  }
-  uiState.headerRestockCleanup = onRestockUpdate(() => {
-    if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
+  // Live countdown ticker
+  const stopTicker = visibleInterval('dashboard-restock-cards', () => {
+    for (const { nextEl } of cardEls) {
+      const ts = parseInt(nextEl.dataset.ts ?? '0', 10);
+      if (!ts) continue;
+      const remaining = ts - Date.now();
+      nextEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
     }
-    debounceTimer = window.setTimeout(() => {
-      debounceTimer = null;
-      updateShopRestockCards();
-    }, 500); // Debounce 500ms to batch rapid updates
+  }, 1000);
+
+  // Cleanup on container detach
+  const obs = new MutationObserver(() => {
+    if (!section.isConnected) { obs.disconnect(); stopTicker(); }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  // Load data
+  const cached = getRestockDataSync();
+  if (cached) updateCards(cached);
+
+  fetchRestockData(false).then(items => updateCards(items)).catch(err => {
+    log('⚠️ [Dashboard] Failed to load restock data', err);
   });
 
-  // Initial render
-  updateShopRestockCards();
+  return section;
+}
 
-  // Re-render when sprites become available (they load in background)
-  if (uiState.headerSpritesCleanup) {
-    uiState.headerSpritesCleanup();
+// ---------------------------------------------------------------------------
+// Changelog card
+// ---------------------------------------------------------------------------
+
+function buildChangelogCard(): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'margin-top:14px',
+    'padding:10px',
+    'background:rgba(255,255,255,0.03)',
+    'border:1px solid rgba(143,130,255,0.15)',
+    'border-radius:6px',
+  ].join(';');
+
+  const headerRow = document.createElement('div');
+  headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:11px;font-weight:700;color:#8f82ff;';
+  title.textContent = '📋 Changelog';
+
+  const latest = CHANGELOG[0]!;
+  const latestBadge = document.createElement('div');
+  latestBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.5);';
+  latestBadge.textContent = `v${latest.version}`;
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.style.cssText = 'background:none;border:none;color:rgba(224,224,224,0.4);font-size:10px;cursor:pointer;padding:0 2px;';
+  toggleBtn.textContent = '▶';
+
+  headerRow.append(title, latestBadge, toggleBtn);
+  card.appendChild(headerRow);
+
+  // All changelog content — collapsed by default
+  const body = document.createElement('div');
+  body.style.display = 'none';
+
+  const latestEntry = buildChangelogEntry(latest, true);
+  body.appendChild(latestEntry);
+
+  for (const entry of CHANGELOG.slice(1)) {
+    body.appendChild(buildChangelogEntry(entry, false));
   }
-  uiState.headerSpritesCleanup = onSpritesReady(() => {
-    updateShopRestockCards();
+  card.appendChild(body);
+
+  let expanded = false;
+  const toggle = (): void => {
+    expanded = !expanded;
+    body.style.display = expanded ? 'block' : 'none';
+    toggleBtn.textContent = expanded ? '▼' : '▶';
+  };
+  headerRow.addEventListener('click', toggle);
+
+  return card;
+}
+
+function buildChangelogEntry(entry: { version: string; date: string; notes: string[] }, isLatest: boolean): HTMLElement {
+  const el = document.createElement('div');
+  el.style.cssText = `margin-top:8px;padding-top:${isLatest ? '8' : '6'}px;${isLatest ? '' : 'border-top:1px solid rgba(255,255,255,0.06);'}`;
+
+  const versionRow = document.createElement('div');
+  versionRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
+
+  const versionBadge = document.createElement('span');
+  versionBadge.style.cssText = `font-size:10px;font-weight:700;color:${isLatest ? '#8f82ff' : '#aaa'};`;
+  versionBadge.textContent = `v${entry.version}`;
+
+  const dateBadge = document.createElement('span');
+  dateBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);';
+  dateBadge.textContent = entry.date;
+
+  versionRow.append(versionBadge, dateBadge);
+  el.appendChild(versionRow);
+
+  const list = document.createElement('ul');
+  list.style.cssText = 'margin:0;padding:0 0 0 14px;';
+  for (const note of entry.notes) {
+    const li = document.createElement('li');
+    li.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.7);margin-bottom:2px;';
+    li.textContent = note;
+    list.appendChild(li);
+  }
+  el.appendChild(list);
+
+  return el;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard modules
+// ---------------------------------------------------------------------------
+
+function buildModulesSection(uiState: UIState): HTMLElement {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-top:14px;';
+
+  const headerRow = document.createElement('div');
+  headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+
+  const sectionTitle = document.createElement('div');
+  sectionTitle.style.cssText = 'font-size:11px;font-weight:600;color:rgba(224,224,224,0.6);text-transform:uppercase;letter-spacing:0.5px;';
+  sectionTitle.textContent = '⚡ Feature Modules';
+
+  const customizeBtn = document.createElement('button');
+  customizeBtn.type = 'button';
+  customizeBtn.textContent = '⚙ Customize';
+  customizeBtn.style.cssText = [
+    'font-size:10px',
+    'padding:2px 8px',
+    'background:rgba(143,130,255,0.1)',
+    'border:1px solid rgba(143,130,255,0.25)',
+    'border-radius:4px',
+    'color:#c8c0ff',
+    'cursor:pointer',
+  ].join(';');
+
+  headerRow.append(sectionTitle, customizeBtn);
+  section.appendChild(headerRow);
+
+  // Toggle panel
+  const togglePanel = document.createElement('div');
+  togglePanel.style.cssText = [
+    'display:none',
+    'background:rgba(0,0,0,0.25)',
+    'border:1px solid rgba(143,130,255,0.15)',
+    'border-radius:6px',
+    'padding:8px 10px',
+    'margin-bottom:8px',
+    'display:flex',
+    'flex-wrap:wrap',
+    'gap:8px',
+  ].join(';');
+  togglePanel.style.display = 'none';
+  section.appendChild(togglePanel);
+
+  let enabledModules = loadEnabledModules();
+
+  const moduleCards = document.createElement('div');
+  moduleCards.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;';
+  section.appendChild(moduleCards);
+
+  const renderTogglePanel = (): void => {
+    togglePanel.innerHTML = '';
+    for (const mod of ALL_MODULES) {
+      const chip = document.createElement('label');
+      chip.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(224,224,224,0.7);cursor:pointer;';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = enabledModules.has(mod.id);
+      cb.style.accentColor = '#8f82ff';
+      cb.addEventListener('change', () => {
+        if (cb.checked) enabledModules.add(mod.id);
+        else enabledModules.delete(mod.id);
+        saveEnabledModules(enabledModules);
+        renderModuleCards();
+      });
+
+      chip.append(cb, document.createTextNode(`${mod.icon} ${mod.label}`));
+      togglePanel.appendChild(chip);
+    }
+  };
+
+  let turtleTimerCleanup: (() => void) | null = null;
+  let moduleTickerCleanup: (() => void) | null = null;
+
+  const renderModuleCards = (): void => {
+    // Cleanup previous subscriptions
+    turtleTimerCleanup?.();
+    turtleTimerCleanup = null;
+    moduleTickerCleanup?.();
+    moduleTickerCleanup = null;
+    moduleCards.innerHTML = '';
+
+    if (enabledModules.size === 0) {
+      const hint = document.createElement('div');
+      hint.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
+      hint.textContent = 'No modules enabled. Click ⚙ Customize to add some.';
+      moduleCards.appendChild(hint);
+      return;
+    }
+
+    for (const modDef of ALL_MODULES) {
+      if (!enabledModules.has(modDef.id)) continue;
+      moduleCards.appendChild(buildModuleCard(modDef, uiState, (cleanup) => {
+        if (modDef.id === 'turtle-timer') turtleTimerCleanup = cleanup;
+        else if (modDef.id === 'next-restock') moduleTickerCleanup = cleanup;
+      }));
+    }
+  };
+
+  // Cleanup on section detach
+  const obs = new MutationObserver(() => {
+    if (!section.isConnected) {
+      obs.disconnect();
+      turtleTimerCleanup?.();
+      moduleTickerCleanup?.();
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  customizeBtn.addEventListener('click', () => {
+    const showing = togglePanel.style.display !== 'none';
+    togglePanel.style.display = showing ? 'none' : 'flex';
+    if (!showing) renderTogglePanel();
   });
 
-  return container;
+  renderModuleCards();
+  return section;
+}
+
+function buildModuleCard(
+  mod: DashboardModule,
+  _uiState: UIState,
+  onCleanup: (fn: () => void) => void,
+): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'padding:8px 10px',
+    'background:rgba(255,255,255,0.04)',
+    'border:1px solid rgba(143,130,255,0.12)',
+    'border-radius:6px',
+    'display:flex',
+    'flex-direction:column',
+    'gap:4px',
+    'min-height:70px',
+    'max-height:120px',
+    'overflow:hidden',
+  ].join(';');
+
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;';
+  titleEl.textContent = `${mod.icon} ${mod.label}`;
+  card.appendChild(titleEl);
+
+  const valueEl = document.createElement('div');
+  valueEl.style.cssText = 'font-size:13px;font-weight:600;color:#e0e0e0;';
+  card.appendChild(valueEl);
+
+  const subEl = document.createElement('div');
+  subEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.45);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  card.appendChild(subEl);
+
+  if (mod.id === 'active-pets') {
+    const pets = getActivePetInfos();
+    const names = pets.slice(0, 3).map(p => p.name || p.species || 'Pet');
+    valueEl.textContent = String(pets.length);
+    subEl.textContent = names.join(', ') || 'None active';
+
+  } else if (mod.id === 'turtle-timer') {
+    const update = (snap: TurtleTimerState): void => {
+      if (!snap.enabled) { valueEl.textContent = 'Off'; subEl.textContent = ''; return; }
+      const remaining = snap.plant.focusSlot?.remainingMs ?? null;
+      if (remaining == null) { valueEl.textContent = '—'; subEl.textContent = 'No plant tracked'; return; }
+      valueEl.textContent = formatCountdown(remaining);
+      subEl.textContent = snap.plant.focusSlot?.species ?? '';
+    };
+    const unsub = onTurtleTimerState(update);
+    onCleanup(unsub);
+    valueEl.textContent = '—';
+    subEl.textContent = 'Loading...';
+
+  } else if (mod.id === 'xp-near-max') {
+    const pets = getActivePetInfos();
+    // "Near max" = strength >= 95 (max is 100)
+    const nearMax = pets.filter(p => p.strength != null && p.strength >= 95);
+    valueEl.textContent = String(nearMax.length);
+    subEl.textContent = nearMax.length === 0
+      ? 'None at str ≥95'
+      : nearMax.map(p => p.name || p.species || 'Pet').join(', ');
+
+  } else if (mod.id === 'next-restock') {
+    const items = getRestockDataSync() ?? [];
+    const now = Date.now();
+    const withNext = items
+      .filter(it => it.estimated_next_timestamp != null && it.estimated_next_timestamp > now)
+      .sort((a, b) => (a.estimated_next_timestamp ?? 0) - (b.estimated_next_timestamp ?? 0));
+
+    if (withNext.length) {
+      const soonest = withNext[0]!;
+      const remaining = (soonest.estimated_next_timestamp ?? 0) - now;
+      valueEl.textContent = formatCountdown(remaining);
+      valueEl.dataset.ts = String(soonest.estimated_next_timestamp ?? '');
+      subEl.textContent = `${soonest.item_id ?? '?'} (${soonest.shop_type ?? '?'})`;
+    } else {
+      valueEl.textContent = '—';
+      subEl.textContent = 'No data';
+    }
+
+    // Live countdown
+    const stopTicker = visibleInterval(`dashboard-module-next-restock`, () => {
+      const ts = parseInt(valueEl.dataset.ts ?? '0', 10);
+      if (!ts) return;
+      const remaining = ts - Date.now();
+      valueEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
+    }, 1000);
+    onCleanup(stopTicker);
+  }
+
+  return card;
 }

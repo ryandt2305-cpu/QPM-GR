@@ -70,7 +70,7 @@ import type { CompareStage } from '../data/petCompareRules';
 
 const WINDOW_ID = 'qpm-pets-window';
 const PETS_WINDOW_SWITCH_TAB_EVENT = 'qpm:pets-window-switch-tab';
-const DEFAULT_KEYBIND = 'p';
+const DEFAULT_KEYBIND = '';
 const FLOATING_CARD_STATE_EVENT = 'qpm:floating-card-state';
 let currentKeybind = DEFAULT_KEYBIND;
 const PET_TEAMS_UI_STATE_KEY = 'qpm.petTeams.uiState.v1';
@@ -3448,7 +3448,7 @@ export function initPetsWindow(): void {
     if (isEditableTarget(e.target)) return;
 
     // Window open/close keybind
-    if (e.key.toLowerCase() === currentKeybind && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (currentKeybind && e.key.toLowerCase() === currentKeybind && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       togglePetsWindow();
       return;

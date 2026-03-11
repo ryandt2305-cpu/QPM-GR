@@ -16,6 +16,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.11', date: '2026-03', notes: [
+    'removed default pets keybind',
+  ]},
 { version: '3.1.1', date: '2026-03', notes: [
     'Feeding: detached instant feed buttons now resolve per-pet diets/allowed food totals per active slot',
     'Pet Optimizer: Double Harvest and Crop Refund compare/obsolete logic now ranks per ability family (Top 3 kept per family)',

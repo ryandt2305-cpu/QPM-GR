@@ -5,7 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.1] - Current
+## [3.1.11] - Current
+
+### Changed
+- removed default pets keybind
+
+---
+
+## [3.1.1]
 
 ### Changed
 - Feeding: detached instant feed buttons now resolve per-pet diets/allowed food totals per active slot

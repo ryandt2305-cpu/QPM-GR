@@ -10,12 +10,11 @@ import { showToast, formatWeatherLabel } from './panelHelpers';
 import { toggleWindow, isWindowOpen } from './modalWindow';
 import { UIState, createInitialUIState } from './panelState';
 import { createNotificationSection } from './notificationSection';
-import { createGuideSection } from './sections/guideSection';
 import { createMutationSection } from './sections/mutationValueSection';
 import { createStatsHeader } from './sections/statsHeaderSection';
 import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getRestockDataSync } from '../utils/restockDataService';
-import { getCropSpriteCanvas, getPetSpriteCanvas } from '../sprite-v2/compat';
+import { getCropSpriteCanvas, getPetSpriteCanvas, getAnySpriteDataUrl, onSpritesReady } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { visibleInterval } from '../utils/timerManager';
 import { calculateMaxStrength } from '../store/xpTracker';
@@ -239,7 +238,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     'public-rooms':    'rgba(233, 30, 99, 0.28)',   // Pink
     'utility':         'rgba(63, 81, 181, 0.28)',   // Indigo
     'journal-checker': 'rgba(121, 85, 72, 0.28)',   // Brown
-    'guide':           'rgba(96, 125, 139, 0.28)',  // Blue Grey
+    'tools':           'rgba(96, 125, 139, 0.28)',  // Blue Grey
   };
 
   const buildSection = (header: string) => {
@@ -292,9 +291,6 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     return { tile, setStatus, setStatusDom };
   };
 
-  // Guide section
-  const guideSection = createGuideSection();
-
   const registerTabPanel = (key: string, elements: HTMLElement[]) => {
     const tab = document.createElement('div');
     tab.className = 'qpm-tab';
@@ -332,6 +328,34 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   });
   const { tile: tShop, setStatus: setShopStatus, setStatusDom: setShopStatusDom } = buildTile('shop-restock', '🏪', 'Shop Restock');
+  const applyShopTileCoinIcon = (): void => {
+    const labelEl = tShop.querySelector('.qpm-tile__label') as HTMLElement | null;
+    if (!labelEl) return;
+
+    const coinUrl = getAnySpriteDataUrl('sprite/ui/Coin');
+    labelEl.innerHTML = '';
+
+    if (coinUrl) {
+      const coinImg = document.createElement('img');
+      coinImg.src = coinUrl;
+      coinImg.alt = 'Coin';
+      coinImg.style.cssText = 'width:15px;height:15px;image-rendering:pixelated;flex-shrink:0;';
+      labelEl.appendChild(coinImg);
+    } else {
+      const fallbackIcon = document.createElement('span');
+      fallbackIcon.textContent = '🏪';
+      fallbackIcon.setAttribute('aria-hidden', 'true');
+      labelEl.appendChild(fallbackIcon);
+    }
+
+    const labelText = document.createElement('span');
+    labelText.textContent = 'Shop Restock';
+    labelEl.appendChild(labelText);
+  };
+  applyShopTileCoinIcon();
+  onSpritesReady(() => {
+    applyShopTileCoinIcon();
+  });
   tShop.dataset.windowId = 'shop-restock';
   tShop.addEventListener('click', async () => {
     try {
@@ -388,23 +412,30 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       });
     }, '900px', '90vh');
   });
-  const { tile: tGuide, setStatus: setGuideStatus } = buildTile('guide', '📖', 'Guide');
-  tGuide.addEventListener('click', () => activateTab('guide'));
-  toolsRow([tJournal, tGuide]);
+  const { tile: tTools, setStatus: setToolsStatus } = buildTile('tools', '\u{1F9F0}', 'Tools');
+  tTools.dataset.windowId = 'tools-hub';
+  tTools.addEventListener('click', async () => {
+    try {
+      const { openToolsHubWindow } = await import('./toolsHubWindow');
+      openToolsHubWindow();
+    } catch (e) {
+      log('Failed to open Tools Hub window', e);
+    }
+  });
+  toolsRow([tJournal, tTools]);
   navSections.appendChild(toolsSection);
   tabButtons.set('utility', tUtility);
   tabButtons.set('dashboard', tDash);
   tabButtons.set('journal-checker', tJournal);
-  tabButtons.set('guide', tGuide);
+  tabButtons.set('tools', tTools);
 
-  // ── Tab panels (inline content for dashboard/journal/guide; empty for window-openers) ──
+  // ── Tab panels (inline content for dashboard only; empty for window-openers) ──
   registerTabPanel('pet-teams', []);
   registerTabPanel('trackers', []);
   registerTabPanel('shop-restock', []);
   registerTabPanel('public-rooms', []);
   registerTabPanel('utility', []);
   registerTabPanel('dashboard', [statsHeader]);
-  registerTabPanel('guide', [guideSection]);
 
   activateTab('dashboard');
   // Apply persisted section collapse state (after activateTab so auto-expand logic doesn't fight it)
@@ -527,7 +558,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   setUtilityStatus('Filters · Reminders · Favs');
   setDashStatus('Stats & overview');
   setJournalStatus('Loading tips...');
-  setGuideStatus(`v${getCurrentVersion()}`);
+  setToolsStatus('Guide | Layout Tools');
 
   // Journal tile — async smart tips: inline sprites only, mutation dot overlay
   (async () => {

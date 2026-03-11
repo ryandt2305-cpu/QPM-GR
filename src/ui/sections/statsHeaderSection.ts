@@ -4,7 +4,7 @@ import { btn } from '../panelHelpers';
 import { log } from '../../utils/logger';
 import { storage } from '../../utils/storage';
 import { getCropSpriteDataUrl } from '../../sprite-v2/compat';
-import { fetchRestockData, getRestockDataSync, getItemProbability, type RestockItem } from '../../utils/restockDataService';
+import { fetchRestockData, getRestockDataSync, type RestockItem } from '../../utils/restockDataService';
 import { calculateMaxStrength } from '../../store/xpTracker';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../../store/pets';
 import { onTurtleTimerState, setTurtleTimerEnabled, type TurtleTimerChannel, type GardenSlotEstimate } from '../../features/turtleTimer.ts';
@@ -16,6 +16,11 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  { version: '3.1.04', date: '2026-03', notes: [
+    'Tools Hub: customizable cards, updated tool descriptions, and sprite-based icons',
+    'Dashboard: Shop Restock tile now uses the Coin UI sprite; Celestial Restocks hide rate percentages',
+    'Journal: fixed Amberlit/Ambershine variant matching for completion tracking',
+  ]},
   { version: '3.1.03', date: '2026-03', notes: [
     'Resize handling fixes for feature windows',
     'Minimize/restore handling fixes',
@@ -150,14 +155,6 @@ function etaColor(ts: number): string {
   return '#ef4444';
 }
 
-function rateColorDash(rate: number | null): string {
-  if (rate === null) return 'rgba(224,224,224,0.4)';
-  const pct = rate * 100;
-  if (pct >= 80) return '#4ade80';
-  if (pct >= 40) return '#fbbf24';
-  return '#f87171';
-}
-
 // ---------------------------------------------------------------------------
 // createStatsHeader
 // ---------------------------------------------------------------------------
@@ -221,7 +218,7 @@ function buildShopRestockSection(): HTMLElement {
   section.appendChild(grid);
 
   // One card per celestial item — looked up by item_id, not shop_type
-  const cardEls: Array<{ nextEl: HTMLElement; rateEl: HTMLElement; subEl: HTMLElement; ts: number }> = [];
+  const cardEls: Array<{ nextEl: HTMLElement; subEl: HTMLElement; ts: number }> = [];
 
   for (const item of CELESTIAL_ITEMS) {
     const card = document.createElement('div');
@@ -252,20 +249,17 @@ function buildShopRestockSection(): HTMLElement {
     nextEl.style.cssText = 'font-size:15px;font-weight:700;color:rgba(224,224,224,0.4);font-variant-numeric:tabular-nums;';
     nextEl.textContent = '—';
 
-    // Rate + last seen row
+    // Last seen row
     const subRow = document.createElement('div');
     subRow.style.cssText = 'display:flex;align-items:center;gap:5px;';
-    const rateEl = document.createElement('span');
-    rateEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.4);';
-    rateEl.textContent = '';
     const subEl = document.createElement('span');
     subEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     subEl.textContent = 'Loading...';
-    subRow.append(rateEl, subEl);
+    subRow.append(subEl);
 
     card.append(nameEl, nextEl, subRow);
     grid.appendChild(card);
-    cardEls.push({ nextEl, rateEl, subEl, ts: 0 });
+    cardEls.push({ nextEl, subEl, ts: 0 });
   }
 
   // Find an item in the dataset by trying multiple known item_id aliases
@@ -284,13 +278,12 @@ function buildShopRestockSection(): HTMLElement {
     CELESTIAL_ITEMS.forEach((def, i) => {
       const card = cardEls[i];
       if (!card) return;
-      const { nextEl, rateEl, subEl } = card;
+      const { nextEl, subEl } = card;
 
       const found = findItem(allItems, def.itemIds);
       if (!found) {
         nextEl.textContent = '—';
         nextEl.style.color = 'rgba(224,224,224,0.4)';
-        rateEl.textContent = '';
         subEl.textContent = 'No data yet';
         card.ts = 0;
         return;
@@ -302,9 +295,6 @@ function buildShopRestockSection(): HTMLElement {
       nextEl.style.color = etaColor(ts);
 
       const now = Date.now();
-      const prob = getItemProbability(found);
-      rateEl.textContent = prob != null ? `${Math.round(prob * 100)}%` : '';
-      rateEl.style.color = rateColorDash(prob);
       subEl.textContent = found.last_seen
         ? `Last ${Math.round((now - found.last_seen) / 86_400_000)}d ago`
         : '';

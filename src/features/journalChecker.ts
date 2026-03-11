@@ -32,6 +32,16 @@ const resolveProduceKey = (raw: string): string => {
   return key;
 };
 
+const VARIANT_KEY_ALIASES: Record<string, string> = {
+  amberlit: 'amberlit',
+  ambershine: 'amberlit',
+};
+
+const resolveVariantKey = (raw: string): string => {
+  const key = normalizeKey(raw);
+  return VARIANT_KEY_ALIASES[key] ?? key;
+};
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -327,7 +337,7 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
 
     if (speciesLog?.variantsLogged) {
       for (const log of speciesLog.variantsLogged) {
-        loggedVariants.set(normalizeKey(log.variant), log.createdAt || 0);
+        loggedVariants.set(resolveVariantKey(log.variant), log.createdAt || 0);
       }
     }
 
@@ -340,8 +350,8 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       species,
       variants: possibleVariants.map((variant) => ({
         variant: String(variant), // Ensure it's a string
-        collected: loggedVariants.has(normalizeKey(String(variant))),
-        collectedAt: loggedVariants.get(normalizeKey(String(variant))),
+        collected: loggedVariants.has(resolveVariantKey(String(variant))),
+        collectedAt: loggedVariants.get(resolveVariantKey(String(variant))),
       })),
     });
   }
@@ -354,7 +364,7 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
 
     if (speciesLog?.variantsLogged) {
       for (const log of speciesLog.variantsLogged) {
-        loggedVariants.set(normalizeKey(log.variant), log.createdAt || 0);
+        loggedVariants.set(resolveVariantKey(log.variant), log.createdAt || 0);
       }
     }
 
@@ -367,8 +377,8 @@ export async function getJournalSummary(): Promise<JournalSummary | null> {
       species,
       variants: possibleVariants.map((variant) => ({
         variant: String(variant), // Ensure it's a string
-        collected: loggedVariants.has(normalizeKey(String(variant))),
-        collectedAt: loggedVariants.get(normalizeKey(String(variant))),
+        collected: loggedVariants.has(resolveVariantKey(String(variant))),
+        collectedAt: loggedVariants.get(resolveVariantKey(String(variant))),
       })),
     });
   }

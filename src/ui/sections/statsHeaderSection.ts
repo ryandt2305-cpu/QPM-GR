@@ -16,6 +16,11 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  { version: '3.1.05', date: '2026-03', notes: [
+    'UI: standardized emoji-safe font fallback across panel and window roots',
+    'UI: removed temporary text-repair observer workaround',
+    'Fixed icon/symbol placeholders showing as ?? in panel and feature windows',
+  ]},
   { version: '3.1.04', date: '2026-03', notes: [
     'Tools Hub: customizable cards, updated tool descriptions, and sprite-based icons',
     'Dashboard: Shop Restock tile now uses the Coin UI sprite; Celestial Restocks hide rate percentages',

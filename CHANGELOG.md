@@ -1,23 +1,34 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to QPM-GR are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.0] — Current
+## [3.1.05] - Current
+
+### Changed
+- Standardized one emoji-safe font fallback stack across panel and feature window roots
+- Removed temporary mojibake text-repair observer workaround
+
+### Fixed
+- Icon/symbol glyphs rendering as `??` in panel labels, tabs, and buttons
+
+---
+
+## [3.1.0]
 
 ### Changed
 - XP Tracker, Ability Tracker, and Turtle Timer windows rebuilt with cleaner, smarter layouts
 - `src/ui/originalPanel.ts` refactored from a single 8,700-line monolith into modular files:
-  - `src/ui/panelHelpers.ts` — shared formatters and UI helpers
-  - `src/ui/panelState.ts` — UIState interface and factory
-  - `src/ui/panelStyles.ts` — all CSS/style injection
-  - `src/ui/abilityAnalysis.ts` — ability computation logic
-  - `src/ui/turtleTimerLogic.ts` — turtle timer update logic
-  - `src/ui/notificationSection.ts` — notification section and state
-  - `src/ui/shopHistoryWindow.ts` — shop history modal
-  - `src/ui/sections/` — 10 individual section builders
+  - `src/ui/panelHelpers.ts` â€” shared formatters and UI helpers
+  - `src/ui/panelState.ts` â€” UIState interface and factory
+  - `src/ui/panelStyles.ts` â€” all CSS/style injection
+  - `src/ui/abilityAnalysis.ts` â€” ability computation logic
+  - `src/ui/turtleTimerLogic.ts` â€” turtle timer update logic
+  - `src/ui/notificationSection.ts` â€” notification section and state
+  - `src/ui/shopHistoryWindow.ts` â€” shop history modal
+  - `src/ui/sections/` â€” 10 individual section builders
 
 ### Removed
 - Dead `createJournalCheckerSectionOld` function (unused)
@@ -27,12 +38,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.0.6x] — Stability & Fixes
+## [3.0.6x] â€” Stability & Fixes
 
 ### Fixed
 - Missing import in `xpTrackerWindow` (v3.0.59)
 - XP Tracker strength calculations and slot 2 data issues
-- Bulk favorite sidebar positioning — uses stable container bounds, no longer shifts when inventory filters are applied (v3.0.51)
+- Bulk favorite sidebar positioning â€” uses stable container bounds, no longer shifts when inventory filters are applied (v3.0.51)
 - Crop size indicator updated with catalog integration for new plants
 - Journal badges updated for new plant types via catalog integration
 
@@ -53,7 +64,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.0.5x] — Foundation
+## [3.0.5x] â€” Foundation
 
 ### Added
 - Initial public release structure
@@ -75,8 +86,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Infrastructure
 - TypeScript strict mode throughout
 - Vite IIFE bundle + userscript header wrapper (`scripts/build-userscript.js`)
-- Sprite system (sprite-v2) via PIXI hook — no hardcoded atlas access
-- Runtime catalog capture via Object.* hook — no hardcoded game data
+- Sprite system (sprite-v2) via PIXI hook â€” no hardcoded atlas access
+- Runtime catalog capture via Object.* hook â€” no hardcoded game data
 - Jotai store bridge for reactive state access
 - GM_* storage wrapper with localStorage fallback
 

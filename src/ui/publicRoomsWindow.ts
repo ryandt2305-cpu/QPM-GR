@@ -2259,7 +2259,7 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
     style.id = 'pr-style-block';
     style.textContent = `
       .hidden { display: none !important; }
-      #pr-app { color: #e5e7eb; font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 16px; }
+      #pr-app { color: #e5e7eb; font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif; padding: 16px; }
       .pr-hero { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding: 18px; border-radius: 14px; background: linear-gradient(135deg, #0b1f2b, #0f2f3c 50%, #0b1b27); border: 1px solid rgba(100, 181, 246, 0.25); box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
       .pr-hero h3 { margin: 6px 0; font-size: 22px; color: #f8fafc; letter-spacing: 0.2px; }
       .pr-hero p { margin: 0; color: #94a3b8; font-size: 13px; }

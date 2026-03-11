@@ -22,7 +22,7 @@ export function ensurePanelStyles(): void {
     --qpm-warning: #ffb347;
     --qpm-shadow: 0 14px 32px rgba(15, 17, 28, 0.55);
     --qpm-divider: rgba(120, 130, 170, 0.2);
-    --qpm-font: 'Inter', 'Segoe UI', Arial, sans-serif;
+    --qpm-font: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   }
 
   .qpm-panel {

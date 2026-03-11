@@ -1229,7 +1229,7 @@ export function createXpTrackerWindow(): XpTrackerWindowState {
     'border-radius:8px',
     'box-shadow:0 8px 40px rgba(0,0,0,0.75)',
     'z-index:10002',
-    'font-family:Arial,sans-serif',
+    "font-family:'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif",
     'display:none',
     'flex-direction:column',
     'overflow:hidden',
@@ -1456,5 +1456,3 @@ export function destroyXpTrackerWindow(state: XpTrackerWindowState): void {
 export function setGlobalXpTrackerState(_state: XpTrackerWindowState): void {
   // intentionally empty
 }
-
-

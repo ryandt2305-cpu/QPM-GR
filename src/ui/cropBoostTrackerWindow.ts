@@ -43,7 +43,7 @@ function renderCropBoostSection(root: HTMLElement): void {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   `;
 
   const analysis = getCurrentAnalysis();

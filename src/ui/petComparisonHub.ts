@@ -110,7 +110,7 @@ export function createPetComparisonHub(): void {
     border-radius: 20px;
     box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
     z-index: 100000;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
     display: flex;
     flex-direction: column;
     overflow: hidden;

@@ -209,7 +209,7 @@ export function openPetHutchWindow(): void {
     border-radius: 12px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
     z-index: 99999;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   `;
 
   windowElement.innerHTML = `

@@ -50,14 +50,46 @@ export function detectGameVersion(): string {
   throw new Error('Version not found. Could not detect game version from DOM or global variables.');
 }
 
+export async function detectGameVersionWithRetry(
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 12000;
+  const intervalMs = Math.max(50, options.intervalMs ?? 250);
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+
+  while (Date.now() < deadline) {
+    try {
+      return detectGameVersion();
+    } catch (error) {
+      lastError = error;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, intervalMs);
+      });
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error('Version not found after retry window.');
+}
+
+function resolveAssetsOrigin(origin?: string): string {
+  const runtimeOrigin = getRuntimeWindow()?.location?.origin;
+  const resolved = (origin && origin.trim()) || runtimeOrigin || 'https://magicgarden.gg';
+  return resolved.replace(/\/$/, '');
+}
+
 /**
  * Builds the base assets URL for the detected version
- * @param origin The origin URL (default: https://magicgarden.gg)
+ * @param origin The origin URL (defaults to current runtime origin)
+ * @param version Optional pre-detected game version hash
  * @returns The full base URL for assets (e.g., "https://magicgarden.gg/version/436ff68/assets/")
  */
-export function buildAssetsBaseUrl(origin = 'https://magicgarden.gg'): string {
-  const version = detectGameVersion();
-  return `${origin.replace(/\/$/, '')}/version/${version}/assets/`;
+export function buildAssetsBaseUrl(origin?: string, version?: string): string {
+  const resolvedVersion = (version && version.trim()) || detectGameVersion();
+  return `${resolveAssetsOrigin(origin)}/version/${resolvedVersion}/assets/`;
 }
 
 /**

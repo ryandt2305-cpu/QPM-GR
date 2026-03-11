@@ -36,6 +36,7 @@ const WINDOW_SIZE_KEY = 'qpm-window-size-';
 const WINDOW_MARGIN = 8;
 const WINDOW_MIN_WIDTH = 260;
 const WINDOW_MIN_HEIGHT = 120;
+const QPM_UI_FONT_STACK = "'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif";
 const windows = new Map<string, WindowState>();
 let currentZ = 10000;
 let resizeListenerAdded = false;
@@ -173,7 +174,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     border-radius: 8px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
     backdrop-filter: blur(12px);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: ${QPM_UI_FONT_STACK};
     font-size: 13px;
     color: #e0e0e0;
     z-index: ${currentZ++};

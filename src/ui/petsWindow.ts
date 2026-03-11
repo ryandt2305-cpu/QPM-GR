@@ -24,7 +24,7 @@ import {
   clearFeedPolicyOverride,
   getAllPooledPets,
 } from '../store/petTeams';
-import { getPetSpriteDataUrlWithMutations, isSpritesReady, getAnySpriteDataUrl } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations, isSpritesReady, getAnySpriteDataUrl, onSpritesReady } from '../sprite-v2/compat';
 import { calculateMaxStrength } from '../store/xpTracker';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
@@ -36,7 +36,7 @@ import {
   type ComparePetInput,
   type TeamCompareProfile,
 } from '../features/petCompareEngine';
-import { getActivePetInfos } from '../store/pets';
+import { getActivePetInfos, onActivePetInfos } from '../store/pets';
 import { openPetPicker } from './petPickerModal';
 import { storage } from '../utils/storage';
 import {
@@ -2316,10 +2316,21 @@ function buildManagerTab(
 // Feeding tab
 // ---------------------------------------------------------------------------
 
-function buildFeedingTab(root: HTMLElement): void {
+function buildFeedingTab(root: HTMLElement): () => void {
   const feed = document.createElement('div');
   feed.className = 'qpm-feed';
   root.appendChild(feed);
+  let destroyed = false;
+  let renderQueued = false;
+
+  const queueRender = (): void => {
+    if (destroyed || renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      if (!destroyed) render();
+    });
+  };
 
   function render(): void {
     feed.innerHTML = '';
@@ -2525,6 +2536,13 @@ function buildFeedingTab(root: HTMLElement): void {
   }
 
   render();
+  const unsubscribePets = onActivePetInfos(() => queueRender(), false);
+  const unsubscribeSprites = onSpritesReady(() => queueRender());
+  return () => {
+    destroyed = true;
+    unsubscribePets();
+    unsubscribeSprites();
+  };
 }
 
 
@@ -2653,7 +2671,7 @@ function renderPetsWindow(root: HTMLElement): void {
       });
       allCleanups.push(...managerState.cleanups);
     } else if (def.id === 'feeding') {
-      buildFeedingTab(panel);
+      allCleanups.push(buildFeedingTab(panel));
     }
     // pet-optimizer is lazy-loaded on first click
   }

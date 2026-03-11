@@ -3,7 +3,7 @@
 
 import type { SpriteState, SpriteConfig, SpriteService, GetSpriteParams, RenderOptions } from './types';
 import { DEFAULT_CFG } from './settings';
-import { detectGameVersion, buildAssetsBaseUrl, getRuntimeWindow } from './detector';
+import { detectGameVersionWithRetry, buildAssetsBaseUrl, getRuntimeWindow } from './detector';
 import { createPixiHooks, waitForPixi, ensureDocumentReady } from './hooks';
 import { getJSON, loadAtlasJsons, isAtlas, getBlob, blobToImage, joinPath, relPath } from './manifest';
 import { getCtors } from './utils';
@@ -399,9 +399,11 @@ async function resolvePixiFast(): Promise<PixiBundle> {
 }
 
 async function start(): Promise<SpriteService> {
+  const runtimeOrigin = getRuntimeWindow().location?.origin || DEFAULT_CFG.origin;
+
   // Initialize context
   ctx = {
-    cfg: { ...DEFAULT_CFG },
+    cfg: { ...DEFAULT_CFG, origin: runtimeOrigin },
     state: createInitialState(),
   };
 
@@ -416,8 +418,8 @@ async function start(): Promise<SpriteService> {
   notifyWarmup({ phase: 'init', total: 0, done: 0, completed: false });
 
   // Detect version and build base URL early so we can start prefetching
-  const version = detectGameVersion();
-  const base = buildAssetsBaseUrl(ctx.cfg.origin);
+  const version = await detectGameVersionWithRetry();
+  const base = buildAssetsBaseUrl(ctx.cfg.origin, version);
   ctx.state.version = version;
   ctx.state.base = base;
 

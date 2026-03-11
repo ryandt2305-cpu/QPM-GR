@@ -720,7 +720,7 @@ export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
     'border-radius:8px',
     'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
     'z-index:10002',
-    'font-family:system-ui,sans-serif',
+    "font-family:'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif",
     'color:var(--qpm-text,#fff)',
   ].join(';');
 

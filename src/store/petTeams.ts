@@ -11,6 +11,7 @@ import { logTeamEvent } from './petTeamsLogs';
 import { delay } from '../utils/scheduling';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from './xpTracker';
 import type { PetTeam, PetTeamsConfig, PetFeedPolicy, PooledPet } from '../types/petTeams';
+import { sendRoomAction } from '../websocket/api';
 
 const CONFIG_KEY = 'qpm.petTeams.config.v1';
 const FEED_POLICY_KEY = 'qpm.petTeams.feedPolicy.v1';
@@ -47,6 +48,35 @@ export function initPetTeamsStore(): void {
   for (const team of config.teams) {
     if (!Array.isArray(team.slots)) team.slots = [null, null, null];
     while (team.slots.length < 3) team.slots.push(null);
+  }
+
+  // Keybind migration: combo -> teamIndex (legacy) to combo -> teamId (current).
+  // Also prune bindings that point to missing teams.
+  const migratedKeybinds: Record<string, string> = {};
+  let keybindsChanged = false;
+  for (const [combo, target] of Object.entries(config.keybinds as Record<string, unknown>)) {
+    if (typeof target === 'string') {
+      const exists = config.teams.some((team) => team.id === target);
+      if (exists) {
+        migratedKeybinds[combo.toLowerCase()] = target;
+      } else {
+        keybindsChanged = true;
+      }
+      continue;
+    }
+    if (typeof target === 'number' && Number.isInteger(target) && target >= 0) {
+      const migratedTeamId = config.teams[target]?.id ?? null;
+      if (migratedTeamId) {
+        migratedKeybinds[combo.toLowerCase()] = migratedTeamId;
+      }
+      keybindsChanged = true;
+      continue;
+    }
+    keybindsChanged = true;
+  }
+  if (keybindsChanged || Object.keys(migratedKeybinds).length !== Object.keys(config.keybinds).length) {
+    config.keybinds = migratedKeybinds;
+    storage.set(CONFIG_KEY, config);
   }
 
   feedPolicy = storage.get<PetFeedPolicy>(FEED_POLICY_KEY, DEFAULT_FEED_POLICY);
@@ -156,7 +186,12 @@ export function renameTeam(id: string, name: string): void {
 export function deleteTeam(id: string): void {
   config.teams = config.teams.filter(t => t.id !== id);
   if (config.activeTeamId === id) config.activeTeamId = null;
-  // Clear keybinds that pointed to this team by index (re-compute from current array)
+  // Clear keybinds that pointed to the deleted team.
+  for (const [key, teamId] of Object.entries(config.keybinds)) {
+    if (teamId === id) {
+      delete config.keybinds[key];
+    }
+  }
   saveConfig();
 }
 
@@ -419,11 +454,16 @@ export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
     const petId = toActivate[i]!;
     // If in hutch, retrieve to inventory first
     if (sourceMap.get(petId) === 'hutch') {
-      const conn = (window as unknown as Record<string, unknown>).MagicCircle_RoomConnection as { sendMessage: (p: unknown) => void } | undefined;
-      if (conn) {
-        conn.sendMessage({ scopePath: ['Room', 'Quinoa'], type: 'RetrieveItemFromStorage', itemId: petId, storageId: 'PetHutch' });
-        await delay(3500);
+      const retrieved = sendRoomAction(
+        'RetrieveItemFromStorage',
+        { itemId: petId, storageId: 'PetHutch' },
+        { throttleMs: 100 },
+      );
+      if (!retrieved.ok) {
+        errors.push(`RetrieveItemFromStorage failed: ${petId} (${retrieved.reason ?? 'unknown'})`);
+        continue;
       }
+      await delay(3500);
     }
     // ⚠️ PlacePet position is unverified — see PLACE_PET_DEFAULTS
     const ok = sendPlacePet(
@@ -448,8 +488,10 @@ export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
 // Keybinds
 // ---------------------------------------------------------------------------
 
-export function setKeybind(key: string, teamIndex: number): void {
-  config.keybinds[key.toLowerCase()] = teamIndex;
+export function setKeybind(key: string, teamId: string): void {
+  const normalized = key.toLowerCase();
+  if (!config.teams.some((team) => team.id === teamId)) return;
+  config.keybinds[normalized] = teamId;
   saveConfig();
 }
 
@@ -458,7 +500,7 @@ export function clearKeybind(key: string): void {
   saveConfig();
 }
 
-export function getKeybinds(): Record<string, number> {
+export function getKeybinds(): Record<string, string> {
   return { ...config.keybinds };
 }
 

@@ -8,12 +8,36 @@ import { computeMutationMultiplier } from '../utils/cropMultipliers';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { lookupMaxScale } from '../utils/plantScales';
 import { analyzeCropMutationPotential } from './cropMutationAnalytics';
+import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
 
 const FRIEND_BONUS_MULTIPLIER = 1.5; // Assume max friend bonus (50%).
 const MIN_SCALE = 1;
 const MIN_PERCENT = 50;
 const MAX_PERCENT = 100;
 const FALLBACK_MAX_SCALE = 2;
+
+/**
+ * Maps known Granter ability IDs to the mutation name they grant.
+ * Abilities NOT in this map use the ID prefix (e.g. "FrostGranter" → "Frost").
+ */
+const GRANTER_TO_MUTATION: Readonly<Record<string, string>> = {
+  GoldGranter: 'Gold',
+  RainbowGranter: 'Rainbow',
+  SnowGranter: 'Frozen',
+  FrostGranter: 'Frozen',
+  AmberGranter: 'Amberlit',
+  DawnGranter: 'Dawnlit',
+  WetGranter: 'Wet',
+  RainGranter: 'Wet',
+};
+
+/**
+ * Returns the mutation name granted by a *Granter ability.
+ * Uses the lookup table above; falls back to stripping the "Granter" suffix.
+ */
+export function resolveGrantedMutationName(abilityId: string): string {
+  return GRANTER_TO_MUTATION[abilityId] ?? abilityId.replace(/Granter$/, '');
+}
 
 interface MatureCrop {
   species: string;
@@ -352,6 +376,73 @@ function resolveColorGranterEffect(
   };
 }
 
+/**
+ * Generalized granter effect: calculates average value gain from granting
+ * `mutationName` to one eligible mature crop.
+ * Eligible = isMature AND does NOT already have `mutationName`.
+ */
+function resolveGranterEffect(
+  context: AbilityValuationContext,
+  mutationName: string,
+): DynamicAbilityEffect | null {
+  const eligible = context.crops.filter(
+    (crop) => crop.isMature && !crop.mutations.includes(mutationName),
+  );
+  if (!eligible.length) return null;
+
+  let weightedDelta = 0;
+  let totalWeight = 0;
+
+  for (const crop of eligible) {
+    const weight = Math.max(1, Math.floor(crop.fruitCount));
+    const newValue = calculatePlantValue(
+      crop.species,
+      crop.scale,
+      [...crop.mutations, mutationName],
+      FRIEND_BONUS_MULTIPLIER,
+    );
+    const delta = newValue - crop.currentValue;
+    if (Number.isFinite(delta) && delta > 0) {
+      totalWeight += weight;
+      weightedDelta += delta * weight;
+    }
+  }
+
+  if (totalWeight === 0 || weightedDelta <= 0) return null;
+
+  const averageDelta = weightedDelta / totalWeight;
+  const fruitSlots = eligible.reduce((s, c) => s + Math.max(1, c.fruitCount), 0);
+  return {
+    effectPerProc: averageDelta,
+    detail: `Grants ${mutationName} to 1 eligible crop. ${eligible.length} plant${eligible.length === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) eligible (50% friend bonus, weighted by fruit count).`,
+  };
+}
+
+function resolveMatureFruitValueEffect(
+  context: AbilityValuationContext,
+  effectLabel: string,
+): DynamicAbilityEffect | null {
+  const eligible = context.crops.filter((crop) => crop.isMature && Math.max(1, crop.fruitCount) > 0);
+  if (!eligible.length) return null;
+
+  let weightedValue = 0;
+  let totalWeight = 0;
+  for (const crop of eligible) {
+    const weight = Math.max(1, Math.floor(crop.fruitCount));
+    if (!Number.isFinite(crop.currentValue) || crop.currentValue <= 0) continue;
+    totalWeight += weight;
+    weightedValue += crop.currentValue * weight;
+  }
+  if (totalWeight === 0 || weightedValue <= 0) return null;
+
+  const averageValue = weightedValue / totalWeight;
+  const fruitSlots = eligible.reduce((sum, crop) => sum + Math.max(1, Math.floor(crop.fruitCount)), 0);
+  return {
+    effectPerProc: averageValue,
+    detail: `${effectLabel}. ${eligible.length} mature plant${eligible.length === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) considered, weighted by fruit count.`,
+  };
+}
+
 export function resolveDynamicAbilityEffect(
   abilityId: string,
   context: AbilityValuationContext,
@@ -369,7 +460,14 @@ export function resolveDynamicAbilityEffect(
     case 'ProduceMutationBoost':
     case 'ProduceMutationBoostII':
       return resolveCropMutationEffect(abilityId);
+    case 'DoubleHarvest':
+      return resolveMatureFruitValueEffect(context, 'Duplicates 1 harvested fruit');
+    case 'ProduceRefund':
+      return resolveMatureFruitValueEffect(context, 'Refunds 1 sold crop');
     default:
+      if (abilityId.endsWith('Granter')) {
+        return resolveGranterEffect(context, resolveGrantedMutationName(abilityId));
+      }
       return null;
   }
 }
@@ -471,4 +569,6 @@ const abilityDebugApi: AbilityDebugApi = {
   },
 };
 
-shareGlobal('__qpmAbilityDebug', abilityDebugApi);
+if (isDebugGlobalsEnabled()) {
+  shareGlobal('__qpmAbilityDebug', abilityDebugApi);
+}

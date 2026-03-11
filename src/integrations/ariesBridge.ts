@@ -13,6 +13,8 @@ export type AriesBridgeTeam = {
 };
 
 const TEAM_STORAGE_KEYS = [
+  'aries_mod',
+  'aries_storage',
   'qws:pets:teams:v1',
   'MGA_petPresets',
   'aries:teams',
@@ -22,6 +24,47 @@ const TEAM_STORAGE_KEYS = [
   'petTeams',
   'teams',
 ];
+
+function readPath(root: unknown, path: string[]): unknown {
+  let cur: unknown = root;
+  for (const part of path) {
+    if (!cur || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+function extractTeamArrays(parsed: unknown): unknown[][] {
+  const arrays: unknown[][] = [];
+  if (Array.isArray(parsed)) {
+    arrays.push(parsed);
+    return arrays;
+  }
+  if (!parsed || typeof parsed !== 'object') return arrays;
+
+  const obj = parsed as Record<string, unknown>;
+  const directKeys = ['teams', 'petTeams', 'presets'];
+  for (const key of directKeys) {
+    const value = obj[key];
+    if (Array.isArray(value)) arrays.push(value);
+  }
+
+  const nestedPaths = [
+    ['pets', 'teams'],
+    ['pets', 'petTeams'],
+    ['data', 'pets', 'teams'],
+  ];
+  for (const path of nestedPaths) {
+    const value = readPath(obj, path);
+    if (Array.isArray(value)) arrays.push(value);
+  }
+
+  // Backward-compatible fallback: look one level deep for arrays
+  Object.values(obj).forEach((val) => {
+    if (Array.isArray(val)) arrays.push(val);
+  });
+  return arrays;
+}
 
 function normalizeTeam(entry: any): AriesBridgeTeam | null {
   if (!entry || typeof entry !== 'object') return null;
@@ -61,24 +104,21 @@ function normalizeTeam(entry: any): AriesBridgeTeam | null {
 
 export function readTeamsFromLocalStorage(): AriesBridgeTeam[] {
   const teams: AriesBridgeTeam[] = [];
+  const seen = new Set<string>();
   TEAM_STORAGE_KEYS.forEach((key) => {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      const arrays: any[] = [];
-      if (Array.isArray(parsed)) {
-        arrays.push(parsed);
-      } else if (parsed && typeof parsed === 'object') {
-        Object.values(parsed).forEach((val) => {
-          if (Array.isArray(val)) arrays.push(val);
-        });
-      }
+      const arrays = extractTeamArrays(parsed);
 
       arrays.forEach((arr) => {
         arr.forEach((entry: unknown) => {
           const normalized = normalizeTeam(entry);
           if (normalized) {
+            const fp = `${normalized.name}::${normalized.slotIds.map(s => s ?? '').join('|')}`;
+            if (seen.has(fp)) return;
+            seen.add(fp);
             normalized.source = 'localStorage';
             teams.push(normalized);
           }

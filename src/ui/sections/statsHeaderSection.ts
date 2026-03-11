@@ -3,9 +3,11 @@ import { type UIState } from '../panelState';
 import { btn } from '../panelHelpers';
 import { log } from '../../utils/logger';
 import { storage } from '../../utils/storage';
+import { getCropSpriteDataUrl } from '../../sprite-v2/compat';
 import { fetchRestockData, getRestockDataSync, getItemProbability, type RestockItem } from '../../utils/restockDataService';
-import { getActivePetInfos } from '../../store/pets';
-import { onTurtleTimerState } from '../../features/turtleTimer.ts';
+import { calculateMaxStrength } from '../../store/xpTracker';
+import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../../store/pets';
+import { onTurtleTimerState, setTurtleTimerEnabled, type TurtleTimerChannel, type GardenSlotEstimate } from '../../features/turtleTimer.ts';
 import type { TurtleTimerState } from '../../features/turtleTimer.ts';
 import { visibleInterval } from '../../utils/timerManager';
 
@@ -14,7 +16,7 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
-  { version: '3.0.67', date: '2026-03', notes: [
+  { version: '3.1.0', date: '2026-03', notes: [
     'Consolidated tabs into hub windows (Trackers, Utility, Pets)',
     'Shop Restock rewritten with Supabase data',
     'Dashboard: Changelog card, shop restock cards, dashboard modules',
@@ -67,12 +69,44 @@ function saveEnabledModules(ids: Set<ModuleId>): void {
 // Shop restock card helpers
 // ---------------------------------------------------------------------------
 
-const SHOP_TYPES = [
-  { key: 'Starweaver', emoji: '⭐', color: 'rgba(255,215,0,0.12)', accent: '#FFD700' },
-  { key: 'Dawnbinder', emoji: '🌅', color: 'rgba(255,152,0,0.12)', accent: '#FF9800' },
-  { key: 'Moonbinder', emoji: '🌙', color: 'rgba(156,39,176,0.12)', accent: '#CE93D8' },
-  { key: 'Mythical Eggs', emoji: '🥚', color: 'rgba(66,165,245,0.12)', accent: '#42A5F5' },
-];
+// These are specific items tracked in the restock database with special pity logic.
+// They are matched by item_id (trying multiple known aliases), not by shop_type.
+// Item IDs must stay in sync with CELESTIAL_IDS in shopRestockWindow.ts.
+const CELESTIAL_ITEMS = [
+  {
+    label: 'Starweaver',
+    color: 'rgba(255,215,0,0.12)',
+    accent: '#FFD700',
+    itemIds: ['StarweaverPod', 'Starweaver'],
+  },
+  {
+    label: 'Dawnbinder',
+    color: 'rgba(255,152,0,0.12)',
+    accent: '#FF9800',
+    itemIds: ['DawnbinderPod', 'Dawnbinder', 'DawnCelestial'],
+  },
+  {
+    label: 'Moonbinder',
+    color: 'rgba(156,39,176,0.12)',
+    accent: '#CE93D8',
+    itemIds: ['MoonbinderPod', 'Moonbinder', 'MoonCelestial'],
+  },
+  {
+    label: 'Mythical Egg',
+    color: 'rgba(66,165,245,0.12)',
+    accent: '#42A5F5',
+    itemIds: ['MythicalEgg', 'MythicalEggs'],
+  },
+] as const;
+
+/** Try to get a sprite data URL for the first matching item ID alias. Returns '' if not found. */
+function getCelestialSpriteUrl(itemIds: readonly string[]): string {
+  for (const id of itemIds) {
+    const url = getCropSpriteDataUrl(id);
+    if (url) return url;
+  }
+  return '';
+}
 
 function formatCountdown(ms: number): string {
   if (ms <= 0) return 'Soon™';
@@ -81,6 +115,42 @@ function formatCountdown(ms: number): string {
   if (h > 0) return `${h}h ${m}m`;
   const s = Math.floor((ms % 60_000) / 1000);
   return `${m}m ${s}s`;
+}
+
+// ETA format matching the restock tracker: ~Xm / ~Xh / ~Xd
+function formatETA(ts: number): string {
+  if (!ts) return '—';
+  const diff = ts - Date.now();
+  if (diff <= 0) return '—'; // stale — Supabase will have a new prediction after next refresh
+  const min = Math.ceil(diff / 60_000);
+  if (min < 60) return `~${min}m`;
+  const hr = Math.ceil(diff / 3_600_000);
+  if (hr < 24) return `~${hr}h`;
+  const day = Math.ceil(diff / 86_400_000);
+  return `~${day}d`;
+}
+
+// 7-tier color scale matching the restock tracker: green = imminent, red = far
+function etaColor(ts: number): string {
+  if (!ts) return 'rgba(224,224,224,0.4)';
+  const diff = ts - Date.now();
+  if (diff <= 0)   return 'rgba(224,224,224,0.3)'; // stale — muted until next refresh
+  const h = diff / 3_600_000;
+  if (h < 1)        return '#22c55e';
+  if (h < 6)        return '#84cc16';
+  if (h < 24)       return '#eab308';
+  const d = diff / 86_400_000;
+  if (d < 7)        return '#f97316';
+  if (d < 14)       return '#f87171';
+  return '#ef4444';
+}
+
+function rateColorDash(rate: number | null): string {
+  if (rate === null) return 'rgba(224,224,224,0.4)';
+  const pct = rate * 100;
+  if (pct >= 80) return '#4ade80';
+  if (pct >= 40) return '#fbbf24';
+  return '#f87171';
 }
 
 // ---------------------------------------------------------------------------
@@ -123,9 +193,7 @@ export function createStatsHeader(
   const changelogCard = buildChangelogCard();
   container.appendChild(changelogCard);
 
-  // ── Dashboard Modules ──
-  const modulesSection = buildModulesSection(uiState);
-  container.appendChild(modulesSection);
+  // Feature modules were removed from Dashboard to keep the surface minimal.
 
   return container;
 }
@@ -140,96 +208,112 @@ function buildShopRestockSection(): HTMLElement {
 
   const sectionTitle = document.createElement('div');
   sectionTitle.style.cssText = 'font-size:11px;font-weight:600;color:#64b5f6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;';
-  sectionTitle.textContent = '🏪 Shop Restock';
+  sectionTitle.textContent = '✨ Celestial Restocks';
   section.appendChild(sectionTitle);
 
   const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;';
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(2,1fr);gap:8px;';
   section.appendChild(grid);
 
-  // One card per shop type
-  const cardEls: Array<{ el: HTMLElement; nextEl: HTMLElement; topEl: HTMLElement }> = [];
+  // One card per celestial item — looked up by item_id, not shop_type
+  const cardEls: Array<{ nextEl: HTMLElement; rateEl: HTMLElement; subEl: HTMLElement; ts: number }> = [];
 
-  for (const shop of SHOP_TYPES) {
+  for (const item of CELESTIAL_ITEMS) {
     const card = document.createElement('div');
     card.style.cssText = [
-      `padding:8px 10px`,
-      `background:${shop.color}`,
-      `border:1px solid ${shop.accent}30`,
-      `border-radius:6px`,
-      `display:flex`,
-      `flex-direction:column`,
-      `gap:3px`,
-      `min-width:0`,
+      'padding:8px 10px',
+      `background:${item.color}`,
+      `border:1px solid ${item.accent}40`,
+      'border-radius:6px',
+      'display:flex',
+      'flex-direction:column',
+      'gap:3px',
+      'min-width:0',
     ].join(';');
 
-    const shopName = document.createElement('div');
-    shopName.style.cssText = `font-size:10px;font-weight:700;color:${shop.accent};text-transform:uppercase;letter-spacing:0.4px;`;
-    shopName.textContent = `${shop.emoji} ${shop.key}`;
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `font-size:10px;font-weight:700;color:${item.accent};letter-spacing:0.3px;display:flex;align-items:center;gap:3px;`;
+    const spriteUrl = getCelestialSpriteUrl(item.itemIds);
+    if (spriteUrl) {
+      const img = document.createElement('img');
+      img.src = spriteUrl;
+      img.style.cssText = 'height:16px;width:auto;image-rendering:pixelated;flex-shrink:0;';
+      nameEl.appendChild(img);
+    }
+    nameEl.appendChild(document.createTextNode(item.label));
 
+    // ETA row: large colored countdown
     const nextEl = document.createElement('div');
-    nextEl.style.cssText = 'font-size:12px;font-weight:600;color:#e0e0e0;';
+    nextEl.style.cssText = 'font-size:15px;font-weight:700;color:rgba(224,224,224,0.4);font-variant-numeric:tabular-nums;';
     nextEl.textContent = '—';
 
-    const topEl = document.createElement('div');
-    topEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-    topEl.textContent = 'Loading...';
+    // Rate + last seen row
+    const subRow = document.createElement('div');
+    subRow.style.cssText = 'display:flex;align-items:center;gap:5px;';
+    const rateEl = document.createElement('span');
+    rateEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.4);';
+    rateEl.textContent = '';
+    const subEl = document.createElement('span');
+    subEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    subEl.textContent = 'Loading...';
+    subRow.append(rateEl, subEl);
 
-    card.append(shopName, nextEl, topEl);
+    card.append(nameEl, nextEl, subRow);
     grid.appendChild(card);
-    cardEls.push({ el: card, nextEl, topEl });
+    cardEls.push({ nextEl, rateEl, subEl, ts: 0 });
   }
 
-  // Update card contents with data
-  const updateCards = (items: RestockItem[]): void => {
-    SHOP_TYPES.forEach((shop, i) => {
+  // Find an item in the dataset by trying multiple known item_id aliases
+  const findItem = (allItems: RestockItem[], aliases: readonly string[]): RestockItem | null => {
+    for (const alias of aliases) {
+      const found = allItems.find(it =>
+        (it.item_id ?? '').toLowerCase() === alias.toLowerCase()
+      );
+      if (found) return found;
+    }
+    return null;
+  };
+
+  // Update card contents from dataset
+  const updateCards = (allItems: RestockItem[]): void => {
+    CELESTIAL_ITEMS.forEach((def, i) => {
       const card = cardEls[i];
       if (!card) return;
-      const { nextEl, topEl } = card;
-      const shopItems = items.filter(it =>
-        (it.shop_type ?? '').toLowerCase() === shop.key.toLowerCase()
-      );
+      const { nextEl, rateEl, subEl } = card;
 
-      if (!shopItems.length) {
+      const found = findItem(allItems, def.itemIds);
+      if (!found) {
         nextEl.textContent = '—';
-        topEl.textContent = 'No data';
+        nextEl.style.color = 'rgba(224,224,224,0.4)';
+        rateEl.textContent = '';
+        subEl.textContent = 'No data yet';
+        card.ts = 0;
         return;
       }
 
-      // Find soonest next restock
-      const now = Date.now();
-      const withNext = shopItems
-        .filter(it => it.estimated_next_timestamp != null)
-        .sort((a, b) => (a.estimated_next_timestamp ?? 0) - (b.estimated_next_timestamp ?? 0));
+      const ts = found.estimated_next_timestamp ?? 0;
+      card.ts = ts;
+      nextEl.textContent = formatETA(ts);
+      nextEl.style.color = etaColor(ts);
 
-      if (withNext.length) {
-        const soonest = withNext[0]!;
-        const remaining = (soonest.estimated_next_timestamp ?? 0) - now;
-        nextEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
-        const prob = getItemProbability(soonest);
-        const probText = prob != null ? ` (${prob.toFixed(0)}%)` : '';
-        topEl.textContent = `${soonest.item_id ?? '?'}${probText}`;
-        nextEl.dataset.ts = String(soonest.estimated_next_timestamp ?? '');
-      } else {
-        nextEl.textContent = '—';
-        // Show highest prob item
-        const byProb = [...shopItems].sort((a, b) =>
-          (getItemProbability(b) ?? -1) - (getItemProbability(a) ?? -1)
-        );
-        topEl.textContent = byProb[0]?.item_id ?? '—';
-      }
+      const now = Date.now();
+      const prob = getItemProbability(found);
+      rateEl.textContent = prob != null ? `${Math.round(prob * 100)}%` : '';
+      rateEl.style.color = rateColorDash(prob);
+      subEl.textContent = found.last_seen
+        ? `Last ${Math.round((now - found.last_seen) / 86_400_000)}d ago`
+        : '';
     });
   };
 
-  // Live countdown ticker
+  // Live countdown ticker — update ETA text + color every 30s (matches restock window)
   const stopTicker = visibleInterval('dashboard-restock-cards', () => {
-    for (const { nextEl } of cardEls) {
-      const ts = parseInt(nextEl.dataset.ts ?? '0', 10);
-      if (!ts) continue;
-      const remaining = ts - Date.now();
-      nextEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
+    for (const card of cardEls) {
+      if (!card.ts) continue;
+      card.nextEl.textContent = formatETA(card.ts);
+      card.nextEl.style.color = etaColor(card.ts);
     }
-  }, 1000);
+  }, 30_000);
 
   // Cleanup on container detach
   const obs = new MutationObserver(() => {
@@ -367,16 +451,13 @@ function buildModulesSection(uiState: UIState): HTMLElement {
   headerRow.append(sectionTitle, customizeBtn);
   section.appendChild(headerRow);
 
-  // Toggle panel
   const togglePanel = document.createElement('div');
   togglePanel.style.cssText = [
-    'display:none',
     'background:rgba(0,0,0,0.25)',
     'border:1px solid rgba(143,130,255,0.15)',
     'border-radius:6px',
     'padding:8px 10px',
     'margin-bottom:8px',
-    'display:flex',
     'flex-wrap:wrap',
     'gap:8px',
   ].join(';');
@@ -386,7 +467,7 @@ function buildModulesSection(uiState: UIState): HTMLElement {
   let enabledModules = loadEnabledModules();
 
   const moduleCards = document.createElement('div');
-  moduleCards.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;';
+  moduleCards.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;';
   section.appendChild(moduleCards);
 
   const renderTogglePanel = (): void => {
@@ -394,7 +475,6 @@ function buildModulesSection(uiState: UIState): HTMLElement {
     for (const mod of ALL_MODULES) {
       const chip = document.createElement('label');
       chip.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(224,224,224,0.7);cursor:pointer;';
-
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = enabledModules.has(mod.id);
@@ -405,23 +485,17 @@ function buildModulesSection(uiState: UIState): HTMLElement {
         saveEnabledModules(enabledModules);
         renderModuleCards();
       });
-
       chip.append(cb, document.createTextNode(`${mod.icon} ${mod.label}`));
       togglePanel.appendChild(chip);
     }
   };
 
-  let turtleTimerCleanup: (() => void) | null = null;
-  let moduleTickerCleanup: (() => void) | null = null;
+  let moduleCleanups: Array<() => void> = [];
 
   const renderModuleCards = (): void => {
-    // Cleanup previous subscriptions
-    turtleTimerCleanup?.();
-    turtleTimerCleanup = null;
-    moduleTickerCleanup?.();
-    moduleTickerCleanup = null;
+    moduleCleanups.forEach(fn => fn());
+    moduleCleanups = [];
     moduleCards.innerHTML = '';
-
     if (enabledModules.size === 0) {
       const hint = document.createElement('div');
       hint.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
@@ -429,22 +503,19 @@ function buildModulesSection(uiState: UIState): HTMLElement {
       moduleCards.appendChild(hint);
       return;
     }
-
     for (const modDef of ALL_MODULES) {
       if (!enabledModules.has(modDef.id)) continue;
       moduleCards.appendChild(buildModuleCard(modDef, uiState, (cleanup) => {
-        if (modDef.id === 'turtle-timer') turtleTimerCleanup = cleanup;
-        else if (modDef.id === 'next-restock') moduleTickerCleanup = cleanup;
+        moduleCleanups.push(cleanup);
       }));
     }
   };
 
-  // Cleanup on section detach
   const obs = new MutationObserver(() => {
     if (!section.isConnected) {
       obs.disconnect();
-      turtleTimerCleanup?.();
-      moduleTickerCleanup?.();
+      moduleCleanups.forEach(fn => fn());
+      moduleCleanups = [];
     }
   });
   obs.observe(document.body, { childList: true, subtree: true });
@@ -459,6 +530,38 @@ function buildModulesSection(uiState: UIState): HTMLElement {
   return section;
 }
 
+// ─── Compact helpers ──────────────────────────────────────────────────────────
+
+function makeChannelRow(icon: string, label: string): { el: HTMLElement; val: HTMLElement } {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;';
+  const labelEl = document.createElement('span');
+  labelEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.4);white-space:nowrap;';
+  labelEl.textContent = `${icon} ${label}`;
+  const val = document.createElement('span');
+  val.style.cssText = 'font-size:12px;font-weight:600;color:#e0e0e0;';
+  val.textContent = '—';
+  row.append(labelEl, val);
+  return { el: row, val };
+}
+
+function makeBar(pct: number, color: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'flex:1;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;min-width:30px;';
+  const fill = document.createElement('div');
+  fill.style.cssText = `height:100%;width:${Math.max(0, Math.min(100, pct))}%;background:${color};border-radius:3px;transition:width 0.4s;`;
+  wrap.appendChild(fill);
+  return wrap;
+}
+
+function hungerColor(pct: number): string {
+  if (pct >= 75) return '#4caf50';
+  if (pct >= 40) return '#ff9800';
+  return '#f44336';
+}
+
+// ─── Module card dispatcher ───────────────────────────────────────────────────
+
 function buildModuleCard(
   mod: DashboardModule,
   _uiState: UIState,
@@ -472,80 +575,282 @@ function buildModuleCard(
     'border-radius:6px',
     'display:flex',
     'flex-direction:column',
-    'gap:4px',
-    'min-height:70px',
-    'max-height:120px',
+    'gap:5px',
     'overflow:hidden',
   ].join(';');
 
+  const cleanups: Array<() => void> = [];
+  const reg = (fn: () => void): void => { cleanups.push(fn); };
+
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:18px;';
   const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;';
+  titleEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;';
   titleEl.textContent = `${mod.icon} ${mod.label}`;
-  card.appendChild(titleEl);
+  titleRow.appendChild(titleEl);
+  card.appendChild(titleRow);
 
-  const valueEl = document.createElement('div');
-  valueEl.style.cssText = 'font-size:13px;font-weight:600;color:#e0e0e0;';
-  card.appendChild(valueEl);
+  if (mod.id === 'turtle-timer') buildTurtleTimerModule(card, titleRow, reg);
+  else if (mod.id === 'active-pets') buildActivePetsModule(card, titleRow, reg);
+  else if (mod.id === 'xp-near-max') buildXpNearMaxModule(card, reg);
+  else if (mod.id === 'next-restock') buildNextRestockModule(card, reg);
 
-  const subEl = document.createElement('div');
-  subEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.45);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-  card.appendChild(subEl);
-
-  if (mod.id === 'active-pets') {
-    const pets = getActivePetInfos();
-    const names = pets.slice(0, 3).map(p => p.name || p.species || 'Pet');
-    valueEl.textContent = String(pets.length);
-    subEl.textContent = names.join(', ') || 'None active';
-
-  } else if (mod.id === 'turtle-timer') {
-    const update = (snap: TurtleTimerState): void => {
-      if (!snap.enabled) { valueEl.textContent = 'Off'; subEl.textContent = ''; return; }
-      const remaining = snap.plant.focusSlot?.remainingMs ?? null;
-      if (remaining == null) { valueEl.textContent = '—'; subEl.textContent = 'No plant tracked'; return; }
-      valueEl.textContent = formatCountdown(remaining);
-      subEl.textContent = snap.plant.focusSlot?.species ?? '';
-    };
-    const unsub = onTurtleTimerState(update);
-    onCleanup(unsub);
-    valueEl.textContent = '—';
-    subEl.textContent = 'Loading...';
-
-  } else if (mod.id === 'xp-near-max') {
-    const pets = getActivePetInfos();
-    // "Near max" = strength >= 95 (max is 100)
-    const nearMax = pets.filter(p => p.strength != null && p.strength >= 95);
-    valueEl.textContent = String(nearMax.length);
-    subEl.textContent = nearMax.length === 0
-      ? 'None at str ≥95'
-      : nearMax.map(p => p.name || p.species || 'Pet').join(', ');
-
-  } else if (mod.id === 'next-restock') {
-    const items = getRestockDataSync() ?? [];
-    const now = Date.now();
-    const withNext = items
-      .filter(it => it.estimated_next_timestamp != null && it.estimated_next_timestamp > now)
-      .sort((a, b) => (a.estimated_next_timestamp ?? 0) - (b.estimated_next_timestamp ?? 0));
-
-    if (withNext.length) {
-      const soonest = withNext[0]!;
-      const remaining = (soonest.estimated_next_timestamp ?? 0) - now;
-      valueEl.textContent = formatCountdown(remaining);
-      valueEl.dataset.ts = String(soonest.estimated_next_timestamp ?? '');
-      subEl.textContent = `${soonest.item_id ?? '?'} (${soonest.shop_type ?? '?'})`;
-    } else {
-      valueEl.textContent = '—';
-      subEl.textContent = 'No data';
-    }
-
-    // Live countdown
-    const stopTicker = visibleInterval(`dashboard-module-next-restock`, () => {
-      const ts = parseInt(valueEl.dataset.ts ?? '0', 10);
-      if (!ts) return;
-      const remaining = ts - Date.now();
-      valueEl.textContent = remaining > 0 ? formatCountdown(remaining) : 'Soon™';
-    }, 1000);
-    onCleanup(stopTicker);
-  }
-
+  onCleanup(() => cleanups.forEach(fn => fn()));
   return card;
+}
+
+// ─── Turtle Timer module ──────────────────────────────────────────────────────
+
+function buildTurtleTimerModule(
+  card: HTMLElement,
+  titleRow: HTMLElement,
+  reg: (fn: () => void) => void,
+): void {
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.textContent = '...';
+  toggleBtn.style.cssText = [
+    'font-size:10px', 'padding:1px 8px', 'border-radius:3px', 'cursor:pointer',
+    'border:1px solid rgba(143,130,255,0.3)', 'background:rgba(143,130,255,0.08)',
+    'color:rgba(224,224,224,0.4)', 'flex-shrink:0',
+  ].join(';');
+  titleRow.appendChild(toggleBtn);
+
+  const plantRow = makeChannelRow('🌱', 'Plant');
+  const eggRow   = makeChannelRow('🥚', 'Egg');
+  const footerEl = document.createElement('div');
+  footerEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);';
+  card.append(plantRow.el, eggRow.el, footerEl);
+
+  let currentEnabled = false;
+  let plantEndTime: number | null = null;
+  let plantRate = 1;
+  let eggEndTime: number | null = null;
+  let eggRate = 1;
+
+  toggleBtn.addEventListener('click', () => setTurtleTimerEnabled(!currentEnabled));
+
+  const tick = (): void => {
+    const now = Date.now();
+    if (plantEndTime != null) {
+      const adj = Math.max(0, plantEndTime - now) / Math.max(0.01, plantRate);
+      plantRow.val.textContent = adj > 0 ? formatCountdown(adj) : 'Ready';
+    } else { plantRow.val.textContent = '—'; }
+    if (eggEndTime != null) {
+      const adj = Math.max(0, eggEndTime - now) / Math.max(0.01, eggRate);
+      eggRow.val.textContent = adj > 0 ? formatCountdown(adj) : 'Ready';
+    } else { eggRow.val.textContent = '—'; }
+  };
+
+  reg(onTurtleTimerState((snap) => {
+    currentEnabled = snap.enabled;
+    toggleBtn.textContent = snap.enabled ? 'ON' : 'OFF';
+    toggleBtn.style.color = snap.enabled ? '#4caf50' : 'rgba(224,224,224,0.4)';
+    toggleBtn.style.borderColor = snap.enabled ? 'rgba(76,175,80,0.4)' : 'rgba(143,130,255,0.3)';
+    if (!snap.enabled) {
+      plantEndTime = eggEndTime = null;
+      plantRow.val.textContent = eggRow.val.textContent = 'Off';
+      footerEl.textContent = 'Disabled'; return;
+    }
+    const getEnd = (ch: TurtleTimerChannel): number | null =>
+      (ch.focusSlot as (GardenSlotEstimate & { remainingMs: number | null; endTime?: number }) | null)?.endTime ?? null;
+    plantEndTime = getEnd(snap.plant); plantRate = snap.plant.effectiveRate ?? 1;
+    eggEndTime   = getEnd(snap.egg);   eggRate   = snap.egg.effectiveRate ?? 1;
+    footerEl.textContent = snap.availableTurtles > 0
+      ? `${snap.availableTurtles} turtle${snap.availableTurtles !== 1 ? 's' : ''} active`
+      : 'No turtles available';
+    tick();
+  }));
+  reg(visibleInterval('dashboard-turtle-module', tick, 1000));
+}
+
+// ─── Active Pets module ───────────────────────────────────────────────────────
+
+function buildActivePetsModule(
+  card: HTMLElement,
+  titleRow: HTMLElement,
+  reg: (fn: () => void) => void,
+): void {
+  const feedAllBtn = document.createElement('button');
+  feedAllBtn.type = 'button';
+  feedAllBtn.textContent = '🍖 All';
+  feedAllBtn.style.cssText = [
+    'font-size:10px', 'padding:1px 6px', 'border-radius:3px', 'cursor:pointer',
+    'border:1px solid rgba(143,130,255,0.3)', 'background:rgba(143,130,255,0.08)',
+    'color:#c8c0ff', 'flex-shrink:0',
+  ].join(';');
+  titleRow.appendChild(feedAllBtn);
+
+  feedAllBtn.addEventListener('click', async () => {
+    feedAllBtn.disabled = true; feedAllBtn.textContent = '⏳';
+    try {
+      const { feedAllPetsInstantly } = await import('../../features/instantFeed');
+      await feedAllPetsInstantly(100, false);
+    } catch (err) { log('⚠️ Feed all failed', err); }
+    finally { feedAllBtn.disabled = false; feedAllBtn.textContent = '🍖 All'; }
+  });
+
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  card.appendChild(listEl);
+
+  const render = (pets: ActivePetInfo[]): void => {
+    listEl.innerHTML = '';
+    if (!pets.length) {
+      const e = document.createElement('div');
+      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
+      e.textContent = 'No active pets'; listEl.appendChild(e); return;
+    }
+    for (const pet of pets.slice(0, 3)) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nameEl.textContent = pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+      const pct = pet.hungerPct ?? 0;
+      const bar = makeBar(pct, hungerColor(pct));
+      const pctEl = document.createElement('span');
+      pctEl.style.cssText = `font-size:10px;color:${hungerColor(pct)};min-width:28px;text-align:right;`;
+      pctEl.textContent = `${Math.round(pct)}%`;
+      const feedBtn = document.createElement('button');
+      feedBtn.type = 'button'; feedBtn.textContent = '🍖'; feedBtn.title = 'Feed';
+      feedBtn.style.cssText = 'font-size:11px;padding:0 4px;border-radius:3px;cursor:pointer;border:1px solid rgba(143,130,255,0.2);background:rgba(143,130,255,0.06);flex-shrink:0;line-height:1.5;';
+      const idx = pet.slotIndex;
+      feedBtn.addEventListener('click', async () => {
+        feedBtn.disabled = true; feedBtn.textContent = '⏳';
+        try {
+          const { feedPetInstantly } = await import('../../features/instantFeed');
+          await feedPetInstantly(idx, false);
+        } catch (err) { log('⚠️ Feed failed', err); }
+        finally { feedBtn.disabled = false; feedBtn.textContent = '🍖'; }
+      });
+      row.append(nameEl, bar, pctEl, feedBtn);
+      listEl.appendChild(row);
+    }
+  };
+
+  reg(onActivePetInfos(render));
+}
+
+// ─── XP Near Max module ───────────────────────────────────────────────────────
+
+function buildXpNearMaxModule(
+  card: HTMLElement,
+  reg: (fn: () => void) => void,
+): void {
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  card.appendChild(listEl);
+
+  const render = (pets: ActivePetInfo[]): void => {
+    listEl.innerHTML = '';
+    // Compute pct-to-max for each pet; sort closest-to-max first
+    type PetWithPct = { pet: ActivePetInfo; pct: number; str: number };
+    const withPct = pets.reduce<PetWithPct[]>((acc, p) => {
+      if (p.strength === null) return acc;
+      const maxStr = p.targetScale !== null && p.species !== null
+        ? calculateMaxStrength(p.targetScale, p.species)
+        : null;
+      const pct = maxStr !== null && maxStr > 0
+        ? Math.min(100, Math.round((p.strength / maxStr) * 100))
+        : null;
+      if (pct !== null) acc.push({ pet: p, pct, str: p.strength });
+      return acc;
+    }, []).sort((a, b) => b.pct - a.pct);
+
+    if (!withPct.length) {
+      const e = document.createElement('div');
+      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
+      e.textContent = 'No XP data'; listEl.appendChild(e); return;
+    }
+    for (const { pet, pct, str } of withPct.slice(0, 3)) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nameEl.textContent = pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+      const clr = pct >= 95 ? '#8f82ff' : pct >= 80 ? '#ff9800' : 'rgba(255,255,255,0.5)';
+      const bar = makeBar(pct, clr);
+      const pctEl = document.createElement('span');
+      pctEl.style.cssText = `font-size:10px;color:${clr};min-width:30px;text-align:right;white-space:nowrap;`;
+      pctEl.textContent = `${pct}% (${Math.round(str)})`;
+      row.append(nameEl, bar, pctEl);
+      listEl.appendChild(row);
+    }
+  };
+
+  reg(onActivePetInfos(render));
+}
+
+// ─── Next Restock module ──────────────────────────────────────────────────────
+
+function buildNextRestockModule(
+  card: HTMLElement,
+  reg: (fn: () => void) => void,
+): void {
+  const SHOP_ICONS: Record<string, string> = {
+    'seed': '🌱', 'egg': '🥚', 'decor': '🏡', 'weather': '🌤',
+  };
+  const SHOP_LABELS: Record<string, string> = {
+    'seed': 'Seeds', 'egg': 'Eggs', 'decor': 'Decor', 'weather': 'Weather',
+  };
+  const SHOP_ORDER = ['seed', 'egg', 'decor', 'weather'];
+
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  card.appendChild(listEl);
+
+  const shopSlots = new Map<string, { tsEl: HTMLElement; ts: number }>();
+
+  const buildRows = (items: RestockItem[]): void => {
+    listEl.innerHTML = '';
+    shopSlots.clear();
+    const now = Date.now();
+    const byShop = new Map<string, RestockItem>();
+    for (const it of items) {
+      if (!it.shop_type || !it.estimated_next_timestamp) continue;
+      const ex = byShop.get(it.shop_type);
+      if (!ex || it.estimated_next_timestamp < (ex.estimated_next_timestamp ?? Infinity)) {
+        byShop.set(it.shop_type, it);
+      }
+    }
+    if (!byShop.size) {
+      const e = document.createElement('div');
+      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
+      e.textContent = 'No data'; listEl.appendChild(e); return;
+    }
+    for (const shopKey of SHOP_ORDER) {
+      const it = byShop.get(shopKey);
+      if (!it) continue;
+      const ts = it.estimated_next_timestamp ?? 0;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
+      const iconEl = document.createElement('span');
+      iconEl.style.cssText = 'font-size:12px;flex-shrink:0;';
+      iconEl.textContent = SHOP_ICONS[shopKey] ?? '🏪';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.6);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nameEl.textContent = (it.item_id ?? shopKey).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const prob = it.current_probability ?? (it as RestockItem & { appearance_rate?: number }).appearance_rate ?? 0;
+      const probEl = document.createElement('span');
+      probEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.4);flex-shrink:0;';
+      probEl.textContent = `${Math.round(prob * 100)}%`;
+      const tsEl = document.createElement('span');
+      tsEl.style.cssText = 'font-size:10px;color:#8f82ff;min-width:44px;text-align:right;flex-shrink:0;';
+      tsEl.textContent = ts > now ? formatCountdown(ts - now) : 'Soon™';
+      shopSlots.set(shopKey, { tsEl, ts });
+      row.append(iconEl, nameEl, probEl, tsEl);
+      listEl.appendChild(row);
+    }
+  };
+
+  buildRows(getRestockDataSync() ?? []);
+  void fetchRestockData().then(items => { if (items) buildRows(items); }).catch(() => { /* no-op */ });
+
+  reg(visibleInterval('dashboard-restock-module', () => {
+    const now = Date.now();
+    for (const { tsEl, ts } of shopSlots.values()) {
+      tsEl.textContent = ts > now ? formatCountdown(ts - now) : 'Soon™';
+    }
+  }, 1000));
 }

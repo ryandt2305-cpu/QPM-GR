@@ -3,11 +3,11 @@
 // Allows users to favorite/unfavorite all produce items of a species with one click
 
 import { log } from '../utils/logger';
-import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, InventoryItem } from '../store/inventory';
 import { getCropSpriteDataUrl } from '../sprite-v2/compat';
 import { addStyle } from '../utils/dom';
 import { getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
+import { sendRoomAction } from '../websocket/api';
 
 // ============================================================================
 // TYPES
@@ -240,20 +240,11 @@ function getProduceGroups(): ProduceGroup[] {
 // ============================================================================
 
 function sendFavoriteToggle(itemId: string): boolean {
-  try {
-    const connection = (pageWindow as any)?.MagicCircle_RoomConnection;
-    if (connection && typeof connection.sendMessage === 'function') {
-      connection.sendMessage({
-        scopePath: ['Room', 'Quinoa'],
-        type: 'ToggleFavoriteItem',
-        itemId,
-      });
-      return true;
-    }
-  } catch (error) {
-    log('⚠️ [BulkFavorite] Failed to send favorite toggle', error);
+  const sent = sendRoomAction('ToggleFavoriteItem', { itemId }, { throttleMs: 50 });
+  if (!sent.ok && sent.reason !== 'throttled') {
+    log(`⚠️ [BulkFavorite] Failed to send favorite toggle (${sent.reason ?? 'unknown'})`);
   }
-  return false;
+  return sent.ok;
 }
 
 // ============================================================================
@@ -652,4 +643,6 @@ export function refreshBulkFavorite(): void {
 export function isBulkFavoriteActive(): boolean {
   return observer !== null;
 }
+
+
 

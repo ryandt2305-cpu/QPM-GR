@@ -26,6 +26,7 @@ import type { SpriteCategory, SpriteService } from '../sprite-v2/types';
 import { findVariantBadge } from '../data/variantBadges';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../store/xpTracker';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { getAbilityColor as getSharedAbilityColor } from '../utils/petCardRenderer';
 
 const inspectorState = {
   targetPlayerId: null as string | null,
@@ -264,7 +265,11 @@ if (!(window as any).QPM_INSPECT_FRIEND) {
 function setPanePlaceholder(id: string, text: string): void {
   const el = document.getElementById(id);
   if (el) {
-    el.innerHTML = `<div class="pr-pane-placeholder">${text}</div>`;
+    clearNode(el);
+    const placeholder = document.createElement('div');
+    placeholder.className = 'pr-pane-placeholder';
+    placeholder.textContent = text;
+    el.appendChild(placeholder);
   }
 }
 
@@ -440,9 +445,9 @@ function openInspector(slot: RoomUserSlot | null, room: Room): void {
   const subEl = shell.querySelector('#pr-inspector-sub') as HTMLElement | null;
 
   if (avatarEl) {
-    if (slot?.avatarUrl) {
-      const isHttp = /^https?:\/\//.test(slot.avatarUrl);
-      avatarEl.style.backgroundImage = isHttp ? `url('${encodeURI(slot.avatarUrl)}')` : '';
+    const safeAvatar = sanitizeImageUrl(slot?.avatarUrl);
+    if (safeAvatar) {
+      avatarEl.style.backgroundImage = `url("${safeAvatar}")`;
       avatarEl.textContent = '';
       avatarEl.classList.add('has-img');
     } else {
@@ -541,10 +546,36 @@ function safeArray(value: any): any[] {
   return Array.isArray(value) ? value : [];
 }
 
+function sanitizeImageUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (!value) return null;
+
+  if (value.startsWith('data:image/')) {
+    // Allow image-only data URLs for rendered sprite/avatar content.
+    if (/[<>\s]/.test(value)) return null;
+    return value;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function clearNode(node: HTMLElement): void {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
 function renderAvatarBlock(view: PlayerView, name: string): string {
-  const safeAvatarUrl = view.avatarUrl && /^https?:\/\//.test(view.avatarUrl)
-    ? `url('${encodeURI(view.avatarUrl)}')`
-    : '';
+  const safeAvatar = sanitizeImageUrl(view.avatarUrl);
+  const safeAvatarUrl = safeAvatar ? `url("${safeAvatar}")` : '';
   const avatar = safeAvatarUrl
     ? `<div class="pr-avatar-block-img" style="background-image:${safeAvatarUrl}"></div>`
     : `<div class="pr-avatar-block-fallback">${escapeHtml(avatarInitials(name))}</div>`;
@@ -591,8 +622,9 @@ function friendlyName(raw: any): string {
 
 function spriteCircle(url: string | null | undefined, fallback: string): string {
   // Properly quote data URLs in CSS
-  const style = url ? `background-image:url('${url}');` : '';
-  return `<div class="pr-sprite-circle" style="${style}">${url ? '' : fallback}</div>`;
+  const safeUrl = sanitizeImageUrl(url);
+  const style = safeUrl ? `background-image:url("${safeUrl}");` : '';
+  return `<div class="pr-sprite-circle" style="${style}">${safeUrl ? '' : fallback}</div>`;
 }
 
 type SpriteFilterConfig = {
@@ -829,52 +861,7 @@ const ABILITY_COLOR_MAP = {
 };
 
 function getAbilityColor(abilityName: string): { base: string; glow: string; text: string } {
-  const name = (abilityName || '').toLowerCase().replace(/\s+/g, '');
-  
-  // Rainbow and Gold special abilities - check exact matches first
-  if (name.includes('rainbowgranter') || name.includes('rainbow')) return { base: 'linear-gradient(135deg, #FF0000 0%, #FF7F00 16.67%, #FFFF00 33.33%, #00FF00 50%, #0000FF 66.67%, #4B0082 83.33%, #9400D3 100%)', glow: 'rgba(124,77,255,0.7)', text: '#FFF' };
-  if (name.includes('goldgranter') || name.includes('golden') || name === 'gold') return { base: 'linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)', glow: 'rgba(255,215,0,0.75)', text: '#000' };
-  
-  // Coin abilities - Yellow/Gold (CoinFinderI, CoinFinderII, CoinFinderIII)
-  if (name.includes('coinfinder')) return { base: '#FFD700', glow: 'rgba(255,215,0,0.65)', text: '#000' };
-  
-  // Produce/Crop abilities - Orange/Red tones
-  if (name.includes('produceeater') || name.includes('cropeater')) return { base: '#FF5722', glow: 'rgba(255,87,34,0.6)', text: '#FFF' };
-  if (name.includes('producerefund') || name.includes('croprefund')) return { base: '#FF5722', glow: 'rgba(255,87,34,0.6)', text: '#FFF' };
-  if (name.includes('producescaleboost') || name.includes('cropsize')) return { base: '#4CAF50', glow: 'rgba(76,175,80,0.6)', text: '#FFF' };
-  if (name.includes('producemutation') || name.includes('cropmutation')) return { base: '#E91E63', glow: 'rgba(233,30,99,0.6)', text: '#FFF' };
-  
-  // Seed abilities - Orange (SeedFinderI, SeedFinderII, SeedFinderIII)
-  if (name.includes('seedfinder')) return { base: '#FF9800', glow: 'rgba(255,152,0,0.6)', text: '#FFF' };
-  
-  // Egg abilities - Purple/Magenta (EggGrowthBoostI, EggGrowthBoostII, EggGrowthBoostIII)
-  if (name.includes('egggrowth')) return { base: '#9C27B0', glow: 'rgba(156,39,176,0.6)', text: '#FFF' };
-  
-  // Pet abilities
-  if (name.includes('petrefund')) return { base: '#00BCD4', glow: 'rgba(0,188,212,0.6)', text: '#FFF' };
-  if (name.includes('petmutation')) return { base: '#E91E63', glow: 'rgba(233,30,99,0.6)', text: '#FFF' };
-  if (name.includes('petageboost') || name.includes('maxstrength') || name.includes('strengthboost')) return { base: '#673AB7', glow: 'rgba(103,58,183,0.6)', text: '#FFF' };
-  if (name.includes('pethatchsizeboost') || name.includes('hatchxp')) return { base: '#7C4DFF', glow: 'rgba(124,77,255,0.65)', text: '#FFF' };
-  
-  // Sell abilities - Red (SellBoostI, SellBoostII, SellBoostIII)
-  if (name.includes('sellboost')) return { base: '#F44336', glow: 'rgba(244,67,54,0.6)', text: '#FFF' };
-  
-  // Hunger abilities - Pink (HungerRestore, HungerRestoreII)
-  if (name.includes('hunger')) return { base: '#EC407A', glow: 'rgba(236,64,122,0.6)', text: '#FFF' };
-  
-  // XP abilities - Blue (XPBoostI, XPBoostII, XPBoostIII)
-  if (name.includes('xpboost')) return { base: '#2196F3', glow: 'rgba(33,150,243,0.6)', text: '#FFF' };
-  
-  // Plant/Produce Growth abilities - Teal/Cyan (PlantGrowthBoostI, PlantGrowthBoostII, PlantGrowthBoostIII)
-  if (name.includes('plantgrowth') || name.includes('producegrowth')) return { base: '#26A69A', glow: 'rgba(38,166,154,0.6)', text: '#FFF' };
-  
-  // Weather/Special abilities - Blue (RainDance, DoubleHatch, DoubleHarvest)
-  if (name.includes('raindance')) return { base: '#2196F3', glow: 'rgba(33,150,243,0.6)', text: '#FFF' };
-  if (name.includes('doublehatch')) return { base: '#5C6BC0', glow: 'rgba(92,107,192,0.6)', text: '#FFF' };
-  if (name.includes('doubleharvest')) return { base: '#1976D2', glow: 'rgba(25,118,210,0.6)', text: '#FFF' };
-  
-  // Default
-  return { base: '#90A4AE', glow: 'rgba(144,164,174,0.6)', text: '#FFF' };
+  return getSharedAbilityColor(abilityName);
 }
 
 function renderAbilitySquares(abilities: string[]): string {
@@ -1255,7 +1242,7 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
           const isExpanded = content.style.display !== 'none';
           content.style.display = isExpanded ? 'none' : 'block';
           arrow.textContent = isExpanded ? '▶' : '▼';
-          window.QPM?.storage?.set('player-inspector:journal-expanded', !isExpanded);
+          try { localStorage.setItem('player-inspector:journal-expanded', JSON.stringify(!isExpanded)); } catch {}
         ">
           <span>📖 Journal Progress</span>
           <span class="pr-expand-arrow" style="font-size: 12px; transition: transform 0.2s;">${isJournalExpanded ? '▼' : '▶'}</span>
@@ -1417,131 +1404,194 @@ async function renderInventoryPane(view: PlayerView, isFriend: boolean, privacy:
     });
   }
 
+  const pane = document.getElementById('pr-inventory-content');
+  if (!pane) return;
+  clearNode(pane);
+
+  const section = document.createElement('div');
+  section.className = 'pr-section';
+
+  const sectionHead = document.createElement('div');
+  sectionHead.className = 'pr-section-head';
+  sectionHead.textContent = `Inventory (${collected.length} items)`;
+
+  const cardsRoot = document.createElement('div');
+  cardsRoot.className = 'pr-card-grid';
+  cardsRoot.id = 'pr-inv-cards';
+
+  section.append(sectionHead, cardsRoot);
+  pane.appendChild(section);
+
+  const appendAbilitySquares = (container: HTMLElement, abilities: string[]): void => {
+    if (!abilities.length) return;
+    const abilityWrap = document.createElement('div');
+    abilityWrap.className = 'pr-inv-abilities';
+    abilities.forEach((ability) => {
+      const colors = getAbilityColor(String(ability));
+      const square = document.createElement('div');
+      square.className = 'pr-ability-square';
+      square.title = String(ability);
+      square.style.cssText = `background:${colors.base};border:1px solid rgba(255,255,255,0.3);box-shadow:0 0 6px ${colors.glow};`;
+      abilityWrap.appendChild(square);
+    });
+    container.appendChild(abilityWrap);
+  };
+
+  const appendSprite = (container: HTMLElement, sprite: string | null | undefined, fallback: string): void => {
+    const spriteContainer = document.createElement('div');
+    spriteContainer.className = 'pr-inv-sprite-container';
+    const safeSprite = sanitizeImageUrl(sprite);
+    if (safeSprite) {
+      const img = document.createElement('img');
+      img.src = safeSprite;
+      img.alt = '';
+      img.className = 'pr-inv-sprite';
+      spriteContainer.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'pr-inv-placeholder';
+      ph.textContent = fallback;
+      spriteContainer.appendChild(ph);
+    }
+    container.appendChild(spriteContainer);
+  };
+
+  const buildInventoryCard = (item: any): HTMLElement => {
+    const card = document.createElement('div');
+    card.className = item.isPet ? 'pr-inv-card pet-card' : 'pr-inv-card';
+
+    if (item.isPet) {
+      appendAbilitySquares(card, Array.isArray(item.abilities) ? item.abilities.map((a: any) => String(a)) : []);
+      appendSprite(card, item.sprite, '?');
+
+      const name = document.createElement('div');
+      name.className = 'pr-inv-name';
+      name.textContent = String(item.label || 'Pet');
+
+      const str = document.createElement('div');
+      str.className = 'pr-inv-str';
+      str.textContent = `STR: ${item.petLevel ?? 0}`;
+
+      card.append(name, str);
+      return card;
+    }
+
+    appendSprite(card, item.sprite, String(item.icon || '?'));
+
+    const name = document.createElement('div');
+    name.className = 'pr-inv-name';
+    name.textContent = String(item.label || 'Item');
+
+    const qty = document.createElement('div');
+    qty.className = 'pr-inv-qty';
+    qty.textContent = `x${Number(item.qty || 0)}`;
+
+    card.append(name, qty);
+    return card;
+  };
+
+  const BATCH_SIZE = 32;
+  let index = 0;
+  const pump = (): void => {
+    const start = performance.now();
+    let processed = 0;
+    const frag = document.createDocumentFragment();
+
+    while (index < collected.length && processed < BATCH_SIZE && performance.now() - start < 10) {
+      const item = collected[index++];
+      if (!item) continue;
+      frag.appendChild(buildInventoryCard(item));
+      processed += 1;
+    }
+
+    if (frag.childNodes.length > 0) {
+      cardsRoot.appendChild(frag);
+    }
+
+    if (index < collected.length) {
+      requestAnimationFrame(pump);
+      return;
+    }
+
+    if (!cardsRoot.firstChild) {
+      const empty = document.createElement('div');
+      empty.className = 'pr-pane-placeholder';
+      empty.textContent = 'Inventory payload empty or private.';
+      cardsRoot.appendChild(empty);
+    }
+  };
+
+  if (!collected.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pr-pane-placeholder';
+    empty.textContent = 'Inventory payload empty or private.';
+    cardsRoot.appendChild(empty);
+  } else {
+    requestAnimationFrame(pump);
+  }
+
   const storages = (view.state?.inventory as any)?.storages || [];
   const hutch = storages.find((s: any) => s.decorId === 'PetHutch' || s.type === 'hutch' || s.id === 'hutch');
-  let hutchHtml = '';
-  if (hutch && hutch.items && hutch.items.length > 0) {
-    const hutchPets = hutch.items
-      .map((pet: any) => {
-        const species = pet.petSpecies || pet.species;
-        const normalized = normalizePetSpecies(String(species));
-        const name = pet.name || friendlyName(species);
+  if (hutch && Array.isArray(hutch.items) && hutch.items.length > 0) {
+    const hutchSection = document.createElement('div');
+    hutchSection.className = 'pr-section';
 
-        let sprite = canvasToDataUrlSafe(getPetSpriteCanvas(normalized));
-        const petMut = (pet.mutation || pet.mutations) ? String(Array.isArray(pet.mutations) ? pet.mutations[0] : pet.mutation).toLowerCase() : '';
-        if (sprite && petMut) {
-          const petCanvas = getPetSpriteWithMutations(normalized, [petMut]);
-          if (petCanvas) {
-            const withMut = applyCanvasFilter(petCanvas, petMut);
-            sprite = canvasToDataUrlSafe(withMut) || sprite;
-          }
+    const hutchHead = document.createElement('div');
+    hutchHead.className = 'pr-section-head';
+    hutchHead.textContent = `Pet Hutch (${hutch.items.length} pets)`;
+
+    const hutchGrid = document.createElement('div');
+    hutchGrid.className = 'pr-card-grid';
+
+    hutch.items.forEach((pet: any) => {
+      const species = pet.petSpecies || pet.species;
+      const normalized = normalizePetSpecies(String(species));
+      const name = pet.name || friendlyName(species);
+
+      let sprite = canvasToDataUrlSafe(getPetSpriteCanvas(normalized));
+      const petMut = (pet.mutation || pet.mutations) ? String(Array.isArray(pet.mutations) ? pet.mutations[0] : pet.mutation).toLowerCase() : '';
+      if (sprite && petMut) {
+        const petCanvas = getPetSpriteWithMutations(normalized, [petMut]);
+        if (petCanvas) {
+          const withMut = applyCanvasFilter(petCanvas, petMut);
+          sprite = canvasToDataUrlSafe(withMut) || sprite;
         }
-        const xp = pet.xp || 0;
-        const targetScale = pet.targetScale || 1;
-        let strength = 50;
-        const maxStrength = calculateMaxStrength(targetScale, species);
-        const xpPerLevel = getSpeciesXpPerLevel(species);
-        if (xpPerLevel && xpPerLevel > 0 && xp > 0 && maxStrength) {
-          const level = Math.min(30, Math.floor(xp / xpPerLevel));
-          const baseStrength = 50;
-          const strengthPerLevel = (maxStrength - baseStrength) / 30;
-          strength = Math.min(maxStrength, Math.round(baseStrength + level * strengthPerLevel));
-        }
-        const abilities = pet.abilities ? (Array.isArray(pet.abilities) ? pet.abilities : [pet.abilities]) : [];
-        const abilitySquares = renderAbilitySquares(abilities);
-
-        return `
-        <div class="pr-inv-card pet-card">
-          ${abilitySquares ? `<div class="pr-inv-abilities">${abilitySquares}</div>` : ''}
-          <div class="pr-inv-sprite-container">
-            ${sprite ? `<img src="${sprite}" alt="${name}" class="pr-inv-sprite" />` : '<div class="pr-inv-placeholder">?</div>'}
-          </div>
-          <div class="pr-inv-name">${name}</div>
-          <div class="pr-inv-str">STR: ${strength}</div>
-        </div>
-      `;
-      })
-      .join('');
-
-    hutchHtml = `
-      <div class="pr-section">
-        <div class="pr-section-head">🐾 Pet Hutch (${hutch.items.length} pets)</div>
-        <div class="pr-card-grid">${hutchPets}</div>
-      </div>
-    `;
-  }
-
-  setPaneContent('pr-inventory-content', `
-    <div class="pr-section">
-      <div class="pr-section-head">🎒 Inventory (<span id="pr-inv-count">${collected.length}</span> items)</div>
-      <div class="pr-card-grid" id="pr-inv-cards"></div>
-    </div>
-    ${hutchHtml}
-  `);
-
-  const cardsRoot = document.getElementById('pr-inv-cards');
-  if (cardsRoot) {
-    const buildPetCard = (item: any) => {
-      const abilities = item.abilities || [];
-      const abilitySquares = renderAbilitySquares(abilities);
-      const currentSTR = item.petLevel ?? 0;
-      return `
-        <div class="pr-inv-card pet-card">
-          ${abilitySquares ? `<div class="pr-inv-abilities">${abilitySquares}</div>` : ''}
-          <div class="pr-inv-sprite-container">
-            ${item.sprite ? `<img src="${item.sprite}" alt="${item.label}" class="pr-inv-sprite" />` : '<div class="pr-inv-placeholder">?</div>'}
-          </div>
-          <div class="pr-inv-name">${item.label}</div>
-          <div class="pr-inv-str">STR: ${currentSTR}</div>
-        </div>
-      `;
-    };
-
-    const buildItemCard = (item: any) => {
-      const fallback = item.icon || '?';
-      return `
-        <div class="pr-inv-card">
-          <div class="pr-inv-sprite-container">
-            ${item.sprite ? `<img src="${item.sprite}" alt="${item.label}" class="pr-inv-sprite" />` : `<div class="pr-inv-placeholder">${fallback}</div>`}
-          </div>
-          <div class="pr-inv-name">${item.label}</div>
-          <div class="pr-inv-qty">x${item.qty}</div>
-        </div>
-      `;
-    };
-
-    const BATCH_SIZE = 32;
-    let index = 0;
-    const pump = () => {
-      const start = performance.now();
-      let chunk = '';
-      let processed = 0;
-      while (index < collected.length && processed < BATCH_SIZE && performance.now() - start < 10) {
-        const item = collected[index++];
-        if (!item) {
-          continue;
-        }
-        chunk += item.isPet ? buildPetCard(item) : buildItemCard(item);
-        processed += 1;
       }
-      if (chunk) {
-        cardsRoot.insertAdjacentHTML('beforeend', chunk);
-      }
-      if (index < collected.length) {
-        requestAnimationFrame(pump);
-      } else if (!cardsRoot.innerHTML.trim()) {
-        cardsRoot.innerHTML = '<div class="pr-pane-placeholder">Inventory payload empty or private.</div>';
-      }
-    };
 
-    if (!collected.length) {
-      cardsRoot.innerHTML = '<div class="pr-pane-placeholder">Inventory payload empty or private.</div>';
-    } else {
-      requestAnimationFrame(pump);
-    }
+      const xp = pet.xp || 0;
+      const targetScale = pet.targetScale || 1;
+      let strength = 50;
+      const maxStrength = calculateMaxStrength(targetScale, species);
+      const xpPerLevel = getSpeciesXpPerLevel(species);
+      if (xpPerLevel && xpPerLevel > 0 && xp > 0 && maxStrength) {
+        const level = Math.min(30, Math.floor(xp / xpPerLevel));
+        const baseStrength = 50;
+        const strengthPerLevel = (maxStrength - baseStrength) / 30;
+        strength = Math.min(maxStrength, Math.round(baseStrength + level * strengthPerLevel));
+      }
+
+      const abilities = pet.abilities ? (Array.isArray(pet.abilities) ? pet.abilities : [pet.abilities]) : [];
+      const card = document.createElement('div');
+      card.className = 'pr-inv-card pet-card';
+      appendAbilitySquares(card, abilities.map((a: any) => String(a)));
+      appendSprite(card, sprite, '?');
+
+      const petName = document.createElement('div');
+      petName.className = 'pr-inv-name';
+      petName.textContent = String(name);
+
+      const petStr = document.createElement('div');
+      petStr.className = 'pr-inv-str';
+      petStr.textContent = `STR: ${strength}`;
+
+      card.append(petName, petStr);
+      hutchGrid.appendChild(card);
+    });
+
+    hutchSection.append(hutchHead, hutchGrid);
+    pane.appendChild(hutchSection);
   }
 }
-
 function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: PlayerView['privacy']): void {
   const logs = Array.isArray(view.state?.activityLog)
     ? view.state?.activityLog
@@ -1562,14 +1612,12 @@ function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: Player
     const timestamp = normalizeMillis(obj.timestamp ?? obj.time ?? obj.createdAt ?? null);
     const ago = timestamp ? formatUpdatedAgo(new Date(timestamp).toISOString()) : 'recently';
     const params = obj.parameters || obj;
-    
-    // Extract crop/pet/item info from parameters
+
     const crop = params?.species || params?.crop || params?.seed || obj.seed;
     const pet = params?.pet?.name || params?.pet?.petSpecies || params?.petSpecies || obj.pet;
     const mutations = params?.mutations || params?.mutation || [];
     let sprite = null;
-    
-    // Get appropriate sprite
+
     if (crop) {
       sprite = getMutatedCropSpriteUrl(String(crop).toLowerCase(), mutations);
     } else if (pet) {
@@ -1577,7 +1625,6 @@ function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: Player
       sprite = canvasToDataUrlSafe(getPetSpriteCanvas(String(petSpecies).toLowerCase()));
     }
 
-    // Build detailed description based on action type
     let detail = '';
     if (rawAction === 'feedPet') {
       const petName = params?.pet?.name || 'pet';
@@ -1591,20 +1638,20 @@ function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: Player
       const seedType = Array.isArray(seedIds) && seedIds.length > 0 ? seedIds[0] : 'seed';
       detail = `Purchased ${friendlyName(seedType)}`;
     } else if (rawAction === 'purchaseTool') {
-      detail = `Purchased tool`;
+      detail = 'Purchased tool';
     } else if (rawAction === 'harvest') {
       const crops = params?.crops || [];
       const cropCount = Array.isArray(crops) ? crops.length : 1;
       const cropSpecies = Array.isArray(crops) && crops.length > 0 ? crops[0].species : 'crops';
       detail = `Harvested ${cropCount} ${friendlyName(cropSpecies)}`;
     } else if (rawAction === 'plantEgg') {
-      detail = `Planted an egg`;
+      detail = 'Planted an egg';
     } else if (rawAction.startsWith('PetXpBoost')) {
       const bonusXp = params?.bonusXp || 0;
       const affected = params?.petsAffected?.length || 0;
       detail = `+${bonusXp} XP to ${affected} pet${affected !== 1 ? 's' : ''}`;
     } else if (rawAction === 'ProduceScaleBoostII' || rawAction === 'ProduceScaleBoost') {
-      detail = `Crop size boost activated`;
+      detail = 'Crop size boost activated';
     } else if (rawAction.includes('Kisser') || rawAction.includes('Granter')) {
       detail = `${action} ability triggered`;
     } else if (rawAction.toLowerCase().includes('hatch')) {
@@ -1620,27 +1667,72 @@ function renderActivityPane(view: PlayerView, isFriend: boolean, privacy: Player
     return { action, ago, detail, sprite };
   });
 
-  const timeline = parsed.map(item => `
-    <div class="pr-timeline-item">
-      <div class="pr-timeline-dot"></div>
-      ${item.sprite ? spriteCircle(item.sprite, '') : '<div style="width:10px"></div>'}
-      <div class="pr-timeline-main">
-        <div class="pr-timeline-title">${item.action}</div>
-        <div class="pr-timeline-detail">${item.detail || 'No details'}</div>
-      </div>
-      <div class="pr-time-badge">${item.ago}</div>
-    </div>
-  `).join('');
+  const pane = document.getElementById('pr-activity-content');
+  if (!pane) return;
+  clearNode(pane);
 
-  setPaneContent('pr-activity-content', `
-    <div class="pr-section">
-      <div class="pr-section-head">Recent Activity</div>
-      <div class="pr-timeline">${timeline}</div>
-      ${logs.length > 8 ? '<div class="pr-hint">Showing first 8 entries</div>' : ''}
-    </div>
-  `);
+  const section = document.createElement('div');
+  section.className = 'pr-section';
+
+  const head = document.createElement('div');
+  head.className = 'pr-section-head';
+  head.textContent = 'Recent Activity';
+
+  const timeline = document.createElement('div');
+  timeline.className = 'pr-timeline';
+
+  parsed.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'pr-timeline-item';
+
+    const dot = document.createElement('div');
+    dot.className = 'pr-timeline-dot';
+    row.appendChild(dot);
+
+    const safeSprite = sanitizeImageUrl(item.sprite);
+    if (safeSprite) {
+      const sprite = document.createElement('div');
+      sprite.className = 'pr-sprite-circle';
+      sprite.style.backgroundImage = `url("${safeSprite}")`;
+      row.appendChild(sprite);
+    } else {
+      const spacer = document.createElement('div');
+      spacer.style.width = '10px';
+      row.appendChild(spacer);
+    }
+
+    const main = document.createElement('div');
+    main.className = 'pr-timeline-main';
+
+    const title = document.createElement('div');
+    title.className = 'pr-timeline-title';
+    title.textContent = item.action;
+
+    const detail = document.createElement('div');
+    detail.className = 'pr-timeline-detail';
+    detail.textContent = item.detail || 'No details';
+
+    main.append(title, detail);
+
+    const timeBadge = document.createElement('div');
+    timeBadge.className = 'pr-time-badge';
+    timeBadge.textContent = item.ago;
+
+    row.append(main, timeBadge);
+    timeline.appendChild(row);
+  });
+
+  section.append(head, timeline);
+
+  if (logs.length > 8) {
+    const hint = document.createElement('div');
+    hint.className = 'pr-hint';
+    hint.textContent = 'Showing first 8 entries';
+    section.appendChild(hint);
+  }
+
+  pane.appendChild(section);
 }
-
 async function renderInspectorPanes(view: PlayerView, isFriend: boolean): Promise<void> {
   const privacy = view.privacy || {
     showProfile: true,
@@ -1808,12 +1900,11 @@ function createAppContainer(): HTMLElement {
 }
 
 function playerChip(slot: RoomUserSlot): string {
-  const safeAvatarUrl = slot.avatarUrl && /^https?:\/\//.test(slot.avatarUrl)
-    ? `url('${encodeURI(slot.avatarUrl)}')`
-    : '';
+  const avatarUrl = sanitizeImageUrl(slot.avatarUrl);
+  const safeAvatarUrl = avatarUrl ? `url("${avatarUrl}")` : '';
   const avatar = safeAvatarUrl
     ? `<span style="width: 20px; height: 20px; border-radius: 50%; background-image: ${safeAvatarUrl}; background-size: cover; background-position: center; border: 1px solid rgba(255,255,255,0.15);"></span>`
-    : '<span style="font-size: 12px; opacity: 0.7;">👤</span>';
+    : '<span style="font-size: 12px; opacity: 0.7;">User</span>';
   return `
     <span class="pr-player-chip" data-player-name="${escapeHtml(slot.name || '')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 12px; font-weight: 600;">
       ${avatar}
@@ -1821,7 +1912,6 @@ function playerChip(slot: RoomUserSlot): string {
     </span>
   `;
 }
-
 function avatarInitials(name?: string | null): string {
   if (!name) return '👤';
   const parts = name.trim().split(/\s+/);
@@ -1840,46 +1930,89 @@ function openPlayersModal(room: Room): void {
   card.style.cssText = 'width: min(520px, 100%); max-height: 80vh; overflow: auto; background: #111827; border: 2px solid rgba(66,165,245,0.35); border-radius: 10px; padding: 18px; color: #fff; box-shadow: 0 12px 32px rgba(0,0,0,0.4);';
 
   const players = room.userSlots || [];
+  const close = (): void => overlay.remove();
 
-  card.innerHTML = `
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-      <div>
-        <div style="font-size: 18px; font-weight: 700;">Players in ${room.id}</div>
-        <div style="font-size: 12px; color: #9CA3AF;">${players.length} visible player${players.length === 1 ? '' : 's'}</div>
-      </div>
-      <button id="pr-modal-close" class="qpm-button qpm-button--neutral" style="padding: 6px 12px;">✖</button>
-    </div>
-    <div style="display: flex; flex-direction: column; gap: 10px;">
-      ${players.length === 0 ? '<div style="color: #9CA3AF; font-size: 13px; text-align: center; padding: 20px;">No players visible for this room.</div>' : players.map(slot => `
-        <div class="qpm-card" style="padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 10px;">
-          ${slot.avatarUrl ? `<img src="${slot.avatarUrl}" alt="avatar" style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); object-fit: cover;">` : '<div style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08); display: grid; place-items: center; color: #9CA3AF;">👤</div>'}
-          <div style="flex: 1;">
-            <div style="font-size: 14px; font-weight: 700;">${slot.name || 'Unknown player'}</div>
-            <div style="font-size: 11px; color: #9CA3AF;">Tap to search by this player</div>
-          </div>
-          <button class="qpm-button qpm-button--neutral pr-search-player" data-player-name="${slot.name || ''}" style="padding: 6px 10px; font-size: 12px;">🔍 Search</button>
-        </div>
-      `).join('')}
-    </div>
-  `;
+  const header = document.createElement('div');
+  header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;';
 
+  const headerText = document.createElement('div');
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size: 18px; font-weight: 700;';
+  title.textContent = `Players in ${room.id}`;
+  const subtitle = document.createElement('div');
+  subtitle.style.cssText = 'font-size: 12px; color: #9CA3AF;';
+  subtitle.textContent = `${players.length} visible player${players.length === 1 ? '' : 's'}`;
+  headerText.append(title, subtitle);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'qpm-button qpm-button--neutral';
+  closeBtn.style.cssText = 'padding: 6px 12px;';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', close);
+  header.append(headerText, closeBtn);
+
+  const body = document.createElement('div');
+  body.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+
+  if (players.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color: #9CA3AF; font-size: 13px; text-align: center; padding: 20px;';
+    empty.textContent = 'No players visible for this room.';
+    body.appendChild(empty);
+  } else {
+    players.forEach((slot) => {
+      const row = document.createElement('div');
+      row.className = 'qpm-card';
+      row.style.cssText = 'padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 10px;';
+
+      const safeAvatar = sanitizeImageUrl(slot.avatarUrl);
+      if (safeAvatar) {
+        const avatar = document.createElement('img');
+        avatar.src = safeAvatar;
+        avatar.alt = 'avatar';
+        avatar.style.cssText = 'width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); object-fit: cover;';
+        row.appendChild(avatar);
+      } else {
+        const fallback = document.createElement('div');
+        fallback.style.cssText = 'width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08); display: grid; place-items: center; color: #9CA3AF;';
+        fallback.textContent = avatarInitials(slot.name);
+        row.appendChild(fallback);
+      }
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex: 1;';
+      const playerName = document.createElement('div');
+      playerName.style.cssText = 'font-size: 14px; font-weight: 700;';
+      playerName.textContent = slot.name || 'Unknown player';
+      const hint = document.createElement('div');
+      hint.style.cssText = 'font-size: 11px; color: #9CA3AF;';
+      hint.textContent = 'Tap to search by this player';
+      info.append(playerName, hint);
+      row.appendChild(info);
+
+      const searchBtn = document.createElement('button');
+      searchBtn.className = 'qpm-button qpm-button--neutral';
+      searchBtn.style.cssText = 'padding: 6px 10px; font-size: 12px;';
+      searchBtn.textContent = 'Search';
+      searchBtn.addEventListener('click', () => {
+        const searchInput = document.getElementById('pr-search-input') as HTMLInputElement | null;
+        const name = slot.name || '';
+        if (searchInput) searchInput.value = name;
+        setSearchTerm(name);
+        close();
+      });
+      row.appendChild(searchBtn);
+
+      body.appendChild(row);
+    });
+  }
+
+  card.append(header, body);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
 
-  const close = (): void => overlay.remove();
-  card.querySelector('#pr-modal-close')?.addEventListener('click', close);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
-  });
-
-  card.querySelectorAll('.pr-search-player').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const name = (e.currentTarget as HTMLElement).getAttribute('data-player-name') || '';
-      const searchInput = document.getElementById('pr-search-input') as HTMLInputElement | null;
-      if (searchInput) searchInput.value = name;
-      setSearchTerm(name);
-      close();
-    });
   });
 }
 
@@ -1887,19 +2020,22 @@ function renderRooms(rooms: RoomsMap): void {
   const roomsList = document.getElementById('pr-rooms-list');
   if (!roomsList) return;
 
-  roomsList.innerHTML = '';
+  clearNode(roomsList);
   const roomKeys = Object.keys(rooms);
   const totalRooms = Object.keys(getState().allRooms || {}).length;
   setRoomStatPills(totalRooms, roomKeys.length, getState().lastUpdatedAt);
 
-  const fragment = document.createDocumentFragment();
-
   if (roomKeys.length === 0) {
-    roomsList.innerHTML = '<p style="text-align: center; color: #aaa; grid-column: 1/-1; font-size: 14px;">No rooms found. Try adjusting filters or search by player name.</p>';
+    const empty = document.createElement('p');
+    empty.style.cssText = 'text-align: center; color: #aaa; grid-column: 1/-1; font-size: 14px;';
+    empty.textContent = 'No rooms found. Try adjusting filters or search by player name.';
+    roomsList.appendChild(empty);
     return;
   }
 
-  roomKeys.forEach(roomCode => {
+  const fragment = document.createDocumentFragment();
+
+  roomKeys.forEach((roomCode) => {
     const room = rooms[roomCode];
     if (!room) return;
 
@@ -1926,118 +2062,166 @@ function renderRooms(rooms: RoomsMap): void {
     const originBadgeColor = origin === 'Discord' ? '#7289DA' : '#26A69A';
     const originBgColor = origin === 'Discord' ? 'rgba(114, 137, 218, 0.2)' : 'rgba(38, 166, 154, 0.2)';
 
-    const slotsHtml = room.userSlots && room.userSlots.length > 0
-      ? `<div class="pr-avatar-stack">${room.userSlots.slice(0, 6).map(slot => slot.avatarUrl
-        ? `<span class="pr-avatar" data-room="${room.id}" data-player="${slot.name || ''}"><img src="${slot.avatarUrl}" alt="avatar"></span>`
-        : `<span class="pr-avatar" data-room="${room.id}" data-player="${slot.name || ''}">${avatarInitials(slot.name)}</span>`).join('')}${room.userSlots.length > 6 ? `<span class="pr-avatar" style="background: rgba(148,163,184,0.2); color: #fff;">+${room.userSlots.length - 6}</span>` : ''}</div>`
-      : '<div class="pr-players-empty">No visible players</div>';
-
     const roomCard = document.createElement('div');
     roomCard.className = 'pr-room-card';
 
-    roomCard.innerHTML = `
-      <div class="pr-room-header">
-        <div class="pr-room-title">
-          <span class="pr-pill ${room.isPrivate ? 'pr-pill-private' : 'pr-pill-public'}">${room.isPrivate ? '🔒 Private' : '🔓 Public'}</span>
-          <span title="${room.id}" style="font-size: 18px;">${roomLabel}</span>
-          <span class="pr-pill" style="background: ${originBgColor}; border: 1px solid ${originBadgeColor}; color: ${originBadgeColor};">${origin === 'Discord' ? '🛰️ Discord' : '🌐 Web'}</span>
-        </div>
-        <div class="pr-player-count" style="background: ${playerBgColor}; border-color: ${playerBadgeColor}; color: ${playerBadgeColor};">
-          <span>👥</span><span>${playerCount}</span>
-        </div>
-      </div>
-      <div class="pr-meta-line">
-        <span><span class="pr-dot"></span> Updated ${formatUpdatedAgo(room.lastUpdatedAt)}</span>
-        <span>Code: <code style="color: #e2e8f0;">${room.id}</code></span>
-      </div>
-      ${slotsHtml ? slotsHtml : ''}
-      <div class="pr-hint-line">Tap an avatar to open the Inspector</div>
-      <div class="pr-room-actions">
-        <button
-          class="qpm-button ${isFull ? 'qpm-button--negative' : 'qpm-button--positive'} pr-join-btn"
-          data-room-code="${roomCode}"
-          style="flex: 1; padding: 10px; font-size: 13px; font-weight: 700; ${isFull ? 'background: linear-gradient(135deg, rgba(229,57,53,0.85), rgba(183,28,28,0.9)); border: 2px solid rgba(229,57,53,0.9); color: #fff;' : ''}"
-        >${isFull ? '⛔ Full' : '🚀 Join'}</button>
-        <button class="qpm-button qpm-button--neutral pr-view-btn" data-room-code="${roomCode}" style="padding: 10px; font-size: 13px; font-weight: 700;">👁️ Players</button>
-      </div>
-    `;
+    const header = document.createElement('div');
+    header.className = 'pr-room-header';
 
-    fragment.appendChild(roomCard);
-  });
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'pr-room-title';
 
-  roomsList.appendChild(fragment);
+    const privacyPill = document.createElement('span');
+    privacyPill.className = `pr-pill ${room.isPrivate ? 'pr-pill-private' : 'pr-pill-public'}`;
+    privacyPill.textContent = room.isPrivate ? 'Private' : 'Public';
 
-  roomsList.querySelectorAll('.pr-join-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const roomCode = (e.target as HTMLElement).getAttribute('data-room-code');
-      if (roomCode && /^[a-zA-Z0-9_-]{1,64}$/.test(roomCode)) {
+    const roomLabelEl = document.createElement('span');
+    roomLabelEl.style.cssText = 'font-size: 18px;';
+    roomLabelEl.title = room.id;
+    roomLabelEl.textContent = roomLabel;
+
+    const originPill = document.createElement('span');
+    originPill.className = 'pr-pill';
+    originPill.style.cssText = `background: ${originBgColor}; border: 1px solid ${originBadgeColor}; color: ${originBadgeColor};`;
+    originPill.textContent = origin;
+
+    titleWrap.append(privacyPill, roomLabelEl, originPill);
+
+    const count = document.createElement('div');
+    count.className = 'pr-player-count';
+    count.style.cssText = `background: ${playerBgColor}; border-color: ${playerBadgeColor}; color: ${playerBadgeColor};`;
+    const countIcon = document.createElement('span');
+    countIcon.textContent = 'Players';
+    const countValue = document.createElement('span');
+    countValue.textContent = String(playerCount);
+    count.append(countIcon, countValue);
+
+    header.append(titleWrap, count);
+    roomCard.appendChild(header);
+
+    const metaLine = document.createElement('div');
+    metaLine.className = 'pr-meta-line';
+    const updated = document.createElement('span');
+    const dot = document.createElement('span');
+    dot.className = 'pr-dot';
+    updated.append(dot, document.createTextNode(` Updated ${formatUpdatedAgo(room.lastUpdatedAt)}`));
+
+    const code = document.createElement('span');
+    code.textContent = 'Code: ';
+    const codeEl = document.createElement('code');
+    codeEl.style.color = '#e2e8f0';
+    codeEl.textContent = room.id;
+    code.appendChild(codeEl);
+    metaLine.append(updated, code);
+    roomCard.appendChild(metaLine);
+
+    if (room.userSlots && room.userSlots.length > 0) {
+      const stack = document.createElement('div');
+      stack.className = 'pr-avatar-stack';
+
+      room.userSlots.slice(0, 6).forEach((slot) => {
+        const avatarWrap = document.createElement('span');
+        avatarWrap.className = 'pr-avatar';
+        const safeAvatar = sanitizeImageUrl(slot.avatarUrl);
+        if (safeAvatar) {
+          const avatar = document.createElement('img');
+          avatar.src = safeAvatar;
+          avatar.alt = 'avatar';
+          avatarWrap.appendChild(avatar);
+        } else {
+          avatarWrap.textContent = avatarInitials(slot.name);
+        }
+        avatarWrap.addEventListener('click', () => {
+          openInspector(slot ?? null, room);
+        });
+        stack.appendChild(avatarWrap);
+      });
+
+      if (room.userSlots.length > 6) {
+        const extra = document.createElement('span');
+        extra.className = 'pr-avatar';
+        extra.style.cssText = 'background: rgba(148,163,184,0.2); color: #fff;';
+        extra.textContent = `+${room.userSlots.length - 6}`;
+        stack.appendChild(extra);
+      }
+
+      roomCard.appendChild(stack);
+    } else {
+      const emptyPlayers = document.createElement('div');
+      emptyPlayers.className = 'pr-players-empty';
+      emptyPlayers.textContent = 'No visible players';
+      roomCard.appendChild(emptyPlayers);
+    }
+
+    const hint = document.createElement('div');
+    hint.className = 'pr-hint-line';
+    hint.textContent = 'Tap an avatar to open the Inspector';
+    roomCard.appendChild(hint);
+
+    const actions = document.createElement('div');
+    actions.className = 'pr-room-actions';
+
+    const joinBtn = document.createElement('button');
+    joinBtn.className = `qpm-button ${isFull ? 'qpm-button--negative' : 'qpm-button--positive'} pr-join-btn`;
+    joinBtn.style.cssText = `flex: 1; padding: 10px; font-size: 13px; font-weight: 700; ${isFull ? 'background: linear-gradient(135deg, rgba(229,57,53,0.85), rgba(183,28,28,0.9)); border: 2px solid rgba(229,57,53,0.9); color: #fff;' : ''}`;
+    joinBtn.textContent = isFull ? 'Full' : 'Join';
+    joinBtn.addEventListener('click', () => {
+      if (/^[a-zA-Z0-9_-]{1,64}$/.test(roomCode)) {
         window.location.href = `/r/${roomCode}`;
       }
     });
-  });
 
-  roomsList.querySelectorAll('.pr-player-chip').forEach(chip => {
-    chip.addEventListener('click', (e) => {
-      const name = (e.currentTarget as HTMLElement).getAttribute('data-player-name');
-      if (!name) return;
-      const searchInput = document.getElementById('pr-search-input') as HTMLInputElement | null;
-      if (searchInput) searchInput.value = name;
-      setSearchTerm(name);
-    });
-  });
-
-  roomsList.querySelectorAll('.pr-view-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const roomCode = (e.target as HTMLElement).getAttribute('data-room-code');
-      if (!roomCode) return;
-      const room = getState().allRooms[roomCode];
-      if (!room) {
-        showToast('Room data unavailable', 'error');
-        return;
-      }
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'qpm-button qpm-button--neutral pr-view-btn';
+    viewBtn.style.cssText = 'padding: 10px; font-size: 13px; font-weight: 700;';
+    viewBtn.textContent = 'Players';
+    viewBtn.addEventListener('click', () => {
       if (!room.userSlots || room.userSlots.length === 0) {
         showToast('No players visible in this room', 'info');
         return;
       }
       openPlayersModal(room);
     });
+
+    actions.append(joinBtn, viewBtn);
+    roomCard.appendChild(actions);
+    fragment.appendChild(roomCard);
   });
 
-  roomsList.querySelectorAll('.pr-avatar').forEach(el => {
-    el.addEventListener('click', (e) => {
-      const target = e.currentTarget as HTMLElement;
-      const roomId = target.getAttribute('data-room');
-      const playerName = target.getAttribute('data-player') || '';
-      if (!roomId) return;
-      const room = getState().allRooms[roomId];
-      if (!room) return;
-      const slot = room.userSlots?.find(s => (s.name || '') === playerName) ?? null;
-      openInspector(slot ?? null, room);
-    });
-  });
+  roomsList.appendChild(fragment);
 }
-
 function showRoomsError(message: string): void {
   const roomsList = document.getElementById('pr-rooms-list');
-  if (roomsList) {
-    roomsList.innerHTML = `
-      <div style="text-align: center; color: #ff4d4d; grid-column: 1/-1; padding: 40px;">
-        <div style="font-size: 32px; margin-bottom: 16px;">⚠️</div>
-        <p style="font-size: 14px; margin-bottom: 16px;">${message}</p>
-        <button id="pr-retry-fetch-btn" style="padding: 10px 20px; background: rgba(66, 165, 245, 0.2); border: 2px solid #42A5F5; border-radius: 6px; color: #42A5F5; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">🔄 Retry</button>
-      </div>
-    `;
+  if (!roomsList) return;
 
-    const retryBtn = document.getElementById('pr-retry-fetch-btn');
-    if (retryBtn) {
-      retryBtn.addEventListener('click', () => {
-        roomsList.innerHTML = '<p style="text-align: center; color: #aaa; grid-column: 1/-1; font-size: 14px;">Loading rooms...</p>';
-        fetchRooms();
-      });
-    }
-  }
+  clearNode(roomsList);
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'text-align: center; color: #ff4d4d; grid-column: 1/-1; padding: 40px;';
+
+  const icon = document.createElement('div');
+  icon.style.cssText = 'font-size: 32px; margin-bottom: 16px;';
+  icon.textContent = '!';
+
+  const text = document.createElement('p');
+  text.style.cssText = 'font-size: 14px; margin-bottom: 16px;';
+  text.textContent = message;
+
+  const retryBtn = document.createElement('button');
+  retryBtn.id = 'pr-retry-fetch-btn';
+  retryBtn.style.cssText = 'padding: 10px 20px; background: rgba(66, 165, 245, 0.2); border: 2px solid #42A5F5; border-radius: 6px; color: #42A5F5; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;';
+  retryBtn.textContent = 'Retry';
+  retryBtn.addEventListener('click', () => {
+    clearNode(roomsList);
+    const loading = document.createElement('p');
+    loading.style.cssText = 'text-align: center; color: #aaa; grid-column: 1/-1; font-size: 14px;';
+    loading.textContent = 'Loading rooms...';
+    roomsList.appendChild(loading);
+    fetchRooms();
+  });
+
+  wrapper.append(icon, text, retryBtn);
+  roomsList.appendChild(wrapper);
 }
-
 function updateConnectionStatus(status: PublicRoomsState['connectionStatus']): void {
   const statusEl = document.getElementById('pr-connection-status');
   const roomsList = document.getElementById('pr-rooms-list');
@@ -2068,7 +2252,7 @@ function updateConnectionStatus(status: PublicRoomsState['connectionStatus']): v
 
 export function renderPublicRoomsWindow(root: HTMLElement): void {
   root.innerHTML = '';
-  root.style.cssText = 'height: 100%; overflow-y: auto; background: linear-gradient(135deg, rgba(33, 33, 33, 0.95) 0%, rgba(0, 0, 0, 0.95) 50%, rgba(22, 22, 44, 0.95) 100%);';
+  root.style.cssText = 'flex: 1; min-height: 0; overflow-y: auto; background: linear-gradient(135deg, rgba(33, 33, 33, 0.95) 0%, rgba(0, 0, 0, 0.95) 50%, rgba(22, 22, 44, 0.95) 100%);';
 
   if (!document.querySelector('#pr-style-block')) {
     const style = document.createElement('style');
@@ -2304,3 +2488,4 @@ export function renderPublicRoomsWindow(root: HTMLElement): void {
     (window as any).QPM_INSPECT_PLAYER = (playerId: string, playerName?: string): void => openInspectorDirect(playerId, playerName);
   }
 }
+

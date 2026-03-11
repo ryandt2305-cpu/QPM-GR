@@ -20,7 +20,7 @@ export const VARIANT_BADGES: VariantBadge[] = [
   { matches: ['Dawncharged', 'Dawnbound'], label: 'D', color: '#7e00fc', bold: true },
   { matches: ['Amberlit', 'Ambershine'], label: 'A', color: '#FFA726' },
   { matches: ['Ambercharged', 'Amberbound'], label: 'A', color: '#FFA726', bold: true },
-  { matches: ['Max Weight', 'Max'], label: 'S', color: '#BDBDBD', bold: true },
+  { matches: ['Max Weight', 'Max', 'Max Size'], label: 'S', color: '#BDBDBD', bold: true },
 ];
 
 const collectedTextColors: Record<string, string> = {

@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.0.64] — Current
+## [3.1.0] — Current
 
 ### Changed
 - XP Tracker, Ability Tracker, and Turtle Timer windows rebuilt with cleaner, smarter layouts

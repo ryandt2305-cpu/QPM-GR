@@ -8,6 +8,13 @@ import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { getAbilityDefinition } from '../data/petAbilities';
 import { calculateMaxStrength, getSpeciesXpPerLevel } from '../store/xpTracker';
 import {
+  buildPetCompareProfile,
+  captureProgressionStage,
+  createValuationContext,
+  type ComparePetInput,
+  type ProgressionStageSnapshot,
+} from './petCompareEngine';
+import {
   STRATEGY_DEFINITIONS,
   getAbilityStrategy,
   NON_STACKING_ABILITIES,
@@ -119,7 +126,7 @@ function isRarePlus(species: string | null): boolean {
 // ============================================================================
 
 export type PetLocation = 'active' | 'inventory' | 'hutch';
-export type PetStatus = 'keep' | 'consider' | 'obsolete' | 'upgrade';
+export type PetStatus = 'keep' | 'consider' | 'obsolete' | 'upgrade' | 'review';
 
 export interface CollectedPet {
   // Identity
@@ -179,6 +186,7 @@ export interface OptimizerAnalysis {
   consider: PetComparison[];
   obsolete: PetComparison[];
   upgrades: PetComparison[];
+  review: PetComparison[];
 
   // Strategy-filtered
   strategyPets: Map<StrategyCategory, PetComparison[]>;
@@ -190,6 +198,7 @@ export interface OptimizerAnalysis {
   hutchPets: number;
   obsoleteCount: number;
   upgradeCount: number;
+  reviewCount: number;
 }
 
 export interface OptimizerConfig {
@@ -218,20 +227,19 @@ export interface OptimizerConfig {
 const DEFAULT_CONFIG: OptimizerConfig = {
   selectedStrategy: 'all',
   showObsoleteOnly: false,
-  groupBySpecies: true, // Default to grouping by species
+  groupBySpecies: false,
   sortBy: 'score',
   sortDirection: 'desc',
   minStrengthThreshold: 100,
   protectedPetIds: new Set(),
 
-  // STRICTNESS DEFAULTS (Early-game friendly)
-  mutationProtection: 'both', // Protect both Rainbow and Gold by default
-  minMaxStrength: 0, // Disabled by default
-  minTargetScale: 1.0, // Disabled by default (1.0 = minimum)
-  minAbilityCount: 1, // Keep all pets regardless of ability count
-  onlyRarePlus: false, // Keep all species rarities
-  markLowValueAbilities: false, // Don't mark low-value abilities
-  prioritizeActivePets: true, // Protect active pets by default
+  mutationProtection: 'both',
+  minMaxStrength: 0,
+  minTargetScale: 1.0,
+  minAbilityCount: 1,
+  onlyRarePlus: false,
+  markLowValueAbilities: false,
+  prioritizeActivePets: true,
 };
 
 let config: OptimizerConfig = { ...DEFAULT_CONFIG, protectedPetIds: new Set() };
@@ -268,14 +276,14 @@ export function unprotectPet(petId: string): void {
 }
 
 function saveConfig(): void {
-  storage.set('petOptimizer:config', {
+  storage.set('petOptimizer:config.v2', {
     ...config,
     protectedPetIds: Array.from(config.protectedPetIds),
   });
 }
 
 function loadConfig(): void {
-  const stored = storage.get<Partial<OptimizerConfig>>('petOptimizer:config');
+  const stored = storage.get<Partial<OptimizerConfig>>('petOptimizer:config.v2');
   if (stored) {
     config = {
       ...DEFAULT_CONFIG,
@@ -634,6 +642,48 @@ function calculateAbilityRarityScore(abilityIds: string[]): number {
 // Pet Comparison & Analysis
 // ============================================================================
 
+interface OptimizerCompareSnapshot {
+  score: number;
+  reviewCount: number;
+  groupSignature: string;
+}
+
+function toCompareInput(pet: CollectedPet): ComparePetInput {
+  return {
+    id: pet.id,
+    species: pet.species ?? 'Unknown',
+    strength: pet.strength,
+    targetScale: pet.targetScale,
+    abilities: pet.abilityIds,
+    mutations: pet.mutations,
+  };
+}
+
+function createCompareSnapshotMap(
+  pets: CollectedPet[],
+): { stage: ProgressionStageSnapshot; byPetId: Map<string, OptimizerCompareSnapshot> } {
+  const stage = captureProgressionStage(pets.map((pet) => toCompareInput(pet)));
+  const valuationContext = createValuationContext();
+  const byPetId = new Map<string, OptimizerCompareSnapshot>();
+
+  for (const pet of pets) {
+    const profile = buildPetCompareProfile(toCompareInput(pet), stage, valuationContext);
+    const grouped = profile.abilities
+      .filter((entry) => !entry.isIgnored && !entry.isReview)
+      .map((entry) => entry.group)
+      .sort()
+      .join('|');
+
+    byPetId.set(pet.id, {
+      score: profile.score,
+      reviewCount: profile.reviewCount,
+      groupSignature: grouped || 'review',
+    });
+  }
+
+  return { stage, byPetId };
+}
+
 /**
  * Analyze all collected pets and determine status (ASYNC version for better performance)
  * Breaks work into chunks to prevent blocking the main thread
@@ -648,8 +698,10 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
     petScores.set(pet.id, calculatePetScore(pet));
   }
 
+  const compareSnapshots = createCompareSnapshotMap(pets);
+
   // Group pets by species + ability combination (fast, synchronous)
-  const groups = groupPetsByAbilities(pets);
+  const groups = groupPetsByAbilities(pets, compareSnapshots.byPetId);
 
   // Analyze pets in chunks to avoid blocking UI
   for (let i = 0; i < pets.length; i += CHUNK_SIZE) {
@@ -657,7 +709,7 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
 
     for (const pet of chunk) {
       const score = petScores.get(pet.id)!;
-      const comparison = analyzePet(pet, score, pets, groups);
+      const comparison = analyzePet(pet, score, pets, groups, compareSnapshots.byPetId, compareSnapshots.stage);
       comparisons.push(comparison);
     }
 
@@ -677,6 +729,7 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
   const consider = comparisons.filter(c => c.status === 'consider');
   const obsolete = comparisons.filter(c => c.status === 'obsolete');
   const upgrades = comparisons.filter(c => c.status === 'upgrade');
+  const review = comparisons.filter(c => c.status === 'review');
 
   // Group by strategy (fast, synchronous)
   const strategyPets = new Map<StrategyCategory, PetComparison[]>();
@@ -694,6 +747,7 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
     consider,
     obsolete,
     upgrades,
+    review,
     strategyPets,
     totalPets: pets.length,
     activePets: pets.filter(p => p.location === 'active').length,
@@ -701,6 +755,7 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
     hutchPets: pets.filter(p => p.location === 'hutch').length,
     obsoleteCount: obsolete.length,
     upgradeCount: upgrades.length,
+    reviewCount: review.length,
   };
 }
 
@@ -717,13 +772,15 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
     petScores.set(pet.id, calculatePetScore(pet));
   }
 
+  const compareSnapshots = createCompareSnapshotMap(pets);
+
   // Group pets by species + ability combination
-  const groups = groupPetsByAbilities(pets);
+  const groups = groupPetsByAbilities(pets, compareSnapshots.byPetId);
 
   // Analyze each pet
   for (const pet of pets) {
     const score = petScores.get(pet.id)!;
-    const comparison = analyzePet(pet, score, pets, groups);
+    const comparison = analyzePet(pet, score, pets, groups, compareSnapshots.byPetId, compareSnapshots.stage);
     comparisons.push(comparison);
   }
 
@@ -732,6 +789,7 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
   const consider = comparisons.filter(c => c.status === 'consider');
   const obsolete = comparisons.filter(c => c.status === 'obsolete');
   const upgrades = comparisons.filter(c => c.status === 'upgrade');
+  const review = comparisons.filter(c => c.status === 'review');
 
   // Group by strategy
   const strategyPets = new Map<StrategyCategory, PetComparison[]>();
@@ -749,6 +807,7 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
     consider,
     obsolete,
     upgrades,
+    review,
     strategyPets,
     totalPets: pets.length,
     activePets: pets.filter(p => p.location === 'active').length,
@@ -756,6 +815,7 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
     hutchPets: pets.filter(p => p.location === 'hutch').length,
     obsoleteCount: obsolete.length,
     upgradeCount: upgrades.length,
+    reviewCount: review.length,
   };
 }
 
@@ -765,20 +825,44 @@ interface PetGroup {
   pets: CollectedPet[];
 }
 
-function groupPetsByAbilities(pets: CollectedPet[]): Map<string, PetGroup> {
+function getMaxStrengthValue(pet: CollectedPet): number {
+  return pet.maxStrength ?? pet.strength;
+}
+
+function hasRainbowGranter(pet: CollectedPet): boolean {
+  return pet.abilityIds.includes('RainbowGranter');
+}
+
+function shouldPreferLateGameStrength(
+  incumbent: CollectedPet,
+  challenger: CollectedPet,
+  stage: ProgressionStageSnapshot,
+): boolean {
+  // Late-game preference lock: +3 max STR outweighs Rainbow Granter pressure.
+  if (stage.stage !== 'late') return false;
+  if (!hasRainbowGranter(challenger) || hasRainbowGranter(incumbent)) return false;
+
+  const maxStrDelta = getMaxStrengthValue(incumbent) - getMaxStrengthValue(challenger);
+  return maxStrDelta >= 3;
+}
+
+function groupPetsByAbilities(
+  pets: CollectedPet[],
+  compareByPetId: Map<string, OptimizerCompareSnapshot>,
+): Map<string, PetGroup> {
   const groups = new Map<string, PetGroup>();
 
   for (const pet of pets) {
     if (!pet.species) continue;
 
-    // Create signature: species + sorted ability IDs
-    const sortedAbilities = [...pet.abilityIds].sort().join(',');
-    const key = `${pet.species}:${sortedAbilities}`;
+    const compare = compareByPetId.get(pet.id);
+    const signature = compare?.groupSignature || [...pet.abilityIds].sort().join(',');
+    const key = `${pet.species}:${signature}`;
 
     if (!groups.has(key)) {
       groups.set(key, {
         species: pet.species,
-        abilitySignature: sortedAbilities,
+        abilitySignature: signature,
         pets: [],
       });
     }
@@ -821,7 +905,9 @@ function analyzePet(
   pet: CollectedPet,
   score: PetScore,
   allPets: CollectedPet[],
-  groups: Map<string, PetGroup>
+  groups: Map<string, PetGroup>,
+  compareByPetId: Map<string, OptimizerCompareSnapshot>,
+  stage: ProgressionStageSnapshot,
 ): PetComparison {
   // Check if protected by user
   if (config.protectedPetIds.has(pet.id)) {
@@ -855,6 +941,18 @@ function analyzePet(
   // Skip filters if pet has high-value abilities, rainbow mutation, or is only source
 
   const hasProtection = hasHighValueAbilities(pet) || pet.hasRainbow || onlySourceAbility !== null;
+  const compareSnapshot = compareByPetId.get(pet.id);
+
+  if (compareSnapshot?.reviewCount && compareSnapshot.reviewCount > 0) {
+    return {
+      pet,
+      score,
+      status: 'review',
+      reason: 'Review required: unknown or unmapped abilities detected',
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+    };
+  }
 
   // Filter 1: Species rarity (only keep Rare+)
   if (config.onlyRarePlus && !hasProtection && !isRarePlus(pet.species)) {
@@ -924,20 +1022,23 @@ function analyzePet(
     }
   }
 
-  // Find all pets with similar abilities (for comparison)
-  const betterPets: CollectedPet[] = [];
-
-  // Check if any pets have higher-tier versions of this pet's abilities with better mutations
-  for (const other of allPets) {
-    if (other.id === pet.id) continue;
-    if (other.species !== pet.species) continue;
-
-    // Check if 'other' is strictly better than 'pet'
-    const isBetter = isPetStrictlyBetter(other, pet);
-    if (isBetter) {
-      betterPets.push(other);
-    }
-  }
+  const petCompareScore = compareSnapshot?.score ?? 0;
+  const betterPets: CollectedPet[] = allPets
+    .filter((other) => {
+      if (other.id === pet.id) return false;
+      if (other.species !== pet.species) return false;
+      const otherSnapshot = compareByPetId.get(other.id);
+      if (!otherSnapshot || otherSnapshot.reviewCount > 0) return false;
+      if (otherSnapshot.groupSignature !== compareSnapshot?.groupSignature) return false;
+      if (shouldPreferLateGameStrength(pet, other, stage)) return false;
+      if (otherSnapshot.score > petCompareScore) return true;
+      return isPetStrictlyBetter(other, pet);
+    })
+    .sort((a, b) => {
+      const aScore = compareByPetId.get(a.id)?.score ?? 0;
+      const bScore = compareByPetId.get(b.id)?.score ?? 0;
+      return bScore - aScore;
+    });
 
   // If no better alternatives, keep it
   if (betterPets.length === 0) {
@@ -952,14 +1053,19 @@ function analyzePet(
   }
 
   // Find pet's group (same species + abilities)
-  const sortedAbilities = [...pet.abilityIds].sort().join(',');
-  const groupKey = `${pet.species}:${sortedAbilities}`;
+  const groupKey = `${pet.species}:${compareSnapshot?.groupSignature ?? [...pet.abilityIds].sort().join(',')}`;
   const group = groups.get(groupKey);
 
   // For pets in same group, check top 3 pattern
   let isInTop3 = false;
   if (group && group.pets.length > 1) {
     const sortedGroup = [...group.pets].sort((a, b) => {
+      const aPreferredForStrength = shouldPreferLateGameStrength(a, b, stage);
+      const bPreferredForStrength = shouldPreferLateGameStrength(b, a, stage);
+      if (aPreferredForStrength !== bPreferredForStrength) {
+        return aPreferredForStrength ? -1 : 1;
+      }
+
       // Priority 1: Active pets get bonus if prioritizeActivePets is enabled
       if (config.prioritizeActivePets) {
         const aIsActive = a.location === 'active' ? 1 : 0;
@@ -967,17 +1073,22 @@ function analyzePet(
         if (bIsActive !== aIsActive) return bIsActive - aIsActive;
       }
 
-      // Priority 2: Sort by mutation (rainbow > gold > none)
+      // Priority 2: Stage-aware compare score.
+      const aCompare = compareByPetId.get(a.id)?.score ?? 0;
+      const bCompare = compareByPetId.get(b.id)?.score ?? 0;
+      if (bCompare !== aCompare) return bCompare - aCompare;
+
+      // Priority 3: Sort by mutation (rainbow > gold > none)
       const aMutScore = a.hasRainbow ? 3 : a.hasGold ? 2 : 1;
       const bMutScore = b.hasRainbow ? 3 : b.hasGold ? 2 : 1;
       if (bMutScore !== aMutScore) return bMutScore - aMutScore;
 
-      // Priority 3: Then by max STR
+      // Priority 4: Then by max STR
       const aMaxStr = a.maxStrength || a.strength;
       const bMaxStr = b.maxStrength || b.strength;
       if (bMaxStr !== aMaxStr) return bMaxStr - aMaxStr;
 
-      // Priority 4: Finally by current STR
+      // Priority 5: Finally by current STR
       return b.strength - a.strength;
     });
 
@@ -1010,7 +1121,7 @@ function analyzePet(
       score,
       status: shouldProtect ? 'consider' : 'obsolete',
       reason,
-      betterAlternatives: betterPets,
+      betterAlternatives: betterPets.slice(0, 1),
       upgradeOpportunities: [],
     };
   }

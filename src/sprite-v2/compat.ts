@@ -169,6 +169,12 @@ function normalizeMutations(mutations: string[] = []): string[] {
     });
 }
 
+// Plant sprite atlas key aliases — some plant catalog names differ from their atlas keys.
+// E.g. "Rose" in the catalog resolves to "RoseRed" in the plant sprite atlas.
+const PLANT_SPRITE_ALIASES: Record<string, string> = {
+  Rose: 'RoseRed',
+};
+
 function getIdVariations(category: string, id: string): string[] {
   const variations = [id]; // Try original display name first
 
@@ -189,6 +195,12 @@ function getIdVariations(category: string, id: string): string[] {
   const colorMatch = id.match(/^(Orange|Red|Yellow|Pink|Purple|White)(.+)$/);
   if (colorMatch && colorMatch[2]) {
     variations.push(colorMatch[2]); // Extract base name (e.g., "Tulip")
+  }
+
+  // Plant-specific atlas key aliases (plant / tallplant / crop categories only)
+  if (category === 'plant' || category === 'tallplant' || category === 'crop') {
+    const alias = PLANT_SPRITE_ALIASES[id];
+    if (alias) variations.push(alias);
   }
 
   return variations;
@@ -317,6 +329,49 @@ export function getPetSpriteDataUrlWithMutations(species: string, mutations: str
 }
 
 /**
+ * Produce-only categories — excludes 'seed' and 'pet' so a plant species like
+ * "Rose" resolves to the plant sprite instead of a Rose-colored pet sprite.
+ */
+const PRODUCE_CATEGORIES = ['plant', 'tallplant', 'crop', 'item', 'decor'] as const;
+
+export function getProduceSpriteCanvas(
+  speciesOrTile: string | number | null | undefined
+): HTMLCanvasElement | null {
+  if (speciesOrTile == null) return null;
+  const id = normalizeSpeciesName(speciesOrTile);
+  return renderAcrossCategories(PRODUCE_CATEGORIES, id, [], true);
+}
+
+export function getProduceSpriteWithMutations(
+  speciesOrTile: string | number | null | undefined,
+  mutations: string[] = []
+): HTMLCanvasElement | null {
+  if (speciesOrTile == null) return null;
+  const id = normalizeSpeciesName(speciesOrTile);
+  const normalizedMutations = normalizeMutations(mutations);
+  return renderAcrossCategories(PRODUCE_CATEGORIES, id, normalizedMutations, true);
+}
+
+export function getProduceSpriteDataUrl(
+  speciesOrTile: string | number | null | undefined
+): string {
+  const id = speciesOrTile == null ? '' : String(speciesOrTile);
+  const key = makeCacheKey('produce', id);
+  if (dataUrlCache.has(key)) return dataUrlCache.get(key)!;
+  return cacheDataUrl(key, canvasToDataUrl(getProduceSpriteCanvas(speciesOrTile)));
+}
+
+export function getProduceSpriteDataUrlWithMutations(
+  speciesOrTile: string | number,
+  mutations: string[]
+): string {
+  const normalizedMutations = normalizeMutations(mutations);
+  const key = makeCacheKey('produce', String(speciesOrTile), normalizedMutations);
+  if (dataUrlCache.has(key)) return dataUrlCache.get(key)!;
+  return cacheDataUrl(key, canvasToDataUrl(getProduceSpriteWithMutations(speciesOrTile, mutations)));
+}
+
+/**
  * Gets crop sprite canvas by tile ID
  */
 export function getCropSpriteByTileId(tileId: string | number | null | undefined): HTMLCanvasElement | null {
@@ -331,6 +386,20 @@ export function getCropSpriteByTileId(tileId: string | number | null | undefined
 export function getMutationOverlayDataUrl(mutation: string): string {
   if (!mutation) return '';
   return canvasToDataUrl(tryRenderCanvas('mutation-overlay', mutation, []));
+}
+
+/**
+ * Render a sprite by exact runtime key via the "any" category.
+ * Example: "ui/Coin", "pet/Cat", "item/WateringCan"
+ */
+export function getAnySpriteDataUrl(spriteKey: string | null | undefined): string {
+  const key = String(spriteKey ?? '').trim();
+  if (!key) return '';
+  const cacheKey = makeCacheKey('any', key);
+  if (dataUrlCache.has(cacheKey)) {
+    return dataUrlCache.get(cacheKey)!;
+  }
+  return cacheDataUrl(cacheKey, canvasToDataUrl(tryRenderCanvas('any', key, [])));
 }
 
 /**

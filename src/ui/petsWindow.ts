@@ -1,5 +1,5 @@
 // src/ui/petsWindow.ts
-// Pets window: 3-tab panel (Manager | Feeding | Logs)
+// Pets window: tab panel (Manager | Feeding | Pet Hub | Pet Optimizer)
 // Opened via toggleWindow from modalWindow.ts.
 
 import { log } from '../utils/logger';
@@ -24,15 +24,21 @@ import {
   clearFeedPolicyOverride,
   getAllPooledPets,
 } from '../store/petTeams';
-import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations, isSpritesReady, getAnySpriteDataUrl } from '../sprite-v2/compat';
 import { calculateMaxStrength } from '../store/xpTracker';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour } from '../data/petAbilities';
-import { getLogs, clearLogs, onLogsChange } from '../store/petTeamsLogs';
+import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type AbilityValuationContext } from '../features/abilityValuation';
+import {
+  buildTeamCompareProfile,
+  captureProgressionStage,
+  type ComparePetInput,
+  type TeamCompareProfile,
+} from '../features/petCompareEngine';
 import { getActivePetInfos } from '../store/pets';
 import { openPetPicker } from './petPickerModal';
-import { importAriesTeams } from '../utils/ariesTeamImport';
+import { storage } from '../utils/storage';
 import {
   getPetFoodRules,
   setRespectPetFoodRules,
@@ -43,12 +49,105 @@ import {
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { feedPetInstantly, feedAllPetsInstantly } from '../features/instantFeed';
 import { openFloatingCard, hasFloatingCard } from './petFloatingCard';
+import { importAriesTeams } from '../utils/ariesTeamImport';
 import type { PetTeam, PooledPet } from '../types/petTeams';
-import type { PetLogEventType } from '../types/petTeams';
+import {
+  buildCompareCardViewModel,
+} from './comparePresentation';
+import type { CompareStage } from '../data/petCompareRules';
 
 const WINDOW_ID = 'qpm-pets-window';
 const DEFAULT_KEYBIND = 'p';
 let currentKeybind = DEFAULT_KEYBIND;
+const PET_TEAMS_UI_STATE_KEY = 'qpm.petTeams.uiState.v1';
+const ARIES_IMPORT_ONCE_KEY = 'petHub:ariesImportOnce.v1';
+
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+interface CompareUiState {
+  selectedTeamAId?: string;
+  selectedTeamBId?: string;
+  abilityByPair?: Record<string, string>;
+}
+
+interface PetTeamsUiState {
+  compare?: CompareUiState;
+}
+
+function loadPetTeamsUiState(): PetTeamsUiState {
+  const raw = storage.get<PetTeamsUiState>(PET_TEAMS_UI_STATE_KEY, {});
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+function saveCompareUiState(patch: Partial<CompareUiState>): void {
+  const state = loadPetTeamsUiState();
+  const nextCompare: CompareUiState = {
+    ...(state.compare ?? {}),
+    ...patch,
+  };
+  storage.set(PET_TEAMS_UI_STATE_KEY, {
+    ...state,
+    compare: nextCompare,
+  });
+}
+
+function saveCompareAbilityForPair(pairKey: string, abilityId: string): void {
+  if (!pairKey) return;
+  const state = loadPetTeamsUiState();
+  const currentCompare = state.compare ?? {};
+  const currentMap = currentCompare.abilityByPair ?? {};
+  storage.set(PET_TEAMS_UI_STATE_KEY, {
+    ...state,
+    compare: {
+      ...currentCompare,
+      abilityByPair: {
+        ...currentMap,
+        [pairKey]: abilityId,
+      },
+    },
+  });
+}
+
+function getCompareAbilityForPair(pairKey: string): string | null {
+  if (!pairKey) return null;
+  const state = loadPetTeamsUiState();
+  const ability = state.compare?.abilityByPair?.[pairKey];
+  return typeof ability === 'string' ? ability : null;
+}
+
+function normalizeKeybind(e: KeyboardEvent): string {
+  const SKIP = ['Control', 'Shift', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Dead', 'Unidentified'];
+  if (SKIP.includes(e.key)) return '';
+  const parts: string[] = [];
+  if (e.ctrlKey || e.metaKey) parts.push('ctrl');
+  if (e.altKey) parts.push('alt');
+  if (e.shiftKey && (e.ctrlKey || e.metaKey || e.altKey)) parts.push('shift');
+  parts.push(e.key.toLowerCase());
+  return parts.join('+');
+}
+
+function formatKeybind(combo: string): string {
+  if (!combo) return '';
+  return combo.split('+').map(p => {
+    if (p === 'ctrl') return IS_MAC ? '⌘' : 'Ctrl';
+    if (p === 'alt') return IS_MAC ? '⌥' : 'Alt';
+    if (p === 'shift') return IS_MAC ? '⇧' : 'Shift';
+    return p.length === 1 ? p.toUpperCase() : p;
+  }).join(IS_MAC ? '' : '+');
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  ) {
+    return true;
+  }
+  return !!target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
+}
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -58,7 +157,8 @@ const STYLES = `
 .qpm-pets {
   font-family: inherit;
   color: #e0e0e0;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -68,6 +168,35 @@ const STYLES = `
   padding: 10px 14px 0;
   border-bottom: 1px solid rgba(143,130,255,0.2);
   flex-shrink: 0;
+}
+.qpm-pets__stage-badge {
+  margin-left: auto;
+  align-self: center;
+  margin-bottom: 7px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.08);
+  color: rgba(240,242,250,0.92);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.qpm-pets__stage-badge--hidden { display: none; }
+.qpm-pets__stage-badge--early {
+  border-color: rgba(255,208,130,0.36);
+  background: rgba(255,208,130,0.10);
+}
+.qpm-pets__stage-badge--mid {
+  border-color: rgba(144,196,255,0.36);
+  background: rgba(144,196,255,0.10);
+}
+.qpm-pets__stage-badge--late {
+  border-color: rgba(142,255,200,0.36);
+  background: rgba(142,255,200,0.10);
 }
 .qpm-pets__tab {
   padding: 7px 16px;
@@ -100,6 +229,7 @@ const STYLES = `
 .qpm-mgr__list {
   width: 240px;
   flex-shrink: 0;
+  min-height: 0;
   border-right: 1px solid rgba(143,130,255,0.2);
   display: flex;
   flex-direction: column;
@@ -108,9 +238,15 @@ const STYLES = `
 .qpm-mgr__list-header {
   padding: 10px 12px;
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(143,130,255,0.1);
+}
+.qpm-mgr__list-top {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
 }
 .qpm-mgr__search {
   flex: 1;
@@ -124,6 +260,7 @@ const STYLES = `
 }
 .qpm-mgr__teams {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 6px 8px;
 }
@@ -139,6 +276,16 @@ const STYLES = `
 }
 .qpm-team-row:hover { background: rgba(143,130,255,0.08); }
 .qpm-team-row--selected { background: rgba(143,130,255,0.16); }
+.qpm-team-row--draggable { cursor: grab; }
+.qpm-team-row--dragging { opacity: 0.55; }
+.qpm-team-row--compare-a {
+  background: rgba(88, 160, 255, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(88, 160, 255, 0.6);
+}
+.qpm-team-row--compare-b {
+  background: rgba(100, 255, 150, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(100, 255, 150, 0.55);
+}
 .qpm-team-row__name {
   flex: 1;
   font-size: 13px;
@@ -160,13 +307,24 @@ const STYLES = `
   color: rgba(224,224,224,0.4);
   flex-shrink: 0;
 }
-.qpm-mgr__actions {
-  padding: 10px 12px;
-  display: flex;
-  gap: 6px;
+.qpm-team-row__cmp-badge {
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  border-top: 1px solid rgba(143,130,255,0.1);
-  flex-wrap: wrap;
+}
+.qpm-team-row__cmp-badge--a {
+  background: rgba(88, 160, 255, 0.3);
+  color: #b8dcff;
+}
+.qpm-team-row__cmp-badge--b {
+  background: rgba(100, 255, 150, 0.24);
+  color: #c8ffd9;
 }
 .qpm-mgr__editor {
   flex: 1;
@@ -263,15 +421,40 @@ const STYLES = `
   color: rgba(224,224,224,0.6);
 }
 .qpm-keybind-input {
-  width: 36px;
+  width: 90px;
   text-align: center;
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(143,130,255,0.25);
   border-radius: 5px;
   color: #e0e0e0;
-  font-size: 12px;
+  font-size: 11px;
   padding: 5px;
   outline: none;
+  cursor: pointer;
+  caret-color: transparent;
+}
+.qpm-keybind-input:focus {
+  border-color: rgba(143,130,255,0.6);
+  box-shadow: 0 0 0 2px rgba(143,130,255,0.12);
+}
+.qpm-select {
+  padding: 4px 8px;
+  border: 1px solid rgba(143,130,255,0.3);
+  border-radius: 8px;
+  background: rgba(20,24,36,0.65);
+  color: #e0e0e0;
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  color-scheme: dark;
+}
+.qpm-select:focus {
+  border-color: #8f82ff;
+  box-shadow: 0 0 0 2px rgba(143,130,255,0.18);
+}
+.qpm-select option {
+  background: rgb(20, 24, 36);
+  color: #e0e0e0;
 }
 
 /* Feeding tab */
@@ -392,75 +575,313 @@ const STYLES = `
   border-radius: 12px; padding: 2px 8px;
   font-size: 11px; color: rgba(224,224,224,0.75); white-space: nowrap;
 }
-
-/* Logs tab */
-.qpm-logs { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-.qpm-logs__header {
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(143,130,255,0.15);
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-  flex-shrink: 0;
+.qpm-tcmp-grid { display:flex; flex-direction:column; gap:10px; }
+.qpm-tcmp-team-summary {
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+  padding:10px 12px;
+  border:1px solid rgba(143,130,255,0.24);
+  border-radius:10px;
+  background:linear-gradient(155deg, rgba(143,130,255,0.10), rgba(255,255,255,0.02));
 }
-.qpm-logs__filter-btn {
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 11px;
-  cursor: pointer;
-  border: 1px solid rgba(143,130,255,0.2);
-  background: transparent;
-  color: rgba(224,224,224,0.6);
-  transition: background 0.1s;
+.qpm-tcmp-team-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
 }
-.qpm-logs__filter-btn--active {
-  background: rgba(143,130,255,0.2);
-  color: #e0e0e0;
-  border-color: rgba(143,130,255,0.5);
+.qpm-tcmp-team-title {
+  font-size:12px;
+  color:rgba(224,224,224,0.8);
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-.qpm-logs__clear {
-  margin-left: auto;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 11px;
-  cursor: pointer;
-  border: 1px solid rgba(244,67,54,0.3);
-  background: transparent;
-  color: rgba(244,67,54,0.7);
-  transition: background 0.1s;
+.qpm-tcmp-team-score {
+  font-size:12px;
+  font-weight:700;
+  color:#dfe6ff;
 }
-.qpm-logs__clear:hover { background: rgba(244,67,54,0.1); }
-.qpm-logs__list { flex: 1; overflow-y: auto; padding: 6px; }
-.qpm-log-entry {
-  display: flex;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 5px;
-  font-size: 12px;
-  transition: background 0.1s;
+.qpm-tcmp-team-score--win { color:#74ffb5; }
+.qpm-tcmp-team-score--lose { color:rgba(224,224,224,0.38); }
+.qpm-tcmp-team-table {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 98px minmax(0,1fr);
+  gap:6px;
+  align-items:center;
 }
-.qpm-log-entry:hover { background: rgba(255,255,255,0.03); }
-.qpm-log-entry__time { color: rgba(224,224,224,0.35); flex-shrink: 0; width: 56px; }
-.qpm-log-entry__type {
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 2px 5px;
-  border-radius: 3px;
-  font-weight: 600;
-  text-transform: uppercase;
-  height: fit-content;
-  margin-top: 1px;
+.qpm-tcmp-team-table-head {
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:rgba(224,224,224,0.45);
+  border-bottom:1px solid rgba(143,130,255,0.18);
+  padding-bottom:3px;
 }
-.qpm-log-entry__type--ability { background: rgba(124,77,255,0.2); color: #b39dff; }
-.qpm-log-entry__type--feed { background: rgba(100,200,100,0.2); color: #80c880; }
-.qpm-log-entry__type--team { background: rgba(143,130,255,0.2); color: #8f82ff; }
-.qpm-log-entry__detail { flex: 1; color: #e0e0e0; }
-.qpm-logs__empty {
-  text-align: center;
-  color: rgba(224,224,224,0.3);
-  font-size: 13px;
-  padding: 40px 0;
+.qpm-tcmp-team-a { text-align:left; font-size:12px; font-weight:700; color:#e7e8ff; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qpm-tcmp-team-b { text-align:right; font-size:12px; font-weight:700; color:#e7e8ff; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qpm-tcmp-team-mid {
+  text-align:center;
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:rgba(224,224,224,0.48);
+  white-space:nowrap;
+}
+.qpm-tcmp-team-win { color:#74ffb5; }
+.qpm-tcmp-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 236px minmax(0,1fr);
+  gap:10px;
+  align-items:stretch;
+  padding:12px;
+  border:1px solid rgba(143,130,255,0.22);
+  border-radius:10px;
+  background:linear-gradient(145deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+.qpm-tcmp-pet {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+  border:1px solid rgba(143,130,255,0.22);
+  border-radius:9px;
+  padding:10px 11px;
+  background:rgba(8,10,18,0.42);
+  transition:border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.qpm-tcmp-pet--right { align-items:flex-end; text-align:right; }
+.qpm-tcmp-head { display:flex; align-items:center; gap:8px; min-width:0; min-height:50px; }
+.qpm-tcmp-pet--right .qpm-tcmp-head { flex-direction:row-reverse; }
+.qpm-tcmp-pet--winner {
+  border-color:rgba(102,255,165,0.58);
+  background:linear-gradient(170deg, rgba(64,255,194,0.14), rgba(8,10,18,0.45));
+  box-shadow:0 0 0 1px rgba(102,255,165,0.25) inset;
+}
+.qpm-tcmp-pet--loser {
+  opacity:0.88;
+  border-color:rgba(143,130,255,0.15);
+}
+.qpm-tcmp-sprite {
+  width:46px; height:46px;
+  border-radius:8px;
+  background:rgba(143,130,255,0.10);
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px;
+  overflow:hidden;
+  flex-shrink:0;
+}
+.qpm-tcmp-sprite img { width:46px; height:46px; object-fit:contain; image-rendering:pixelated; }
+.qpm-tcmp-name { font-size:14px; font-weight:700; color:#f0eeff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+.qpm-tcmp-str { font-size:12px; color:rgba(224,224,224,0.72); font-family:monospace; }
+.qpm-tcmp-idline {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:7px;
+  width:100%;
+}
+.qpm-tcmp-idline--right { flex-direction:row-reverse; }
+.qpm-tcmp-idcopy { min-width:0; flex:1; }
+.qpm-tcmp-adots {
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+  max-width:72px;
+  margin-top:2px;
+}
+.qpm-tcmp-adots--right { justify-content:flex-start; }
+.qpm-tcmp-adot {
+  width:9px;
+  height:9px;
+  border-radius:2px;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.2) inset;
+  flex-shrink:0;
+}
+.qpm-tcmp-ab {
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  max-width:100%;
+  min-height:30px;
+}
+.qpm-tcmp-ab-main {
+  font-size:11px;
+  color:rgba(170,200,255,0.86);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.qpm-tcmp-ab-all {
+  font-size:10px;
+  color:rgba(224,224,224,0.5);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.qpm-tcmp-metrics {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  width:100%;
+}
+.qpm-tcmp-metric {
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  font-size:12px;
+  color:rgba(224,224,224,0.68);
+  min-height:18px;
+}
+.qpm-tcmp-metric--right { justify-content:flex-end; }
+.qpm-tcmp-metric-key {
+  font-size:9px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:rgba(224,224,224,0.43);
+  flex-shrink:0;
+  white-space:nowrap;
+}
+.qpm-tcmp-metric-val {
+  font-weight:700;
+  color:#dfe6ff;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.qpm-tcmp-metric-val--winner { color:#74ffb5; }
+.qpm-tcmp-metric-val--rainbow {
+  background:linear-gradient(90deg,#ff6f6f,#ffd56b,#77ff9f,#6fc4ff,#d487ff);
+  -webkit-background-clip:text;
+  background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.qpm-tcmp-metric-val--gold { color:#ffd86b; }
+.qpm-tcmp-coin {
+  width:14px;
+  height:14px;
+  object-fit:contain;
+  image-rendering:pixelated;
+  flex-shrink:0;
+}
+.qpm-tcmp-center {
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  justify-content:flex-start;
+  gap:8px;
+  border:1px solid rgba(143,130,255,0.16);
+  border-radius:9px;
+  padding:9px 8px;
+  background:rgba(143,130,255,0.06);
+}
+.qpm-tcmp-center-top {
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  gap:8px;
+  min-height:88px;
+}
+.qpm-tcmp-slot { font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:rgba(224,224,224,0.45); text-align:center; }
+.qpm-tcmp-verdict {
+  font-size:12px;
+  font-weight:700;
+  padding:4px 9px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,0.15);
+  color:#f5f2ff;
+  background:rgba(255,255,255,0.06);
+  width:fit-content;
+  align-self:center;
+}
+.qpm-tcmp-verdict--a { border-color:rgba(88,160,255,0.55); background:rgba(88,160,255,0.18); color:#d6e8ff; }
+.qpm-tcmp-verdict--b { border-color:rgba(100,255,150,0.55); background:rgba(100,255,150,0.18); color:#d6ffe4; }
+.qpm-tcmp-verdict--tie { border-color:rgba(255,255,255,0.28); background:rgba(255,255,255,0.08); color:#ececec; }
+.qpm-tcmp-verdict--review { border-color:rgba(255,193,7,0.5); background:rgba(255,193,7,0.14); color:#ffe8a3; }
+.qpm-tcmp-ledger {
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  width:100%;
+}
+.qpm-tcmp-ledger-head,
+.qpm-tcmp-ledger-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);
+  align-items:center;
+  gap:6px;
+}
+.qpm-tcmp-ledger-head {
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:rgba(224,224,224,0.46);
+  border-bottom:1px solid rgba(143,130,255,0.2);
+  padding-bottom:4px;
+}
+.qpm-tcmp-ledger-row {
+  font-size:11px;
+  color:rgba(224,224,224,0.72);
+}
+.qpm-tcmp-ledger-a,
+.qpm-tcmp-ledger-b {
+  font-weight:700;
+  color:#e7e8ff;
+}
+.qpm-tcmp-ledger-a { text-align:left; }
+.qpm-tcmp-ledger-b { text-align:right; }
+.qpm-tcmp-ledger-mid {
+  text-align:center;
+  font-size:9px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:rgba(224,224,224,0.46);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.qpm-tcmp-ledger-win { color:#74ffb5; }
+.qpm-tcmp-legend {
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  width:100%;
+}
+.qpm-tcmp-legend-row {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height:18px;
+  text-align:center;
+  font-size:9px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:rgba(224,224,224,0.5);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.qpm-tcmp-stage {
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:rgba(224,224,224,0.5);
+  text-align:center;
+  border-top:1px solid rgba(143,130,255,0.2);
+  padding-top:6px;
+}
+.qpm-tcmp-filter-row { display:flex; align-items:center; gap:8px; }
+.qpm-tcmp-filter-chip {
+  font-size:10px;
+  color:rgba(224,224,224,0.7);
+  border:1px solid rgba(143,130,255,0.25);
+  background:rgba(143,130,255,0.1);
+  border-radius:999px;
+  padding:2px 8px;
+  white-space:nowrap;
 }
 
 /* Shared buttons */
@@ -511,14 +932,6 @@ function btn(label: string, variant: 'default' | 'primary' | 'danger' | 'sm' = '
   return el;
 }
 
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const h = d.getHours().toString().padStart(2, '0');
-  const m = d.getMinutes().toString().padStart(2, '0');
-  const s = d.getSeconds().toString().padStart(2, '0');
-  return `${h}:${m}:${s}`;
-}
-
 function showToast(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
   const el = document.createElement('div');
   el.style.cssText = `
@@ -541,6 +954,12 @@ function computeTeamAbilityPills(
   slots: Array<{ abilities: string[]; strength: number | null; targetScale: number | null; species: string }>,
 ): Array<{ icon: string; label: string; value: string }> {
   const totals = { coins: 0, plant: 0, egg: 0, xp: 0 };
+  let valuationContext: AbilityValuationContext | null = null;
+  try {
+    valuationContext = buildAbilityValuationContext();
+  } catch {
+    valuationContext = null;
+  }
 
   for (const slot of slots) {
     const str = slot.strength ?? calculateMaxStrength(slot.targetScale, slot.species) ?? 100;
@@ -548,11 +967,29 @@ function computeTeamAbilityPills(
       const def = getAbilityDefinition(abilityId);
       if (!def) continue;
       const stats = computeAbilityStats(def, str);
+      if (def.effectUnit === 'coins' || def.category === 'coins') {
+        if (def.trigger === 'continuous') {
+          totals.coins += computeEffectPerHour(def, stats);
+          continue;
+        }
+
+        const dynamic = valuationContext ? resolveDynamicAbilityEffect(def.id, valuationContext, str) : null;
+        const effectPerProc = dynamic?.effectPerProc && Number.isFinite(dynamic.effectPerProc) && dynamic.effectPerProc > 0
+          ? dynamic.effectPerProc
+          : (Number.isFinite(def.effectValuePerProc) ? Math.max(0, def.effectValuePerProc ?? 0) : 0);
+        if (effectPerProc > 0) {
+          const triggerChance = Math.max(0, Math.min(1, stats.chancePerMinute / 100));
+          totals.coins += effectPerProc * triggerChance * stats.procsPerHour;
+        } else {
+          totals.coins += computeEffectPerHour(def, stats);
+        }
+        continue;
+      }
+
       const eph = computeEffectPerHour(def, stats);
-      if (def.effectUnit === 'coins' || def.category === 'coins') totals.coins += eph;
-      else if (def.category === 'plantGrowth') totals.plant += eph;
+      if (def.category === 'plantGrowth') totals.plant += eph;
       else if (def.category === 'eggGrowth') totals.egg += eph;
-      else if (def.category === 'xp') totals.xp += eph;
+      else if (def.category === 'xp' && def.trigger === 'continuous') totals.xp += eph;
     }
   }
 
@@ -565,6 +1002,664 @@ function computeTeamAbilityPills(
 }
 
 // ---------------------------------------------------------------------------
+// 3v3 Compare Teams panel (Manager tab)
+// ---------------------------------------------------------------------------
+
+function toCompareInput(pet: PooledPet | null): ComparePetInput | null {
+  if (!pet) return null;
+  return {
+    id: pet.id,
+    species: pet.species,
+    strength: pet.strength,
+    targetScale: pet.targetScale,
+    abilities: pet.abilities,
+    mutations: pet.mutations,
+  };
+}
+
+function deriveCompareStage(pool: PooledPet[]): ReturnType<typeof captureProgressionStage> {
+  const inputs = pool.map((pet) => toCompareInput(pet)).filter((pet): pet is ComparePetInput => !!pet);
+  return captureProgressionStage(inputs);
+}
+
+function formatActionExpectedValue(profile: TeamCompareProfile, key: 'harvest' | 'sell' | 'hatch'): string {
+  const bucket = profile.actionBuckets[key];
+  const value = bucket.expectedValuePerTrigger;
+  const unit = bucket.entries.find((entry) => entry.unit !== 'none')?.unit ?? 'none';
+  if (unit === 'coins') return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
+  if (unit === 'minutes') return value.toFixed(1);
+  if (unit === 'xp') return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
+  return value.toFixed(value >= 10 ? 1 : 2);
+}
+
+function formatTeamScoreCompact(score: number): string {
+  if (!Number.isFinite(score)) return '0';
+  const absScore = Math.abs(score);
+  if (absScore >= 1000) return formatCoinsAbbreviated(score);
+  if (absScore >= 100) return score.toFixed(1);
+  return score.toFixed(2);
+}
+
+function renderTeamSummaryCompare(params: {
+  teamAName: string;
+  teamBName: string;
+  profileA: TeamCompareProfile;
+  profileB: TeamCompareProfile;
+  stage: CompareStage;
+  stageScore: number;
+}): HTMLElement {
+  const { teamAName, teamBName, profileA, profileB, stage, stageScore } = params;
+  const wrap = document.createElement('div');
+  wrap.className = 'qpm-tcmp-team-summary';
+
+  const head = document.createElement('div');
+  head.className = 'qpm-tcmp-team-head';
+  const title = document.createElement('div');
+  title.className = 'qpm-tcmp-team-title';
+  title.textContent = 'Team Summary';
+  const stageEl = document.createElement('div');
+  stageEl.className = 'qpm-tcmp-stage';
+  stageEl.style.borderTop = 'none';
+  stageEl.style.paddingTop = '0';
+  stageEl.textContent = `Stage ${stage.toUpperCase()} • ${stageScore.toFixed(1)}`;
+  head.append(title, stageEl);
+  wrap.appendChild(head);
+
+  const table = document.createElement('div');
+  table.className = 'qpm-tcmp-team-table';
+
+  const hA = document.createElement('div');
+  hA.className = 'qpm-tcmp-team-table-head';
+  hA.textContent = teamAName;
+  const hMid = document.createElement('div');
+  hMid.className = 'qpm-tcmp-team-table-head';
+  hMid.style.textAlign = 'center';
+  hMid.textContent = 'Metric';
+  const hB = document.createElement('div');
+  hB.className = 'qpm-tcmp-team-table-head';
+  hB.style.textAlign = 'right';
+  hB.textContent = teamBName;
+  table.append(hA, hMid, hB);
+
+  const hasMagnitude = (aRaw: number, bRaw: number): boolean => {
+    const EPS = 0.0001;
+    return Math.abs(aRaw) > EPS || Math.abs(bRaw) > EPS;
+  };
+
+  const addRow = (label: string, aRaw: number, bRaw: number, aText: string, bText: string): void => {
+    if (!hasMagnitude(aRaw, bRaw)) return;
+
+    const a = document.createElement('div');
+    a.className = 'qpm-tcmp-team-a';
+    a.textContent = aText;
+    const mid = document.createElement('div');
+    mid.className = 'qpm-tcmp-team-mid';
+    mid.textContent = label;
+    const b = document.createElement('div');
+    b.className = 'qpm-tcmp-team-b';
+    b.textContent = bText;
+
+    if (aRaw > bRaw) a.classList.add('qpm-tcmp-team-win');
+    else if (bRaw > aRaw) b.classList.add('qpm-tcmp-team-win');
+
+    table.append(a, mid, b);
+  };
+
+  addRow(
+    'Coins/Hr',
+    profileA.totals.coinsPerHour,
+    profileB.totals.coinsPerHour,
+    formatCoinsAbbreviated(Math.max(0, Math.round(profileA.totals.coinsPerHour))),
+    formatCoinsAbbreviated(Math.max(0, Math.round(profileB.totals.coinsPerHour))),
+  );
+  addRow(
+    'Plant Min/Hr',
+    profileA.totals.plantMinutesPerHour,
+    profileB.totals.plantMinutesPerHour,
+    profileA.totals.plantMinutesPerHour.toFixed(1),
+    profileB.totals.plantMinutesPerHour.toFixed(1),
+  );
+  addRow(
+    'Egg Min/Hr',
+    profileA.totals.eggMinutesPerHour,
+    profileB.totals.eggMinutesPerHour,
+    profileA.totals.eggMinutesPerHour.toFixed(1),
+    profileB.totals.eggMinutesPerHour.toFixed(1),
+  );
+  addRow(
+    'XP/Hr',
+    profileA.totals.xpPerHour,
+    profileB.totals.xpPerHour,
+    formatCoinsAbbreviated(Math.max(0, Math.round(profileA.totals.xpPerHour))),
+    formatCoinsAbbreviated(Math.max(0, Math.round(profileB.totals.xpPerHour))),
+  );
+
+  const actionKeys: Array<'harvest' | 'sell' | 'hatch'> = ['harvest', 'sell', 'hatch'];
+  for (const key of actionKeys) {
+    const bucketA = profileA.actionBuckets[key];
+    const bucketB = profileB.actionBuckets[key];
+    const hasActionAbility = bucketA.entries.length > 0 || bucketB.entries.length > 0;
+    if (!hasActionAbility) continue;
+
+    const titleCase = key.charAt(0).toUpperCase() + key.slice(1);
+    addRow(
+      `${titleCase} Chance/Min`,
+      bucketA.combinedChancePercent,
+      bucketB.combinedChancePercent,
+      `${bucketA.combinedChancePercent.toFixed(1)}%`,
+      `${bucketB.combinedChancePercent.toFixed(1)}%`,
+    );
+    if (hasMagnitude(bucketA.expectedValuePerTrigger, bucketB.expectedValuePerTrigger)) {
+      addRow(
+        `${titleCase} Value/Trigger`,
+        bucketA.expectedValuePerTrigger,
+        bucketB.expectedValuePerTrigger,
+        formatActionExpectedValue(profileA, key),
+        formatActionExpectedValue(profileB, key),
+      );
+    }
+  }
+
+  const scoreA = document.createElement('div');
+  scoreA.className = 'qpm-tcmp-team-score';
+  scoreA.textContent = formatTeamScoreCompact(profileA.score);
+  const scoreMid = document.createElement('div');
+  scoreMid.className = 'qpm-tcmp-team-mid';
+  scoreMid.textContent = 'Team Score';
+  const scoreB = document.createElement('div');
+  scoreB.className = 'qpm-tcmp-team-score';
+  scoreB.style.textAlign = 'right';
+  scoreB.textContent = formatTeamScoreCompact(profileB.score);
+  if (profileA.score > profileB.score) scoreA.classList.add('qpm-tcmp-team-score--win');
+  else if (profileB.score > profileA.score) scoreB.classList.add('qpm-tcmp-team-score--win');
+  else {
+    scoreA.classList.add('qpm-tcmp-team-score--lose');
+    scoreB.classList.add('qpm-tcmp-team-score--lose');
+  }
+  table.append(scoreA, scoreMid, scoreB);
+
+  wrap.appendChild(table);
+  return wrap;
+}
+
+let coinSpriteUrlCache: string | null = null;
+function getCoinSpriteUrl(): string | null {
+  if (coinSpriteUrlCache) return coinSpriteUrlCache;
+  const url = getAnySpriteDataUrl('sprite/ui/Coin');
+  if (url) coinSpriteUrlCache = url;
+  return coinSpriteUrlCache;
+}
+
+function isCurrencyMetric(metricLabel: string): boolean {
+  return metricLabel.includes('$');
+}
+
+const WINNER_HIGHLIGHT_MODE: 'full' | 'metric' = 'full';
+
+function applyImpactEmphasis(el: HTMLElement, abilityId: string | null): void {
+  el.classList.remove('qpm-tcmp-metric-val--rainbow', 'qpm-tcmp-metric-val--gold');
+  if (!abilityId) return;
+  if (abilityId === 'RainbowGranter') {
+    el.classList.add('qpm-tcmp-metric-val--rainbow');
+    return;
+  }
+  if (abilityId === 'GoldGranter') {
+    el.classList.add('qpm-tcmp-metric-val--gold');
+    return;
+  }
+  el.style.color = getAbilityColor(abilityId).base;
+}
+
+type CompareSideData = NonNullable<ReturnType<typeof buildCompareCardViewModel>>['sideA'];
+type CompareRowData = NonNullable<ReturnType<typeof buildCompareCardViewModel>>['ledgerRows'][number];
+
+function formatAbilityNamesForCompare(abilityIds: string[]): string {
+  if (abilityIds.length === 0) return 'No abilities';
+
+  const names = abilityIds.map((abilityId) => getAbilityDefinition(abilityId)?.name ?? abilityId);
+  const maxVisible = 3;
+  if (names.length <= maxVisible) return names.join(', ');
+  return `${names.slice(0, maxVisible).join(', ')} +${names.length - maxVisible}`;
+}
+
+function renderComparePetColumn(params: {
+  pet: PooledPet | null;
+  side: 'left' | 'right';
+  metrics: CompareSideData;
+  rows: CompareRowData[];
+  verdict: 'a' | 'b' | 'tie' | 'review';
+}): HTMLElement {
+  const { pet, side, metrics, rows, verdict } = params;
+  const root = document.createElement('div');
+  root.className = `qpm-tcmp-pet${side === 'right' ? ' qpm-tcmp-pet--right' : ''}`;
+  const sideKey = side === 'left' ? 'a' : 'b';
+  if (WINNER_HIGHLIGHT_MODE === 'full') {
+    if (verdict === sideKey) {
+      root.classList.add('qpm-tcmp-pet--winner');
+    } else if (verdict === 'a' || verdict === 'b') {
+      root.classList.add('qpm-tcmp-pet--loser');
+    }
+  }
+
+  if (!pet) {
+    root.textContent = 'Empty slot';
+    root.style.color = 'rgba(224,224,224,0.35)';
+    root.style.fontSize = '13px';
+    root.style.justifyContent = 'center';
+    return root;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'qpm-tcmp-head';
+
+  const sprite = document.createElement('div');
+  sprite.className = 'qpm-tcmp-sprite';
+  if (pet.species && isSpritesReady()) {
+    const src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []);
+    if (src) {
+      const img = document.createElement('img');
+      img.src = src;
+      img.alt = pet.species;
+      sprite.appendChild(img);
+    } else {
+      sprite.textContent = '🐾';
+    }
+  } else {
+    sprite.textContent = '🐾';
+  }
+  header.appendChild(sprite);
+
+  const text = document.createElement('div');
+  text.style.minWidth = '0';
+  text.style.width = '100%';
+  const idLine = document.createElement('div');
+  idLine.className = `qpm-tcmp-idline${side === 'right' ? ' qpm-tcmp-idline--right' : ''}`;
+  const idCopy = document.createElement('div');
+  idCopy.className = 'qpm-tcmp-idcopy';
+  const name = document.createElement('div');
+  name.className = 'qpm-tcmp-name';
+  name.textContent = pet.name || pet.species;
+  const maxStr = calculateMaxStrength(pet.targetScale, pet.species);
+  const str = document.createElement('div');
+  str.className = 'qpm-tcmp-str';
+  str.textContent = pet.strength != null && maxStr != null
+    ? `STR ${pet.strength} / ${maxStr}`
+    : pet.strength != null ? `STR ${pet.strength}` : 'STR ?';
+  idCopy.append(name, str);
+  const abilityDots = document.createElement('div');
+  abilityDots.className = `qpm-tcmp-adots${side === 'right' ? ' qpm-tcmp-adots--right' : ''}`;
+  for (const abilityId of pet.abilities.slice(0, 4)) {
+    const dot = document.createElement('span');
+    dot.className = 'qpm-tcmp-adot';
+    dot.title = abilityId;
+    dot.style.background = getAbilityColor(abilityId).base;
+    abilityDots.appendChild(dot);
+  }
+  idLine.append(idCopy, abilityDots);
+  text.append(idLine);
+  header.appendChild(text);
+  root.appendChild(header);
+
+  const ability = document.createElement('div');
+  ability.className = 'qpm-tcmp-ab';
+  const abilityMain = document.createElement('div');
+  abilityMain.className = 'qpm-tcmp-ab-main';
+  abilityMain.textContent = metrics.hasData ? `Focus: ${metrics.abilityName}` : 'No comparable ability';
+  const abilityAll = document.createElement('div');
+  abilityAll.className = 'qpm-tcmp-ab-all';
+  abilityAll.textContent = `All: ${formatAbilityNamesForCompare(pet.abilities)}`;
+  ability.append(abilityMain, abilityAll);
+  root.appendChild(ability);
+
+  const metricRows = document.createElement('div');
+  metricRows.className = 'qpm-tcmp-metrics';
+  const getMetricValue = (rowId: CompareRowData['id']): string => {
+    if (rowId === 'value_per_proc') return metrics.valuePerProc;
+    if (rowId === 'impact_per_hour') return metrics.impactPerHour;
+    if (rowId === 'procs_per_hour') return metrics.procsPerHour;
+    return metrics.triggerPercent;
+  };
+
+  const renderMetric = (rowData: CompareRowData): void => {
+    const row = document.createElement('div');
+    row.className = `qpm-tcmp-metric${side === 'right' ? ' qpm-tcmp-metric--right' : ''}`;
+    const vWrap = document.createElement('span');
+    vWrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
+    const v = document.createElement('span');
+    v.className = 'qpm-tcmp-metric-val';
+    v.textContent = getMetricValue(rowData.id);
+
+    if (rowData.winner === sideKey && rowData.id !== 'impact_per_hour') {
+      v.classList.add('qpm-tcmp-metric-val--winner');
+    }
+    if (rowData.id === 'impact_per_hour') {
+      applyImpactEmphasis(v, metrics.abilityId);
+    }
+    if (rowData.id === 'value_per_proc' && isCurrencyMetric(metrics.metricLabel)) {
+      const coinUrl = getCoinSpriteUrl();
+      if (coinUrl) {
+        const coin = document.createElement('img');
+        coin.className = 'qpm-tcmp-coin';
+        coin.src = coinUrl;
+        coin.alt = '$';
+        vWrap.appendChild(coin);
+      }
+    }
+    vWrap.appendChild(v);
+    row.append(vWrap);
+    metricRows.appendChild(row);
+  };
+
+  for (const rowData of rows) {
+    renderMetric(rowData);
+  }
+  root.appendChild(metricRows);
+
+  return root;
+}
+
+function buildSlotCompareRow(params: {
+  petA: PooledPet | null;
+  petB: PooledPet | null;
+  slotIndex: number;
+  abilityFilter: string;
+  valuationContext: AbilityValuationContext | null;
+  pool: PooledPet[];
+  stage: CompareStage;
+}): HTMLElement {
+  const { petA, petB, slotIndex, abilityFilter, valuationContext, pool, stage } = params;
+  const row = document.createElement('div');
+  row.className = 'qpm-tcmp-row';
+
+  const model = buildCompareCardViewModel({
+    petA,
+    petB,
+    abilityFilter,
+    valuationContext,
+    stage,
+    poolForRank: pool,
+  });
+  const verdictKey = model?.verdict ?? 'review';
+  const sideA = model?.sideA ?? {
+    hasData: false,
+    abilityId: null,
+    abilityName: 'No comparable ability',
+    metricLabel: 'Metric',
+    valuePerProc: '—',
+    impactPerHour: '—',
+    procsPerHour: '—',
+    triggerPercent: '—',
+    rawValuePerProc: 0,
+    rawImpactPerHour: 0,
+    rawProcsPerHour: 0,
+    rawTriggerPercent: 0,
+  };
+  const sideB = model?.sideB ?? {
+    hasData: false,
+    abilityId: null,
+    abilityName: 'No comparable ability',
+    metricLabel: 'Metric',
+    valuePerProc: '—',
+    impactPerHour: '—',
+    procsPerHour: '—',
+    triggerPercent: '—',
+    rawValuePerProc: 0,
+    rawImpactPerHour: 0,
+    rawProcsPerHour: 0,
+    rawTriggerPercent: 0,
+  };
+  const rows: CompareRowData[] = model?.ledgerRows ?? [
+    { id: 'value_per_proc', label: 'Value/Proc', a: '—', b: '—', winner: 'review' as const },
+    { id: 'impact_per_hour', label: 'Impact/Hr', a: '—', b: '—', winner: 'review' as const },
+    { id: 'procs_per_hour', label: 'Rate/Hr', a: '—', b: '—', winner: 'review' as const },
+    { id: 'trigger_percent', label: 'Chance/Min', a: '—', b: '—', winner: 'review' as const },
+  ];
+
+  const left = renderComparePetColumn({ pet: petA, side: 'left', metrics: sideA, rows, verdict: verdictKey });
+  const right = renderComparePetColumn({ pet: petB, side: 'right', metrics: sideB, rows, verdict: verdictKey });
+
+  const center = document.createElement('div');
+  center.className = 'qpm-tcmp-center';
+  const centerTop = document.createElement('div');
+  centerTop.className = 'qpm-tcmp-center-top';
+  const slot = document.createElement('div');
+  slot.className = 'qpm-tcmp-slot';
+  slot.textContent = `Slot ${slotIndex + 1}`;
+  centerTop.appendChild(slot);
+
+  const verdict = document.createElement('div');
+  verdict.className = `qpm-tcmp-verdict qpm-tcmp-verdict--${verdictKey}`;
+  verdict.textContent =
+    verdictKey === 'a' ? 'A Wins'
+      : verdictKey === 'b' ? 'B Wins'
+        : verdictKey === 'tie' ? 'Tie'
+          : 'Review';
+  centerTop.appendChild(verdict);
+  center.appendChild(centerTop);
+
+  const legend = document.createElement('div');
+  legend.className = 'qpm-tcmp-legend';
+  for (const rowData of rows) {
+    const legendRow = document.createElement('div');
+    legendRow.className = 'qpm-tcmp-legend-row';
+    legendRow.textContent = rowData.label;
+    legend.appendChild(legendRow);
+  }
+  center.appendChild(legend);
+
+  const stageBadge = document.createElement('div');
+  stageBadge.className = 'qpm-tcmp-stage';
+  stageBadge.textContent = `Stage ${model?.stageBadge ?? stage.toUpperCase()}`;
+  center.appendChild(stageBadge);
+
+  row.append(left, center, right);
+  return row;
+}
+
+interface ComparePanelHandle {
+  root: HTMLElement;
+  setPair: (teamAId: string | null, teamBId: string | null) => void;
+  refresh: () => void;
+}
+
+function buildCompareTeamsPanel(
+  getPetPool: () => PooledPet[],
+  onStageChange?: (stage: CompareStage) => void,
+): ComparePanelHandle {
+  const panel = document.createElement('div');
+  panel.style.cssText = 'display:flex;flex-direction:column;gap:10px;padding:12px 14px 14px;flex:1;overflow-y:auto;';
+  const compareState = loadPetTeamsUiState().compare ?? {};
+  let teamAId: string | null = compareState.selectedTeamAId ?? null;
+  let teamBId: string | null = compareState.selectedTeamBId ?? null;
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:11px;font-weight:700;color:rgba(143,130,255,0.8);text-transform:uppercase;letter-spacing:0.06em;';
+  hdr.textContent = 'Team Comparison';
+  panel.appendChild(hdr);
+
+  const selectionHint = document.createElement('div');
+  selectionHint.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.5);';
+  panel.appendChild(selectionHint);
+
+  const filterRow = document.createElement('div');
+  filterRow.className = 'qpm-tcmp-filter-row';
+  const filterLbl = document.createElement('span');
+  filterLbl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.4);flex-shrink:0;';
+  filterLbl.textContent = 'Abilities:';
+  const filterSel = document.createElement('select');
+  filterSel.className = 'qpm-select';
+  filterSel.style.cssText = 'flex:1;cursor:pointer;';
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'All';
+  filterSel.appendChild(allOption);
+  const activeFilterChip = document.createElement('span');
+  activeFilterChip.className = 'qpm-tcmp-filter-chip';
+  activeFilterChip.textContent = 'All abilities';
+  filterRow.append(filterLbl, filterSel, activeFilterChip);
+  panel.appendChild(filterRow);
+
+  const grid = document.createElement('div');
+  panel.appendChild(grid);
+
+  function getPairKey(aId: string | null, bId: string | null): string {
+    return aId && bId ? `${aId}|${bId}` : '';
+  }
+
+  function resolveTeamPets(targetTeamId: string): (PooledPet | null)[] {
+    const pool = getPetPool();
+    const team = getTeamsConfig().teams.find((entry) => entry.id === targetTeamId);
+    if (!team) return [null, null, null];
+    return team.slots.map((slotId) => (slotId ? (pool.find((pet) => pet.id === slotId) ?? null) : null));
+  }
+
+  function updateAbilityFilter(allPets: (PooledPet | null)[], preferredAbility: string): void {
+    const allIds = new Set<string>();
+    allPets.forEach((pet) => {
+      if (!pet) return;
+      pet.abilities.forEach((id) => allIds.add(id));
+    });
+
+    filterSel.innerHTML = '';
+    const all = document.createElement('option');
+    all.value = 'all';
+    all.textContent = 'All';
+    filterSel.appendChild(all);
+
+    for (const abilityId of allIds) {
+      const def = getAbilityDefinition(abilityId);
+      const option = document.createElement('option');
+      option.value = abilityId;
+      option.textContent = def?.name ?? abilityId;
+      filterSel.appendChild(option);
+    }
+    filterSel.value = allIds.has(preferredAbility) ? preferredAbility : 'all';
+  }
+
+  function normalizePair(): void {
+    const allTeamIds = new Set(getTeamsConfig().teams.map((team) => team.id));
+    if (teamAId && !allTeamIds.has(teamAId)) teamAId = null;
+    if (teamBId && !allTeamIds.has(teamBId)) teamBId = null;
+    if (teamAId && teamBId && teamAId === teamBId) teamBId = null;
+  }
+
+  function setPlaceholder(text: string): void {
+    grid.innerHTML = '';
+    grid.style.cssText = 'font-size:12px;color:rgba(224,224,224,0.3);text-align:center;padding:16px 0;';
+    grid.textContent = text;
+  }
+
+  function renderComparison(): void {
+    normalizePair();
+    const pool = getPetPool();
+    const stageSnapshot = deriveCompareStage(pool);
+    const stage = stageSnapshot.stage;
+    onStageChange?.(stage);
+
+    const comparePatch: Partial<CompareUiState> = {};
+    if (teamAId) comparePatch.selectedTeamAId = teamAId;
+    if (teamBId) comparePatch.selectedTeamBId = teamBId;
+    saveCompareUiState(comparePatch);
+
+    if (!teamAId && !teamBId) {
+      selectionHint.textContent = 'Compare mode: click a team in the list to set Team A.';
+      filterSel.disabled = true;
+      filterSel.value = 'all';
+      activeFilterChip.textContent = 'All abilities';
+      setPlaceholder('Select Team A, then Team B from the list.');
+      return;
+    }
+
+    if (teamAId && !teamBId) {
+      const teamAName = getTeamsConfig().teams.find((team) => team.id === teamAId)?.name ?? 'Team A';
+      selectionHint.textContent = `Team A: ${teamAName}. Click another team to set Team B.`;
+      filterSel.disabled = true;
+      filterSel.value = 'all';
+      activeFilterChip.textContent = 'All abilities';
+      setPlaceholder('Waiting for Team B selection.');
+      return;
+    }
+
+    if (!teamAId || !teamBId) return;
+
+    const teamAName = getTeamsConfig().teams.find((team) => team.id === teamAId)?.name ?? 'Team A';
+    const teamBName = getTeamsConfig().teams.find((team) => team.id === teamBId)?.name ?? 'Team B';
+    selectionHint.textContent = `Comparing ${teamAName} (A) vs ${teamBName} (B).`;
+    filterSel.disabled = false;
+
+    const pairKey = getPairKey(teamAId, teamBId);
+    const petsA = resolveTeamPets(teamAId);
+    const petsB = resolveTeamPets(teamBId);
+    const preferredAbility = getCompareAbilityForPair(pairKey) ?? filterSel.value;
+    updateAbilityFilter([...petsA, ...petsB], preferredAbility);
+    saveCompareAbilityForPair(pairKey, filterSel.value);
+    activeFilterChip.textContent = filterSel.value === 'all'
+      ? 'All abilities'
+      : (getAbilityDefinition(filterSel.value)?.name ?? filterSel.value);
+
+    let valuationContext: AbilityValuationContext | null = null;
+    try {
+      valuationContext = buildAbilityValuationContext();
+    } catch {
+      valuationContext = null;
+    }
+    grid.innerHTML = '';
+    grid.className = 'qpm-tcmp-grid';
+
+    const teamProfileA = buildTeamCompareProfile(
+      petsA.map((pet) => toCompareInput(pet)),
+      stageSnapshot,
+      valuationContext,
+    );
+    const teamProfileB = buildTeamCompareProfile(
+      petsB.map((pet) => toCompareInput(pet)),
+      stageSnapshot,
+      valuationContext,
+    );
+    grid.appendChild(renderTeamSummaryCompare({
+      teamAName,
+      teamBName,
+      profileA: teamProfileA,
+      profileB: teamProfileB,
+      stage,
+      stageScore: stageSnapshot.score,
+    }));
+
+    for (let i = 0; i < 3; i += 1) {
+      grid.appendChild(buildSlotCompareRow({
+        petA: petsA[i] ?? null,
+        petB: petsB[i] ?? null,
+        slotIndex: i,
+        abilityFilter: filterSel.value,
+        valuationContext,
+        pool,
+        stage,
+      }));
+    }
+  }
+
+  filterSel.addEventListener('change', () => {
+    const pairKey = getPairKey(teamAId, teamBId);
+    if (pairKey) saveCompareAbilityForPair(pairKey, filterSel.value);
+    renderComparison();
+  });
+
+  renderComparison();
+
+  return {
+    root: panel,
+    setPair(nextTeamAId: string | null, nextTeamBId: string | null): void {
+      teamAId = nextTeamAId;
+      teamBId = nextTeamBId;
+      renderComparison();
+    },
+    refresh(): void {
+      renderComparison();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Manager tab
 // ---------------------------------------------------------------------------
 
@@ -574,13 +1669,13 @@ interface ManagerState {
   cleanups: Array<() => void>;
 }
 
-function buildManagerTab(root: HTMLElement): ManagerState {
-  const state: ManagerState = { selectedTeamId: null, searchTerm: '', cleanups: [] };
+function buildManagerTab(
+  root: HTMLElement,
+  onCompareStateChange?: (state: { visible: boolean; stage: CompareStage | null }) => void,
+): ManagerState {
+  const initialTeams = getTeamsConfig().teams;
+  const state: ManagerState = { selectedTeamId: initialTeams[0]?.id ?? null, searchTerm: '', cleanups: [] };
   let petPool: PooledPet[] = [];
-  getAllPooledPets().then(pool => {
-    petPool = pool;
-    if (state.selectedTeamId) renderEditor();
-  }).catch(() => { /* pool stays empty */ });
 
   const mgr = document.createElement('div');
   mgr.className = 'qpm-mgr';
@@ -595,6 +1690,21 @@ function buildManagerTab(root: HTMLElement): ManagerState {
   listHeader.className = 'qpm-mgr__list-header';
   listPanel.appendChild(listHeader);
 
+  const listTop = document.createElement('div');
+  listTop.className = 'qpm-mgr__list-top';
+  listHeader.appendChild(listTop);
+
+  const newTeamBtn = btn('+ New Team', 'sm');
+  listTop.appendChild(newTeamBtn);
+
+  const compareTeamsBtn = btn('⚖ Compare', 'sm');
+  compareTeamsBtn.title = 'Compare two teams side by side';
+  listTop.appendChild(compareTeamsBtn);
+
+  const importBtn = btn('⬇', 'sm');
+  importBtn.title = 'Import Aries teams';
+  listTop.appendChild(importBtn);
+
   const search = document.createElement('input');
   search.className = 'qpm-mgr__search';
   search.placeholder = 'Search teams…';
@@ -603,17 +1713,6 @@ function buildManagerTab(root: HTMLElement): ManagerState {
   const teamsContainer = document.createElement('div');
   teamsContainer.className = 'qpm-mgr__teams';
   listPanel.appendChild(teamsContainer);
-
-  const listActions = document.createElement('div');
-  listActions.className = 'qpm-mgr__actions';
-  listPanel.appendChild(listActions);
-
-  const newTeamBtn = btn('+ New Team', 'sm');
-  listActions.appendChild(newTeamBtn);
-
-  const importBtn = btn('⬆ Import Aries', 'sm');
-  importBtn.title = 'Import pet teams from Aries Mod';
-  listActions.appendChild(importBtn);
 
   // --- Right: team editor ---
   const editorPanel = document.createElement('div');
@@ -624,17 +1723,105 @@ function buildManagerTab(root: HTMLElement): ManagerState {
   editor.className = 'qpm-editor';
   editorPanel.appendChild(editor);
 
+  const savedCompare = loadPetTeamsUiState().compare ?? {};
+  let compareOpen = false;
+  let compareTeamAId: string | null = savedCompare.selectedTeamAId ?? null;
+  let compareTeamBId: string | null = savedCompare.selectedTeamBId ?? null;
+  let dragTeamId: string | null = null;
+
+  let currentCompareStage: CompareStage = 'early';
+  const emitCompareState = (): void => {
+    onCompareStateChange?.({
+      visible: compareOpen,
+      stage: compareOpen ? currentCompareStage : null,
+    });
+  };
+
+  const comparePanel = buildCompareTeamsPanel(
+    () => petPool,
+    (stage) => {
+      currentCompareStage = stage;
+      emitCompareState();
+    },
+  );
+  const compareWrapper = comparePanel.root;
+  compareWrapper.style.display = 'none';
+  editorPanel.appendChild(compareWrapper);
+
+  getAllPooledPets().then((pool) => {
+    petPool = pool;
+    comparePanel.refresh();
+    emitCompareState();
+    if (!compareOpen && state.selectedTeamId) renderEditor();
+  }).catch(() => { /* pool stays empty */ });
+
+  function normalizeComparePair(): void {
+    const teamIds = new Set(getTeamsConfig().teams.map((team) => team.id));
+    if (compareTeamAId && !teamIds.has(compareTeamAId)) compareTeamAId = null;
+    if (compareTeamBId && !teamIds.has(compareTeamBId)) compareTeamBId = null;
+    if (compareTeamAId && compareTeamBId && compareTeamAId === compareTeamBId) compareTeamBId = null;
+    comparePanel.setPair(compareTeamAId, compareTeamBId);
+  }
+
+  function refreshImportButton(): void {
+    const imported = storage.get<boolean>(ARIES_IMPORT_ONCE_KEY, false);
+    importBtn.title = imported ? 'Aries import already completed' : 'Import Aries teams';
+    importBtn.style.opacity = imported ? '0.62' : '1';
+  }
+
+  compareTeamsBtn.addEventListener('click', () => {
+    compareOpen = !compareOpen;
+    normalizeComparePair();
+    editor.style.display = compareOpen ? 'none' : '';
+    compareWrapper.style.display = compareOpen ? '' : 'none';
+    compareTeamsBtn.textContent = compareOpen ? '✕ Close Compare' : '⚖ Compare';
+    emitCompareState();
+    renderTeamList();
+    if (!compareOpen) renderEditor();
+  });
+
+  importBtn.addEventListener('click', () => {
+    const result = importAriesTeams();
+    if (!result.available) {
+      showToast('No Aries teams found in localStorage', 'info');
+      return;
+    }
+
+    storage.set(ARIES_IMPORT_ONCE_KEY, true);
+    refreshImportButton();
+    comparePanel.refresh();
+    renderTeamList();
+    if (!compareOpen) renderEditor();
+    emitCompareState();
+
+    if (result.imported > 0) {
+      showToast(`Imported ${result.imported} team${result.imported > 1 ? 's' : ''}`, 'success');
+    } else {
+      showToast('Aries teams already imported', 'info');
+    }
+  });
+
+  refreshImportButton();
+  emitCompareState();
+
   // Render helpers
   function renderTeamList(): void {
     const config = getTeamsConfig();
     const term = state.searchTerm.toLowerCase();
     const detectedId = detectCurrentTeam();
     const keybinds = getKeybinds();
-    const keyByIndex = Object.fromEntries(Object.entries(keybinds).map(([k, idx]) => [String(idx), k]));
+    const keyByTeamId: Record<string, string> = {};
+    for (const [combo, teamId] of Object.entries(keybinds)) {
+      if (!teamId || keyByTeamId[teamId]) continue;
+      keyByTeamId[teamId] = combo;
+    }
+
+    const reorderEnabled = !compareOpen && term.length === 0;
+    normalizeComparePair();
 
     teamsContainer.innerHTML = '';
 
-    const filtered = config.teams.filter(t => !term || t.name.toLowerCase().includes(term));
+    const filtered = config.teams.filter((team) => !term || team.name.toLowerCase().includes(term));
 
     if (filtered.length === 0) {
       const empty = document.createElement('div');
@@ -644,21 +1831,40 @@ function buildManagerTab(root: HTMLElement): ManagerState {
       return;
     }
 
-    filtered.forEach((team, idx) => {
+    filtered.forEach((team) => {
       const row = document.createElement('div');
-      row.className = `qpm-team-row${state.selectedTeamId === team.id ? ' qpm-team-row--selected' : ''}`;
+      row.className = 'qpm-team-row';
+      if (!compareOpen && state.selectedTeamId === team.id) {
+        row.classList.add('qpm-team-row--selected');
+      }
+      if (compareOpen && compareTeamAId === team.id) row.classList.add('qpm-team-row--compare-a');
+      if (compareOpen && compareTeamBId === team.id) row.classList.add('qpm-team-row--compare-b');
+      if (reorderEnabled) row.classList.add('qpm-team-row--draggable');
 
       const name = document.createElement('div');
       name.className = 'qpm-team-row__name';
       name.textContent = team.name;
       row.appendChild(name);
 
-      const keyLabel = keyByIndex[String(idx)];
+      const keyLabel = keyByTeamId[team.id];
       if (keyLabel) {
         const keyEl = document.createElement('span');
         keyEl.className = 'qpm-team-row__key';
-        keyEl.textContent = `[${keyLabel}]`;
+        keyEl.textContent = `[${formatKeybind(keyLabel)}]`;
         row.appendChild(keyEl);
+      }
+
+      if (compareOpen && compareTeamAId === team.id) {
+        const badgeA = document.createElement('span');
+        badgeA.className = 'qpm-team-row__cmp-badge qpm-team-row__cmp-badge--a';
+        badgeA.textContent = 'A';
+        row.appendChild(badgeA);
+      }
+      if (compareOpen && compareTeamBId === team.id) {
+        const badgeB = document.createElement('span');
+        badgeB.className = 'qpm-team-row__cmp-badge qpm-team-row__cmp-badge--b';
+        badgeB.textContent = 'B';
+        row.appendChild(badgeB);
       }
 
       if (team.id === detectedId) {
@@ -669,14 +1875,61 @@ function buildManagerTab(root: HTMLElement): ManagerState {
       }
 
       row.addEventListener('click', () => {
+        if (compareOpen) {
+          if (!compareTeamAId) {
+            compareTeamAId = team.id;
+            compareTeamBId = null;
+          } else if (!compareTeamBId) {
+            if (team.id !== compareTeamAId) compareTeamBId = team.id;
+          } else {
+            compareTeamAId = team.id;
+            compareTeamBId = null;
+          }
+          comparePanel.setPair(compareTeamAId, compareTeamBId);
+          renderTeamList();
+          return;
+        }
+
         state.selectedTeamId = team.id;
         renderTeamList();
         renderEditor();
       });
+
+      if (reorderEnabled) {
+        row.draggable = true;
+        row.addEventListener('dragstart', (event) => {
+          dragTeamId = team.id;
+          row.classList.add('qpm-team-row--dragging');
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', team.id);
+          }
+        });
+        row.addEventListener('dragend', () => {
+          dragTeamId = null;
+          row.classList.remove('qpm-team-row--dragging');
+        });
+        row.addEventListener('dragover', (event) => {
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        });
+        row.addEventListener('drop', (event) => {
+          event.preventDefault();
+          const fromId = dragTeamId || event.dataTransfer?.getData('text/plain') || null;
+          dragTeamId = null;
+          if (!fromId || fromId === team.id) return;
+          const liveTeams = getTeamsConfig().teams;
+          const fromIndex = liveTeams.findIndex((entry) => entry.id === fromId);
+          const toIndex = liveTeams.findIndex((entry) => entry.id === team.id);
+          if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+          reorderTeams(fromIndex, toIndex);
+          comparePanel.refresh();
+        });
+      }
+
       teamsContainer.appendChild(row);
     });
   }
-
   function renderEditor(): void {
     editor.innerHTML = '';
 
@@ -691,7 +1944,7 @@ function buildManagerTab(root: HTMLElement): ManagerState {
     const config = getTeamsConfig();
     const team = config.teams.find(t => t.id === state.selectedTeamId);
     if (!team) {
-      state.selectedTeamId = null;
+      state.selectedTeamId = config.teams[0]?.id ?? null;
       renderEditor();
       return;
     }
@@ -892,6 +2145,7 @@ function buildManagerTab(root: HTMLElement): ManagerState {
           (team.slots.filter((s, idx2) => s && idx2 !== i) as string[])
         );
         openPetPicker({
+          teamId: team.id,
           usedPetIds: usedIds,
           onSelect: (petId) => {
             setTeamSlot(team.id, i as 0 | 1 | 2, petId);
@@ -933,11 +2187,11 @@ function buildManagerTab(root: HTMLElement): ManagerState {
           showToast(`Applied "${team.name}"`, 'success');
         } else {
           showToast(`Applied with ${result.errors.length} error(s)`, 'error');
-          log('[PetsWindow] applyTeam errors:', result.errors);
+          // errors logged via showToast above
         }
       } catch (err) {
         showToast('Apply failed', 'error');
-        log('[PetsWindow] applyTeam threw:', err);
+        void err;
       } finally {
         applyBtn.disabled = false;
         applyBtn.textContent = '▶ Apply Team';
@@ -975,27 +2229,48 @@ function buildManagerTab(root: HTMLElement): ManagerState {
 
     const kbInput = document.createElement('input');
     kbInput.className = 'qpm-keybind-input';
-    kbInput.maxLength = 1;
+    kbInput.readOnly = true;
     kbInput.placeholder = '—';
 
-    const config2 = getTeamsConfig();
-    const teamIndex = config2.teams.findIndex(t => t.id === team.id);
-    const keybinds = getKeybinds();
-    const currentKey = Object.entries(keybinds).find(([, idx]) => idx === teamIndex)?.[0] ?? '';
-    kbInput.value = currentKey;
+    const teamId = team.id;
+    const currentCombo = Object.entries(getKeybinds()).find(([, id]) => id === teamId)?.[0] ?? '';
+    kbInput.value = currentCombo ? formatKeybind(currentCombo) : '';
 
-    kbInput.addEventListener('input', () => {
-      const key = kbInput.value.toLowerCase().trim();
-      // Clear any existing binding for this team first
-      Object.entries(keybinds).forEach(([k, idx]) => { if (idx === teamIndex) clearKeybind(k); });
-      if (key) setKeybind(key, teamIndex);
+    kbInput.addEventListener('focus', () => {
+      kbInput.placeholder = 'Press a key…';
+      kbInput.value = '';
+    });
+
+    kbInput.addEventListener('blur', () => {
+      kbInput.placeholder = '—';
+      const freshCombo = Object.entries(getKeybinds()).find(([, id]) => id === teamId)?.[0] ?? '';
+      kbInput.value = freshCombo ? formatKeybind(freshCombo) : '';
+    });
+
+    kbInput.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') { kbInput.blur(); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        Object.entries(getKeybinds()).forEach(([k, id]) => { if (id === teamId) clearKeybind(k); });
+        kbInput.value = '';
+        kbInput.blur();
+        renderTeamList();
+        return;
+      }
+      const combo = normalizeKeybind(e);
+      if (!combo) return;
+      Object.entries(getKeybinds()).forEach(([k, id]) => { if (id === teamId) clearKeybind(k); });
+      setKeybind(combo, teamId);
+      kbInput.value = formatKeybind(combo);
+      kbInput.blur();
       renderTeamList();
     });
     keybindRow.appendChild(kbInput);
 
     const kbHint = document.createElement('span');
     kbHint.style.cssText = 'color:rgba(224,224,224,0.35);font-size:11px;';
-    kbHint.textContent = '(single key, no modifier)';
+    kbHint.textContent = '(click to set, Del to clear)';
     keybindRow.appendChild(kbHint);
 
     editor.appendChild(keybindRow);
@@ -1015,20 +2290,18 @@ function buildManagerTab(root: HTMLElement): ManagerState {
     renderEditor();
   });
 
-  importBtn.addEventListener('click', () => {
-    const result = importAriesTeams();
-    if (!result.available) {
-      showToast('No Aries Mod teams found in storage', 'error');
-      return;
-    }
-    showToast(`Imported ${result.imported} team(s), skipped ${result.skipped}`, result.imported > 0 ? 'success' : 'info');
-    renderTeamList();
-  });
-
   // Subscribe to team changes
   const unsub = onTeamsChange(() => {
+    const teams = getTeamsConfig().teams;
+    if (state.selectedTeamId && !teams.some(t => t.id === state.selectedTeamId)) {
+      state.selectedTeamId = teams[0]?.id ?? null;
+    } else if (!state.selectedTeamId && teams.length > 0) {
+      state.selectedTeamId = teams[0]!.id;
+    }
+    normalizeComparePair();
+    comparePanel.refresh();
     renderTeamList();
-    renderEditor();
+    if (!compareOpen) renderEditor();
   });
   state.cleanups.push(unsub);
 
@@ -1253,93 +2526,6 @@ function buildFeedingTab(root: HTMLElement): void {
   render();
 }
 
-// ---------------------------------------------------------------------------
-// Logs tab
-// ---------------------------------------------------------------------------
-
-function buildLogsTab(root: HTMLElement): Array<() => void> {
-  const cleanups: Array<() => void> = [];
-
-  const logsEl = document.createElement('div');
-  logsEl.className = 'qpm-logs';
-  root.appendChild(logsEl);
-
-  const header = document.createElement('div');
-  header.className = 'qpm-logs__header';
-  logsEl.appendChild(header);
-
-  let activeFilter: PetLogEventType | undefined;
-
-  const filterBtns: HTMLButtonElement[] = [];
-  for (const [type, label] of [[undefined, 'All'], ['ability', 'Ability'], ['feed', 'Feed'], ['team', 'Team']] as const) {
-    const fbtn = document.createElement('button');
-    fbtn.className = `qpm-logs__filter-btn${activeFilter === type ? ' qpm-logs__filter-btn--active' : ''}`;
-    fbtn.textContent = label;
-    fbtn.addEventListener('click', () => {
-      activeFilter = type;
-      filterBtns.forEach(b => b.classList.remove('qpm-logs__filter-btn--active'));
-      fbtn.classList.add('qpm-logs__filter-btn--active');
-      renderList();
-    });
-    filterBtns.push(fbtn);
-    header.appendChild(fbtn);
-  }
-  filterBtns[0]?.classList.add('qpm-logs__filter-btn--active');
-
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'qpm-logs__clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (confirm('Clear all pet event logs?')) { clearLogs(); renderList(); }
-  });
-  header.appendChild(clearBtn);
-
-  const list = document.createElement('div');
-  list.className = 'qpm-logs__list';
-  logsEl.appendChild(list);
-
-  function renderList(): void {
-    list.innerHTML = '';
-    const logs = getLogs(activeFilter, 500);
-
-    if (logs.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'qpm-logs__empty';
-      empty.textContent = 'No events recorded yet';
-      list.appendChild(empty);
-      return;
-    }
-
-    for (const entry of logs) {
-      const row = document.createElement('div');
-      row.className = 'qpm-log-entry';
-
-      const time = document.createElement('div');
-      time.className = 'qpm-log-entry__time';
-      time.textContent = formatTime(entry.timestamp);
-      row.appendChild(time);
-
-      const typeBadge = document.createElement('div');
-      typeBadge.className = `qpm-log-entry__type qpm-log-entry__type--${entry.type}`;
-      typeBadge.textContent = entry.type;
-      row.appendChild(typeBadge);
-
-      const detail = document.createElement('div');
-      detail.className = 'qpm-log-entry__detail';
-      detail.textContent = entry.detail;
-      row.appendChild(detail);
-
-      list.appendChild(row);
-    }
-  }
-
-  renderList();
-
-  const unsub = onLogsChange(() => renderList());
-  cleanups.push(unsub);
-
-  return cleanups;
-}
 
 // ---------------------------------------------------------------------------
 // Main window
@@ -1363,6 +2549,10 @@ function renderPetsWindow(root: HTMLElement): void {
   tabs.className = 'qpm-pets__tabs';
   container.appendChild(tabs);
 
+  const compareStageBadge = document.createElement('div');
+  compareStageBadge.className = 'qpm-pets__stage-badge qpm-pets__stage-badge--hidden';
+  compareStageBadge.textContent = 'Stage • Early';
+
   const body = document.createElement('div');
   body.className = 'qpm-pets__body';
   container.appendChild(body);
@@ -1370,17 +2560,46 @@ function renderPetsWindow(root: HTMLElement): void {
   const tabDefs = [
     { id: 'manager', label: 'Manager', lazy: false },
     { id: 'feeding', label: 'Feeding', lazy: false },
-    { id: 'logs', label: 'Logs', lazy: false },
-    { id: 'pet-hub', label: '🐾 Pet Hub', lazy: true },
     { id: 'pet-optimizer', label: '🎯 Pet Optimizer', lazy: true },
   ] as const;
 
   type TabId = typeof tabDefs[number]['id'];
   let activeTab: TabId = 'manager';
+  let compareBadgeVisible = false;
+  let compareBadgeStage: CompareStage | null = null;
 
   const panels: Partial<Record<TabId, HTMLElement>> = {};
   const tabBtns: Partial<Record<TabId, HTMLElement>> = {};
   const lazyLoaded = new Set<TabId>();
+
+  function renderCompareStageBadge(): void {
+    const show = compareBadgeVisible && activeTab === 'manager' && !!compareBadgeStage;
+    compareStageBadge.classList.toggle('qpm-pets__stage-badge--hidden', !show);
+    compareStageBadge.classList.remove(
+      'qpm-pets__stage-badge--early',
+      'qpm-pets__stage-badge--mid',
+      'qpm-pets__stage-badge--late',
+    );
+
+    if (!show || !compareBadgeStage) return;
+
+    compareStageBadge.textContent = `Stage • ${compareBadgeStage.toUpperCase()}`;
+    compareStageBadge.classList.add(`qpm-pets__stage-badge--${compareBadgeStage}`);
+  }
+
+  function reassertScrollChain(panel: HTMLElement | undefined): void {
+    if (!panel) return;
+    panel.style.minHeight = '0';
+    panel.style.overflow = 'hidden';
+
+    const scrollTargets = panel.querySelectorAll<HTMLElement>(
+      '.qpm-mgr__teams, .qpm-mgr__editor, .qpm-editor, .qpm-feed, .qpm-tcmp-grid, .qpm-window-body',
+    );
+    scrollTargets.forEach((target) => {
+      if (!target.style.minHeight) target.style.minHeight = '0';
+      if (!target.style.overflowY) target.style.overflowY = 'auto';
+    });
+  }
 
   function switchTab(id: TabId): void {
     activeTab = id;
@@ -1388,21 +2607,16 @@ function renderPetsWindow(root: HTMLElement): void {
       tabBtns[def.id]?.classList.toggle('qpm-pets__tab--active', def.id === id);
       panels[def.id]?.classList.toggle('qpm-pets__panel--active', def.id === id);
     }
-    // Lazy-load hub tabs on first activation
-    if (id === 'pet-hub' && !lazyLoaded.has('pet-hub')) {
-      lazyLoaded.add('pet-hub');
-      const panel = panels['pet-hub']!;
-      panel.style.cssText = 'display:flex;flex:1;overflow:hidden;flex-direction:column;';
-      import('./petHubWindow').then(({ renderPetHubWindow }) => {
-        panel.innerHTML = '';
-        renderPetHubWindow(panel);
-      }).catch(() => {
-        panel.innerHTML = '<div style="padding:20px;color:#ff6b6b;">Failed to load Pet Hub</div>';
-      });
-    } else if (id === 'pet-optimizer' && !lazyLoaded.has('pet-optimizer')) {
+    // Force inactive panels hidden to avoid stale sub-layout bleed-through.
+    for (const def of tabDefs) {
+      const panel = panels[def.id];
+      if (!panel) continue;
+      panel.style.display = def.id === id ? 'flex' : 'none';
+    }
+    // Lazy-load optimizer tab on first activation.
+    if (id === 'pet-optimizer' && !lazyLoaded.has('pet-optimizer')) {
       lazyLoaded.add('pet-optimizer');
       const panel = panels['pet-optimizer']!;
-      panel.style.cssText = 'display:flex;flex:1;overflow:hidden;flex-direction:column;';
       import('./petOptimizerWindow').then(({ renderPetOptimizerWindow }) => {
         panel.innerHTML = '';
         renderPetOptimizerWindow(panel);
@@ -1410,6 +2624,9 @@ function renderPetsWindow(root: HTMLElement): void {
         panel.innerHTML = '<div style="padding:20px;color:#ff6b6b;">Failed to load Pet Optimizer</div>';
       });
     }
+
+    renderCompareStageBadge();
+    requestAnimationFrame(() => reassertScrollChain(panels[id]));
   }
 
   let managerState: ManagerState | null = null;
@@ -1428,16 +2645,29 @@ function renderPetsWindow(root: HTMLElement): void {
     panels[def.id] = panel;
 
     if (def.id === 'manager') {
-      managerState = buildManagerTab(panel);
+      managerState = buildManagerTab(panel, ({ visible, stage }) => {
+        compareBadgeVisible = visible;
+        compareBadgeStage = stage;
+        renderCompareStageBadge();
+      });
       allCleanups.push(...managerState.cleanups);
     } else if (def.id === 'feeding') {
       buildFeedingTab(panel);
-    } else if (def.id === 'logs') {
-      const logCleanups = buildLogsTab(panel);
-      allCleanups.push(...logCleanups);
     }
-    // pet-hub and pet-optimizer are lazy-loaded on first click
+    // pet-optimizer is lazy-loaded on first click
   }
+  tabs.appendChild(compareStageBadge);
+
+  // Normalize initial panel visibility through the same switch path.
+  switchTab(activeTab);
+
+  const onWindowRestore = (event: Event): void => {
+    const detail = (event as CustomEvent<{ id?: string }>).detail;
+    if (!detail || detail.id !== WINDOW_ID) return;
+    requestAnimationFrame(() => reassertScrollChain(panels[activeTab]));
+  };
+  window.addEventListener('qpm:window-restored', onWindowRestore as EventListener);
+  allCleanups.push(() => window.removeEventListener('qpm:window-restored', onWindowRestore as EventListener));
 
   // Cleanup on window root removal (MutationObserver)
   const observer = new MutationObserver(() => {
@@ -1459,29 +2689,28 @@ export function initPetsWindow(): void {
   if (keybindHandler) return; // idempotent
 
   keybindHandler = (e: KeyboardEvent) => {
+    if (isEditableTarget(e.target)) return;
+
     // Window open/close keybind
-    if (e.key.toLowerCase() === currentKeybind &&
-        !(e.target instanceof HTMLInputElement) &&
-        !(e.target instanceof HTMLTextAreaElement) &&
-        !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key.toLowerCase() === currentKeybind && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       togglePetsWindow();
       return;
     }
 
     // Team keybinds
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-
     const keybinds = getKeybinds();
-    const teamIndex = keybinds[e.key.toLowerCase()];
-    if (teamIndex == null) return;
+    const combo = normalizeKeybind(e);
+    if (!combo) return;
+    const teamId = keybinds[combo];
+    if (!teamId) return;
 
     const config = getTeamsConfig();
-    const team = config.teams[teamIndex];
+    const team = config.teams.find((entry) => entry.id === teamId);
     if (!team) return;
 
     e.preventDefault();
+    e.stopPropagation();
     showToast(`Applying "${team.name}"…`);
     applyTeam(team.id)
       .then(result => {
@@ -1495,7 +2724,6 @@ export function initPetsWindow(): void {
   };
 
   document.addEventListener('keydown', keybindHandler);
-  log('[PetsWindow] Initialized');
 }
 
 export function stopPetsWindow(): void {

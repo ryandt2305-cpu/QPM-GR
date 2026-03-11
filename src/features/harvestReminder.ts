@@ -14,6 +14,7 @@ const disposeGardenHighlightOverlay = (): void => {};
 import { lookupMaxScale } from '../utils/plantScales';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { onWeatherSnapshot, startWeatherHub, WeatherSnapshot } from '../store/weatherHub';
+import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
 
 declare global {
   interface Window {
@@ -277,7 +278,9 @@ export function runHarvestHighlightDebug(): void {
   }
 
   const matches = collectMatches(snapshot, activeMutationKeys(), Date.now());
-  shareGlobal('__qpmHarvestDebugMatches', matches);
+  if (isDebugGlobalsEnabled()) {
+    shareGlobal('__qpmHarvestDebugMatches', matches);
+  }
   if (matches.length > 0) {
     const preview = matches.slice(0, Math.min(5, matches.length)).map((match) => ({
       species: match.species,
@@ -520,10 +523,12 @@ function applyHighlights(matches: HarvestMatch[]): void {
       hiddenSpecies: 'Carrot',
       hiddenScale: 0.1,
     } satisfies Record<string, unknown>;
-    shareGlobal('__qpmHarvestDebugConfig', {
-      ...config,
-      attemptedMutations: mutationFilter,
-    });
+    if (isDebugGlobalsEnabled()) {
+      shareGlobal('__qpmHarvestDebugConfig', {
+        ...config,
+        attemptedMutations: mutationFilter,
+      });
+    }
     highlightFn.call(pageWindow, config);
 
     const setTimeoutFn = (pageWindow as typeof window).setTimeout;

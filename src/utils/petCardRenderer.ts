@@ -3,6 +3,7 @@ import { getPetSpriteCanvas } from '../sprite-v2/compat';
 import { getMutationSpriteDataUrl } from './petMutationRenderer';
 import { canvasToDataUrl } from './canvasHelpers';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../store/xpTracker';
+import { getAbilityDef, getPetAbilitiesCatalog } from '../catalogs/gameCatalogs';
 
 interface PetCardConfig {
   species: string;
@@ -38,11 +39,98 @@ export function normalizeAbilityName(abilityId: string): string {
     .trim();
 }
 
+function normalizeAbilityLookup(value: string): string {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const abilityLookupIndex = new Map<string, string>();
+let indexedCatalogRef: unknown = null;
+
+function ensureAbilityLookupIndex(): void {
+  const catalog = getPetAbilitiesCatalog();
+  if (!catalog || catalog === indexedCatalogRef) return;
+
+  abilityLookupIndex.clear();
+  for (const [abilityId, entry] of Object.entries(catalog)) {
+    const keys = new Set<string>();
+    keys.add(abilityId);
+    keys.add(normalizeAbilityName(abilityId));
+
+    const rawName = (entry as Record<string, unknown> | null)?.name;
+    if (typeof rawName === 'string' && rawName.trim()) {
+      keys.add(rawName.trim());
+    }
+
+    for (const key of keys) {
+      const normalized = normalizeAbilityLookup(key);
+      if (!normalized || abilityLookupIndex.has(normalized)) continue;
+      abilityLookupIndex.set(normalized, abilityId);
+    }
+  }
+  indexedCatalogRef = catalog;
+}
+
+function resolveAbilityId(input: string): string | null {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  // Fast path: exact ID.
+  if (getAbilityDef(raw)) return raw;
+
+  ensureAbilityLookupIndex();
+  const normalized = normalizeAbilityLookup(raw);
+  if (!normalized) return null;
+  return abilityLookupIndex.get(normalized) ?? null;
+}
+
 /**
  * Get ability color configuration
  */
 export function getAbilityColor(abilityName: string): { base: string; glow: string; text: string } {
-  const name = (abilityName || '').toLowerCase().replace(/\s+/g, '');
+  const resolvedAbilityId = resolveAbilityId(abilityName) ?? abilityName;
+  const name = normalizeAbilityLookup(resolvedAbilityId || abilityName);
+  const catalogEntry = getAbilityDef(resolvedAbilityId);
+
+  // Prefer runtime-catalog color if present.
+  // Handles unknown/new abilities with authoritative in-game colors when exposed.
+  const readColorValue = (value: unknown): string | null => {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return `#${Math.max(0, Math.min(0xFFFFFF, value)).toString(16).padStart(6, '0')}`;
+    }
+    return null;
+  };
+  const readCatalogColor = (): { base: string; glow: string } | null => {
+    const entry = catalogEntry as Record<string, unknown> | null;
+    if (!entry) return null;
+
+    // Gemini-style enriched shape: entry.color = { bg, hover }
+    const colorObj = entry.color;
+    if (colorObj && typeof colorObj === 'object') {
+      const record = colorObj as Record<string, unknown>;
+      const bg = readColorValue(record.bg) ?? readColorValue(record.base);
+      const hover = readColorValue(record.hover);
+      if (bg) return { base: bg, glow: hover ?? bg };
+    }
+
+    const directKeys = ['uiColor', 'hexColor', 'tint', 'displayColor', 'color'];
+    for (const key of directKeys) {
+      const parsed = readColorValue(entry[key]);
+      if (parsed) return { base: parsed, glow: parsed };
+    }
+    const baseParams = entry.baseParameters as Record<string, unknown> | undefined;
+    if (baseParams && typeof baseParams === 'object') {
+      for (const key of directKeys) {
+        const parsed = readColorValue(baseParams[key]);
+        if (parsed) return { base: parsed, glow: parsed };
+      }
+    }
+    return null;
+  };
+  const runtimeColor = readCatalogColor();
+  if (runtimeColor) {
+    return { base: runtimeColor.base, glow: runtimeColor.glow, text: '#FFF' };
+  }
   
   // Rainbow and Gold special abilities
   if (name.includes('rainbowgranter') || name.includes('rainbow')) return { base: 'linear-gradient(135deg, #FF0000 0%, #FF7F00 16.67%, #FFFF00 33.33%, #00FF00 50%, #0000FF 66.67%, #4B0082 83.33%, #9400D3 100%)', glow: 'rgba(124,77,255,0.7)', text: '#FFF' };
@@ -85,9 +173,23 @@ export function getAbilityColor(abilityName: string): { base: string; glow: stri
   if (name.includes('raindance')) return { base: '#2196F3', glow: 'rgba(33,150,243,0.6)', text: '#FFF' };
   if (name.includes('doublehatch')) return { base: '#5C6BC0', glow: 'rgba(92,107,192,0.6)', text: '#FFF' };
   if (name.includes('doubleharvest')) return { base: '#1976D2', glow: 'rgba(25,118,210,0.6)', text: '#FFF' };
+  if (name.includes('frostgranter') || name.includes('snowgranter')) return { base: '#6EC8FF', glow: 'rgba(110,200,255,0.6)', text: '#FFF' };
+  if (name.includes('dawnlitgranter')) return { base: '#A77CFF', glow: 'rgba(167,124,255,0.6)', text: '#FFF' };
+  if (name.includes('amberlitgranter')) return { base: '#FF9C52', glow: 'rgba(255,156,82,0.62)', text: '#FFF' };
   
-  // Default
-  return { base: '#90A4AE', glow: 'rgba(144,164,174,0.6)', text: '#FFF' };
+  // Default: deterministic dynamic color so new/unknown abilities are not all gray.
+  const source = name || 'ability';
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = ((hash << 5) - hash) + source.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  const sat = 68 + (Math.abs(hash) % 18); // 68-85
+  const light = 56 + (Math.abs(hash) % 10); // 56-65
+  const base = `hsl(${hue} ${sat}% ${light}%)`;
+  const glow = `hsla(${hue} ${sat}% ${light}% / 0.62)`;
+  return { base, glow, text: '#FFF' };
 }
 
 /**

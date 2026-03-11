@@ -5,9 +5,10 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { pageWindow } from '../core/pageContext';
 import { getInventoryItems, getFavoritedItemIds, isInventoryStoreActive } from '../store/inventory';
-import { criticalInterval } from '../utils/timerManager';
+import { visibleInterval } from '../utils/timerManager';
 import { getCropCategory, getAllCropCategories } from '../utils/cropCategorizer';
 import { getAllPlantSpecies, getAllAbilities, getAllMutations, areCatalogsReady } from '../catalogs/gameCatalogs';
+import { sendRoomAction } from '../websocket/api';
 
 const STORAGE_KEY = 'qpm.autoFavorite.v1';
 
@@ -123,6 +124,7 @@ let config: AutoFavoriteConfig = {
 
 const listeners = new Set<(config: AutoFavoriteConfig) => void>();
 let cleanupInterval: (() => void) | null = null;
+let visibilityListener: ((this: Document, ev: Event) => any) | null = null;
 let seenItemIds = new Set<string>();
 
 /**
@@ -467,38 +469,13 @@ function unfavoritePetAbility(abilityName: string): void {
   // Do nothing - script only adds favorites, never removes them
 }
 
-/**
- * Get the current scope path for WebSocket messages
- * Uses dynamic scope path from game if available
- */
-function getScopePath(): string[] {
-  try {
-    const typedPageWindow = pageWindow as QPMPageWindow;
-    return typedPageWindow?.__mga_lastScopePath?.slice() ?? ['Room', 'Quinoa'];
-  } catch {
-    return ['Room', 'Quinoa'];
-  }
-}
-
 // Function to actually send the favorite message via websocket
 function sendFavoriteMessage(itemId: string): boolean {
-  try {
-    const typedPageWindow = pageWindow as QPMPageWindow;
-    const maybeConnection = typedPageWindow?.MagicCircle_RoomConnection;
-
-    if (maybeConnection && typeof maybeConnection.sendMessage === 'function') {
-      maybeConnection.sendMessage({
-        scopePath: getScopePath(),
-        type: 'ToggleFavoriteItem',
-        itemId,
-      });
-      return true;
-    }
-    return false;
-  } catch (error) {
-    log(`⚠️ Failed to favorite item ${itemId}`, error);
-    return false;
+  const sent = sendRoomAction('ToggleFavoriteItem', { itemId }, { throttleMs: 80 });
+  if (!sent.ok && sent.reason !== 'throttled') {
+    log(`⚠️ Failed to favorite item ${itemId} (${sent.reason ?? 'unknown'})`);
   }
+  return sent.ok;
 }
 
 function startAutoFavoritePolling(): void {
@@ -506,7 +483,7 @@ function startAutoFavoritePolling(): void {
 
   let pollCount = 0;
 
-  cleanupInterval = criticalInterval('auto-favorite-poll', () => {
+  const runPollTick = (): void => {
     pollCount++;
 
     // Early exit if auto-favorite is disabled or no watched items
@@ -688,18 +665,33 @@ function startAutoFavoritePolling(): void {
 
     // Update seen IDs to current state
     seenItemIds = currentItemIds;
-  }, 2000); // Every 2 seconds (optimized, pauses when tab hidden)
+  };
 
-  log('✅ Auto-favorite polling started (2 second interval, visibility-aware)');
+  cleanupInterval = visibleInterval('auto-favorite-poll', runPollTick, 2000);
+
+  visibilityListener = () => {
+    if (document.hidden) return;
+    // Force a reconciliation scan immediately when the tab becomes visible.
+    seenItemIds = new Set<string>();
+    runPollTick();
+  };
+  document.addEventListener('visibilitychange', visibilityListener);
+
+  log('✅ Auto-favorite polling started (2 second visible-only interval)');
 }
 
 function stopAutoFavoritePolling(): void {
   if (cleanupInterval !== null) {
     cleanupInterval();
     cleanupInterval = null;
-    log('⏹️ Auto-favorite polling stopped');
   }
+  if (visibilityListener) {
+    document.removeEventListener('visibilitychange', visibilityListener);
+    visibilityListener = null;
+  }
+  log('⏹️ Auto-favorite polling stopped');
 }
+
 
 export function initializeAutoFavorite(): void {
   loadConfig();

@@ -1,6 +1,7 @@
 import { shareGlobal } from '../core/pageContext';
 import { log } from '../utils/logger';
 import type { WeatherType } from '../features/mutationReminder';
+import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
 
 export type MutationActiveWeather = Exclude<WeatherType, 'sunny' | 'unknown'>;
 
@@ -244,7 +245,9 @@ const mutationDebugApi = {
 	},
 };
 
-shareGlobal('__qpmMutationDebug', mutationDebugApi);
+if (isDebugGlobalsEnabled()) {
+	shareGlobal('__qpmMutationDebug', mutationDebugApi);
+}
 
 export function publishMutationSummary(source: MutationSummarySource, summary: MutationSummary): void {
 	lastSummaries[source] = summary;

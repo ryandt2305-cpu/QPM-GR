@@ -488,16 +488,166 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
 
 const abilityLookup = new Map<string, AbilityDefinition>();
 
+const WEATHER_PREFIX_ENTRIES = [
+  { prefix: 'snowy', weather: 'snow' },
+  { prefix: 'frosty', weather: 'snow' },
+  { prefix: 'frost', weather: 'snow' },
+  { prefix: 'snow', weather: 'snow' },
+  { prefix: 'rainy', weather: 'rain' },
+  { prefix: 'rain', weather: 'rain' },
+  { prefix: 'wet', weather: 'rain' },
+  { prefix: 'dawn', weather: 'dawn' },
+  { prefix: 'amber', weather: 'amber' },
+] as const;
+
+interface CatalogLookupCache {
+  signature: string;
+  byKey: Map<string, string>;
+}
+
+let catalogLookupCache: CatalogLookupCache | null = null;
+
 const normalizeKey = (value: string): string => value.trim().toLowerCase();
+const normalizeCompactKey = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+function addLookupKeys(map: Map<string, AbilityDefinition>, key: string, definition: AbilityDefinition): void {
+  const normalized = normalizeKey(key);
+  const compact = normalizeCompactKey(key);
+
+  if (normalized.length > 0) {
+    map.set(normalized, definition);
+  }
+  if (compact.length > 0) {
+    map.set(compact, definition);
+  }
+}
 
 for (const definition of ABILITY_DEFINITIONS) {
-  abilityLookup.set(normalizeKey(definition.id), definition);
-  abilityLookup.set(normalizeKey(definition.name), definition);
+  addLookupKeys(abilityLookup, definition.id, definition);
+  addLookupKeys(abilityLookup, definition.name, definition);
   if (Array.isArray(definition.aliases)) {
     for (const alias of definition.aliases) {
-      abilityLookup.set(normalizeKey(alias), definition);
+      addLookupKeys(abilityLookup, alias, definition);
     }
   }
+}
+
+function resolveWeatherFromPrefix(prefix: string): AbilityDefinition['requiredWeather'] | null {
+  const normalized = normalizeCompactKey(prefix);
+  if (!normalized) return null;
+
+  const hit = WEATHER_PREFIX_ENTRIES.find((entry) => entry.prefix === normalized);
+  return hit ? hit.weather : null;
+}
+
+function buildLookupCandidates(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  const candidates = new Set<string>();
+  const normalized = normalizeKey(trimmed);
+  const compact = normalizeCompactKey(trimmed);
+
+  if (normalized.length > 0) {
+    candidates.add(normalized);
+  }
+  if (compact.length > 0) {
+    candidates.add(compact);
+  }
+
+  for (const { prefix } of WEATHER_PREFIX_ENTRIES) {
+    if (!compact.startsWith(prefix) || compact.length <= prefix.length + 2) {
+      continue;
+    }
+    candidates.add(compact.slice(prefix.length));
+    break;
+  }
+
+  return [...candidates];
+}
+
+function attachWeatherConstraint(raw: string, definition: AbilityDefinition): AbilityDefinition {
+  const compactRaw = normalizeCompactKey(raw);
+  const compactDef = normalizeCompactKey(definition.id);
+
+  if (!compactRaw || !compactDef || compactRaw === compactDef || !compactRaw.endsWith(compactDef)) {
+    return definition;
+  }
+
+  const prefix = compactRaw.slice(0, compactRaw.length - compactDef.length);
+  const requiredWeather = resolveWeatherFromPrefix(prefix);
+  if (!requiredWeather) {
+    return definition;
+  }
+
+  return {
+    ...definition,
+    requiredWeather: definition.requiredWeather ?? requiredWeather,
+  };
+}
+
+function normalizeCatalogTrigger(trigger: unknown): AbilityDefinition['trigger'] {
+  if (trigger === 'hatchEgg' || trigger === 'sellAllCrops' || trigger === 'sellPet' || trigger === 'harvest') {
+    return trigger;
+  }
+  return 'continuous';
+}
+
+function buildCatalogLookupCache(): CatalogLookupCache | null {
+  if (!areCatalogsReady()) return null;
+
+  const abilityIds = getAllAbilities();
+  if (abilityIds.length === 0) return null;
+
+  const signature = [...abilityIds].sort().join('|');
+  if (catalogLookupCache && catalogLookupCache.signature === signature) {
+    return catalogLookupCache;
+  }
+
+  const byKey = new Map<string, string>();
+  const addCatalogKey = (key: string, abilityId: string): void => {
+    const normalized = normalizeKey(key);
+    const compact = normalizeCompactKey(key);
+
+    if (normalized.length > 0 && !byKey.has(normalized)) {
+      byKey.set(normalized, abilityId);
+    }
+    if (compact.length > 0 && !byKey.has(compact)) {
+      byKey.set(compact, abilityId);
+    }
+  };
+
+  for (const abilityId of abilityIds) {
+    addCatalogKey(abilityId, abilityId);
+    const entry = getAbilityDef(abilityId);
+    if (entry && typeof entry.name === 'string' && entry.name.trim().length > 0) {
+      addCatalogKey(entry.name, abilityId);
+    }
+  }
+
+  catalogLookupCache = { signature, byKey };
+  return catalogLookupCache;
+}
+
+function buildDefinitionFromCatalog(abilityId: string, raw: string): AbilityDefinition | null {
+  const catalogEntry = getAbilityDef(abilityId);
+  if (!catalogEntry) return null;
+
+  const trigger = normalizeCatalogTrigger(catalogEntry.trigger);
+  const definition: AbilityDefinition = {
+    id: abilityId,
+    name: typeof catalogEntry.name === 'string' && catalogEntry.name.trim().length > 0 ? catalogEntry.name : abilityId,
+    category: trigger === 'hatchEgg' ? 'eggGrowth' : 'misc',
+    trigger,
+    rollPeriodMinutes: 1,
+    notes: 'Auto-discovered from game catalog',
+  };
+
+  if (typeof catalogEntry.baseProbability === 'number' && Number.isFinite(catalogEntry.baseProbability)) {
+    definition.baseProbability = catalogEntry.baseProbability;
+  }
+
+  return attachWeatherConstraint(raw, definition);
 }
 
 export function getAbilityDefinition(raw: string | null | undefined): AbilityDefinition | null {
@@ -505,39 +655,31 @@ export function getAbilityDefinition(raw: string | null | undefined): AbilityDef
     return null;
   }
 
-  const normalized = normalizeKey(raw);
-
-  // Priority 1: Try hardcoded definitions (has full metadata)
-  const hardcoded = abilityLookup.get(normalized);
-  if (hardcoded) {
-    return hardcoded;
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
   }
 
-  // Priority 2: Try catalog (FUTUREPROOF - supports new abilities!)
+  const lookupCandidates = buildLookupCandidates(trimmed);
+
+  // Priority 1: Hardcoded definitions (full metadata)
+  for (const key of lookupCandidates) {
+    const hardcoded = abilityLookup.get(key);
+    if (hardcoded) {
+      return attachWeatherConstraint(trimmed, hardcoded);
+    }
+  }
+
+  // Priority 2: Runtime catalog (futureproof)
   if (areCatalogsReady()) {
-    const catalogEntry = getAbilityDef(raw);
-    if (catalogEntry) {
-      // Create basic definition from catalog data
-      const category: AbilityCategory =
-        catalogEntry.trigger === 'hatchEgg' ? 'eggGrowth' :
-        catalogEntry.trigger === 'continuous' ? 'misc' :
-        'misc';
-
-      const definition: AbilityDefinition = {
-        id: raw,
-        name: catalogEntry.name || raw,
-        category,
-        trigger: catalogEntry.trigger as any,
-        rollPeriodMinutes: 1,
-        notes: 'Auto-discovered from game catalog',
-      };
-
-      // Only add baseProbability if it exists
-      if (catalogEntry.baseProbability !== undefined) {
-        definition.baseProbability = catalogEntry.baseProbability;
+    const cache = buildCatalogLookupCache();
+    if (cache) {
+      for (const key of lookupCandidates) {
+        const abilityId = cache.byKey.get(key);
+        if (!abilityId) continue;
+        const definition = buildDefinitionFromCatalog(abilityId, trimmed);
+        if (definition) return definition;
       }
-
-      return definition;
     }
   }
 

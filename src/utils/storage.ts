@@ -77,7 +77,13 @@ const QPM_STORAGE_KEYS = [
 
   // Shop Restock (Supabase)
   'qpm.restockCache',
+  'qpm.restockCache.v2',
+  'qpm.restockCache.v3',
+  'qpm.restock.refreshBudget.v1',
   'qpm.dashboardModules',
+
+  // Pet Optimizer
+  'petOptimizer:config.v2',
 ];
 
 export const storage: Storage = {

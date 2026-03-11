@@ -15,7 +15,7 @@ export interface PetTeam {
 
 export interface PetTeamsConfig {
   teams: PetTeam[];                        // Soft limit: 100
-  keybinds: Record<string, number>;        // e.g. { "1": 0, "2": 1 } — key → team index
+  keybinds: Record<string, string>;        // e.g. { "1": "team-id" } — key → team id
   activeTeamId: string | null;             // Currently matched team
   lastAppliedAt: number;
 }

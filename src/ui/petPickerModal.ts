@@ -8,7 +8,7 @@ import { log } from '../utils/logger';
 import { getAllPooledPets } from '../store/petTeams';
 import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
 import { getAbilityColor } from '../utils/petCardRenderer';
-import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour } from '../data/petAbilities';
+import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
 import { findAbilityHistoryForIdentifiers } from '../store/abilityLogs';
 import { computeObservedMetrics } from './abilityAnalysis';
 import { calculateMaxStrength, getSpeciesXpPerLevel } from '../store/xpTracker';
@@ -16,6 +16,11 @@ import type { PooledPet } from '../types/petTeams';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { getPetMetadata } from '../data/petMetadata';
 import { getHungerDepletionTime } from '../data/petHungerDepletion';
+import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type AbilityValuationContext } from '../features/abilityValuation';
+import { buildCompareCardViewModel } from './comparePresentation';
+import { captureProgressionStage, type ComparePetInput } from '../features/petCompareEngine';
+import type { CompareStage } from '../data/petCompareRules';
+import { storage } from '../utils/storage';
 
 // ---------------------------------------------------------------------------
 // State
@@ -30,6 +35,50 @@ interface PickerState {
 }
 
 let activeState: PickerState | null = null;
+const PET_TEAMS_UI_STATE_KEY = 'qpm.petTeams.uiState.v1';
+
+interface PickerFilterState {
+  location: string;
+  sort: string;
+  tier: string;
+  ability: string;
+  compareAbility: string;
+  species: string[];
+}
+
+interface PetTeamsUiState {
+  pickerByTeam?: Record<string, PickerFilterState>;
+  compare?: {
+    selectedTeamAId?: string;
+    selectedTeamBId?: string;
+    abilityByPair?: Record<string, string>;
+  };
+}
+
+function loadPetTeamsUiState(): PetTeamsUiState {
+  const raw = storage.get<PetTeamsUiState>(PET_TEAMS_UI_STATE_KEY, {});
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+function getSavedPickerFilters(teamId?: string): PickerFilterState | null {
+  if (!teamId) return null;
+  const state = loadPetTeamsUiState();
+  const saved = state.pickerByTeam?.[teamId];
+  return saved && typeof saved === 'object' ? saved : null;
+}
+
+function savePickerFilters(teamId: string | undefined, filters: PickerFilterState): void {
+  if (!teamId) return;
+  const state = loadPetTeamsUiState();
+  const byTeam = state.pickerByTeam ?? {};
+  storage.set(PET_TEAMS_UI_STATE_KEY, {
+    ...state,
+    pickerByTeam: {
+      ...byTeam,
+      [teamId]: filters,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Mutation tier helpers
@@ -112,11 +161,81 @@ const STYLES = `
 }
 .qpm-picker__search:focus { border-color: rgba(143,130,255,0.7); }
 .qpm-picker__filter {
-  background: rgba(255,255,255,0.07);
+  background: rgba(20,24,36,0.65);
   border: 1px solid rgba(143,130,255,0.3);
+  border-radius: 8px;
+  color: #e0e0e0; font-size: 11px;
+  padding: 4px 8px; outline: none; cursor: pointer;
+  color-scheme: dark;
+}
+.qpm-picker__filter:focus {
+  border-color: #8f82ff;
+  box-shadow: 0 0 0 2px rgba(143,130,255,0.18);
+}
+.qpm-picker__filter option {
+  background: rgb(20,24,36);
+  color: #e0e0e0;
+}
+.qpm-picker__species-wrap {
+  position: relative;
+}
+.qpm-picker__species-btn {
+  background: rgba(20,24,36,0.65);
+  border: 1px solid rgba(143,130,255,0.3);
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.qpm-picker__species-btn:hover {
+  border-color: rgba(143,130,255,0.65);
+}
+.qpm-picker__species-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 220px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: rgba(14,16,22,0.98);
+  border: 1px solid rgba(143,130,255,0.35);
+  border-radius: 8px;
+  padding: 6px;
+  z-index: 3;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+}
+.qpm-picker__species-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
   border-radius: 6px;
-  color: #e0e0e0; font-size: 12px;
-  padding: 5px 7px; outline: none; cursor: pointer;
+  cursor: pointer;
+}
+.qpm-picker__species-item:hover {
+  background: rgba(143,130,255,0.14);
+}
+.qpm-picker__species-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+.qpm-picker__species-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+.qpm-picker__species-count {
+  font-size: 10px;
+  color: rgba(224,224,224,0.62);
+  margin-left: 6px;
 }
 .qpm-picker__compare-btn {
   background: rgba(143,130,255,0.12);
@@ -314,7 +433,7 @@ const STYLES = `
 .qpm-picker__compare-clear:hover { background: rgba(244,67,54,0.2); }
 /* Compare panel */
 .qpm-compare-panel {
-  width: 280px; flex-shrink: 0;
+  width: 360px; flex-shrink: 0;
   border-left: 1px solid rgba(143,130,255,0.2);
   background: rgba(12,14,20,0.6);
   overflow-y: auto; padding: 10px 12px;
@@ -330,23 +449,39 @@ const STYLES = `
 }
 .qpm-compare__sprite-col { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .qpm-compare__sprite {
-  width: 48px; height: 48px; image-rendering: pixelated; object-fit: contain;
+  width: 72px; height: 72px; image-rendering: pixelated; object-fit: contain;
 }
 .qpm-compare__sprite-placeholder {
-  width: 48px; height: 48px; background: rgba(143,130,255,0.1); border-radius: 6px;
-  display: flex; align-items: center; justify-content: center; font-size: 24px;
+  width: 72px; height: 72px; background: rgba(143,130,255,0.1); border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; font-size: 32px;
+}
+.qpm-compare__ability-filter {
+  background: rgba(20,24,36,0.65);
+  border: 1px solid rgba(143,130,255,0.3);
+  border-radius: 8px;
+  color: #e0e0e0; font-size: 11px;
+  padding: 4px 8px; outline: none; cursor: pointer; width: 100%;
+  color-scheme: dark;
+}
+.qpm-compare__ability-filter:focus {
+  border-color: #8f82ff;
+  box-shadow: 0 0 0 2px rgba(143,130,255,0.18);
+}
+.qpm-compare__ability-filter option {
+  background: rgb(20,24,36);
+  color: #e0e0e0;
 }
 .qpm-compare__pet-name { font-size: 10px; color: #d0d0d0; text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qpm-compare__vs { font-size: 12px; color: rgba(224,224,224,0.3); font-weight: 700; }
 .qpm-compare__row {
-  display: grid; grid-template-columns: 1fr auto 1fr;
+  display: grid; grid-template-columns: minmax(0,1fr) 112px minmax(0,1fr);
   align-items: center; gap: 4px; font-size: 11px; padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .qpm-compare__row:last-child { border-bottom: none; }
-.qpm-compare__cell-a { text-align: right; font-family: monospace; }
-.qpm-compare__cell-b { text-align: left; font-family: monospace; }
-.qpm-compare__cell-label { text-align: center; font-size: 9px; color: rgba(224,224,224,0.4); text-transform: uppercase; letter-spacing: 0.05em; }
+.qpm-compare__cell-a { text-align: right; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qpm-compare__cell-b { text-align: left; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qpm-compare__cell-label { text-align: center; font-size: 9px; color: rgba(224,224,224,0.4); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qpm-compare__winner { color: rgba(64,255,194,0.9) !important; font-weight: 700; }
 .qpm-compare__loser { color: rgba(224,224,224,0.3) !important; }
 .qpm-compare__tie { color: rgba(224,224,224,0.65); }
@@ -358,12 +493,26 @@ const STYLES = `
   margin-top: 2px;
 }
 .qpm-compare__stat-row {
-  display: grid; grid-template-columns: 1fr 36px 1fr;
-  gap: 2px; align-items: center; font-size: 10px; padding: 1px 0;
+  display: grid; grid-template-columns: minmax(0,1fr) 112px minmax(0,1fr);
+  gap: 6px; align-items: center; font-size: 10px; padding: 1px 0;
 }
-.qpm-compare__stat-lbl { text-align: center; color: rgba(224,224,224,0.3); font-size: 9px; }
-.qpm-compare__stat-a { text-align: right; font-family: monospace; }
-.qpm-compare__stat-b { text-align: left; font-family: monospace; }
+.qpm-compare__stat-lbl {
+  text-align: center;
+  color: rgba(224,224,224,0.3);
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qpm-compare__stat-a,
+.qpm-compare__stat-b {
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qpm-compare__stat-a { text-align: right; }
+.qpm-compare__stat-b { text-align: left; }
 .qpm-compare__abil-block {
   display: grid; grid-template-columns: 1fr 52px 1fr;
   gap: 3px; padding: 4px 0;
@@ -429,11 +578,34 @@ function getSpriteSrc(species: string, mutations: string[]): string | null {
 // Ability metric summary
 // ---------------------------------------------------------------------------
 
-function getAbilityMetric(abilityId: string, strength: number | null | undefined): string {
+function getAbilityMetric(
+  abilityId: string,
+  strength: number | null | undefined,
+  valuationContext: AbilityValuationContext | null,
+): string {
   const def = getAbilityDefinition(abilityId);
   if (!def) return '';
   const stats = computeAbilityStats(def, strength ?? null);
   if (!stats) return '';
+
+  if (isEventTriggeredAbility(def)) {
+    const triggerChance = Math.max(0, Math.min(100, stats.chancePerMinute));
+    let valuePerProc = 0;
+    if (valuationContext) {
+      const dynamic = resolveDynamicAbilityEffect(abilityId, valuationContext, strength ?? null);
+      if (dynamic && Number.isFinite(dynamic.effectPerProc) && dynamic.effectPerProc > 0) {
+        valuePerProc = dynamic.effectPerProc;
+      }
+    }
+    if (valuePerProc <= 0 && Number.isFinite(def.effectValuePerProc) && (def.effectValuePerProc ?? 0) > 0) {
+      valuePerProc = def.effectValuePerProc!;
+    }
+    if (valuePerProc > 0) {
+      return `${getTriggerLabel(def)} ${triggerChance.toFixed(1)}% · ${formatProcValue(def, valuePerProc)}`;
+    }
+    return `${getTriggerLabel(def)} ${triggerChance.toFixed(1)}%`;
+  }
+
   const effectPerHour = computeEffectPerHour(def, stats);
   if (def.effectUnit === 'coins' && effectPerHour > 0) {
     return `~${formatCoinsAbbreviated(Math.round(effectPerHour))} $/hr`;
@@ -457,6 +629,12 @@ function getAbilityMetric(abilityId: string, strength: number | null | undefined
 function buildHoverPanel(pet: PooledPet, panel: HTMLElement): void {
   panel.innerHTML = '';
   panel.className = 'qpm-picker__hover-panel';
+  let valuationContext: AbilityValuationContext | null = null;
+  try {
+    valuationContext = buildAbilityValuationContext();
+  } catch {
+    valuationContext = null;
+  }
 
   // --- Sprite section ---
   const spriteSection = document.createElement('div');
@@ -624,7 +802,7 @@ function buildHoverPanel(pet: PooledPet, panel: HTMLElement): void {
 
       // Key metric: observed first, then estimated
       let metric = '';
-      if (observed?.procsPerHour != null && def) {
+      if (observed?.procsPerHour != null && def && !isEventTriggeredAbility(def)) {
         const stats = computeAbilityStats(def, pet.strength ?? null);
         if (stats) {
           const eph = computeEffectPerHour(def, { ...stats, procsPerHour: observed.procsPerHour });
@@ -636,7 +814,7 @@ function buildHoverPanel(pet: PooledPet, panel: HTMLElement): void {
         }
       }
       if (!metric) {
-        metric = getAbilityMetric(abilityId, pet.strength);
+        metric = getAbilityMetric(abilityId, pet.strength, valuationContext);
       }
 
       if (metric) {
@@ -700,16 +878,85 @@ function makeBarRow(label: string, value: number, max: number, color: string, su
 // Compare panel helpers
 // ---------------------------------------------------------------------------
 
+function isEventTriggeredAbility(definition: AbilityDefinition): boolean {
+  return definition.trigger !== 'continuous';
+}
+
+function getTriggerLabel(definition: AbilityDefinition): string {
+  if (definition.trigger === 'harvest') return 'Harvest';
+  if (definition.trigger === 'sellAllCrops') return 'Sell';
+  if (definition.trigger === 'sellPet') return 'Pet Sell';
+  if (definition.trigger === 'hatchEgg') return 'Hatch';
+  return 'Trigger';
+}
+
+function formatProcValue(definition: AbilityDefinition, valuePerProc: number): string {
+  if (definition.effectUnit === 'minutes' || definition.category === 'plantGrowth' || definition.category === 'eggGrowth') {
+    return `${valuePerProc.toFixed(1)} min/proc`;
+  }
+  if (definition.effectUnit === 'xp' || definition.category === 'xp') {
+    return `${formatCoinsAbbreviated(valuePerProc)} xp/proc`;
+  }
+  return `${formatCoinsAbbreviated(valuePerProc)} $/proc`;
+}
+
+function formatExpectedValuePerTrigger(definition: AbilityDefinition, value: number): string {
+  if (definition.effectUnit === 'minutes' || definition.category === 'plantGrowth' || definition.category === 'eggGrowth') {
+    return `${value.toFixed(1)} min/trigger`;
+  }
+  if (definition.effectUnit === 'xp' || definition.category === 'xp') {
+    return `${formatCoinsAbbreviated(value)} xp/trigger`;
+  }
+  return `${formatCoinsAbbreviated(value)} $/trigger`;
+}
+
+interface CompareAbilityStats {
+  procsPerHour: number;
+  impactPerHour: number;
+  triggerChancePercent: number;
+  valuePerProc: number;
+  expectedValuePerTrigger: number;
+  isEventTriggered: boolean;
+  triggerLabel: string;
+}
+
 function computePetAbilityStatsForCompare(
   pet: PooledPet,
   abilityId: string,
-): { procsPerHour: number; impact: number } | null {
+  valuationContext: AbilityValuationContext | null,
+): CompareAbilityStats | null {
   const def = getAbilityDefinition(abilityId);
   if (!def) return null;
   const str = pet.strength ?? calculateMaxStrength(pet.targetScale, pet.species) ?? 100;
   const stats = computeAbilityStats(def, str);
-  const impact = computeEffectPerHour(def, stats);
-  return { procsPerHour: stats.procsPerHour, impact };
+  const isEventTriggered = isEventTriggeredAbility(def);
+  const triggerChancePercent = Math.max(0, Math.min(100, stats.chancePerMinute));
+
+  let valuePerProc = 0;
+  if (valuationContext) {
+    const dynamic = resolveDynamicAbilityEffect(def.id, valuationContext, str);
+    if (dynamic && Number.isFinite(dynamic.effectPerProc) && dynamic.effectPerProc > 0) {
+      valuePerProc = dynamic.effectPerProc;
+    }
+  }
+  if (valuePerProc <= 0 && Number.isFinite(def.effectValuePerProc) && (def.effectValuePerProc ?? 0) > 0) {
+    valuePerProc = def.effectValuePerProc!;
+  }
+
+  const impactPerHour = valuePerProc > 0
+    ? valuePerProc * stats.procsPerHour
+    : computeEffectPerHour(def, stats);
+  const expectedValuePerTrigger = valuePerProc > 0 ? (triggerChancePercent / 100) * valuePerProc : 0;
+
+  return {
+    procsPerHour: stats.procsPerHour,
+    impactPerHour,
+    triggerChancePercent,
+    valuePerProc,
+    expectedValuePerTrigger,
+    isEventTriggered,
+    triggerLabel: getTriggerLabel(def),
+  };
 }
 
 function formatImpactValue(
@@ -728,10 +975,135 @@ function formatImpactValue(
 // Compare panel builder
 // ---------------------------------------------------------------------------
 
-function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElement): void {
+function buildComparePanel(
+  petA: PooledPet,
+  petB: PooledPet,
+  container: HTMLElement,
+  abilityFilter: string,
+  stage: CompareStage,
+  onFilterChange: (newFilter: string) => void,
+): void {
   container.innerHTML = '';
   container.className = 'qpm-compare-panel';
+  let valuationContext: AbilityValuationContext | null = null;
+  try {
+    valuationContext = buildAbilityValuationContext();
+  } catch {
+    valuationContext = null;
+  }
 
+  const sharedModel = buildCompareCardViewModel({
+    petA,
+    petB,
+    abilityFilter,
+    valuationContext,
+    stage,
+    poolForRank: [petA, petB],
+  });
+
+  const sharedHeader = document.createElement('div');
+  sharedHeader.className = 'qpm-compare__header';
+  const sharedTitle = document.createElement('div');
+  sharedTitle.className = 'qpm-compare__title';
+  sharedTitle.textContent = `Compare • ${stage.toUpperCase()}`;
+  sharedHeader.appendChild(sharedTitle);
+  container.appendChild(sharedHeader);
+
+  const quickFilterAbilityIds = [...new Set([...petA.abilities, ...petB.abilities])];
+  if (quickFilterAbilityIds.length > 0) {
+    const filterSel = document.createElement('select');
+    filterSel.className = 'qpm-compare__ability-filter qpm-select';
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all';
+    allOpt.textContent = 'All Abilities';
+    filterSel.appendChild(allOpt);
+    for (const id of quickFilterAbilityIds) {
+      const def = getAbilityDefinition(id);
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = def?.name ?? id;
+      filterSel.appendChild(opt);
+    }
+    filterSel.value = abilityFilter;
+    filterSel.addEventListener('change', () => onFilterChange(filterSel.value));
+    container.appendChild(filterSel);
+  }
+
+  const sprites = document.createElement('div');
+  sprites.className = 'qpm-compare__sprites';
+  const makeSpriteCol = (pet: PooledPet): HTMLElement => {
+    const col = document.createElement('div');
+    col.className = 'qpm-compare__sprite-col';
+    const src = getSpriteSrc(pet.species, pet.mutations);
+    if (src) {
+      const img = document.createElement('img');
+      img.className = 'qpm-compare__sprite';
+      img.src = src;
+      img.alt = pet.species;
+      col.appendChild(img);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'qpm-compare__sprite-placeholder';
+      placeholder.textContent = '•';
+      col.appendChild(placeholder);
+    }
+    const name = document.createElement('div');
+    name.className = 'qpm-compare__pet-name';
+    name.textContent = pet.name || pet.species;
+    col.appendChild(name);
+    return col;
+  };
+  sprites.appendChild(makeSpriteCol(petA));
+  const vs = document.createElement('div');
+  vs.className = 'qpm-compare__vs';
+  vs.textContent = 'vs';
+  sprites.appendChild(vs);
+  sprites.appendChild(makeSpriteCol(petB));
+  container.appendChild(sprites);
+
+  const addRow = (
+    label: string,
+    aText: string,
+    bText: string,
+    winner: 'a' | 'b' | 'tie' | 'review',
+  ): void => {
+    const row = document.createElement('div');
+    row.className = 'qpm-compare__stat-row';
+    const a = document.createElement('div');
+    a.className = 'qpm-compare__stat-a';
+    a.textContent = aText;
+    const mid = document.createElement('div');
+    mid.className = 'qpm-compare__stat-lbl';
+    mid.textContent = label;
+    const b = document.createElement('div');
+    b.className = 'qpm-compare__stat-b';
+    b.textContent = bText;
+    if (winner === 'a') {
+      a.classList.add('qpm-compare__winner');
+      b.classList.add('qpm-compare__loser');
+    } else if (winner === 'b') {
+      b.classList.add('qpm-compare__winner');
+      a.classList.add('qpm-compare__loser');
+    }
+    row.append(a, mid, b);
+    container.appendChild(row);
+  };
+
+  const strA = petA.strength ?? calculateMaxStrength(petA.targetScale, petA.species) ?? 100;
+  const strB = petB.strength ?? calculateMaxStrength(petB.targetScale, petB.species) ?? 100;
+  addRow('STR', String(strA), String(strB), strA > strB ? 'a' : strB > strA ? 'b' : 'tie');
+
+  if (!sharedModel) {
+    addRow('Status', 'Review', 'Review', 'review');
+    return;
+  }
+
+  for (const rowData of sharedModel.ledgerRows) {
+    addRow(rowData.label, rowData.a, rowData.b, rowData.winner);
+  }
+  return;
+
+  /*
   const CMP_LEFT_TEXT  = '#C9F1FF';
   const CMP_RIGHT_TEXT = '#F7E5FF';
   const CMP_WIN_TEXT   = 'rgb(64,255,194)';
@@ -745,6 +1117,27 @@ function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElem
   hdrTitle.textContent = 'Compare';
   hdr.appendChild(hdrTitle);
   container.appendChild(hdr);
+
+  // --- Ability filter ---
+  const allAbilityIdsForFilter = [...new Set([...petA.abilities, ...petB.abilities])];
+  if (allAbilityIdsForFilter.length > 0) {
+    const filterSel = document.createElement('select');
+    filterSel.className = 'qpm-compare__ability-filter qpm-select';
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all';
+    allOpt.textContent = 'All Abilities';
+    filterSel.appendChild(allOpt);
+    for (const id of allAbilityIdsForFilter) {
+      const def = getAbilityDefinition(id);
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = def?.name ?? id;
+      filterSel.appendChild(opt);
+    }
+    filterSel.value = abilityFilter;
+    filterSel.addEventListener('change', () => onFilterChange(filterSel.value));
+    container.appendChild(filterSel);
+  }
 
   // --- Sprites row ---
   const spritesRow = document.createElement('div');
@@ -884,7 +1277,8 @@ function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElem
   );
 
   // --- Abilities section ---
-  const allAbilityIds = [...new Set([...petA.abilities, ...petB.abilities])];
+  const allAbilityIds = [...new Set([...petA.abilities, ...petB.abilities])]
+    .filter(id => abilityFilter === 'all' || id === abilityFilter);
   if (allAbilityIds.length > 0) {
     addSectionTitle('Abilities');
 
@@ -896,20 +1290,33 @@ function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElem
       const hasB = petB.abilities.includes(abilityId);
       const color = getAbilityColor(abilityId);
 
-      const cmpA = hasA ? computePetAbilityStatsForCompare(petA, abilityId) : null;
-      const cmpB = hasB ? computePetAbilityStatsForCompare(petB, abilityId) : null;
+      const cmpA = hasA ? computePetAbilityStatsForCompare(petA, abilityId, valuationContext) : null;
+      const cmpB = hasB ? computePetAbilityStatsForCompare(petB, abilityId, valuationContext) : null;
 
-      const impactA = cmpA?.impact ?? 0;
-      const impactB = cmpB?.impact ?? 0;
+      const impactA = cmpA?.impactPerHour ?? 0;
+      const impactB = cmpB?.impactPerHour ?? 0;
       const procsA = cmpA?.procsPerHour ?? 0;
       const procsB = cmpB?.procsPerHour ?? 0;
+      const expectedA = cmpA?.expectedValuePerTrigger ?? 0;
+      const expectedB = cmpB?.expectedValuePerTrigger ?? 0;
+      const chanceA = cmpA?.triggerChancePercent ?? 0;
+      const chanceB = cmpB?.triggerChancePercent ?? 0;
+      const eventTriggered = cmpA?.isEventTriggered ?? cmpB?.isEventTriggered ?? false;
 
-      const aWins = hasA && hasB && (impactA > impactB || (impactA === impactB && procsA > procsB));
-      const bWins = hasA && hasB && (impactB > impactA || (impactA === impactB && procsB > procsA));
+      const aWins = hasA && hasB && (
+        eventTriggered
+          ? (expectedA > expectedB || (expectedA === expectedB && chanceA > chanceB))
+          : (impactA > impactB || (impactA === impactB && procsA > procsB))
+      );
+      const bWins = hasA && hasB && (
+        eventTriggered
+          ? (expectedB > expectedA || (expectedA === expectedB && chanceB > chanceA))
+          : (impactB > impactA || (impactA === impactB && procsB > procsA))
+      );
 
       function buildAbilSide(
         hasPet: boolean,
-        cmpStats: { procsPerHour: number; impact: number } | null,
+        cmpStats: CompareAbilityStats | null,
         isWinner: boolean,
         nameColor: string,
       ): HTMLElement {
@@ -926,32 +1333,70 @@ function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElem
 
         const metricColor = isWinner ? CMP_WIN_TEXT : nameColor;
 
-        const procsRow = document.createElement('div');
-        procsRow.className = 'qpm-compare__abil-metric';
-        const procsLbl = document.createElement('span');
-        procsLbl.className = 'qpm-compare__abil-metric-lbl';
-        procsLbl.textContent = 'Proc/hr';
-        const procsVal = document.createElement('span');
-        procsVal.className = 'qpm-compare__abil-metric-val';
-        procsVal.textContent = cmpStats.procsPerHour.toFixed(1);
-        procsVal.style.color = metricColor;
-        procsRow.appendChild(procsLbl);
-        procsRow.appendChild(procsVal);
-        side.appendChild(procsRow);
+        if (cmpStats.isEventTriggered) {
+          const chanceRow = document.createElement('div');
+          chanceRow.className = 'qpm-compare__abil-metric';
+          const chanceLbl = document.createElement('span');
+          chanceLbl.className = 'qpm-compare__abil-metric-lbl';
+          chanceLbl.textContent = `${cmpStats.triggerLabel} %`;
+          const chanceVal = document.createElement('span');
+          chanceVal.className = 'qpm-compare__abil-metric-val';
+          chanceVal.textContent = cmpStats.triggerChancePercent.toFixed(1);
+          chanceVal.style.color = metricColor;
+          chanceRow.append(chanceLbl, chanceVal);
+          side.appendChild(chanceRow);
 
-        if (cmpStats.impact > 0) {
-          const impactRow = document.createElement('div');
-          impactRow.className = 'qpm-compare__abil-metric';
-          const impactLbl = document.createElement('span');
-          impactLbl.className = 'qpm-compare__abil-metric-lbl';
-          impactLbl.textContent = 'Impact';
-          const impactVal = document.createElement('span');
-          impactVal.className = 'qpm-compare__abil-metric-val';
-          impactVal.textContent = formatImpactValue(def!, cmpStats.impact, cmpStats.procsPerHour);
-          impactVal.style.color = metricColor;
-          impactRow.appendChild(impactLbl);
-          impactRow.appendChild(impactVal);
-          side.appendChild(impactRow);
+          if (cmpStats.valuePerProc > 0) {
+            const valueRow = document.createElement('div');
+            valueRow.className = 'qpm-compare__abil-metric';
+            const valueLbl = document.createElement('span');
+            valueLbl.className = 'qpm-compare__abil-metric-lbl';
+            valueLbl.textContent = 'Value/proc';
+            const valueVal = document.createElement('span');
+            valueVal.className = 'qpm-compare__abil-metric-val';
+            valueVal.textContent = formatProcValue(def!, cmpStats.valuePerProc);
+            valueVal.style.color = metricColor;
+            valueRow.append(valueLbl, valueVal);
+            side.appendChild(valueRow);
+
+            const expRow = document.createElement('div');
+            expRow.className = 'qpm-compare__abil-metric';
+            const expLbl = document.createElement('span');
+            expLbl.className = 'qpm-compare__abil-metric-lbl';
+            expLbl.textContent = 'Exp/trigger';
+            const expVal = document.createElement('span');
+            expVal.className = 'qpm-compare__abil-metric-val';
+            expVal.textContent = formatExpectedValuePerTrigger(def!, cmpStats.expectedValuePerTrigger);
+            expVal.style.color = metricColor;
+            expRow.append(expLbl, expVal);
+            side.appendChild(expRow);
+          }
+        } else {
+          const procsRow = document.createElement('div');
+          procsRow.className = 'qpm-compare__abil-metric';
+          const procsLbl = document.createElement('span');
+          procsLbl.className = 'qpm-compare__abil-metric-lbl';
+          procsLbl.textContent = 'Proc/hr';
+          const procsVal = document.createElement('span');
+          procsVal.className = 'qpm-compare__abil-metric-val';
+          procsVal.textContent = cmpStats.procsPerHour.toFixed(1);
+          procsVal.style.color = metricColor;
+          procsRow.append(procsLbl, procsVal);
+          side.appendChild(procsRow);
+
+          if (cmpStats.impactPerHour > 0) {
+            const impactRow = document.createElement('div');
+            impactRow.className = 'qpm-compare__abil-metric';
+            const impactLbl = document.createElement('span');
+            impactLbl.className = 'qpm-compare__abil-metric-lbl';
+            impactLbl.textContent = 'Impact';
+            const impactVal = document.createElement('span');
+            impactVal.className = 'qpm-compare__abil-metric-val';
+            impactVal.textContent = formatImpactValue(def!, cmpStats.impactPerHour, cmpStats.procsPerHour);
+            impactVal.style.color = metricColor;
+            impactRow.append(impactLbl, impactVal);
+            side.appendChild(impactRow);
+          }
         }
 
         return side;
@@ -979,6 +1424,7 @@ function buildComparePanel(petA: PooledPet, petB: PooledPet, container: HTMLElem
       container.appendChild(block);
     }
   }
+  */
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,11 +1561,36 @@ function buildAbilityFilterOptions(pets: PooledPet[], sel: HTMLSelectElement): v
   }
 }
 
+function toCompareInput(pet: PooledPet): ComparePetInput {
+  return {
+    id: pet.id,
+    species: pet.species,
+    strength: pet.strength,
+    targetScale: pet.targetScale,
+    abilities: pet.abilities,
+    mutations: pet.mutations,
+  };
+}
+
+function derivePickerCompareStage(pets: PooledPet[]): CompareStage {
+  const stage = captureProgressionStage(pets.map((pet) => toCompareInput(pet)));
+  return stage.stage;
+}
+
+function getUniqueSpecies(pets: PooledPet[]): string[] {
+  const species = new Set<string>();
+  for (const pet of pets) {
+    if (pet.species) species.add(pet.species);
+  }
+  return [...species].sort((a, b) => a.localeCompare(b));
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export interface OpenPickerOptions {
+  teamId?: string;
   usedPetIds?: Set<string>;
   onSelect: (petItemId: string) => void;
   onCancel?: () => void;
@@ -1155,7 +1626,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   // Location filter
   const locationFilter = document.createElement('select');
-  locationFilter.className = 'qpm-picker__filter';
+  locationFilter.className = 'qpm-picker__filter qpm-select';
   for (const [value, label] of [['all', 'All Locations'], ['active', 'Active'], ['hutch', 'Hutch'], ['inventory', 'Bag']] as const) {
     const opt = document.createElement('option');
     opt.value = value; opt.textContent = label;
@@ -1165,7 +1636,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   // Sort filter
   const sortFilter = document.createElement('select');
-  sortFilter.className = 'qpm-picker__filter';
+  sortFilter.className = 'qpm-picker__filter qpm-select';
   for (const [value, label] of [['str-desc', 'STR ↓'], ['str-asc', 'STR ↑'], ['name-az', 'Name A→Z'], ['rainbow', 'Rainbow first']] as const) {
     const opt = document.createElement('option');
     opt.value = value; opt.textContent = label;
@@ -1175,7 +1646,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   // Tier filter
   const tierFilter = document.createElement('select');
-  tierFilter.className = 'qpm-picker__filter';
+  tierFilter.className = 'qpm-picker__filter qpm-select';
   for (const [value, label] of [['all', 'All Tiers'], ['rainbow', '🌈 Rainbow'], ['gold', '⭐ Gold'], ['clean', 'Clean']] as const) {
     const opt = document.createElement('option');
     opt.value = value; opt.textContent = label;
@@ -1185,12 +1656,29 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   // Ability filter (populated after pets load)
   const abilityFilter = document.createElement('select');
-  abilityFilter.className = 'qpm-picker__filter';
+  abilityFilter.className = 'qpm-picker__filter qpm-select';
   const abilFilterDefaultOpt = document.createElement('option');
   abilFilterDefaultOpt.value = 'all';
   abilFilterDefaultOpt.textContent = 'All Abilities';
   abilityFilter.appendChild(abilFilterDefaultOpt);
   header.appendChild(abilityFilter);
+
+  // Species filter (popover multi-select)
+  const speciesWrap = document.createElement('div');
+  speciesWrap.className = 'qpm-picker__species-wrap';
+  const speciesBtn = document.createElement('button');
+  speciesBtn.type = 'button';
+  speciesBtn.className = 'qpm-picker__species-btn';
+  speciesBtn.textContent = 'Species';
+  const speciesCount = document.createElement('span');
+  speciesCount.className = 'qpm-picker__species-count';
+  speciesBtn.appendChild(speciesCount);
+  speciesWrap.appendChild(speciesBtn);
+  const speciesPopover = document.createElement('div');
+  speciesPopover.className = 'qpm-picker__species-popover';
+  speciesPopover.style.display = 'none';
+  speciesWrap.appendChild(speciesPopover);
+  header.appendChild(speciesWrap);
 
   // Compare button
   const compareBtn = document.createElement('button');
@@ -1231,7 +1719,110 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   let hoverTimeout: number | null = null;
   let compareMode = false;
   let compareSelected: PooledPet[] = [];
+  const savedFilters = getSavedPickerFilters(options.teamId);
+  let compareAbilityFilter = savedFilters?.compareAbility ?? 'all';
+  let selectedSpecies = new Set<string>(Array.isArray(savedFilters?.species) ? savedFilters.species : []);
+  let speciesPopoverOpen = false;
   const cardMap = new Map<string, HTMLElement>(); // pet.id → card element
+
+  if (savedFilters?.location && [...locationFilter.options].some(o => o.value === savedFilters.location)) {
+    locationFilter.value = savedFilters.location;
+  }
+  if (savedFilters?.sort && [...sortFilter.options].some(o => o.value === savedFilters.sort)) {
+    sortFilter.value = savedFilters.sort;
+  }
+  if (savedFilters?.tier && [...tierFilter.options].some(o => o.value === savedFilters.tier)) {
+    tierFilter.value = savedFilters.tier;
+  }
+
+  function updateSpeciesSummaryLabel(): void {
+    speciesCount.textContent = selectedSpecies.size > 0 ? `(${selectedSpecies.size})` : '';
+    speciesBtn.title = selectedSpecies.size > 0
+      ? `${selectedSpecies.size} species selected`
+      : 'All species';
+  }
+
+  function setSpeciesPopoverVisible(visible: boolean): void {
+    speciesPopoverOpen = visible;
+    speciesPopover.style.display = visible ? '' : 'none';
+  }
+
+  function renderSpeciesPopover(): void {
+    speciesPopover.innerHTML = '';
+    const speciesList = getUniqueSpecies(allPets);
+    if (!speciesList.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:8px;color:rgba(224,224,224,0.45);font-size:11px;';
+      empty.textContent = 'No species loaded';
+      speciesPopover.appendChild(empty);
+      return;
+    }
+
+    for (const species of speciesList) {
+      const row = document.createElement('label');
+      row.className = 'qpm-picker__species-item';
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = selectedSpecies.has(species);
+      check.style.cursor = 'pointer';
+      check.addEventListener('change', () => {
+        if (check.checked) selectedSpecies.add(species);
+        else selectedSpecies.delete(species);
+        updateSpeciesSummaryLabel();
+        persistFilters();
+        renderList();
+      });
+      row.appendChild(check);
+
+      const src = getSpriteSrc(species, []);
+      if (src) {
+        const img = document.createElement('img');
+        img.className = 'qpm-picker__species-icon';
+        img.src = src;
+        img.alt = species;
+        row.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'qpm-picker__species-icon';
+        ph.textContent = '•';
+        ph.style.textAlign = 'center';
+        row.appendChild(ph);
+      }
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'qpm-picker__species-name';
+      nameEl.textContent = species;
+      row.appendChild(nameEl);
+      speciesPopover.appendChild(row);
+    }
+  }
+
+  const onSpeciesBtnClick = (event: MouseEvent): void => {
+    event.stopPropagation();
+    if (!speciesPopoverOpen) renderSpeciesPopover();
+    setSpeciesPopoverVisible(!speciesPopoverOpen);
+  };
+  speciesBtn.addEventListener('click', onSpeciesBtnClick);
+  cleanups.push(() => speciesBtn.removeEventListener('click', onSpeciesBtnClick));
+
+  const onPointerDown = (event: MouseEvent): void => {
+    if (speciesWrap.contains(event.target as Node)) return;
+    setSpeciesPopoverVisible(false);
+  };
+  document.addEventListener('mousedown', onPointerDown);
+  cleanups.push(() => document.removeEventListener('mousedown', onPointerDown));
+  updateSpeciesSummaryLabel();
+
+  function persistFilters(): void {
+    savePickerFilters(options.teamId, {
+      location: locationFilter.value,
+      sort: sortFilter.value,
+      tier: tierFilter.value,
+      ability: abilityFilter.value,
+      compareAbility: compareAbilityFilter,
+      species: [...selectedSpecies],
+    });
+  }
 
   // --- Compare mode ---
   function setCompareMode(active: boolean): void {
@@ -1253,7 +1844,12 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   function updateRightPanel(hoveredPet: PooledPet | null): void {
     if (compareMode) {
       if (compareSelected.length === 2) {
-        buildComparePanel(compareSelected[0]!, compareSelected[1]!, rightPanel);
+        buildComparePanel(
+          compareSelected[0]!, compareSelected[1]!, rightPanel,
+          compareAbilityFilter,
+          derivePickerCompareStage(allPets),
+          (newFilter) => { compareAbilityFilter = newFilter; persistFilters(); updateRightPanel(null); },
+        );
       } else {
         rightPanel.className = 'qpm-picker__hover-panel qpm-picker__hover-panel--empty';
         rightPanel.innerHTML = '';
@@ -1359,6 +1955,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
     let filtered = allPets.filter(p => {
       if (loc !== 'all' && p.location !== loc) return false;
       if (term && !p.name.toLowerCase().includes(term) && !p.species.toLowerCase().includes(term)) return false;
+      if (selectedSpecies.size > 0 && !selectedSpecies.has(p.species)) return false;
       if (tierVal !== 'all') {
         const t = getMutationTier(p.mutations);
         if (tierVal === 'clean' && t !== 'none') return false;
@@ -1399,28 +1996,41 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   try {
     allPets = await getAllPooledPets();
     buildAbilityFilterOptions(allPets, abilityFilter);
+    if (savedFilters?.ability && [...abilityFilter.options].some(o => o.value === savedFilters.ability)) {
+      abilityFilter.value = savedFilters.ability;
+    }
+    const validSpecies = new Set(getUniqueSpecies(allPets));
+    selectedSpecies = new Set([...selectedSpecies].filter((species) => validSpecies.has(species)));
+    updateSpeciesSummaryLabel();
+    renderSpeciesPopover();
   } catch (error) {
     log('⚠️ petPickerModal: failed to load pets', error);
   }
   renderList();
+  persistFilters();
 
   // --- Wire events ---
   const onSearch = () => renderList();
+  const onFilterChange = () => {
+    persistFilters();
+    renderList();
+  };
   search.addEventListener('input', onSearch);
-  locationFilter.addEventListener('change', onSearch);
-  sortFilter.addEventListener('change', onSearch);
-  tierFilter.addEventListener('change', onSearch);
-  abilityFilter.addEventListener('change', onSearch);
+  locationFilter.addEventListener('change', onFilterChange);
+  sortFilter.addEventListener('change', onFilterChange);
+  tierFilter.addEventListener('change', onFilterChange);
+  abilityFilter.addEventListener('change', onFilterChange);
   cleanups.push(() => {
     search.removeEventListener('input', onSearch);
-    locationFilter.removeEventListener('change', onSearch);
-    sortFilter.removeEventListener('change', onSearch);
-    tierFilter.removeEventListener('change', onSearch);
-    abilityFilter.removeEventListener('change', onSearch);
+    locationFilter.removeEventListener('change', onFilterChange);
+    sortFilter.removeEventListener('change', onFilterChange);
+    tierFilter.removeEventListener('change', onFilterChange);
+    abilityFilter.removeEventListener('change', onFilterChange);
   });
 
-  compareBtn.addEventListener('click', () => setCompareMode(!compareMode));
-  cleanups.push(() => compareBtn.removeEventListener('click', () => {}));
+  const onCompareClick = (): void => setCompareMode(!compareMode);
+  compareBtn.addEventListener('click', onCompareClick);
+  cleanups.push(() => compareBtn.removeEventListener('click', onCompareClick));
 
   const doClose = () => { options.onCancel?.(); closePickerModal(); };
   cancelBtn.addEventListener('click', doClose);

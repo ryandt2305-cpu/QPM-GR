@@ -2,7 +2,15 @@
 // Typed access layer for game catalogs
 // Provides convenient, type-safe methods to access runtime game data
 
-import { getCatalogs, areCatalogsReady, waitForCatalogs, onCatalogsReady, initCatalogLoader, cleanupCatalogLoader } from './catalogLoader';
+import {
+  getCatalogs,
+  areCatalogsReady,
+  waitForCatalogs,
+  onCatalogsReady,
+  initCatalogLoader,
+  cleanupCatalogLoader,
+  forceWeatherCatalogRefresh,
+} from './catalogLoader';
 import type {
   GameCatalogs,
   PetCatalog,
@@ -22,7 +30,15 @@ import type {
 } from './types';
 
 // Re-export for convenience
-export { getCatalogs, areCatalogsReady, waitForCatalogs, onCatalogsReady, initCatalogLoader, cleanupCatalogLoader } from './catalogLoader';
+export {
+  getCatalogs,
+  areCatalogsReady,
+  waitForCatalogs,
+  onCatalogsReady,
+  initCatalogLoader,
+  cleanupCatalogLoader,
+  forceWeatherCatalogRefresh,
+} from './catalogLoader';
 export type { GameCatalogs };
 
 // Re-export diagnostic function
@@ -323,6 +339,36 @@ export function getAllMutations(): string[] {
   return Object.keys(catalog);
 }
 
+// ============================================================================
+// WEATHER CATALOG ACCESS
+// ============================================================================
+
+/**
+ * Get the weather catalog (may be null if not loaded)
+ */
+export function getWeatherCatalog(): Record<string, unknown> | null {
+  return getCatalogs().weatherCatalog;
+}
+
+/**
+ * Get a specific weather definition
+ */
+export function getWeatherDef(weatherId: string): Record<string, unknown> | null {
+  const catalog = getWeatherCatalog();
+  if (!catalog) return null;
+  const entry = catalog[weatherId];
+  return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+}
+
+/**
+ * Get all weather IDs
+ */
+export function getAllWeatherIds(): string[] {
+  const catalog = getWeatherCatalog();
+  if (!catalog) return [];
+  return Object.keys(catalog);
+}
+
 /**
  * Get mutation coin multiplier
  */
@@ -398,6 +444,10 @@ export function getCatalogLoadStatus(): Record<string, { loaded: boolean; count:
     petAbilities: {
       loaded: catalogs.petAbilities !== null,
       count: catalogs.petAbilities ? Object.keys(catalogs.petAbilities).length : 0,
+    },
+    weatherCatalog: {
+      loaded: catalogs.weatherCatalog !== null,
+      count: catalogs.weatherCatalog ? Object.keys(catalogs.weatherCatalog).length : 0,
     },
   };
 }

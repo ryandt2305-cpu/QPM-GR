@@ -6,10 +6,10 @@ import {
   getCropSpriteWithMutations,
   getPetSpriteCanvas,
   getPetSpriteWithMutations,
-  getCropSpriteDataUrl as compatGetCropSpriteDataUrl,
-  getCropSpriteDataUrlWithMutations as compatGetCropSpriteDataUrlWithMutations,
   getPetSpriteDataUrl as compatGetPetSpriteDataUrl,
   getPetSpriteDataUrlWithMutations as compatGetPetSpriteDataUrlWithMutations,
+  getProduceSpriteDataUrl as compatGetProduceSpriteDataUrl,
+  getProduceSpriteDataUrlWithMutations as compatGetProduceSpriteDataUrlWithMutations,
 } from '../sprite-v2/compat';
 import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
@@ -34,12 +34,63 @@ function normalizeSpeciesName(species: string): string {
   return SPECIES_NAME_MAP[key] || species;
 }
 
+// Known mutation prefixes — when a species name starts with one of these,
+// strip it and render the base crop with the mutation applied so we get
+// the plant/crop sprite instead of the seed sprite.
+const CROP_MUTATION_PREFIXES = [
+  'Gold', 'Rainbow', 'Frozen', 'Wet', 'Amber', 'Chilled',
+  'Dawnlit', 'Amberlit', 'Dawnbound', 'Amberbound',
+];
+
 function getCropSpriteUrl(species: string): string | null {
-  return compatGetCropSpriteDataUrl(species);
+  // Use produce-only lookup (excludes 'seed' and 'pet') so "Rose" → plant sprite,
+  // not a Rose-colored pet sprite.
+  for (const prefix of CROP_MUTATION_PREFIXES) {
+    if (species.startsWith(prefix + ' ')) {
+      const base = species.slice(prefix.length + 1);
+      const url = compatGetProduceSpriteDataUrlWithMutations(base, [prefix]) || null;
+      if (url) return url;
+    }
+  }
+  return compatGetProduceSpriteDataUrl(species) || null;
 }
 
 function getPetSpriteUrl(species: string): string | null {
   return compatGetPetSpriteDataUrl(species);
+}
+
+function pickPetRecommendationMutation(missingVariants: string[] | undefined): 'Rainbow' | 'Gold' | null {
+  if (!Array.isArray(missingVariants)) return null;
+  const normalized = missingVariants.map((variant) => String(variant).toLowerCase());
+  if (normalized.includes('rainbow')) return 'Rainbow';
+  if (normalized.includes('gold')) return 'Gold';
+  return null;
+}
+
+function getRecommendationSpriteUrl(rec: {
+  type: 'produce' | 'pet';
+  species: string;
+  missingVariants?: string[];
+}): string | null {
+  const normalizedSpecies = normalizeSpeciesName(rec.species);
+  if (rec.type === 'produce') {
+    return getCropSpriteUrl(normalizedSpecies) || getCropSpriteUrl(rec.species.toLowerCase());
+  }
+
+  const mutation = pickPetRecommendationMutation(rec.missingVariants);
+  if (mutation) {
+    const mutated =
+      compatGetPetSpriteDataUrlWithMutations(normalizedSpecies, [mutation]) ||
+      compatGetPetSpriteDataUrlWithMutations(rec.species, [mutation]) ||
+      compatGetPetSpriteDataUrlWithMutations(rec.species.toLowerCase(), [mutation]);
+    if (mutated) return mutated;
+  }
+
+  return (
+    getPetSpriteUrl(normalizedSpecies) ||
+    getPetSpriteUrl(rec.species.toLowerCase()) ||
+    getPetSpriteUrl(rec.species)
+  );
 }
 
 // Wrapper functions that handle normalization automatically
@@ -706,11 +757,8 @@ export function createJournalCheckerSection(): HTMLElement {
           const priorityBadge = rec.priority === 'high' ? 'HIGH' : rec.priority === 'medium' ? 'MED' : 'LOW';
           const priorityColor = rec.priority === 'high' ? '#f44336' : rec.priority === 'medium' ? '#ff9800' : '#666';
 
-          // Get sprite for this species
-          const normalizedSpeciesPriority = normalizeSpeciesName(rec.species);
-          const spriteUrl = rec.type === 'produce'
-            ? getCropSpriteUrl(normalizedSpeciesPriority) || getCropSpriteUrl(rec.species.toLowerCase())
-            : getPetSpriteUrl(normalizedSpeciesPriority) || getPetSpriteUrl(rec.species.toLowerCase());
+          // Get sprite for this species (pet recommendations prioritize Rainbow/Gold variants)
+          const spriteUrl = getRecommendationSpriteUrl(rec);
 
           const spriteHtml = spriteUrl
             ? `<img src="${spriteUrl}" alt="${rec.species}" style="width: 32px; height: 32px; image-rendering: pixelated;">`
@@ -822,10 +870,8 @@ export function createJournalCheckerSection(): HTMLElement {
             fruitCard.style.borderColor = '#4CAF5033';
           });
 
-          // Get sprite for the species
-          const spriteUrl = rec.type === 'produce'
-            ? getCropSpriteUrl(rec.species)
-            : getPetSpriteUrl(rec.species);
+          // Get sprite for the species (pet recommendations prioritize Rainbow/Gold variants)
+          const spriteUrl = getRecommendationSpriteUrl(rec);
 
           fruitCard.innerHTML = `
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -893,10 +939,8 @@ export function createJournalCheckerSection(): HTMLElement {
             gap: 10px;
           `;
 
-          // Get sprite for the species
-          const spriteUrl = rec.type === 'produce'
-            ? getCropSpriteUrl(rec.species)
-            : getPetSpriteUrl(rec.species);
+          // Get sprite for the species (pet recommendations prioritize Rainbow/Gold variants)
+          const spriteUrl = getRecommendationSpriteUrl(rec);
 
           stepCard.innerHTML = `
             <div style="
@@ -968,10 +1012,8 @@ export function createJournalCheckerSection(): HTMLElement {
             margin-bottom: 8px;
           `;
 
-          // Get sprite for the species
-          const spriteUrl = rec.type === 'produce'
-            ? getCropSpriteUrl(rec.species)
-            : getPetSpriteUrl(rec.species);
+          // Get sprite for the species (pet recommendations prioritize Rainbow/Gold variants)
+          const spriteUrl = getRecommendationSpriteUrl(rec);
 
           goalCard.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">

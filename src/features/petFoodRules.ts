@@ -5,6 +5,7 @@ import { storage } from '../utils/storage';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { pageWindow } from '../core/pageContext';
 import { log } from '../utils/logger';
+import { getAllPetDiets, getPetDiet } from '../catalogs/gameCatalogs';
 
 export interface SpeciesOverride {
   allowed?: string[];
@@ -45,7 +46,7 @@ export interface FoodSelectionOptions {
    * Per-pet-item override. When provided, takes precedence over the species-level override.
    * Callers (e.g. instantFeed.ts) should read this from the Pet Teams feed policy.
    */
-  itemOverride?: SpeciesOverride | null;
+  itemOverride?: SpeciesOverride;
 }
 
 export interface FoodAvailabilityResult {
@@ -71,43 +72,10 @@ const DEFAULT_STATE: PetFoodRulesState = {
 
 const DEFAULT_SAFE_FOODS = ['Carrot', 'Strawberry', 'Blueberry', 'Apple', 'Watermelon', 'Pumpkin'];
 
-const RAW_PET_DIETS: Record<string, string[]> = {
-  Worm: ['Carrot', 'Strawberry', 'Aloe', 'Tomato', 'Apple'],
-  Snail: ['Blueberry', 'Tomato', 'Corn', 'Daffodil'],
-  Bee: ['Strawberry', 'Blueberry', 'Daffodil', 'Lily', 'Chrysanthemum'],
-  Chicken: ['Aloe', 'Corn', 'Watermelon', 'Pumpkin'],
-  Bunny: ['Carrot', 'Strawberry', 'Blueberry', 'OrangeTulip', 'Apple'],
-  Dragonfly: ['Apple', 'OrangeTulip', 'Echeveria'],
-  Pig: ['Watermelon', 'Pumpkin', 'Mushroom', 'Bamboo'],
-  Cow: ['Coconut', 'Banana', 'BurrosTail', 'Mushroom'],
-  Squirrel: ['Pumpkin', 'Banana', 'Grape'],
-  Turtle: ['Watermelon', 'BurrosTail', 'Bamboo', 'Pepper'],
-  Goat: ['Pumpkin', 'Coconut', 'Pepper', 'Camellia', 'PassionFruit'],
-  Butterfly: ['Daffodil', 'Lily', 'Grape', 'Lemon', 'Sunflower', 'Chrysanthemum'],
-  Capybara: ['Lemon', 'PassionFruit', 'DragonFruit', 'Lychee'],
-  Peacock: ['Cactus', 'Sunflower', 'Lychee'],
-};
-
 interface NormalizedDiet {
   display: string[];
   normalized: string[];
 }
-
-const NORMALIZED_PET_DIETS: Record<string, NormalizedDiet> = Object.fromEntries(
-  Object.entries(RAW_PET_DIETS).map(([species, foods]) => {
-    const normalizedKey = normalizeSpeciesKey(species);
-    const normalizedFoods = foods
-      .map(food => normalizeSpeciesKey(food))
-      .filter(Boolean);
-    return [
-      normalizedKey,
-      {
-        display: [...foods],
-        normalized: normalizedFoods,
-      },
-    ];
-  }),
-);
 
 const DEFAULT_SAFE_NORMALIZED = DEFAULT_SAFE_FOODS.map(food => normalizeSpeciesKey(food));
 
@@ -514,6 +482,22 @@ export function readInventorySnapshot(): InventorySnapshot | null {
 }
 
 function resolveDiet(species: string | null): NormalizedDiet {
+  const toNormalizedDiet = (foods: string[]): NormalizedDiet => {
+    const normalized = foods
+      .map(food => normalizeSpeciesKey(food))
+      .filter((food): food is string => !!food);
+    if (normalized.length === 0) {
+      return {
+        display: [...DEFAULT_SAFE_FOODS],
+        normalized: [...DEFAULT_SAFE_NORMALIZED],
+      };
+    }
+    return {
+      display: [...foods],
+      normalized,
+    };
+  };
+
   if (!species) {
     return {
       display: [...DEFAULT_SAFE_FOODS],
@@ -521,10 +505,9 @@ function resolveDiet(species: string | null): NormalizedDiet {
     };
   }
 
-  const key = normalizeSpeciesKey(species);
-  const diet = key ? NORMALIZED_PET_DIETS[key] : undefined;
-  if (diet) {
-    return diet;
+  const runtimeDiet = getPetDiet(species);
+  if (runtimeDiet.length > 0) {
+    return toNormalizedDiet(runtimeDiet);
   }
 
   return {
@@ -538,6 +521,41 @@ function resolveOverride(species: string | null): SpeciesOverride | null {
   const key = normalizeSpeciesKey(species);
   if (!key) return null;
   return rulesState.overrides[key] || null;
+}
+
+function mergeOverrides(
+  speciesOverride: SpeciesOverride | null,
+  itemOverride: SpeciesOverride | undefined,
+): SpeciesOverride | null {
+  const merged: SpeciesOverride = {};
+
+  if (Array.isArray(speciesOverride?.allowed) && speciesOverride.allowed.length > 0) {
+    merged.allowed = [...speciesOverride.allowed];
+  }
+  if (Array.isArray(speciesOverride?.forbidden) && speciesOverride.forbidden.length > 0) {
+    merged.forbidden = [...speciesOverride.forbidden];
+  }
+  if (typeof speciesOverride?.preferred === 'string' && speciesOverride.preferred.length > 0) {
+    merged.preferred = speciesOverride.preferred;
+  }
+
+  const hasItemAllowed = !!itemOverride && Object.prototype.hasOwnProperty.call(itemOverride, 'allowed');
+  const hasItemForbidden = !!itemOverride && Object.prototype.hasOwnProperty.call(itemOverride, 'forbidden');
+  const hasItemPreferred = !!itemOverride && Object.prototype.hasOwnProperty.call(itemOverride, 'preferred');
+  if (hasItemAllowed) merged.allowed = Array.isArray(itemOverride!.allowed) ? [...itemOverride!.allowed] : [];
+  if (hasItemForbidden) merged.forbidden = Array.isArray(itemOverride!.forbidden) ? [...itemOverride!.forbidden] : [];
+  if (hasItemPreferred) {
+    if (typeof itemOverride!.preferred === 'string' && itemOverride!.preferred.length > 0) {
+      merged.preferred = itemOverride!.preferred;
+    } else {
+      delete merged.preferred;
+    }
+  }
+
+  const hasAllowed = Array.isArray(merged.allowed);
+  const hasForbidden = Array.isArray(merged.forbidden);
+  const hasPreferred = typeof merged.preferred === 'string' && merged.preferred.length > 0;
+  return hasAllowed || hasForbidden || hasPreferred ? merged : null;
 }
 
 function normalizeInventoryFood(item: InventoryItemSnapshot): string | null {
@@ -556,8 +574,9 @@ function normalizeInventoryFood(item: InventoryItemSnapshot): string | null {
 
 export function getPetSpeciesCatalog(): SpeciesCatalogEntry[] {
   const entries = new Map<string, SpeciesCatalogEntry>();
+  const runtimeDiets = getAllPetDiets();
 
-  for (const species of Object.keys(RAW_PET_DIETS)) {
+  for (const species of Object.keys(runtimeDiets)) {
     const key = normalizeSpeciesKey(species);
     if (!key) continue;
     entries.set(key, {
@@ -698,7 +717,7 @@ function getFoodRulesContext(
 
   if (respectRules) {
     const diet = resolveDiet(petSpecies);
-    const override = options.itemOverride !== undefined ? options.itemOverride : resolveOverride(petSpecies);
+    const override = mergeOverrides(resolveOverride(petSpecies), options.itemOverride);
 
     diet.normalized.forEach((entry) => allowedNormalized.add(entry));
 

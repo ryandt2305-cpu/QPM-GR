@@ -5,8 +5,17 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { onInventoryChange } from '../store/inventory';
-import { feedPetInstantly, feedPetInstantlyByPetId, getInstantFeedPlan, getInstantFeedPlanByPetId } from '../features/instantFeed';
+import {
+  feedPetInstantly,
+  feedPetInstantlyByPetId,
+  feedPetInstantlyBySlotId,
+  getInstantFeedPlan,
+  getInstantFeedPlanByPetId,
+  getInstantFeedPlanBySlotId,
+  type InstantFeedPlan,
+} from '../features/instantFeed';
 import { PET_FOOD_RULES_CHANGED_EVENT } from '../features/petFoodRules';
+import { PET_FEED_POLICY_CHANGED_EVENT } from '../store/petTeams';
 import {
   getCropSpriteDataUrl,
   getPetSpriteDataUrlWithMutations,
@@ -435,6 +444,8 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   let currentPet: ActivePetInfo | null = null;
   let refreshSeq = 0;
   let feeding = false;
+  let lastMismatchSignature: string | null = null;
+  let lastMismatchRetrySignature: string | null = null;
 
   const setFeedButtonState = (label: string, disabled: boolean): void => {
     feedLabel.textContent = label;
@@ -484,10 +495,50 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     }
 
     try {
-      const plan = currentPet.petId
-        ? await getInstantFeedPlanByPetId(currentPet.petId)
-        : await getInstantFeedPlan(slotIndex);
+      let plan: InstantFeedPlan;
+      if (currentPet.slotId) {
+        plan = await getInstantFeedPlanBySlotId(currentPet.slotId);
+      } else if (currentPet.petId) {
+        plan = await getInstantFeedPlanByPetId(currentPet.petId);
+      } else {
+        plan = await getInstantFeedPlan(slotIndex);
+      }
       if (destroyed || seq !== refreshSeq) return;
+
+      const mismatch = (
+        (currentPet.slotId && plan.slotId && currentPet.slotId !== plan.slotId) ||
+        (currentPet.petId && plan.petId && currentPet.petId !== plan.petId)
+      );
+      if (mismatch) {
+        const signature = `${currentPet.slotId ?? ''}|${currentPet.petId ?? ''}|${plan.slotId ?? ''}|${plan.petId ?? ''}`;
+        if (signature !== lastMismatchSignature) {
+          lastMismatchSignature = signature;
+          log('[FloatingCard] identity mismatch while resolving feed plan', {
+            slotIndex,
+            current: {
+              slotId: currentPet.slotId,
+              petId: currentPet.petId,
+              species: currentPet.species,
+            },
+            resolved: {
+              slotId: plan.slotId,
+              petId: plan.petId,
+              species: plan.petSpecies,
+            },
+          });
+        }
+        if (signature !== lastMismatchRetrySignature) {
+          lastMismatchRetrySignature = signature;
+          window.setTimeout(() => {
+            if (destroyed || seq !== refreshSeq) return;
+            void refreshAvailability();
+          }, 0);
+        }
+        return;
+      } else {
+        lastMismatchSignature = null;
+        lastMismatchRetrySignature = null;
+      }
 
       const selected = plan.foodSelection;
       const foodKey = selected?.item.species ?? selected?.item.name ?? null;
@@ -524,6 +575,8 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   };
   window.addEventListener(PET_FOOD_RULES_CHANGED_EVENT, onRulesChanged as EventListener);
   cleanups.push(() => window.removeEventListener(PET_FOOD_RULES_CHANGED_EVENT, onRulesChanged as EventListener));
+  window.addEventListener(PET_FEED_POLICY_CHANGED_EVENT, onRulesChanged as EventListener);
+  cleanups.push(() => window.removeEventListener(PET_FEED_POLICY_CHANGED_EVENT, onRulesChanged as EventListener));
 
   const onFeedEvent = (): void => {
     void refreshAvailability();
@@ -538,9 +591,14 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     setFeedButtonState('...', true);
 
     try {
-      const result = currentPet?.petId
-        ? await feedPetInstantlyByPetId(currentPet.petId)
-        : await feedPetInstantly(slotIndex);
+      let result;
+      if (currentPet?.slotId) {
+        result = await feedPetInstantlyBySlotId(currentPet.slotId);
+      } else if (currentPet?.petId) {
+        result = await feedPetInstantlyByPetId(currentPet.petId);
+      } else {
+        result = await feedPetInstantly(slotIndex);
+      }
       if (result.success) {
         setFeedButtonState('Fed', true);
         await new Promise((resolve) => window.setTimeout(resolve, 700));

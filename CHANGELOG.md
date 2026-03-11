@@ -5,7 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.09] - Current
+## [3.1.1] - Current
+
+### Changed
+- Feeding: detached instant feed buttons now resolve per-pet diets/allowed food totals per active slot
+- Pet Optimizer: Double Harvest and Crop Refund compare/obsolete logic now ranks per ability family (Top 3 kept per family)
+- Pet Teams: Sell All keybind location is now in the settings gear cog inside the Pet Teams window
+
+---
+
+## [3.1.09]
 
 ### Changed
 - fix feed cards

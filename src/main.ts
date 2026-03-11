@@ -15,7 +15,7 @@ import { initializeMutationValueTracking } from './features/mutationValueTrackin
 import { initializeAutoFavorite } from './features/autoFavorite';
 import { startBulkFavorite } from './features/bulkFavorite';
 import { initializeGardenFilters } from './features/gardenFilters';
-import { getActivePetsDebug } from './store/pets';
+import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
 import { startSellSnapshotWatcher } from './store/sellSnapshot';
 import { shareGlobal } from './core/pageContext';
@@ -31,6 +31,8 @@ import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridO
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
 import { initializeAntiAfk, stopAntiAfk } from './features/antiAfk';
+import { startActivityLogEnhancer, stopActivityLogEnhancer } from './features/activityLogEnhancer';
+import { startAbilityTriggerStore, stopAbilityTriggerStore } from './store/abilityLogs';
 
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
@@ -1169,6 +1171,8 @@ window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
   stopAntiAfk();
+  stopActivityLogEnhancer();
+  stopAbilityTriggerStore();
   timerManager.destroy();
   stopNativeFeedIntercept();
   stopPetTeamsStore();
@@ -1251,9 +1255,20 @@ async function initialize(): Promise<void> {
   // Wait for game to be ready (parallel with sprite init)
   await waitForGame();
   await initializeAntiAfk().catch((error) => {
-    log('⚠️ Anti-AFK initialization failed', error);
+    log('Anti-AFK initialization failed', error);
   });
-
+  await startInventoryStore().catch((error) => {
+    log('Inventory store pre-init failed', error);
+  });
+  await startPetInfoStore().catch((error) => {
+    log('Pet info store pre-init failed', error);
+  });
+  await startAbilityTriggerStore().catch((error) => {
+    log('Ability trigger store pre-init failed', error);
+  });
+  await startActivityLogEnhancer().catch((error) => {
+    log('Activity Log enhancer initialization failed', error);
+  });
   // OPTIMIZATION: Initialize core stores in batches with yields to prevent main thread blocking
   // Phase 1: Critical stores that other features depend on
   initializeStatsStore();
@@ -1404,3 +1419,4 @@ async function initialize(): Promise<void> {
 initialize().catch(error => {
   console.error('[QuinoaPetMgr] Initialization failed:', error);
 });
+

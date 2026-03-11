@@ -732,7 +732,7 @@ function createStatusSection(
 }
 
 function createPetCard(comparison: PetComparison): HTMLElement {
-  const { pet, score, status, reason, betterAlternatives } = comparison;
+  const { pet, score, status, reason, betterAlternatives, decisionFamilyLabel } = comparison;
 
   const card = document.createElement('div');
   card.style.cssText = `
@@ -760,6 +760,8 @@ function createPetCard(comparison: PetComparison): HTMLElement {
     inventory: '📦',
     hutch: '🏠',
   };
+  const showDecisionFamily = (status === 'obsolete' || status === 'consider') && !!decisionFamilyLabel;
+  const betterPetsHeading = decisionFamilyLabel ? `Better ${decisionFamilyLabel} pets` : 'Better pets';
 
   card.innerHTML = `
     <div style="display: flex; gap: 12px; align-items: start;">
@@ -842,11 +844,16 @@ function createPetCard(comparison: PetComparison): HTMLElement {
         <div style="font-size: 12px; color: #ccc; margin-bottom: 8px;">
           ${reason}
         </div>
+        ${showDecisionFamily ? `
+          <div style="font-size: 11px; color: #7fb3ff; margin-bottom: 8px;">
+            Ability family: ${decisionFamilyLabel}
+          </div>
+        ` : ''}
 
         <!-- Better alternatives -->
         ${betterAlternatives.length > 0 ? `
           <div style="font-size: 11px; color: #888; margin-top: 8px; padding-top: 8px; border-top: 1px solid #333;">
-            Better pets: ${betterAlternatives.map(p =>
+            ${betterPetsHeading}: ${betterAlternatives.map(p =>
               `${p.name || p.species} (STR ${p.strength}${p.maxStrength ? `/${p.maxStrength}` : ''})`
             ).join(', ')}
           </div>

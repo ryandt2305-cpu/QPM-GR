@@ -60,6 +60,15 @@ function resolvePetForFeedById(
   return pets.find((pet) => pet.petId === normalizedPetId) ?? null;
 }
 
+function resolvePetForFeedBySlotId(
+  pets: ActivePetInfo[],
+  slotId: string,
+): ActivePetInfo | null {
+  const normalizedSlotId = String(slotId ?? '').trim();
+  if (!normalizedSlotId) return null;
+  return pets.find((pet) => pet.slotId === normalizedSlotId) ?? null;
+}
+
 /**
  * Send a FeedPet WebSocket message.
  */
@@ -80,18 +89,21 @@ function sendFeedPetMessage(petItemId: string, cropItemId: string): boolean {
   return sent.ok;
 }
 
-function toItemOverride(pet: ActivePetInfo): SpeciesOverride | null {
-  if (!pet.slotId) return null;
+function toItemOverride(pet: ActivePetInfo): SpeciesOverride | undefined {
+  if (!pet.slotId) return undefined;
   const feedPolicy = getFeedPolicy();
   const raw = feedPolicy.petItemOverrides[pet.slotId];
-  if (!raw) return null;
+  if (!raw) return undefined;
 
   const normalized: SpeciesOverride = {};
-  if (Array.isArray(raw.allowed) && raw.allowed.length > 0) normalized.allowed = [...raw.allowed];
-  if (Array.isArray(raw.forbidden) && raw.forbidden.length > 0) normalized.forbidden = [...raw.forbidden];
+  if (Array.isArray(raw.allowed)) normalized.allowed = [...raw.allowed];
+  if (Array.isArray(raw.forbidden)) normalized.forbidden = [...raw.forbidden];
   if (typeof raw.preferred === 'string' && raw.preferred.length > 0) normalized.preferred = raw.preferred;
 
-  if (!normalized.allowed && !normalized.forbidden && !normalized.preferred) return null;
+  const hasAllowed = Array.isArray(normalized.allowed);
+  const hasForbidden = Array.isArray(normalized.forbidden);
+  const hasPreferred = typeof normalized.preferred === 'string' && normalized.preferred.length > 0;
+  if (!hasAllowed && !hasForbidden && !hasPreferred) return undefined;
   return normalized;
 }
 
@@ -144,7 +156,7 @@ async function buildPlanForPet(
     {
       respectRules: resolvedRespectRules,
       avoidFavorited: rules.avoidFavorited,
-      itemOverride: override,
+      ...(override ? { itemOverride: override } : {}),
     },
   );
 
@@ -262,6 +274,23 @@ export async function getInstantFeedPlanByPetId(
   return buildPlanForPet(pet, pet.slotIndex, respectFoodRules);
 }
 
+export async function getInstantFeedPlanBySlotId(
+  slotId: string,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedPlan> {
+  const pets = getActivePetInfos();
+  if (pets.length === 0) {
+    return makeMissingPetPlan(-1, 'No active pets found');
+  }
+
+  const pet = resolvePetForFeedBySlotId(pets, slotId);
+  if (!pet) {
+    return makeMissingPetPlan(-1, `Pet with slotId ${slotId} not found`);
+  }
+
+  return buildPlanForPet(pet, pet.slotIndex, respectFoodRules);
+}
+
 /**
  * Feed a pet instantly using WebSocket (bypasses DOM clicks).
  *
@@ -294,6 +323,25 @@ export async function feedPetInstantlyByPetId(
 ): Promise<InstantFeedResult> {
   try {
     const plan = await getInstantFeedPlanByPetId(petId, respectFoodRules);
+    return executeFeedPlan(plan);
+  } catch (error) {
+    log('Instant feed error', error);
+    return {
+      success: false,
+      petName: null,
+      petSpecies: null,
+      foodSpecies: null,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+export async function feedPetInstantlyBySlotId(
+  slotId: string,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedResult> {
+  try {
+    const plan = await getInstantFeedPlanBySlotId(slotId, respectFoodRules);
     return executeFeedPlan(plan);
   } catch (error) {
     log('Instant feed error', error);

@@ -85,6 +85,13 @@ const QPM_STORAGE_KEYS = [
 
   // Pet Optimizer
   'petOptimizer:config.v2',
+
+  // Activity Log Enhancer
+  'qpm.activityLogEnhanced.entries.v1',
+  'qpm.activityLogEnhanced.filters.v1',
+
+  // Sell All Pets
+  'qpm.petTeams.sellAllPets.v1',
 ];
 
 export const storage: Storage = {

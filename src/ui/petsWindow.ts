@@ -22,6 +22,7 @@ import {
   getFeedPolicy,
   setFeedPolicyOverride,
   clearFeedPolicyOverride,
+  PET_FEED_POLICY_CHANGED_EVENT,
   getAllPooledPets,
 } from '../store/petTeams';
 import { getPetSpriteDataUrlWithMutations, isSpritesReady, getAnySpriteDataUrl, onSpritesReady } from '../sprite-v2/compat';
@@ -47,14 +48,21 @@ import {
   setRespectPetFoodRules,
   setAvoidFavoritedFoods,
   getDietOptionsForSpecies,
-  updateSpeciesOverride,
   PET_FOOD_RULES_CHANGED_EVENT,
 } from '../features/petFoodRules';
+import {
+  getSellAllPetsSettings,
+  setSellAllPetsKeybind,
+  setSellAllPetsProtectionRules,
+  runSellAllPets,
+  isSellAllPetsRunning,
+  SELL_ALL_PET_RARITY_OPTIONS,
+} from '../features/sellAllPets';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { feedPetInstantly, feedAllPetsInstantly } from '../features/instantFeed';
 import { initFloatingCards, openFloatingCardForSlot, hasFloatingCardForSlot } from './petFloatingCard';
 import { importAriesTeams } from '../utils/ariesTeamImport';
-import type { PetTeam, PooledPet } from '../types/petTeams';
+import type { PetTeam, PooledPet, PetItemFeedOverride } from '../types/petTeams';
 import {
   buildCompareCardViewModel,
 } from './comparePresentation';
@@ -220,8 +228,14 @@ const STYLES = `
   border-bottom: 1px solid rgba(143,130,255,0.2);
   flex-shrink: 0;
 }
-.qpm-pets__stage-badge {
+.qpm-pets__tabs-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+.qpm-pets__stage-badge {
   align-self: center;
   margin-bottom: 7px;
   padding: 2px 9px;
@@ -261,6 +275,122 @@ const STYLES = `
 }
 .qpm-pets__tab:hover { color: #e0e0e0; }
 .qpm-pets__tab--active { color: #8f82ff; border-color: #8f82ff; }
+.qpm-pets__settings-wrap {
+  position: relative;
+  margin-bottom: 6px;
+}
+.qpm-pets__settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  pointer-events: auto;
+}
+.qpm-pets__settings-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(143,130,255,0.42);
+  background: rgba(143,130,255,0.12);
+  color: rgba(230,230,255,0.95);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.qpm-pets__settings-btn:hover {
+  background: rgba(143,130,255,0.2);
+  border-color: rgba(143,130,255,0.62);
+}
+.qpm-pets__settings-btn[aria-expanded="true"] {
+  background: rgba(143,130,255,0.24);
+  border-color: rgba(143,130,255,0.72);
+}
+.qpm-pets__settings-popover {
+  position: fixed;
+  width: 320px;
+  max-height: 420px;
+  overflow: auto;
+  z-index: 2147483647;
+  pointer-events: auto;
+  background: rgba(14,17,25,0.98);
+  border: 1px solid rgba(143,130,255,0.35);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.45);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.qpm-pets__settings-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #d8d4ff;
+  letter-spacing: 0.02em;
+}
+.qpm-pets__settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: rgba(224,224,224,0.88);
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(143,130,255,0.18);
+  background: rgba(255,255,255,0.03);
+}
+.qpm-pets__settings-row input[type="checkbox"] {
+  accent-color: #8f82ff;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+.qpm-pets__settings-subtle {
+  color: rgba(224,224,224,0.5);
+  font-size: 11px;
+}
+.qpm-pets__settings-divider {
+  height: 1px;
+  background: rgba(143,130,255,0.18);
+  margin: 2px 0;
+}
+.qpm-pets__threshold {
+  width: 66px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(143,130,255,0.32);
+  background: rgba(255,255,255,0.06);
+  color: #e0e0e0;
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+.qpm-pets__threshold:focus {
+  border-color: rgba(143,130,255,0.62);
+  box-shadow: 0 0 0 2px rgba(143,130,255,0.15);
+}
+.qpm-pets__rarity-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.qpm-pets__rarity-pill {
+  border: 1px solid rgba(143,130,255,0.28);
+  background: rgba(255,255,255,0.03);
+  color: rgba(224,224,224,0.8);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.qpm-pets__rarity-pill--active {
+  border-color: rgba(143,130,255,0.7);
+  background: rgba(143,130,255,0.2);
+  color: #ded7ff;
+}
 .qpm-pets__body {
   flex: 1;
   min-height: 0;
@@ -2600,6 +2730,7 @@ function buildFeedingTab(root: HTMLElement): () => void {
     feed.innerHTML = '';
 
     const rules = getPetFoodRules();
+    const feedPolicy = getFeedPolicy();
     const activePets = getActivePetInfos();
 
     // --- Global settings bar ---
@@ -2669,10 +2800,15 @@ function buildFeedingTab(root: HTMLElement): () => void {
     // --- Per-pet cards ---
     for (let i = 0; i < activePets.length; i++) {
       const pet = activePets[i]!;
+      const petItemId = pet.slotId ?? null;
       const speciesKey = pet.species ? normalizeSpeciesKey(pet.species) : '';
       const speciesOverride = speciesKey ? (rules.overrides[speciesKey] ?? {}) : {};
-      const forbiddenSet = new Set(speciesOverride.forbidden ?? []);
-      const preferredKey = speciesOverride.preferred ?? null;
+      const itemOverride = petItemId ? (feedPolicy.petItemOverrides[petItemId] ?? null) : null;
+      const effectiveForbidden = Array.isArray(itemOverride?.forbidden)
+        ? itemOverride.forbidden
+        : (speciesOverride.forbidden ?? []);
+      const forbiddenSet = new Set(effectiveForbidden);
+      const preferredKey = itemOverride?.preferred ?? speciesOverride.preferred ?? null;
 
       const card = document.createElement('div');
       card.className = 'qpm-feed__pet-card';
@@ -2782,13 +2918,50 @@ function buildFeedingTab(root: HTMLElement): () => void {
             cb.type = 'checkbox';
             cb.checked = !forbiddenSet.has(option.key);
             cb.addEventListener('change', () => {
-              const fresh = getPetFoodRules();
-              const freshKey = normalizeSpeciesKey(pet.species!);
-              const freshOverride = freshKey ? (fresh.overrides[freshKey] ?? {}) : {};
-              const forbidden = new Set(freshOverride.forbidden ?? []);
+              if (!pet.slotId || !pet.species) return;
+
+              const freshRules = getPetFoodRules();
+              const freshFeedPolicy = getFeedPolicy();
+              const freshKey = normalizeSpeciesKey(pet.species);
+              const freshSpeciesOverride = freshKey ? (freshRules.overrides[freshKey] ?? {}) : {};
+              const freshItemOverride = freshFeedPolicy.petItemOverrides[pet.slotId] ?? null;
+
+              const currentForbidden = Array.isArray(freshItemOverride?.forbidden)
+                ? freshItemOverride.forbidden
+                : (freshSpeciesOverride.forbidden ?? []);
+              const forbidden = new Set(currentForbidden);
               if (cb.checked) forbidden.delete(option.key);
               else forbidden.add(option.key);
-              updateSpeciesOverride(pet.species!, { ...freshOverride, forbidden: Array.from(forbidden) });
+              const nextForbidden = Array.from(forbidden);
+
+              const speciesForbidden = new Set(freshSpeciesOverride.forbidden ?? []);
+              const sameAsSpecies = (
+                nextForbidden.length === speciesForbidden.size &&
+                nextForbidden.every((value) => speciesForbidden.has(value))
+              );
+
+              const nextAllowed = Array.isArray(freshItemOverride?.allowed)
+                ? [...freshItemOverride.allowed]
+                : undefined;
+              const nextPreferred = typeof freshItemOverride?.preferred === 'string' && freshItemOverride.preferred.length > 0
+                ? freshItemOverride.preferred
+                : undefined;
+
+              const nextOverride: Partial<PetItemFeedOverride> = {};
+              if (nextAllowed !== undefined) nextOverride.allowed = nextAllowed;
+              if (nextPreferred !== undefined) nextOverride.preferred = nextPreferred;
+              if (!sameAsSpecies) {
+                nextOverride.forbidden = nextForbidden;
+              }
+
+              const hasAllowed = Array.isArray(nextOverride.allowed);
+              const hasForbidden = Array.isArray(nextOverride.forbidden);
+              const hasPreferred = typeof nextOverride.preferred === 'string' && (nextOverride.preferred as string).length > 0;
+              if (!hasAllowed && !hasForbidden && !hasPreferred) {
+                clearFeedPolicyOverride(pet.slotId);
+              } else {
+                setFeedPolicyOverride(pet.slotId, nextOverride);
+              }
             });
 
             lbl.appendChild(cb);
@@ -2808,14 +2981,17 @@ function buildFeedingTab(root: HTMLElement): () => void {
   const unsubscribePets = onActivePetInfos(() => queueRender(), false);
   const unsubscribeSprites = onSpritesReady(() => queueRender());
   const onFoodRulesChanged = (): void => queueRender();
+  const onFeedPolicyChanged = (): void => queueRender();
   const onFloatingCardState = (): void => queueRender();
   window.addEventListener(PET_FOOD_RULES_CHANGED_EVENT, onFoodRulesChanged as EventListener);
+  window.addEventListener(PET_FEED_POLICY_CHANGED_EVENT, onFeedPolicyChanged as EventListener);
   window.addEventListener(FLOATING_CARD_STATE_EVENT, onFloatingCardState as EventListener);
   return () => {
     destroyed = true;
     unsubscribePets();
     unsubscribeSprites();
     window.removeEventListener(PET_FOOD_RULES_CHANGED_EVENT, onFoodRulesChanged as EventListener);
+    window.removeEventListener(PET_FEED_POLICY_CHANGED_EVENT, onFeedPolicyChanged as EventListener);
     window.removeEventListener(FLOATING_CARD_STATE_EVENT, onFloatingCardState as EventListener);
   };
 }
@@ -2846,6 +3022,23 @@ function renderPetsWindow(root: HTMLElement): void {
   const compareStageBadge = document.createElement('div');
   compareStageBadge.className = 'qpm-pets__stage-badge qpm-pets__stage-badge--hidden';
   compareStageBadge.textContent = 'Stage • Early';
+
+  const tabsRight = document.createElement('div');
+  tabsRight.className = 'qpm-pets__tabs-right';
+
+  const settingsWrap = document.createElement('div');
+  settingsWrap.className = 'qpm-pets__settings-wrap';
+
+  const settingsBtn = document.createElement('button');
+  settingsBtn.type = 'button';
+  settingsBtn.className = 'qpm-pets__settings-btn';
+  settingsBtn.title = 'Sell all pets settings';
+  settingsBtn.textContent = '⚙';
+  settingsBtn.setAttribute('aria-expanded', 'false');
+
+  let settingsOverlay: HTMLElement | null = null;
+  let settingsPanel: HTMLElement | null = null;
+  let settingsOpen = false;
 
   const body = document.createElement('div');
   body.className = 'qpm-pets__body';
@@ -2880,6 +3073,260 @@ function renderPetsWindow(root: HTMLElement): void {
     compareStageBadge.textContent = `Stage • ${compareBadgeStage.toUpperCase()}`;
     compareStageBadge.classList.add(`qpm-pets__stage-badge--${compareBadgeStage}`);
   }
+
+  function buildSellSettingsPanel(panel: HTMLElement): void {
+    const settings = getSellAllPetsSettings();
+    const protections = settings.protections;
+    panel.replaceChildren();
+
+    const title = document.createElement('div');
+    title.className = 'qpm-pets__settings-title';
+    title.textContent = 'Sell All Pets';
+    panel.appendChild(title);
+
+    const keybindRow = document.createElement('div');
+    keybindRow.className = 'qpm-pets__settings-row';
+    const keybindLabel = document.createElement('div');
+    keybindLabel.innerHTML = 'Keybind<div class="qpm-pets__settings-subtle">Click input, press combo, Del clears</div>';
+
+    const keybindInput = document.createElement('input');
+    keybindInput.className = 'qpm-keybind-input';
+    keybindInput.readOnly = true;
+    keybindInput.placeholder = '—';
+    keybindInput.style.width = '120px';
+    keybindInput.value = settings.keybind ? formatKeybind(settings.keybind) : '';
+
+    keybindInput.addEventListener('focus', () => {
+      keybindInput.placeholder = 'Press keys…';
+      keybindInput.value = '';
+    });
+
+    keybindInput.addEventListener('blur', () => {
+      const fresh = getSellAllPetsSettings().keybind;
+      keybindInput.placeholder = '—';
+      keybindInput.value = fresh ? formatKeybind(fresh) : '';
+    });
+
+    keybindInput.addEventListener('keydown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        keybindInput.blur();
+        return;
+      }
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        setSellAllPetsKeybind('');
+        keybindInput.value = '';
+        keybindInput.blur();
+        return;
+      }
+      const combo = normalizeKeybind(event);
+      if (!combo) return;
+      setSellAllPetsKeybind(combo);
+      keybindInput.value = formatKeybind(combo);
+      keybindInput.blur();
+    });
+
+    keybindRow.append(keybindLabel, keybindInput);
+    panel.appendChild(keybindRow);
+
+    const divider = document.createElement('div');
+    divider.className = 'qpm-pets__settings-divider';
+    panel.appendChild(divider);
+
+    const createToggleRow = (
+      label: string,
+      checked: boolean,
+      onChange: (checked: boolean) => void,
+      subtitle?: string,
+      extraControl?: HTMLElement,
+    ): HTMLElement => {
+      const row = document.createElement('div');
+      row.className = 'qpm-pets__settings-row';
+
+      const text = document.createElement('div');
+      text.innerHTML = subtitle
+        ? `${label}<div class="qpm-pets__settings-subtle">${subtitle}</div>`
+        : label;
+
+      const controls = document.createElement('div');
+      controls.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = checked;
+      toggle.addEventListener('change', () => onChange(toggle.checked));
+      controls.appendChild(toggle);
+
+      if (extraControl) controls.appendChild(extraControl);
+      row.append(text, controls);
+      return row;
+    };
+
+    panel.appendChild(createToggleRow(
+      'Enable protection rules',
+      protections.enabled,
+      (checked) => setSellAllPetsProtectionRules({ enabled: checked }),
+    ));
+
+    panel.appendChild(createToggleRow(
+      'Protect Gold mutation',
+      protections.protectGold,
+      (checked) => setSellAllPetsProtectionRules({ protectGold: checked }),
+    ));
+
+    panel.appendChild(createToggleRow(
+      'Protect Rainbow mutation',
+      protections.protectRainbow,
+      (checked) => setSellAllPetsProtectionRules({ protectRainbow: checked }),
+    ));
+
+    const thresholdInput = document.createElement('input');
+    thresholdInput.type = 'number';
+    thresholdInput.className = 'qpm-pets__threshold';
+    thresholdInput.min = '0';
+    thresholdInput.max = '100';
+    thresholdInput.step = '1';
+    thresholdInput.value = String(protections.maxStrThreshold);
+    thresholdInput.disabled = !protections.protectMaxStr;
+    const saveThreshold = (): void => {
+      const value = Number(thresholdInput.value);
+      if (!Number.isFinite(value)) return;
+      setSellAllPetsProtectionRules({ maxStrThreshold: Math.max(0, Math.min(100, Math.round(value))) });
+      thresholdInput.value = String(getSellAllPetsSettings().protections.maxStrThreshold);
+    };
+    thresholdInput.addEventListener('change', saveThreshold);
+    thresholdInput.addEventListener('blur', saveThreshold);
+
+    panel.appendChild(createToggleRow(
+      'Protect pets with Max STR',
+      protections.protectMaxStr,
+      (checked) => {
+        setSellAllPetsProtectionRules({ protectMaxStr: checked });
+        thresholdInput.disabled = !checked;
+      },
+      'Threshold',
+      thresholdInput,
+    ));
+
+    const rarityWrap = document.createElement('div');
+    rarityWrap.className = 'qpm-pets__settings-row';
+    rarityWrap.style.display = 'grid';
+    rarityWrap.style.gap = '8px';
+
+    const rarityTitle = document.createElement('div');
+    rarityTitle.innerHTML = 'Protected rarities<div class="qpm-pets__settings-subtle">Selected rarities will always require confirmation</div>';
+    rarityWrap.appendChild(rarityTitle);
+
+    const rarityGrid = document.createElement('div');
+    rarityGrid.className = 'qpm-pets__rarity-grid';
+
+    const selected = new Set((protections.protectedRarities ?? []).map((value) => value.toLowerCase()));
+    for (const rarity of SELL_ALL_PET_RARITY_OPTIONS) {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `qpm-pets__rarity-pill${selected.has(rarity.toLowerCase()) ? ' qpm-pets__rarity-pill--active' : ''}`;
+      pill.textContent = rarity;
+      pill.addEventListener('click', () => {
+        const current = new Set(getSellAllPetsSettings().protections.protectedRarities.map((value) => value.toLowerCase()));
+        if (current.has(rarity.toLowerCase())) current.delete(rarity.toLowerCase());
+        else current.add(rarity.toLowerCase());
+        const next = SELL_ALL_PET_RARITY_OPTIONS.filter((value) => current.has(value.toLowerCase()));
+        setSellAllPetsProtectionRules({ protectedRarities: next });
+        if (settingsPanel) buildSellSettingsPanel(settingsPanel);
+      });
+      rarityGrid.appendChild(pill);
+    }
+
+    rarityWrap.appendChild(rarityGrid);
+    panel.appendChild(rarityWrap);
+  }
+
+  function closeSellSettingsPanel(): void {
+    if (!settingsOpen) return;
+    settingsOpen = false;
+    settingsBtn.setAttribute('aria-expanded', 'false');
+    settingsOverlay?.remove();
+    settingsOverlay = null;
+    settingsPanel?.remove();
+    settingsPanel = null;
+  }
+
+  function positionSellSettingsPanel(): void {
+    if (!settingsPanel || !settingsOpen) return;
+    const anchor = settingsBtn.getBoundingClientRect();
+    const panelWidth = Math.min(320, Math.max(240, window.innerWidth - 16));
+    settingsPanel.style.width = `${panelWidth}px`;
+    settingsPanel.style.maxHeight = `${Math.max(220, Math.min(420, window.innerHeight - 24))}px`;
+
+    let left = anchor.right - panelWidth;
+    left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+
+    let top = anchor.bottom + 8;
+    const panelHeight = settingsPanel.offsetHeight || 320;
+    if (top + panelHeight > window.innerHeight - 8) {
+      top = Math.max(8, anchor.top - panelHeight - 8);
+    }
+
+    settingsPanel.style.left = `${Math.round(left)}px`;
+    settingsPanel.style.top = `${Math.round(top)}px`;
+  }
+
+  function openSellSettingsPanel(): void {
+    if (settingsOpen) return;
+    settingsOpen = true;
+    settingsBtn.setAttribute('aria-expanded', 'true');
+
+    settingsOverlay = document.createElement('div');
+    settingsOverlay.className = 'qpm-pets__settings-overlay';
+    settingsOverlay.addEventListener('mousedown', (event) => {
+      if (event.target === settingsOverlay) closeSellSettingsPanel();
+    });
+
+    settingsPanel = document.createElement('div');
+    settingsPanel.className = 'qpm-pets__settings-popover';
+    settingsOverlay.appendChild(settingsPanel);
+    document.body.appendChild(settingsOverlay);
+    buildSellSettingsPanel(settingsPanel);
+    positionSellSettingsPanel();
+  }
+
+  settingsBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (settingsOpen) closeSellSettingsPanel();
+    else openSellSettingsPanel();
+  });
+
+  const onSettingsOutsideClick = (event: MouseEvent): void => {
+    if (!settingsOpen) return;
+    if (!(event.target instanceof Node)) return;
+    if (settingsBtn.contains(event.target)) return;
+    if (settingsPanel && settingsPanel.contains(event.target)) return;
+    closeSellSettingsPanel();
+  };
+  document.addEventListener('mousedown', onSettingsOutsideClick, true);
+  allCleanups.push(() => document.removeEventListener('mousedown', onSettingsOutsideClick, true));
+
+  const onSettingsEscape = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    closeSellSettingsPanel();
+  };
+  document.addEventListener('keydown', onSettingsEscape);
+  allCleanups.push(() => document.removeEventListener('keydown', onSettingsEscape));
+
+  const onSettingsViewportChange = (): void => {
+    if (!settingsOpen) return;
+    positionSellSettingsPanel();
+  };
+  window.addEventListener('resize', onSettingsViewportChange);
+  window.addEventListener('scroll', onSettingsViewportChange, true);
+  allCleanups.push(() => {
+    window.removeEventListener('resize', onSettingsViewportChange);
+    window.removeEventListener('scroll', onSettingsViewportChange, true);
+  });
+
+  allCleanups.push(closeSellSettingsPanel);
 
   function reassertScrollChain(panel: HTMLElement | undefined): void {
     if (!panel) return;
@@ -2950,7 +3397,9 @@ function renderPetsWindow(root: HTMLElement): void {
     }
     // pet-optimizer is lazy-loaded on first click
   }
-  tabs.appendChild(compareStageBadge);
+  settingsWrap.appendChild(settingsBtn);
+  tabsRight.append(compareStageBadge, settingsWrap);
+  tabs.appendChild(tabsRight);
 
   // Normalize initial panel visibility through the same switch path.
   switchTab(activeTab);
@@ -3005,10 +3454,44 @@ export function initPetsWindow(): void {
       return;
     }
 
-    // Team keybinds
-    const keybinds = getKeybinds();
     const combo = normalizeKeybind(e);
     if (!combo) return;
+
+    const sellSettings = getSellAllPetsSettings();
+    if (sellSettings.keybind && combo === sellSettings.keybind) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (isSellAllPetsRunning()) {
+        showToast('Sell all pets is already running', 'info');
+        return;
+      }
+
+      showToast('Selling non-favorited inventory pets…', 'info');
+      runSellAllPets()
+        .then((result) => {
+          if (result.status === 'success') {
+            showToast(result.message, 'success');
+            return;
+          }
+          if (result.status === 'partial') {
+            showToast(result.message, 'error');
+            return;
+          }
+          if (result.status === 'cancelled' || result.status === 'noop' || result.status === 'busy') {
+            showToast(result.message, 'info');
+            return;
+          }
+          showToast(result.message, 'error');
+        })
+        .catch(() => {
+          showToast('Sell all pets failed', 'error');
+        });
+      return;
+    }
+
+    // Team keybinds
+    const keybinds = getKeybinds();
     const teamId = keybinds[combo];
     if (!teamId) return;
 

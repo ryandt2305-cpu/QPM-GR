@@ -8,6 +8,7 @@ export type RoomActionType =
   | 'FeedPet'
   | 'StorePet'
   | 'PlacePet'
+  | 'SellPet'
   | 'PlayerPosition'
   | 'RetrieveItemFromStorage'
   | 'SwapPet';
@@ -79,6 +80,7 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
     case 'FeedPet':
       return isNonEmptyString(payload.petItemId) && isNonEmptyString(payload.cropItemId);
     case 'StorePet':
+    case 'SellPet':
       return isNonEmptyString(payload.itemId);
     case 'PlacePet': {
       const p = payload as PlacePetPayload;
@@ -112,6 +114,7 @@ function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>):
   switch (type) {
     case 'ToggleFavoriteItem':
     case 'StorePet':
+    case 'SellPet':
     case 'RetrieveItemFromStorage':
       return `${type}:${String(payload.itemId ?? '')}`;
     case 'FeedPet':

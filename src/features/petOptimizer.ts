@@ -11,6 +11,7 @@ import {
   buildPetCompareProfile,
   captureProgressionStage,
   createValuationContext,
+  getAbilityFamilyKey,
   type CompareAbilityGroup,
   type ComparePetInput,
   type ProgressionStageSnapshot,
@@ -174,6 +175,9 @@ export interface PetComparison {
   reason: string;
   betterAlternatives: CollectedPet[]; // Pets that make this one obsolete
   upgradeOpportunities: string[]; // Higher tier abilities available
+  decisionFamilyKey?: string;
+  decisionFamilyLabel?: string;
+  topFamilies?: string[];
 }
 
 export type OptimizerCompareFilter = CompareAbilityGroup | 'all';
@@ -653,8 +657,32 @@ function calculateAbilityRarityScore(abilityIds: string[]): number {
 interface OptimizerCompareSnapshot {
   score: number;
   reviewCount: number;
-  groupSignature: string;
   groups: CompareAbilityGroup[];
+  families: Map<string, OptimizerFamilySnapshot>;
+}
+
+interface OptimizerFamilySnapshot {
+  familyKey: string;
+  familyLabel: string;
+  highestTier: number;
+  familyScore: number;
+}
+
+interface FamilyCompetitionEntry {
+  pet: CollectedPet;
+  familyKey: string;
+  familyLabel: string;
+  highestTier: number;
+  familyScore: number;
+  compareScore: number;
+}
+
+interface FamilyCompetitionPool {
+  species: string;
+  familyKey: string;
+  familyLabel: string;
+  ranked: FamilyCompetitionEntry[];
+  rankByPetId: Map<string, number>;
 }
 
 function toCompareInput(pet: CollectedPet): ComparePetInput {
@@ -666,6 +694,30 @@ function toCompareInput(pet: CollectedPet): ComparePetInput {
     abilities: pet.abilityIds,
     mutations: pet.mutations,
   };
+}
+
+function normalizeFamilyLabel(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+(?:IV|III|II|I)$/i, '')
+    .replace(/\s+[1-4]$/i, '')
+    .trim();
+}
+
+function resolveFamilyLabel(abilityId: string, fallbackName: string): string {
+  const definition = getAbilityDefinition(abilityId);
+  const rawLabel = definition?.name ?? fallbackName ?? abilityId;
+  const normalized = normalizeFamilyLabel(rawLabel);
+  return normalized || rawLabel || abilityId;
+}
+
+function getAbilityTierValue(abilityId: string): number {
+  const tier = extractTier(abilityId);
+  if (tier === 'IV') return 4;
+  if (tier === 'III') return 3;
+  if (tier === 'II') return 2;
+  if (tier === 'I') return 1;
+  return 0;
 }
 
 function createCompareSnapshotMap(
@@ -682,13 +734,39 @@ function createCompareSnapshotMap(
       .map((entry) => entry.group)
       .filter((group, index, all) => all.indexOf(group) === index)
       .sort();
-    const grouped = groups.join('|');
+    const families = new Map<string, OptimizerFamilySnapshot>();
+
+    for (const entry of profile.abilities) {
+      if (entry.isIgnored || entry.isReview) continue;
+
+      const rawFamily = getAbilityFamilyKey(entry.abilityId).trim();
+      const familyKey = (rawFamily || entry.abilityId).trim().toLowerCase();
+      if (!familyKey) continue;
+
+      const tierValue = getAbilityTierValue(entry.abilityId);
+      const familyScore = Number.isFinite(entry.scoreValue) ? entry.scoreValue : 0;
+      const familyLabel = resolveFamilyLabel(entry.abilityId, entry.name);
+      const existing = families.get(familyKey);
+
+      if (
+        !existing ||
+        tierValue > existing.highestTier ||
+        (tierValue === existing.highestTier && familyScore > existing.familyScore)
+      ) {
+        families.set(familyKey, {
+          familyKey,
+          familyLabel,
+          highestTier: tierValue,
+          familyScore,
+        });
+      }
+    }
 
     byPetId.set(pet.id, {
       score: profile.score,
       reviewCount: profile.reviewCount,
-      groupSignature: grouped || 'review',
       groups: groups.length > 0 ? groups : ['isolated'],
+      families,
     });
   }
 
@@ -711,8 +789,8 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
 
   const compareSnapshots = createCompareSnapshotMap(pets);
 
-  // Group pets by species + ability combination (fast, synchronous)
-  const groups = groupPetsByAbilities(pets, compareSnapshots.byPetId);
+  // Build species + ability-family competition pools (fast, synchronous)
+  const familyPools = createFamilyCompetitionPools(pets, compareSnapshots.byPetId, compareSnapshots.stage);
 
   // Analyze pets in chunks to avoid blocking UI
   for (let i = 0; i < pets.length; i += CHUNK_SIZE) {
@@ -720,7 +798,7 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
 
     for (const pet of chunk) {
       const score = petScores.get(pet.id)!;
-      const comparison = analyzePet(pet, score, pets, groups, compareSnapshots.byPetId, compareSnapshots.stage);
+      const comparison = analyzePet(pet, score, pets, familyPools, compareSnapshots.byPetId, compareSnapshots.stage);
       comparisons.push(comparison);
     }
 
@@ -786,13 +864,13 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
 
   const compareSnapshots = createCompareSnapshotMap(pets);
 
-  // Group pets by species + ability combination
-  const groups = groupPetsByAbilities(pets, compareSnapshots.byPetId);
+  // Build species + ability-family competition pools
+  const familyPools = createFamilyCompetitionPools(pets, compareSnapshots.byPetId, compareSnapshots.stage);
 
   // Analyze each pet
   for (const pet of pets) {
     const score = petScores.get(pet.id)!;
-    const comparison = analyzePet(pet, score, pets, groups, compareSnapshots.byPetId, compareSnapshots.stage);
+    const comparison = analyzePet(pet, score, pets, familyPools, compareSnapshots.byPetId, compareSnapshots.stage);
     comparisons.push(comparison);
   }
 
@@ -832,12 +910,6 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
   };
 }
 
-interface PetGroup {
-  species: string;
-  abilitySignature: string;
-  pets: CollectedPet[];
-}
-
 function getMaxStrengthValue(pet: CollectedPet): number {
   return pet.maxStrength ?? pet.strength;
 }
@@ -859,31 +931,83 @@ function shouldPreferLateGameStrength(
   return maxStrDelta >= 3;
 }
 
-function groupPetsByAbilities(
+function compareFamilyCompetitionEntries(
+  a: FamilyCompetitionEntry,
+  b: FamilyCompetitionEntry,
+  stage: ProgressionStageSnapshot,
+): number {
+  if (b.highestTier !== a.highestTier) return b.highestTier - a.highestTier;
+  if (b.familyScore !== a.familyScore) return b.familyScore - a.familyScore;
+
+  const aPreferredForStrength = shouldPreferLateGameStrength(a.pet, b.pet, stage);
+  const bPreferredForStrength = shouldPreferLateGameStrength(b.pet, a.pet, stage);
+  if (aPreferredForStrength !== bPreferredForStrength) {
+    return aPreferredForStrength ? -1 : 1;
+  }
+
+  if (config.prioritizeActivePets) {
+    const aIsActive = a.pet.location === 'active' ? 1 : 0;
+    const bIsActive = b.pet.location === 'active' ? 1 : 0;
+    if (bIsActive !== aIsActive) return bIsActive - aIsActive;
+  }
+
+  const aMutScore = a.pet.hasRainbow ? 3 : a.pet.hasGold ? 2 : 1;
+  const bMutScore = b.pet.hasRainbow ? 3 : b.pet.hasGold ? 2 : 1;
+  if (bMutScore !== aMutScore) return bMutScore - aMutScore;
+
+  const aMaxStr = a.pet.maxStrength || a.pet.strength;
+  const bMaxStr = b.pet.maxStrength || b.pet.strength;
+  if (bMaxStr !== aMaxStr) return bMaxStr - aMaxStr;
+
+  if (b.pet.strength !== a.pet.strength) return b.pet.strength - a.pet.strength;
+  if (b.compareScore !== a.compareScore) return b.compareScore - a.compareScore;
+  return a.pet.id.localeCompare(b.pet.id);
+}
+
+function createFamilyCompetitionPools(
   pets: CollectedPet[],
   compareByPetId: Map<string, OptimizerCompareSnapshot>,
-): Map<string, PetGroup> {
-  const groups = new Map<string, PetGroup>();
+  stage: ProgressionStageSnapshot,
+): Map<string, FamilyCompetitionPool> {
+  const pools = new Map<string, FamilyCompetitionPool>();
 
   for (const pet of pets) {
     if (!pet.species) continue;
 
     const compare = compareByPetId.get(pet.id);
-    const signature = compare?.groupSignature || [...pet.abilityIds].sort().join(',');
-    const key = `${pet.species}:${signature}`;
+    if (!compare || compare.reviewCount > 0 || compare.families.size === 0) continue;
 
-    if (!groups.has(key)) {
-      groups.set(key, {
-        species: pet.species,
-        abilitySignature: signature,
-        pets: [],
+    for (const family of compare.families.values()) {
+      const key = `${pet.species}:${family.familyKey}`;
+      if (!pools.has(key)) {
+        pools.set(key, {
+          species: pet.species,
+          familyKey: family.familyKey,
+          familyLabel: family.familyLabel,
+          ranked: [],
+          rankByPetId: new Map<string, number>(),
+        });
+      }
+
+      pools.get(key)!.ranked.push({
+        pet,
+        familyKey: family.familyKey,
+        familyLabel: family.familyLabel,
+        highestTier: family.highestTier,
+        familyScore: family.familyScore,
+        compareScore: compare.score,
       });
     }
-
-    groups.get(key)!.pets.push(pet);
   }
 
-  return groups;
+  for (const pool of pools.values()) {
+    pool.ranked.sort((a, b) => compareFamilyCompetitionEntries(a, b, stage));
+    pool.ranked.forEach((entry, index) => {
+      pool.rankByPetId.set(entry.pet.id, index);
+    });
+  }
+
+  return pools;
 }
 
 /**
@@ -918,7 +1042,7 @@ function analyzePet(
   pet: CollectedPet,
   score: PetScore,
   allPets: CollectedPet[],
-  groups: Map<string, PetGroup>,
+  familyPools: Map<string, FamilyCompetitionPool>,
   compareByPetId: Map<string, OptimizerCompareSnapshot>,
   stage: ProgressionStageSnapshot,
 ): PetComparison {
@@ -1035,117 +1159,117 @@ function analyzePet(
     }
   }
 
-  const petCompareScore = compareSnapshot?.score ?? 0;
-  const betterPets: CollectedPet[] = allPets
-    .filter((other) => {
-      if (other.id === pet.id) return false;
-      if (other.species !== pet.species) return false;
-      const otherSnapshot = compareByPetId.get(other.id);
-      if (!otherSnapshot || otherSnapshot.reviewCount > 0) return false;
-      if (otherSnapshot.groupSignature !== compareSnapshot?.groupSignature) return false;
-      if (shouldPreferLateGameStrength(pet, other, stage)) return false;
-      if (otherSnapshot.score > petCompareScore) return true;
-      return isPetStrictlyBetter(other, pet);
-    })
-    .sort((a, b) => {
-      const aScore = compareByPetId.get(a.id)?.score ?? 0;
-      const bScore = compareByPetId.get(b.id)?.score ?? 0;
-      return bScore - aScore;
-    });
-
-  // If no better alternatives, keep it
-  if (betterPets.length === 0) {
+  const familySnapshots = compareSnapshot ? [...compareSnapshot.families.values()] : [];
+  if (!pet.species || familySnapshots.length === 0) {
     return {
       pet,
       score,
       status: 'keep',
-      reason: '✅ Best available for this ability set',
+      reason: '✅ Best available',
       betterAlternatives: [],
       upgradeOpportunities: [],
     };
   }
 
-  // Find pet's group (same species + abilities)
-  const groupKey = `${pet.species}:${compareSnapshot?.groupSignature ?? [...pet.abilityIds].sort().join(',')}`;
-  const group = groups.get(groupKey);
+  const familyResults: Array<{
+    familyKey: string;
+    familyLabel: string;
+    rank: number;
+    betterEntries: FamilyCompetitionEntry[];
+  }> = [];
 
-  // For pets in same group, check top 3 pattern
-  let isInTop3 = false;
-  if (group && group.pets.length > 1) {
-    const sortedGroup = [...group.pets].sort((a, b) => {
-      const aPreferredForStrength = shouldPreferLateGameStrength(a, b, stage);
-      const bPreferredForStrength = shouldPreferLateGameStrength(b, a, stage);
-      if (aPreferredForStrength !== bPreferredForStrength) {
-        return aPreferredForStrength ? -1 : 1;
-      }
+  for (const family of familySnapshots) {
+    const poolKey = `${pet.species}:${family.familyKey}`;
+    const pool = familyPools.get(poolKey);
+    if (!pool) continue;
 
-      // Priority 1: Active pets get bonus if prioritizeActivePets is enabled
-      if (config.prioritizeActivePets) {
-        const aIsActive = a.location === 'active' ? 1 : 0;
-        const bIsActive = b.location === 'active' ? 1 : 0;
-        if (bIsActive !== aIsActive) return bIsActive - aIsActive;
-      }
+    const rank = pool.rankByPetId.get(pet.id);
+    if (rank == null) continue;
 
-      // Priority 2: Stage-aware compare score.
-      const aCompare = compareByPetId.get(a.id)?.score ?? 0;
-      const bCompare = compareByPetId.get(b.id)?.score ?? 0;
-      if (bCompare !== aCompare) return bCompare - aCompare;
-
-      // Priority 3: Sort by mutation (rainbow > gold > none)
-      const aMutScore = a.hasRainbow ? 3 : a.hasGold ? 2 : 1;
-      const bMutScore = b.hasRainbow ? 3 : b.hasGold ? 2 : 1;
-      if (bMutScore !== aMutScore) return bMutScore - aMutScore;
-
-      // Priority 4: Then by max STR
-      const aMaxStr = a.maxStrength || a.strength;
-      const bMaxStr = b.maxStrength || b.strength;
-      if (bMaxStr !== aMaxStr) return bMaxStr - aMaxStr;
-
-      // Priority 5: Finally by current STR
-      return b.strength - a.strength;
+    familyResults.push({
+      familyKey: family.familyKey,
+      familyLabel: family.familyLabel,
+      rank,
+      betterEntries: pool.ranked.slice(0, rank),
     });
-
-    const petRank = sortedGroup.findIndex(p => p.id === pet.id);
-    isInTop3 = petRank < 3;
   }
 
-  // Determine status based on better alternatives and top 3 status
-  if (betterPets.length > 0 && !isInTop3) {
-    // Pet has better alternatives AND is not in top 3
-    // Apply mutation protection based on config
-    let shouldProtect = false;
-    let mutationType = '';
-
-    if (config.mutationProtection === 'both') {
-      shouldProtect = pet.hasRainbow || pet.hasGold;
-      mutationType = pet.hasRainbow ? 'Rainbow' : 'Gold';
-    } else if (config.mutationProtection === 'rainbow') {
-      shouldProtect = pet.hasRainbow;
-      mutationType = 'Rainbow';
-    }
-    // 'none' = no protection
-
-    const reason = shouldProtect
-      ? `💎 Lower stats but has ${mutationType} mutation - consider keeping`
-      : `❌ ${betterPets.length} better pet${betterPets.length > 1 ? 's' : ''} available`;
-
+  if (familyResults.length === 0) {
     return {
       pet,
       score,
-      status: shouldProtect ? 'consider' : 'obsolete',
-      reason,
-      betterAlternatives: betterPets.slice(0, 1),
+      status: 'keep',
+      reason: '✅ Best available',
+      betterAlternatives: [],
       upgradeOpportunities: [],
     };
   }
 
+  const topFamilies = familyResults
+    .filter((result) => result.rank < 3)
+    .map((result) => result.familyLabel);
+
+  if (topFamilies.length > 0) {
+    const reason = topFamilies.length === 1
+      ? `✅ Top 3 for ${topFamilies[0]}`
+      : `✅ Top 3 in ${topFamilies.length} ability families`;
+
+    return {
+      pet,
+      score,
+      status: 'keep',
+      reason,
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+      topFamilies,
+    };
+  }
+
+  const decision = [...familyResults]
+    .sort((a, b) => {
+      const diff = b.betterEntries.length - a.betterEntries.length;
+      if (diff !== 0) return diff;
+      return a.familyLabel.localeCompare(b.familyLabel);
+    })[0];
+
+  if (!decision || decision.betterEntries.length === 0) {
+    return {
+      pet,
+      score,
+      status: 'keep',
+      reason: '✅ Best available',
+      betterAlternatives: [],
+      upgradeOpportunities: [],
+    };
+  }
+
+  // Apply mutation protection based on config
+  let shouldProtect = false;
+  let mutationType = '';
+
+  if (config.mutationProtection === 'both') {
+    shouldProtect = pet.hasRainbow || pet.hasGold;
+    mutationType = pet.hasRainbow ? 'Rainbow' : 'Gold';
+  } else if (config.mutationProtection === 'rainbow') {
+    shouldProtect = pet.hasRainbow;
+    mutationType = 'Rainbow';
+  }
+  // 'none' = no protection
+
+  const betterPets = decision.betterEntries.map((entry) => entry.pet);
+  const reason = shouldProtect
+    ? `💎 Lower ${decision.familyLabel} ranking but has ${mutationType} mutation - consider keeping`
+    : `❌ ${decision.betterEntries.length} better ${decision.familyLabel} pet${decision.betterEntries.length > 1 ? 's' : ''} available`;
+
   return {
     pet,
     score,
-    status: 'keep',
-    reason: isInTop3 ? '✅ Top 3 for this ability set' : '✅ Best available',
-    betterAlternatives: [],
+    status: shouldProtect ? 'consider' : 'obsolete',
+    reason,
+    betterAlternatives: betterPets.slice(0, 1),
     upgradeOpportunities: [],
+    decisionFamilyKey: decision.familyKey,
+    decisionFamilyLabel: decision.familyLabel,
   };
 }
 
@@ -1223,12 +1347,12 @@ function findUpgradeOpportunities(pet: CollectedPet, allPets: CollectedPet[]): s
     const nextTier = getNextTier(tier);
     if (!nextTier) continue;
 
-    const baseAbility = abilityId.replace(tier, '');
-    const upgradedAbilityId = baseAbility + nextTier;
+    const baseAbility = stripAbilityTierSuffix(abilityId);
+    const upgradeCandidates = [`${baseAbility}${nextTier}`, `${baseAbility}${nextTier}_NEW`];
 
     // Check if any pet has the upgraded ability
     const hasUpgrade = allPets.some(other =>
-      other.abilityIds.includes(upgradedAbilityId)
+      other.abilityIds.some((otherAbilityId) => upgradeCandidates.includes(otherAbilityId))
     );
 
     if (hasUpgrade) {
@@ -1242,8 +1366,14 @@ function findUpgradeOpportunities(pet: CollectedPet, allPets: CollectedPet[]): s
 }
 
 function extractTier(abilityId: string): string | null {
-  const match = abilityId.match(/(I{1,3}|IV)$/);
-  return match && match[1] ? match[1] : null;
+  const match = abilityId.match(/(IV|III|II|I)(?:_NEW)?$/i);
+  return match && match[1] ? match[1].toUpperCase() : null;
+}
+
+function stripAbilityTierSuffix(abilityId: string): string {
+  return abilityId
+    .replace(/(IV|III|II|I)(?:_NEW)?$/i, '')
+    .replace(/_NEW$/i, '');
 }
 
 function getNextTier(tier: string): string | null {
@@ -1261,8 +1391,8 @@ function getNextTier(tier: string): string | null {
  */
 function isAbilityUpgrade(abilityA: string, abilityB: string): boolean {
   // Extract base ability names (without tiers)
-  const baseA = abilityA.replace(/(I{1,3}|IV)$/, '');
-  const baseB = abilityB.replace(/(I{1,3}|IV)$/, '');
+  const baseA = stripAbilityTierSuffix(abilityA);
+  const baseB = stripAbilityTierSuffix(abilityB);
 
   // Must be same base ability
   if (baseA !== baseB) return false;

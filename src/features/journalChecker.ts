@@ -114,42 +114,19 @@ function getProduceCatalog(): Record<string, string[]> {
   return catalog;
 }
 
+// Pet journal only tracks these four. Unlike produce, plant mutations don't apply to pets.
+const PET_JOURNAL_VARIANTS = ['Normal', 'Gold', 'Rainbow', 'Max Weight'] as const;
+
 /**
- * Dynamically generate pet catalog from game catalogs
- * Automatically supports new pet species without code changes
+ * Dynamically generate pet catalog from game catalogs.
+ * Pets only have 4 journal variants (Normal, Gold, Rainbow, Max Weight).
  */
 function getPetCatalog(): Record<string, string[]> {
   const catalog: Record<string, string[]> = {};
-
-  // Return empty if catalogs aren't ready yet
-  if (!areCatalogsReady()) {
-    return catalog;
+  if (!areCatalogsReady()) return catalog;
+  for (const speciesName of getAllPetSpecies()) {
+    catalog[speciesName] = [...PET_JOURNAL_VARIANTS];
   }
-
-  // Build variant list for pets
-  const variants: string[] = ['Normal'];
-
-  // Get mutation names from catalog
-  const mutations = getAllMutations(); // Already returns string[]
-
-  // Include all mutations from the catalog (auto-discovers new mutations like Thunderstruck)
-  for (const mutationName of mutations) {
-    if (typeof mutationName !== 'string') continue;
-    if (mutationName.toLowerCase().includes('maxweight')) continue;
-    variants.push(mutationName);
-  }
-
-  // Add max weight (always present for pets)
-  variants.push('Max Weight');
-
-  // Get all pet species from catalog
-  const species = getAllPetSpecies();
-
-  // Assign variants to all species
-  for (const speciesName of species) {
-    catalog[speciesName] = variants.slice(); // Use slice() to create a copy
-  }
-
   return catalog;
 }
 

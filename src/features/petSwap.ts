@@ -1,8 +1,8 @@
-﻿import { pageWindow } from '../core/pageContext';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { getActivePetInfos } from '../store/pets';
 import { log } from '../utils/logger';
 import { delay } from '../utils/scheduling';
+import { hasRoomConnection, sendRoomAction } from '../websocket/api';
 
 export type SwapPetFailureReason =
   | 'missing_connection'
@@ -22,15 +22,6 @@ export interface SwapPetIntoActiveSlotResult {
   reason?: SwapPetFailureReason;
 }
 
-interface RoomConnection {
-  sendMessage: (payload: unknown) => void;
-}
-
-interface SwapPageWindow extends Window {
-  MagicCircle_RoomConnection?: RoomConnection;
-  __mga_lastScopePath?: string[];
-}
-
 const INVENTORY_ATOM_LABEL = 'myInventoryAtom';
 const HUTCH_RETRIEVE_TIMEOUT_MS = 3500;
 const SWAP_TIMEOUT_MS = 2500;
@@ -48,33 +39,12 @@ function normalizeId(value: unknown): string | null {
   return null;
 }
 
-function getRoomConnection(): RoomConnection | null {
-  const global = pageWindow as SwapPageWindow;
-  return global.MagicCircle_RoomConnection ?? null;
-}
-
-function getScopePath(): string[] {
-  const global = pageWindow as SwapPageWindow;
-  return global.__mga_lastScopePath?.slice() ?? ['Room', 'Quinoa'];
-}
-
-function sendAction(type: string, payload: Record<string, unknown>): boolean {
-  const connection = getRoomConnection();
-  if (!connection) {
-    return false;
+function sendAction(type: 'RetrieveItemFromStorage' | 'PlacePet' | 'SwapPet', payload: Record<string, unknown>): boolean {
+  const sent = sendRoomAction(type, payload, { throttleMs: 100 });
+  if (!sent.ok && sent.reason !== 'throttled') {
+    log('[petSwap] send failed', { type, payload, reason: sent.reason });
   }
-
-  try {
-    connection.sendMessage({
-      scopePath: getScopePath(),
-      type,
-      ...payload,
-    });
-    return true;
-  } catch (error) {
-    log('⚠️ petSwap send failed', { type, payload, error });
-    return false;
-  }
+  return sent.ok;
 }
 
 function extractInventoryItems(raw: unknown): unknown[] {
@@ -131,7 +101,7 @@ async function readInventoryIdSet(): Promise<Set<string>> {
       extractCandidateIds(item as Record<string, unknown>).forEach((id) => result.add(id));
     }
   } catch (error) {
-    log('⚠️ petSwap inventory read failed', error);
+    log('?? petSwap inventory read failed', error);
   }
 
   return result;
@@ -184,6 +154,83 @@ async function waitForSwapApplied(targetSlotId: string, itemId: string, timeoutM
   return false;
 }
 
+async function waitForPetInActiveList(itemId: string, timeoutMs: number): Promise<boolean> {
+  const expectedItemId = normalizeId(itemId);
+  if (!expectedItemId) return false;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const activePets = getActivePetInfos();
+    const found = activePets.some(
+      (p) =>
+        normalizeId(p.petId) === expectedItemId ||
+        normalizeId(p.slotId) === expectedItemId,
+    );
+    if (found) return true;
+    await delay(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+export interface PlacePetIntoActiveSlotArgs {
+  source: 'inventory' | 'hutch';
+  itemId: string;
+  storageId?: string | null;
+}
+
+/**
+ * Place a pet from inventory or hutch into an empty active slot.
+ * Uses the PlacePet WS action (no existing pet required in the target slot).
+ */
+export async function placePetIntoActiveSlot(
+  args: PlacePetIntoActiveSlotArgs,
+): Promise<SwapPetIntoActiveSlotResult> {
+  const itemId = normalizeId(args.itemId);
+
+  if (!itemId) {
+    return { ok: false, reason: 'missing_ids' };
+  }
+
+  if (!hasRoomConnection()) {
+    return { ok: false, reason: 'missing_connection' };
+  }
+
+  if (args.source === 'hutch') {
+    const storageId = normalizeId(args.storageId) ?? DEFAULT_STORAGE_ID;
+    const retrieveSent = sendAction('RetrieveItemFromStorage', {
+      itemId,
+      storageId,
+    });
+
+    if (!retrieveSent) {
+      return { ok: false, reason: 'retrieve_failed_or_inventory_full' };
+    }
+
+    const retrieved = await waitForInventoryContains(itemId, HUTCH_RETRIEVE_TIMEOUT_MS);
+    if (!retrieved) {
+      return { ok: false, reason: 'retrieve_failed_or_inventory_full' };
+    }
+  }
+
+  const placeSent = sendAction('PlacePet', {
+    itemId,
+    position: { x: 0, y: 0 },
+    tileType: 'Boardwalk',
+    localTileIndex: 64,
+  });
+
+  if (!placeSent) {
+    return { ok: false, reason: 'swap_failed_or_timeout' };
+  }
+
+  const applied = await waitForPetInActiveList(itemId, SWAP_TIMEOUT_MS);
+  if (!applied) {
+    return { ok: false, reason: 'swap_failed_or_timeout' };
+  }
+
+  return { ok: true };
+}
+
 export async function swapPetIntoActiveSlot(args: SwapPetIntoActiveSlotArgs): Promise<SwapPetIntoActiveSlotResult> {
   const itemId = normalizeId(args.itemId);
   const targetSlotId = normalizeId(args.targetSlotId);
@@ -192,7 +239,7 @@ export async function swapPetIntoActiveSlot(args: SwapPetIntoActiveSlotArgs): Pr
     return { ok: false, reason: 'missing_ids' };
   }
 
-  if (!getRoomConnection()) {
+  if (!hasRoomConnection()) {
     return { ok: false, reason: 'missing_connection' };
   }
 
@@ -229,3 +276,6 @@ export async function swapPetIntoActiveSlot(args: SwapPetIntoActiveSlotArgs): Pr
 
   return { ok: true };
 }
+
+
+

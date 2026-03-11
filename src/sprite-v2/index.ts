@@ -13,6 +13,7 @@ import { clearVariantCache, getCacheStats } from './cache';
 import * as api from './api';
 import { sleep } from '../utils/dom';
 import { yieldToBrowser, YieldController, delay } from '../utils/scheduling';
+import { log } from '../utils/logger';
 
 // Global state
 let ctx: {
@@ -635,7 +636,7 @@ async function start(): Promise<SpriteService> {
     curVariant: () => computeVariantSignature(ctx!.state),
   };
 
-  console.log('[QPM Sprite-v2] Initialized', {
+  log('[QPM Sprite-v2] Initialized', {
     version: ctx.state.version,
     pixi: pixiVersion,
     textures: ctx.state.tex.size,

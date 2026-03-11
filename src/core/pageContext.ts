@@ -9,9 +9,23 @@ declare const unsafeWindow: (Window & typeof globalThis & Record<string, unknown
 /* eslint-enable @typescript-eslint/ban-ts-comment */
 
 const sandboxWindow = window;
-const pageWindowRef = typeof unsafeWindow !== 'undefined' && unsafeWindow
-  ? unsafeWindow
-  : sandboxWindow;
+
+function resolvePageWindow(): Window & typeof globalThis & Record<string, unknown> {
+  // Tampermonkey / Violentmonkey standard
+  if (typeof unsafeWindow !== 'undefined' && unsafeWindow) {
+    return unsafeWindow;
+  }
+
+  // Greasemonkey / Firefox bridge
+  const wrapped = (sandboxWindow as unknown as { wrappedJSObject?: unknown }).wrappedJSObject;
+  if (wrapped && wrapped !== sandboxWindow) {
+    return wrapped as Window & typeof globalThis & Record<string, unknown>;
+  }
+
+  return sandboxWindow as Window & typeof globalThis & Record<string, unknown>;
+}
+
+const pageWindowRef = resolvePageWindow();
 
 /** Reference to the actual page window. Falls back to the sandbox window. */
 export const pageWindow = pageWindowRef;
@@ -47,4 +61,23 @@ export function readSharedGlobal<T = unknown>(name: string): T | undefined {
     }
   }
   return (pageWindowRef as unknown as Record<string, unknown>)[name] as T | undefined;
+}
+
+/**
+ * Dispatch a CustomEvent to both page and sandbox contexts.
+ */
+export function dispatchCustomEventAll<T = unknown>(type: string, detail?: T): void {
+  const dispatch = (target: Window & typeof globalThis): void => {
+    try {
+      const EventCtor = (target as unknown as { CustomEvent?: typeof CustomEvent }).CustomEvent ?? CustomEvent;
+      target.dispatchEvent(new EventCtor(type, detail !== undefined ? { detail } : undefined));
+    } catch {
+      // Ignore cross-realm event constructor issues.
+    }
+  };
+
+  dispatch(pageWindowRef);
+  if (isIsolatedContext) {
+    dispatch(sandboxWindow);
+  }
 }

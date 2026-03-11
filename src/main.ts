@@ -1,6 +1,6 @@
 // src/main.ts
 import { ready, sleep, getGameHudRoot } from './utils/dom';
-import { log } from './utils/logger';
+import { log, importantLog, isVerboseLogsEnabled, setVerboseLogsEnabled } from './utils/logger';
 import { yieldToBrowser } from './utils/scheduling';
 import { startMutationReminder } from './features/mutationReminder';
 import { startMutationTracker } from './features/mutationTracker';
@@ -29,10 +29,13 @@ import { initSpriteSystem } from './sprite-v2/index';
 import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
+import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
 
-import { initializeAchievements } from './store/achievements';
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
+import { initPetTeamsStore, stopPetTeamsStore } from './store/petTeams';
+import { initPetTeamsLogs, stopPetTeamsLogs } from './store/petTeamsLogs';
+import { initPetsWindow, stopPetsWindow, togglePetsWindow } from './ui/petsWindow';
 import { toggleWindow } from './ui/modalWindow';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
@@ -40,15 +43,30 @@ import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindo
 import { resetFriendsCache } from './services/ariesPlayers';
 import { exposeValidationCommands } from './utils/validationCommands';
 import { storage } from './utils/storage';
+import { DEBUG_GLOBALS_OPT_IN_KEY, isDebugGlobalsEnabled } from './utils/debugGlobals';
 import { timerManager } from './utils/timerManager';
 // Data Catalog Loader
-import { initCatalogLoader, logCatalogStatus, diagnoseCatalogs, getCatalogs, areCatalogsReady, waitForCatalogs, onCatalogsReady } from './catalogs/gameCatalogs';
+import {
+  initCatalogLoader,
+  logCatalogStatus,
+  diagnoseCatalogs,
+  getCatalogs,
+  areCatalogsReady,
+  waitForCatalogs,
+  onCatalogsReady,
+  forceWeatherCatalogRefresh,
+} from './catalogs/gameCatalogs';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+const DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
-  storage, // Expose storage for inline onclick handlers
+  setVerboseLogs: (enabled: boolean) => {
+    setVerboseLogsEnabled(Boolean(enabled));
+    return { verboseLogs: isVerboseLogsEnabled() };
+  },
+  getVerboseLogs: () => isVerboseLogsEnabled(),
   debugPets: () => {
     const pets = getActivePetsDebug();
     console.log('=== Active Pets Debug (v2024-11-13-DOM-STRENGTH) ===');
@@ -780,18 +798,6 @@ const QPM_DEBUG_API = {
     console.log('• Check console for detection logs');
   },
 
-  toggleBadgePreview: async (force?: boolean) => {
-    try {
-      const { toggleBadgePreview } = await import('./ui/achievementsWindow');
-      const result = toggleBadgePreview(force);
-      log(`QPM badge preview ${result ? 'enabled' : 'disabled'}${force === undefined ? '' : ` (forced ${force})`}`);
-      return result;
-    } catch (error) {
-      console.error('Failed to toggle badge preview', error);
-      return null;
-    }
-  },
-
   // Debug helpers (inventory + seeds + rainbow + Pet Hub)
   debugInventoryAtoms: async (labels: string[] = ['myInventoryAtom', 'myCropInventoryAtom', 'seedInventoryAtom']) => {
     const cache = (window as any).__qpmJotaiAtomCache__;
@@ -993,10 +999,27 @@ const QPM_DEBUG_API = {
     const { showTutorialPopup } = await import('./ui/tutorialPopup');
     showTutorialPopup();
   },
+
+  // Pet Teams debug helpers
+  togglePetsWindow,
+  getPetTeams: async () => {
+    const { getTeamsConfig } = await import('./store/petTeams');
+    return getTeamsConfig();
+  },
+  applyPetTeam: async (teamId: string) => {
+    const { applyTeam } = await import('./store/petTeams');
+    return applyTeam(teamId);
+  },
+  getPetPool: async () => {
+    const { getAllPooledPets } = await import('./store/petTeams');
+    return getAllPooledPets();
+  },
 };
 
-registerInspectFriendHelper();
-registerInspectPlayerHelper();
+if (DEBUG_GLOBALS_ENABLED) {
+  registerInspectFriendHelper();
+  registerInspectPlayerHelper();
+}
 
 // Simple console helper to force inspector self playerId for friend-level testing
 function registerInspectFriendHelper(): void {
@@ -1046,13 +1069,16 @@ function registerInspectPlayerHelper(): void {
     console.warn('[PublicRooms] Failed to share QPM_INSPECT_PLAYER globally', err);
   }
 }
-
-shareGlobal('QPM', QPM_DEBUG_API);
-shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
-const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-(globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
-(globalDebugTarget as any).QPM = QPM_DEBUG_API;
-log('✅ QPM debug API registered');
+if (DEBUG_GLOBALS_ENABLED) {
+  shareGlobal('QPM', QPM_DEBUG_API);
+  shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
+  const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  (globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
+  (globalDebugTarget as any).QPM = QPM_DEBUG_API;
+  log('QPM debug API registered');
+} else {
+  log(`[Main] Debug globals disabled. Set ${DEBUG_GLOBALS_OPT_IN_KEY}=true to enable.`);
+}
 
 // Load configuration similar to original
 const LS_KEY = 'quinoa-pet-manager';
@@ -1142,10 +1168,14 @@ window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
   timerManager.destroy();
+  stopNativeFeedIntercept();
+  stopPetTeamsStore();
+  stopPetTeamsLogs();
+  stopPetsWindow();
 }, { once: true });
 
 async function waitForGame(): Promise<void> {
-  log('⏳ Waiting for game to load...');
+  log('Waiting for game to load...');
   
   // Wait for body
   await ready;
@@ -1161,25 +1191,25 @@ async function waitForGame(): Promise<void> {
     if (hudRoot) {
       const hudContent = hudRoot.querySelector('canvas, button, [data-tm-main-interface], [data-tm-hud-root], [data-tm-player-id]');
       if (hudContent) {
-        log('✅ Game UI detected');
+        log('Game UI detected');
         return;
       }
     }
 
     const anyCanvas = document.querySelector('#App canvas');
     if (anyCanvas) {
-      log('✅ Game UI detected');
+      log('Game UI detected');
       return;
     }
 
     await sleep(interval);
   }
   
-  log('⚠️ Game UI not detected within timeout, proceeding anyway');
+  log('Game UI not detected within timeout, proceeding anyway');
 }
 
 async function initialize(): Promise<void> {
-  log('🚀 Quinoa Pet Manager initializing...');
+  importantLog('Quinoa Pet Manager initializing...');
 
   // Initialize catalog loader (hooks Object.* methods to capture game data)
   // MUST be called early, before game code runs
@@ -1187,10 +1217,12 @@ async function initialize(): Promise<void> {
   log('[Main] Catalog loader initialized');
 
   // Log when catalogs become ready (for timing analysis)
-  onCatalogsReady((catalogs) => {
+  onCatalogsReady(() => {
     const timeMs = performance.now();
-    log(`✅ [Catalog] Catalogs ready at ${(timeMs / 1000).toFixed(1)}s after page load`);
-    logCatalogStatus();
+    log(`[Catalog] Catalogs ready at ${(timeMs / 1000).toFixed(1)}s after page load`);
+    if (isVerboseLogsEnabled()) {
+      logCatalogStatus();
+    }
   });
 
   // Initialize sprite system (sprite-v2) - must be done early to hook PIXI
@@ -1199,17 +1231,19 @@ async function initialize(): Promise<void> {
   const spriteInit = initSpriteSystem().then((service) => {
     spriteService = service;
     setSpriteService(service);
-    shareGlobal('Sprites', service);
-    log('✅ Sprite system v2 initialized');
+    if (DEBUG_GLOBALS_ENABLED) {
+      shareGlobal('Sprites', service);
+    }
+    log('Sprite system v2 initialized');
     
     // Export sprite inspector after sprites are ready
-    if (typeof window !== 'undefined') {
+    if (DEBUG_GLOBALS_ENABLED && typeof window !== 'undefined') {
       const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
       (targetWindow as any).inspectPetSprites = inspectPetSprites;
-      log('🖼️ inspectPetSprites() available in console');
+      log('inspectPetSprites() available in console');
     }
   }).catch((err) => {
-    log('❌ Sprite system failed to initialize:', err);
+    console.error('[QuinoaPetMgr] Sprite system failed to initialize:', err);
   });
 
   // Wait for game to be ready (parallel with sprite init)
@@ -1231,6 +1265,11 @@ async function initialize(): Promise<void> {
   initializeAutoFavorite();
   startBulkFavorite();
   await startSellSnapshotWatcher();
+  await yieldToBrowser();
+
+  // Phase 3b: Pet Teams (needs inventory + pet stores ready)
+  initPetTeamsLogs();
+  initPetTeamsStore();
   await yieldToBrowser();
 
   // Phase 4: Garden bridge (needed for reminders)
@@ -1271,22 +1310,24 @@ async function initialize(): Promise<void> {
   // Phase 8: Non-critical features (can load after UI is visible)
   startCropBoostTracker();
   initCropSizeIndicator();
+  startNativeFeedIntercept();
   await yieldToBrowser();
 
-  // Phase 9: Achievements (heavy, do later)
-  initializeAchievements();
+  // Phase 9: Expose Aries bridge
   exposeAriesBridge();
   await yieldToBrowser();
 
   // Phase 10: Public rooms and garden inspector
   initPublicRooms();
-  const gardenCommands = setupGardenInspector();
-  shareGlobal('QPM_INSPECT_GARDEN', gardenCommands.QPM_INSPECT_GARDEN);
-  shareGlobal('QPM_EXPOSE_GARDEN', gardenCommands.QPM_EXPOSE_GARDEN);
-  shareGlobal('QPM_CURRENT_TILE', gardenCommands.QPM_CURRENT_TILE);
-  (QPM_DEBUG_API as any).inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
-  (QPM_DEBUG_API as any).exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
-  (QPM_DEBUG_API as any).currentTile = gardenCommands.QPM_CURRENT_TILE;
+  if (DEBUG_GLOBALS_ENABLED) {
+    const gardenCommands = setupGardenInspector();
+    shareGlobal('QPM_INSPECT_GARDEN', gardenCommands.QPM_INSPECT_GARDEN);
+    shareGlobal('QPM_EXPOSE_GARDEN', gardenCommands.QPM_EXPOSE_GARDEN);
+    shareGlobal('QPM_CURRENT_TILE', gardenCommands.QPM_CURRENT_TILE);
+    (QPM_DEBUG_API as any).inspectGarden = gardenCommands.QPM_INSPECT_GARDEN;
+    (QPM_DEBUG_API as any).exposeGarden = gardenCommands.QPM_EXPOSE_GARDEN;
+    (QPM_DEBUG_API as any).currentTile = gardenCommands.QPM_CURRENT_TILE;
+  }
 
   // Expose catalog functions to global debug API
   (QPM_DEBUG_API as any).getCatalogs = getCatalogs;
@@ -1294,6 +1335,7 @@ async function initialize(): Promise<void> {
   (QPM_DEBUG_API as any).waitForCatalogs = waitForCatalogs;
   (QPM_DEBUG_API as any).logCatalogStatus = logCatalogStatus;
   (QPM_DEBUG_API as any).diagnoseCatalogs = diagnoseCatalogs;
+  (QPM_DEBUG_API as any).forceWeatherCatalogRefresh = forceWeatherCatalogRefresh;
 
   // Expose garden snapshot for debugging
   const { getGardenSnapshot, getMapSnapshot, isGardenBridgeReady } = await import('./features/gardenBridge');
@@ -1316,13 +1358,15 @@ async function initialize(): Promise<void> {
 
 
   // Also expose to window for easy console access
-  if (typeof window !== 'undefined') {
+  if (DEBUG_GLOBALS_ENABLED && typeof window !== 'undefined') {
     (window as any).__QPM_DiagnoseCatalogs = diagnoseCatalogs;
-    log('🔍 __QPM_DiagnoseCatalogs() available in console');
+    log('__QPM_DiagnoseCatalogs() available in console');
   }
 
   // Expose validation commands for testing
-  exposeValidationCommands();
+  if (DEBUG_GLOBALS_ENABLED) {
+    exposeValidationCommands();
+  }
 
   // Set configuration for UI
   setCfg(cfg);
@@ -1333,6 +1377,7 @@ async function initialize(): Promise<void> {
 
   // Create UI (needs sprites to be ready)
   await createOriginalUI();
+  initPetsWindow();
 
   // Start version checker (checks for updates periodically)
   startVersionChecker();
@@ -1343,7 +1388,7 @@ async function initialize(): Promise<void> {
     showTutorialPopup();
   }, 1500); // Delay to let UI settle
 
-  log('✅ Quinoa Pet Manager initialized successfully');
+  importantLog('Quinoa Pet Manager initialized successfully');
 
   // Schedule sprite cache warmup during idle time (Aries Mod pattern)
   // Delays 2 seconds, then pre-renders sprites in background batches

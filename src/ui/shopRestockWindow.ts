@@ -1,1585 +1,1320 @@
 // src/ui/shopRestockWindow.ts
-// Shop Restock Tracker UI
+// Shop Restock Tracker — pixel-perfect parity with reference viz
 
-import {
-  initializeRestockTracker,
-  addRestockEvents,
-  getAllRestockEvents,
-  calculateItemStats,
-  getSummaryStats,
-  clearAllRestocks,
-  onRestockUpdate,
-  predictItemNextAppearance,
-  getPredictionHistory,
-  getWindowPredictions,
-  getCurrentMonitoringAlerts,
-  formatTimeWindow,
-  getItemConfig,
-  type PredictionRecord,
-  type WindowBasedPrediction,
-  type PredictionWindow,
-} from '../features/shopRestockTracker';
-import {
-  startLiveShopTracking,
-  stopLiveShopTracking,
-  isLiveTrackingActive,
-  enableLiveTracking,
-  disableLiveTracking,
-  isLiveTrackingEnabled,
-} from '../features/shopRestockLiveTracker';
-import { parseRestockFile } from '../features/shopRestockParser';
-import { visibleInterval } from '../utils/timerManager';
+import { toggleWindow } from './modalWindow';
 import { log } from '../utils/logger';
-import { getCropSpriteCanvas, getPetSpriteCanvas } from '../sprite-v2/compat';
+import {
+  fetchRestockData,
+  getRestockDataSync,
+  getRestockFetchedAt,
+  getRestockRefreshBudget,
+  getItemProbability,
+  type RestockItem,
+} from '../utils/restockDataService';
+import { visibleInterval } from '../utils/timerManager';
+import { getAnySpriteDataUrl, getCropSpriteCanvas, getPetSpriteCanvas, onSpritesReady } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { storage } from '../utils/storage';
 
-export interface ShopRestockWindowState {
-  root: HTMLElement;
-  contentContainer: HTMLElement;
-  countdownInterval: (() => void) | null;
-  resizeListener: (() => void) | null;
-  restockUnsubscribe: (() => void) | null;
+// ---------------------------------------------------------------------------
+// Static data
+// ---------------------------------------------------------------------------
+
+// Time-limited seasonal items — hidden from history after expiry.
+// Key: "shopType:itemId"  Value: expiry timestamp (ms UTC)
+const ITEM_EXPIRY: Record<string, number> = {
+  'seed:PineTree':             1768179600000,
+  'seed:Poinsettia':           1768179600000,
+  'egg:WinterEgg':             1768179600000,
+  'decor:Cauldron':            1762477200000,
+  'decor:ColoredStringLights': 1768179600000,
+  'decor:LargeGravestone':     1762477200000,
+  'decor:MarbleCaribou':       1768179600000,
+  'decor:MediumGravestone':    1762477200000,
+  'decor:SmallGravestone':     1762477200000,
+  'decor:StoneCaribou':        1768179600000,
+  'decor:WoodCaribou':         1768179600000,
+};
+
+const RARITY_COLORS: Record<string, string> = {
+  common:    '#E7E7E7',
+  uncommon:  '#67BD4D',
+  rare:      '#0071C6',
+  legendary: '#FFC734',
+  mythic:    '#9944A7',
+  mythical:  '#9944A7',
+  divine:    '#FF7835',
+  celestial: '#FF00FF',
+};
+
+const RARITY_GLOW: Record<string, string> = {
+  legendary: '0 0 8px rgba(255,199,52,0.3)',
+  mythic:    '0 0 10px rgba(153,68,167,0.4)',
+  mythical:  '0 0 10px rgba(153,68,167,0.4)',
+  divine:    '0 0 12px rgba(255,120,53,0.5)',
+  celestial: '0 0 12px rgba(255,0,255,0.5)',
+};
+
+const RARITY_ORDER: Record<string, number> = {
+  common: 0, uncommon: 1, rare: 2, legendary: 3,
+  mythic: 4, mythical: 4, divine: 5, celestial: 6,
+};
+
+const SHOP_ORDER: Record<string, number> = { seed: 0, egg: 1, decor: 2 };
+
+const SHOP_CYCLE_INTERVALS: Record<string, number> = {
+  seed:  5  * 60 * 1000,
+  egg:   15 * 60 * 1000,
+  decor: 60 * 60 * 1000,
+};
+
+const TRACKED_KEY    = 'qpm.restock.tracked';
+const UI_STATE_KEY   = 'qpm.restock.ui.v1';
+const ARIEDAM_KEY    = 'qpm.ariedam.gamedata';
+const ARIEDAM_TTL_MS = 24 * 60 * 60 * 1000;
+const SEARCH_DEBOUNCE_MS = 140;
+const UI_STATE_SAVE_DEBOUNCE_MS = 180;
+const HISTORY_CHUNK_SIZE = 40;
+
+const CELESTIAL_IDS = new Set([
+  'Starweaver', 'StarweaverPod',
+  'Moonbinder', 'MoonbinderPod', 'MoonCelestial',
+  'Dawnbinder', 'DawnbinderPod', 'DawnCelestial',
+  'SunCelestial', 'MythicalEgg',
+]);
+
+const PITY_RAMP_DAY = 15;
+const PITY_CAP_DAY  = 22;
+
+const SHOP_FILTERS = [
+  { label: 'All', value: 'all' },
+  { label: 'Celestial', value: 'celestial' },
+  { label: 'Seeds', value: 'seed' },
+  { label: 'Eggs', value: 'egg' },
+  { label: 'Decor', value: 'decor' },
+] as const;
+
+const CATEGORY_LABELS: Record<string, string> = {
+  seed: 'Seeds',
+  egg: 'Eggs',
+  decor: 'Decor',
+};
+
+// ---------------------------------------------------------------------------
+// Item meta cache (populated by Ariedam /data)
+// ---------------------------------------------------------------------------
+
+interface ItemMeta { name: string; rarity: string; price: number }
+const itemMetaCache = new Map<string, ItemMeta>();
+const toolItemIds   = new Set<string>();
+
+type GmXhr = (details: {
+  method: 'GET';
+  url: string;
+  timeout?: number;
+  onload?: (res: { status: number; responseText: string }) => void;
+  onerror?: (err: unknown) => void;
+  ontimeout?: () => void;
+}) => void;
+
+function resolveGmXhr(): GmXhr | null {
+  if (typeof GM_xmlhttpRequest === 'function') return GM_xmlhttpRequest as unknown as GmXhr;
+  const gm = (globalThis as any).GM;
+  if (typeof gm?.xmlHttpRequest === 'function') return gm.xmlHttpRequest as GmXhr;
+  return null;
 }
 
-/**
- * Format number with commas
- */
-function formatNumber(num: number): string {
-  return num.toLocaleString();
-}
-
-/**
- * Format date
- */
-function formatDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleString();
-}
-
-/**
- * Create Shop Restock Tracker window
- */
-export function createShopRestockWindow(): ShopRestockWindowState {
-  const root = document.createElement('div');
-  root.style.cssText = `
-    position: fixed;
-    top: 80px;
-    right: 20px;
-    width: 900px;
-    max-height: 80vh;
-    overflow-y: auto;
-    background: var(--qpm-background, rgba(0, 0, 0, 0.92));
-    border: 2px solid var(--qpm-border, #555);
-    border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-    z-index: 10003;
-    font-family: Arial, sans-serif;
-    display: none;
-  `;
-
-  // Title bar
-  const titleBar = document.createElement('div');
-  titleBar.style.cssText = `
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    background: var(--qpm-surface-1, #1a1a1a);
-    border-bottom: 2px solid var(--qpm-border, #555);
-    cursor: move;
-  `;
-
-  const title = document.createElement('h3');
-  title.textContent = '🏪 Shop Restock Tracker';
-  title.style.cssText = `
-    margin: 0;
-    color: var(--qpm-text, #fff);
-    font-size: 16px;
-    font-weight: 600;
-  `;
-
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕';
-  closeBtn.style.cssText = `
-    background: transparent;
-    border: none;
-    color: var(--qpm-text, #fff);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 0 8px;
-    line-height: 1;
-  `;
-  closeBtn.onclick = () => {
-    root.style.display = 'none';
-  };
-
-  titleBar.appendChild(title);
-  titleBar.appendChild(closeBtn);
-  root.appendChild(titleBar);
-
-  // Content container
-  const contentContainer = document.createElement('div');
-  contentContainer.style.cssText = `
-    padding: 16px;
-    color: var(--qpm-text, #fff);
-  `;
-  root.appendChild(contentContainer);
-
-  // Make draggable
-  makeDraggable(root, titleBar);
-
-  // Add to DOM
-  document.body.appendChild(root);
-
-  // Create state object
-  const state: ShopRestockWindowState = {
-    root,
-    contentContainer,
-    countdownInterval: null,
-    resizeListener: null,
-    restockUnsubscribe: null,
-  };
-
-  // Add resize listener to keep window visible when viewport changes
-  const resizeListener = () => {
-    if (root.style.display !== 'none') {
-      clampWindowPosition(root);
-    }
-  };
-  window.addEventListener('resize', resizeListener);
-  state.resizeListener = resizeListener;
-
-  // Initialize
-  initializeRestockTracker();
-
-  // Start live tracking automatically (only if enabled)
-  if (isLiveTrackingEnabled()) {
-    startLiveShopTracking();
-  }
-
-  // Initial render
-  renderContent(state);
-
-  // Subscribe to updates with debouncing to prevent excessive re-renders
-  let debounceTimer: number | null = null;
-  state.restockUnsubscribe = onRestockUpdate(() => {
-    if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
-    }
-    debounceTimer = window.setTimeout(() => {
-      debounceTimer = null;
-      renderContent(state);
-    }, 500); // Debounce 500ms to batch rapid updates
-  });
-
-  return state;
-}
-
-/**
- * Render window content
- */
-function renderContent(state: ShopRestockWindowState): void {
-  const events = getAllRestockEvents();
-  const summary = getSummaryStats();
-
-  // Clear countdown interval if exists
-  if (state.countdownInterval !== null) {
-    state.countdownInterval();
-    state.countdownInterval = null;
-  }
-
-  state.contentContainer.innerHTML = '';
-
-  // Live tracking section (always show)
-  const liveTrackingSection = createLiveTrackingSection();
-  state.contentContainer.appendChild(liveTrackingSection);
-
-  // Import section
-  const importSection = createImportSection(state);
-  state.contentContainer.appendChild(importSection);
-
-  // Summary section
-  if (events.length > 0) {
-    // Show loading placeholder for heavy sections
-    const loadingPlaceholder = document.createElement('div');
-    loadingPlaceholder.style.cssText = `
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--qpm-text-muted, #aaa);
-    `;
-    loadingPlaceholder.textContent = '⏳ Loading predictions and statistics...';
-    state.contentContainer.appendChild(loadingPlaceholder);
-
-    // Defer heavy rendering to next frame to prevent UI blocking
-    requestAnimationFrame(() => {
-      if (state.contentContainer.contains(loadingPlaceholder)) {
-        state.contentContainer.removeChild(loadingPlaceholder);
-      }
-
-      // Prediction section (expensive - uses cached data but still creates DOM)
-      const predictionSection = createPredictionSection(state);
-      state.contentContainer.appendChild(predictionSection);
-
-      const summarySection = createSummarySection(summary);
-      state.contentContainer.appendChild(summarySection);
-
-      // Item statistics (expensive - iterates all events)
-      const statsSection = createItemStatsSection();
-      state.contentContainer.appendChild(statsSection);
+function gmFetch(url: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const xhr = resolveGmXhr();
+    if (!xhr) return reject(new Error('GM_xmlhttpRequest unavailable'));
+    xhr({
+      method: 'GET',
+      url,
+      timeout: 10_000,
+      onload: (res) => {
+        if (res.status >= 200 && res.status < 300) {
+          try { resolve(JSON.parse(res.responseText)); }
+          catch { reject(new Error('JSON parse failed')); }
+        } else {
+          reject(new Error(`HTTP ${res.status}`));
+        }
+      },
+      onerror:   () => reject(new Error('Network error')),
+      ontimeout: () => reject(new Error('Timeout')),
     });
+  });
+}
+
+function buildItemMetaCache(gameData: any): void {
+  itemMetaCache.clear();
+  toolItemIds.clear();
+
+  for (const [plantId, plantData] of Object.entries<any>(gameData.plants ?? {})) {
+    const seed = plantData.seed;
+    if (!seed) continue;
+    itemMetaCache.set(`seed:${plantId}`, {
+      name:   seed.name  || `${plantId} Seed`,
+      rarity: (seed.rarity ?? 'common').toLowerCase(),
+      price:  seed.coinPrice ?? 0,
+    });
+  }
+  for (const [eggId, eggData] of Object.entries<any>(gameData.eggs ?? {})) {
+    itemMetaCache.set(`egg:${eggId}`, {
+      name:   eggData.name || eggId,
+      rarity: (eggData.rarity ?? 'common').toLowerCase(),
+      price:  eggData.coinPrice ?? 0,
+    });
+  }
+  for (const [decorId, decorData] of Object.entries<any>(gameData.decor ?? {})) {
+    itemMetaCache.set(`decor:${decorId}`, {
+      name:   decorData.name || decorId,
+      rarity: (decorData.rarity ?? 'common').toLowerCase(),
+      price:  decorData.coinPrice ?? 0,
+    });
+  }
+  for (const [itemId] of Object.entries<any>(gameData.items ?? {})) {
+    toolItemIds.add(itemId);
+    toolItemIds.add(itemId + 's');
+  }
+}
+
+async function initGameData(): Promise<void> {
+  const cached = storage.get<{ data: unknown; timestamp: number } | null>(ARIEDAM_KEY, null);
+  if (cached && typeof cached.timestamp === 'number' && Date.now() - cached.timestamp < ARIEDAM_TTL_MS) {
+    buildItemMetaCache(cached.data);
+    return;
+  }
+
+  try {
+    const gameData = await gmFetch('https://mg-api.ariedam.fr/data');
+    storage.set(ARIEDAM_KEY, { data: gameData, timestamp: Date.now() });
+    buildItemMetaCache(gameData);
+  } catch (err) {
+    log('⚠️ [ShopRestock] Ariedam /data fetch failed', err);
+    // If we have stale cache, use it rather than nothing
+    const stale = storage.get<{ data: unknown; timestamp: number } | null>(ARIEDAM_KEY, null);
+    if (stale?.data) buildItemMetaCache(stale.data);
+  }
+}
+
+function getItemMeta(itemId: string, shopType: string): ItemMeta | null {
+  return itemMetaCache.get(`${shopType}:${itemId}`) ?? null;
+}
+
+function getItemName(itemId: string, shopType: string): string {
+  const meta = getItemMeta(itemId, shopType);
+  if (meta?.name) return meta.name;
+  // Fallback: convert camelCase ID to title case
+  return (itemId ?? '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function getItemRarity(itemId: string, shopType: string): string {
+  return getItemMeta(itemId, shopType)?.rarity ?? 'common';
+}
+
+function getItemPrice(itemId: string, shopType: string): number {
+  return getItemMeta(itemId, shopType)?.price ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+function formatETA(ts: number | null | undefined): string {
+  if (!ts) return '—';
+  const diff = ts - Date.now();
+  if (diff <= 0) {
+    const ms = Math.abs(diff);
+    const d = Math.floor(ms / 86_400_000);
+    const h = Math.floor(ms / 3_600_000);
+    return d >= 1 ? `Late ${d}d` : `Late ${h}h`;
+  }
+  const min = Math.ceil(diff / 60_000);
+  if (min < 60) return `~${min}m`;
+  const hr = Math.ceil(min / 60);
+  if (hr < 24) return `~${hr}h`;
+  return `~${Math.ceil(hr / 24)}d`;
+}
+
+function etaColor(ts: number | null | undefined): string {
+  if (!ts) return 'rgba(224,224,224,0.4)';
+  const diff = ts - Date.now();
+  if (diff <= 0)  return '#10b981';  // overdue
+  const h = diff / 3_600_000;
+  if (h < 1)  return '#22c55e';
+  if (h < 6)  return '#84cc16';
+  if (h < 24) return '#eab308';
+  const d = diff / 86_400_000;
+  if (d < 7)  return '#f97316';
+  if (d < 14) return '#f87171';
+  return '#ef4444';
+}
+
+function ratePercent(rate: number | null): string {
+  if (rate === null || rate === undefined) return '—';
+  if (rate >= 1) return '100%';
+  if (rate <= 0) return '0%';
+  const pct = rate * 100;
+  let formatted: string;
+  if (pct > 99) {
+    formatted = pct.toString().slice(0, 5);
+    if (parseFloat(formatted) >= 100) formatted = '99.99';
+  } else if (pct < 0.01) {
+    formatted = '< 0.01';
   } else {
-    const emptyState = document.createElement('div');
-    emptyState.style.cssText = `
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--qpm-text-muted, #aaa);
-      font-style: italic;
-    `;
-    emptyState.textContent = 'No restock data imported yet. Upload a Discord HTML export to get started!';
-    state.contentContainer.appendChild(emptyState);
+    const decimals = pct >= 10 ? 1 : 2;
+    formatted = pct.toFixed(decimals);
   }
+  if (parseFloat(formatted) >= 100) formatted = '99.9';
+  if (parseFloat(formatted) === 0)  formatted = '0.01';
+  return `${formatted}%`;
 }
 
-/**
- * Create live tracking section
- */
-function createLiveTrackingSection(): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = `
-    margin-bottom: 20px;
-    padding: 16px;
-    background: rgba(76, 175, 80, 0.1);
-    border-radius: 8px;
-    border: 2px solid rgba(76, 175, 80, 0.3);
-  `;
-
-  const heading = document.createElement('h4');
-  heading.textContent = '📡 Live Shop Monitoring';
-  heading.style.cssText = `
-    margin: 0 0 12px 0;
-    color: var(--qpm-accent, #4CAF50);
-    font-size: 14px;
-  `;
-  section.appendChild(heading);
-
-  const status = document.createElement('div');
-  const isTracking = isLiveTrackingActive();
-  const isEnabled = isLiveTrackingEnabled();
-  status.style.cssText = `
-    margin-bottom: 12px;
-    font-size: 12px;
-    padding: 8px 12px;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 4px;
-  `;
-  status.innerHTML = isTracking
-    ? `<span style="color: #4CAF50;">● Active</span> - Monitoring shop for restocks in real-time`
-    : `<span style="color: #aaa;">○ Inactive</span> - Live tracking is not running`;
-  section.appendChild(status);
-
-  const description = document.createElement('p');
-  description.style.cssText = `
-    margin: 0 0 12px 0;
-    font-size: 12px;
-    color: var(--qpm-text-muted, #aaa);
-    line-height: 1.5;
-  `;
-  description.textContent = 'Automatically detects and records shop restocks while you play.';
-  section.appendChild(description);
-
-  // Toggle button
-  const toggleBtn = document.createElement('button');
-  toggleBtn.textContent = isEnabled ? '🛑 Disable Live Tracking' : '▶️ Enable Live Tracking';
-  toggleBtn.style.cssText = `
-    padding: 8px 16px;
-    background: ${isEnabled ? 'rgba(244, 67, 54, 0.2)' : 'rgba(76, 175, 80, 0.2)'};
-    color: ${isEnabled ? '#f44336' : '#4CAF50'};
-    border: 1px solid ${isEnabled ? '#f44336' : '#4CAF50'};
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-  `;
-  toggleBtn.onclick = () => {
-    if (isEnabled) {
-      disableLiveTracking();
-    } else {
-      enableLiveTracking();
-    }
-    // Re-render to update status
-    const parent = section.parentElement;
-    if (parent) {
-      const newSection = createLiveTrackingSection();
-      parent.replaceChild(newSection, section);
-    }
-  };
-  section.appendChild(toggleBtn);
-
-  return section;
+function rateColor(rate: number | null): string {
+  if (rate === null || rate === undefined) return '#f87171';
+  const pct = rate * 100;
+  if (pct >= 80) return '#4ade80';
+  if (pct >= 40) return '#fbbf24';
+  return '#f87171';
 }
 
-function buildRestockPayload(events: ReturnType<typeof getAllRestockEvents>) {
+function formatFrequency(rate: number | null, shopType: string): string {
+  if (rate === null || rate === undefined || rate <= 0) return '';
+  const interval = SHOP_CYCLE_INTERVALS[shopType];
+  if (!interval) return '';
+  if (rate >= 0.95) return 'Every restock';
+  const expectedMs = interval / rate;
+  const min = Math.round(expectedMs / 60_000);
+  if (min < 60) return `Every ~${min}m`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `Every ~${hr}h`;
+  return `Every ~${Math.round(hr / 24)}d`;
+}
+
+function formatAvgQty(qty: number | null): string {
+  if (!qty || qty <= 0) return '';
+  if (qty >= 10) return `~${Math.round(qty)} avg`;
+  if (Number.isInteger(qty)) return `~${qty} avg`;
+  return `~${qty.toFixed(1)} avg`;
+}
+
+function formatPrice(value: number): string {
+  if (!value || value < 1000) return `${value}`;
+  const units = ['K', 'M', 'B', 'T', 'Q'];
+  let v = value;
+  let idx = -1;
+  while (v >= 1000 && idx < units.length - 1) { v /= 1000; idx++; }
+  const rounded = v >= 10 ? Math.round(v) : Math.round(v * 10) / 10;
+  return `${rounded}${units[idx]}`;
+}
+
+function formatRelative(ms: number | null): string {
+  if (!ms) return '—';
+  const diff = Date.now() - ms;
+  if (diff < 0) return 'just now';
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function formatClock(ms: number | null): string {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function formatWindowCountdown(ms: number): string {
+  const safeMs = Math.max(0, ms);
+  const totalMinutes = Math.floor(safeMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}hr ${minutes}min`;
+}
+
+function formatRelativeDay(ms: number | null): string | null {
+  if (!ms) return null;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const dayMs = 86_400_000;
+  const target = new Date(ms);
+  target.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((startOfToday.getTime() - target.getTime()) / dayMs);
+  if (!Number.isFinite(diffDays) || diffDays <= 0) return null;
+  return new Intl.RelativeTimeFormat(undefined, { numeric: 'always' }).format(-diffDays, 'day');
+}
+
+function rarityColor(rarity: string): string {
+  return RARITY_COLORS[rarity] ?? RARITY_COLORS['common']!;
+}
+
+function rarityBorderStyle(rarity: string): string {
+  const color = rarityColor(rarity);
+  const glow  = RARITY_GLOW[rarity] ?? '';
+  return `border:2px solid ${color};${glow ? `box-shadow:${glow};` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// Sprite helper
+// ---------------------------------------------------------------------------
+
+const spriteUrlCache = new Map<string, string | null>();
+let coinSpriteUrlCache: string | null = null;
+
+function getCoinSpriteUrl(): string | null {
+  if (coinSpriteUrlCache) return coinSpriteUrlCache;
+  const url = getAnySpriteDataUrl('sprite/ui/Coin');
+  if (url) coinSpriteUrlCache = url;
+  return coinSpriteUrlCache;
+}
+
+function getSpriteUrl(item: RestockItem): string | null {
+  const id = item.item_id;
+  if (!id) return null;
+  const cacheKey = `${item.shop_type}:${id}`;
+  if (spriteUrlCache.has(cacheKey)) return spriteUrlCache.get(cacheKey)!;
+  let url: string | null = null;
+  try { url = canvasToDataUrl(getPetSpriteCanvas(id))  || null; } catch { /* */ }
+  if (!url) {
+    try { url = canvasToDataUrl(getCropSpriteCanvas(id)) || null; } catch { /* */ }
+  }
+  if (url) spriteUrlCache.set(cacheKey, url); // only cache successes; let failures retry after PIXI loads
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// Storage helpers
+// ---------------------------------------------------------------------------
+
+function loadTracked(): Set<string> {
+  const saved = storage.get<string[] | null>(TRACKED_KEY, null);
+  return new Set(Array.isArray(saved) ? saved : []);
+}
+
+function saveTracked(set: Set<string>): void {
+  storage.set(TRACKED_KEY, Array.from(set));
+}
+
+type SortColumn = 'item' | 'qty' | 'last' | null;
+type SortDirection = 'asc' | 'desc';
+
+interface ShopRestockUiState {
+  filter: string;
+  search: string;
+  predCollapsed: boolean;
+  sortColumn: SortColumn;
+  sortDirection: SortDirection;
+  historyScrollTop: number;
+}
+
+function loadUiState(): ShopRestockUiState {
+  const saved = storage.get<Partial<ShopRestockUiState> | null>(UI_STATE_KEY, null);
+  const sortColumn = saved?.sortColumn === 'item' || saved?.sortColumn === 'qty' || saved?.sortColumn === 'last'
+    ? saved.sortColumn
+    : null;
+  const sortDirection: SortDirection = saved?.sortDirection === 'desc' ? 'desc' : 'asc';
+  const historyScrollTop = Number.isFinite(saved?.historyScrollTop)
+    ? Math.max(0, Math.floor(saved!.historyScrollTop!))
+    : 0;
   return {
-    version: '2025-12-08',
-    exportedAt: Date.now(),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    events: events.map((event) => ({
-      id: event.id,
-      timestamp: event.timestamp,
-      dateString: event.dateString,
-      source: event.source,
-      items: event.items.map((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        type: item.type,
-      })),
-    })),
+    filter: typeof saved?.filter === 'string' ? saved.filter : 'all',
+    search: typeof saved?.search === 'string' ? saved.search : '',
+    predCollapsed: !!saved?.predCollapsed,
+    sortColumn,
+    sortDirection,
+    historyScrollTop,
   };
 }
 
-function serializePayload(payload: unknown): string {
-  // Replace < to avoid breaking the script tag when embedded in HTML
-  return JSON.stringify(payload).replace(/</g, '\\u003c');
+function isCelestial(itemId: string | null | undefined): boolean {
+  return !!itemId && CELESTIAL_IDS.has(itemId);
 }
 
-function formatExportDate(timestamp: number): { full: string; time: string } {
-  const date = new Date(timestamp);
-  const full = date
-    .toLocaleString('en-AU', {
-      timeZone: 'Australia/Sydney',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    })
-    .replace(',', '');
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
 
-  const time = date.toLocaleTimeString('en-AU', {
-    timeZone: 'Australia/Sydney',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
+function renderShopRestockWindow(root: HTMLElement): void {
+  root.innerHTML = '';
+  root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
+
+  // Inject scoped styles for tooltip hover and rarity text
+  const styleEl = document.createElement('style');
+  styleEl.textContent = `
+    .qpm-sr-metric[data-tooltip]:hover::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 100%;
+      right: 0;
+      margin-bottom: 10px;
+      padding: 10px 14px;
+      background: rgba(14,16,24,0.97);
+      border: 1px solid rgba(148,163,184,0.25);
+      border-radius: 8px;
+      color: #e5e7eb;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.5;
+      white-space: pre-line;
+      z-index: 100;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .qpm-sr-th { cursor:pointer; user-select:none; }
+    .qpm-sr-th:hover { opacity:1 !important; }
+    .qpm-sr-tr { cursor:pointer; transition:background 0.12s; }
+    .qpm-sr-tr:hover { background:rgba(143,130,255,0.06); }
+  `;
+  root.appendChild(styleEl);
+  const persistedUi = loadUiState();
+
+
+  // ── Toolbar ──
+  const toolbar = document.createElement('div');
+  toolbar.style.cssText = [
+    'display:flex', 'align-items:center', 'gap:6px',
+    'padding:10px 14px 8px',
+    'border-bottom:1px solid rgba(143,130,255,0.2)',
+    'flex-shrink:0', 'flex-wrap:wrap',
+  ].join(';');
+
+  const filterGroup = document.createElement('div');
+  filterGroup.style.cssText = 'display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;';
+
+  let currentFilter = persistedUi.filter;
+  const filterBtns: HTMLButtonElement[] = [];
+
+  const styleFilter = (btn: HTMLButtonElement, active: boolean): void => {
+    btn.style.background    = active ? 'rgba(143,130,255,0.22)' : 'rgba(255,255,255,0.05)';
+    btn.style.color         = active ? '#c8c0ff' : 'rgba(224,224,224,0.65)';
+    btn.style.borderColor   = active ? 'rgba(143,130,255,0.55)' : 'rgba(143,130,255,0.25)';
+  };
+
+  for (const f of SHOP_FILTERS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = f.label;
+    btn.dataset.filter = f.value;
+    btn.style.cssText = [
+      'padding:3px 8px', 'font-size:11px', 'border-radius:5px', 'cursor:pointer',
+      'border:1px solid rgba(143,130,255,0.25)',
+      'background:rgba(255,255,255,0.05)', 'color:rgba(224,224,224,0.65)', 'transition:all 0.12s',
+    ].join(';');
+    filterBtns.push(btn);
+    filterGroup.appendChild(btn);
+  }
+  const saveUiState = (): void => {
+    storage.set(UI_STATE_KEY, {
+      filter: currentFilter,
+      search: searchInput.value.trim(),
+      predCollapsed,
+      sortColumn,
+      sortDirection,
+      historyScrollTop,
+    });
+  };
+  let saveUiTimer: number | null = null;
+  const scheduleSaveUiState = (): void => {
+    if (saveUiTimer !== null) window.clearTimeout(saveUiTimer);
+    saveUiTimer = window.setTimeout(() => {
+      saveUiTimer = null;
+      saveUiState();
+    }, UI_STATE_SAVE_DEBOUNCE_MS);
+  };
+
+  const setFilter = (value: string): void => {
+    if (currentFilter === value) return;
+    currentFilter = value;
+    filterBtns.forEach(b => styleFilter(b, b.dataset.filter === value));
+    scheduleSaveUiState();
+    scheduleRender(false, true);
+  };
+  filterBtns.forEach(btn => btn.addEventListener('click', () => setFilter(btn.dataset.filter!)));
+  const activeFilterBtn = filterBtns.find(b => b.dataset.filter === currentFilter) ?? filterBtns[0]!;
+  if (activeFilterBtn.dataset.filter !== currentFilter) currentFilter = activeFilterBtn.dataset.filter!;
+  filterBtns.forEach(btn => styleFilter(btn, btn === activeFilterBtn));
+
+  // Search
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Search items…';
+  searchInput.style.cssText = [
+    'padding:4px 10px', 'font-size:12px', 'border-radius:5px', 'flex:1', 'min-width:100px',
+    'background:rgba(255,255,255,0.06)', 'border:1px solid rgba(143,130,255,0.25)',
+    'color:#e0e0e0', 'outline:none',
+  ].join(';');
+  searchInput.value = persistedUi.search;
+  let searchDebounceTimer: number | null = null;
+  searchInput.addEventListener('input', () => {
+    if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = window.setTimeout(() => {
+      searchDebounceTimer = null;
+      scheduleSaveUiState();
+      scheduleRender(false, true);
+    }, SEARCH_DEBOUNCE_MS);
   });
 
-  return { full, time };
-}
 
-/**
- * Create prediction section (window-based)
- */
-function createPredictionSection(state: ShopRestockWindowState): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = `
-    margin-bottom: 20px;
-    padding: 16px;
-    background: rgba(66, 165, 245, 0.1);
-    border-radius: 8px;
-    border: 2px solid rgba(66, 165, 245, 0.3);
-  `;
+  // Refresh + quota + last updated
+  const refreshBtn = document.createElement('button');
+  refreshBtn.type = 'button';
+  refreshBtn.textContent = 'Refresh';
+  refreshBtn.title = 'Refresh data';
+  refreshBtn.style.cssText = [
+    'padding:4px 10px', 'font-size:13px',
+    'background:rgba(143,130,255,0.15)', 'border:1px solid rgba(143,130,255,0.35)',
+    'border-radius:5px', 'color:#c8c0ff', 'cursor:pointer', 'flex-shrink:0',
+  ].join(';');
 
-  const heading = document.createElement('h4');
-  heading.textContent = '🔮 Next Rare Restock Windows';
-  heading.style.cssText = `
-    margin: 0 0 4px 0;
-    color: #42A5F5;
-    font-size: 14px;
-  `;
-  section.appendChild(heading);
+  const refreshBudgetEl = document.createElement('span');
+  refreshBudgetEl.style.cssText = 'font-size:11px;color:rgba(200,192,255,0.72);white-space:nowrap;flex-shrink:0;';
 
-  // Add disclaimer
-  const disclaimer = document.createElement('p');
-  disclaimer.textContent = 'Window-based predictions from pseudo-RNG analysis of 34,861 events';
-  disclaimer.style.cssText = `
-    margin: 0 0 12px 0;
-    font-size: 10px;
-    color: #888;
-    font-style: italic;
-  `;
-  section.appendChild(disclaimer);
+  const lastUpdatedEl = document.createElement('span');
+  lastUpdatedEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.35);white-space:nowrap;flex-shrink:0;';
 
-  // Get all window predictions
-  const predictions = getWindowPredictions();
+  toolbar.append(filterGroup, searchInput, refreshBtn, refreshBudgetEl, lastUpdatedEl);
+  root.appendChild(toolbar);
 
-  // Get current monitoring alerts
-  const alerts = getCurrentMonitoringAlerts();
+  const updateLastUpdated = (): void => {
+    const t = getRestockFetchedAt();
+    if (!t) { lastUpdatedEl.textContent = ''; return; }
+    const m = Math.round((Date.now() - t) / 60_000);
+    lastUpdatedEl.textContent = m < 1 ? 'Updated now' : `Updated ${m}m ago`;
+  };
 
-  // Show alerts if any
-  if (alerts.length > 0) {
-    const alertsContainer = document.createElement('div');
-    alertsContainer.style.cssText = `
-      margin-bottom: 12px;
-      padding: 10px;
-      background: rgba(255, 152, 0, 0.15);
-      border: 2px solid rgba(255, 152, 0, 0.4);
-      border-radius: 6px;
-    `;
+  const updateRefreshBudgetUi = (): void => {
+    const budget = getRestockRefreshBudget();
+    const noun = budget.remaining === 1 ? 'refresh' : 'refreshes';
+    const resetInMs = Math.max(0, budget.resetAt - Date.now());
+    refreshBudgetEl.textContent = `${budget.remaining} ${noun} left - ${formatWindowCountdown(resetInMs)}`;
+    refreshBtn.disabled = isLoading || budget.blocked;
+    refreshBtn.style.opacity = refreshBtn.disabled ? '0.55' : '1';
+    refreshBtn.style.cursor = refreshBtn.disabled ? 'not-allowed' : 'pointer';
+  };
 
-    const alertsTitle = document.createElement('div');
-    alertsTitle.textContent = '🚨 Active Alerts';
-    alertsTitle.style.cssText = `
-      color: #FF9800;
-      font-weight: 700;
-      font-size: 11px;
-      margin-bottom: 8px;
-      text-transform: uppercase;
-    `;
-    alertsContainer.appendChild(alertsTitle);
 
-    for (const alert of alerts) {
-      const alertRow = document.createElement('div');
-      alertRow.style.cssText = `
-        padding: 6px 8px;
-        margin-bottom: 4px;
-        background: rgba(0, 0, 0, 0.3);
-        border-left: 3px solid ${alert.urgency === 'high' ? '#f44336' : alert.urgency === 'medium' ? '#FF9800' : '#4CAF50'};
-        border-radius: 3px;
-        font-size: 10px;
-        color: #fff;
-      `;
-      alertRow.textContent = alert.message;
-      alertsContainer.appendChild(alertRow);
-    }
+  // ── Scrollable body ──
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;overflow-y:auto;min-height:0;display:flex;flex-direction:column;';
+  root.appendChild(body);
 
-    section.appendChild(alertsContainer);
-  }
+  // ── Predictions section ──
+  const predSection = document.createElement('div');
+  predSection.style.cssText = 'flex-shrink:0;border-bottom:1px solid rgba(143,130,255,0.15);';
 
-  // Specific rare items to track
-  const rareItems = [
-    { name: 'Sunflower', color: '#FFD700' },
-    { name: 'Mythical Eggs', color: '#9C27B0' },
-    { name: 'Starweaver', color: '#FFD700' },
-    { name: 'Moonbinder', color: '#CE93D8' },
-    { name: 'Dawnbinder', color: '#FF9800' },
-  ];
+  const predHeaderRow = document.createElement('div');
+  predHeaderRow.style.cssText = [
+    'display:flex', 'align-items:center', 'justify-content:space-between',
+    'padding:7px 14px', 'cursor:pointer', 'user-select:none',
+    'background:rgba(143,130,255,0.04)',
+  ].join(';');
+  const predTitle = document.createElement('span');
+  predTitle.style.cssText = 'font-size:12px;font-weight:700;color:rgba(224,224,224,0.75);';
+  predTitle.textContent = '📌 Pinned';
+  const predChevron = document.createElement('span');
+  predChevron.style.cssText = 'font-size:9px;color:rgba(200,192,255,0.4);';
+  predChevron.textContent = '▼';
+  predHeaderRow.append(predTitle, predChevron);
 
-  const itemsList = document.createElement('div');
-  itemsList.style.cssText = `
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  `;
+  const predBody = document.createElement('div');
+  predBody.style.cssText = 'padding:6px 10px 8px;display:flex;flex-direction:column;gap:2px;';
 
-  for (const rareItem of rareItems) {
-    const prediction = predictions.get(rareItem.name);
-    const history = getPredictionHistory(rareItem.name);
+  let predCollapsed = persistedUi.predCollapsed;
+  predBody.style.display = predCollapsed ? 'none' : '';
+  predChevron.textContent = predCollapsed ? '▶' : '▼';
+  predHeaderRow.addEventListener('click', () => {
+    predCollapsed = !predCollapsed;
+    predBody.style.display = predCollapsed ? 'none' : '';
+    predChevron.textContent = predCollapsed ? '▶' : '▼';
+    scheduleSaveUiState();
+  });
+  predSection.append(predHeaderRow, predBody);
+  body.appendChild(predSection);
 
-    if (!prediction) continue;
+  // ── History section ──
+  const histSection = document.createElement('div');
+  histSection.style.cssText = 'flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;';
 
-    // Container for item + details
-    const itemContainer = document.createElement('div');
-    itemContainer.style.cssText = `
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 6px;
-      border-left: 3px solid ${rareItem.color};
-      overflow: hidden;
-    `;
+  const histHeader = document.createElement('div');
+  histHeader.style.cssText = [
+    'display:flex', 'align-items:center', 'padding:7px 14px',
+    'border-bottom:1px solid rgba(255,255,255,0.06)',
+    'background:rgba(0,0,0,0.15)', 'flex-shrink:0',
+  ].join(';');
+  const histTitle = document.createElement('span');
+  histTitle.style.cssText = 'font-size:11px;font-weight:700;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.5px;flex:1;';
+  histTitle.textContent = 'Items — click to pin';
+  const itemCountEl = document.createElement('span');
+  itemCountEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);';
+  histHeader.append(histTitle, itemCountEl);
 
-    // Main row (current status)
-    const itemRow = document.createElement('div');
-    itemRow.style.cssText = `
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      padding: 10px 12px;
-      cursor: pointer;
-      transition: background 0.2s;
-    `;
+  const tableWrap = document.createElement('div');
+  tableWrap.style.cssText = 'flex:1;overflow-y:auto;min-height:0;';
+  histSection.append(histHeader, tableWrap);
+  body.appendChild(histSection);
 
-    itemRow.addEventListener('mouseenter', () => {
-      itemRow.style.background = 'rgba(255, 255, 255, 0.05)';
-    });
-    itemRow.addEventListener('mouseleave', () => {
-      itemRow.style.background = '';
-    });
+  // ── Shared state ──
+  let allData: RestockItem[] = [];
+  let trackedItems = loadTracked();
+  let isLoading = false;
+  updateRefreshBudgetUi();
+  let sortColumn: SortColumn = persistedUi.sortColumn;
+  let sortDirection: SortDirection = persistedUi.sortDirection;
+  let historyScrollTop = persistedUi.historyScrollTop;
+  let historyChunkRaf: number | null = null;
+  let historyRenderToken = 0;
 
-    const leftSide = document.createElement('div');
-    leftSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';
-
-    // Add crop/seed sprite
-    const cropSprite = canvasToDataUrl(getCropSpriteCanvas(rareItem.name));
-    if (cropSprite) {
-      const spriteImg = document.createElement('img');
-      spriteImg.src = cropSprite;
-      spriteImg.alt = rareItem.name;
-      spriteImg.style.cssText = `
-        width: 16px;
-        height: 16px;
-        image-rendering: pixelated;
-        border-radius: 3px;
-        border: 1px solid rgba(168, 139, 250, 0.2);
-      `;
-      leftSide.appendChild(spriteImg);
-    }
-
-    const itemName = document.createElement('span');
-    itemName.textContent = rareItem.name;
-    itemName.style.cssText = `
-      color: ${rareItem.color};
-      font-weight: 600;
-      font-size: 12px;
-    `;
-
-    // Expand indicator
-    const expandIndicator = document.createElement('span');
-    expandIndicator.textContent = '▼';
-    expandIndicator.style.cssText = `
-      color: #aaa;
-      font-size: 10px;
-      transition: transform 0.2s;
-    `;
-
-    leftSide.appendChild(itemName);
-    leftSide.appendChild(expandIndicator);
-
-    // Status and windows display
-    const statusContainer = document.createElement('div');
-    statusContainer.style.cssText = `
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 4px;
-      font-size: 10px;
-    `;
-
-    // Status badge
-    const statusBadge = document.createElement('div');
-    statusBadge.style.cssText = `
-      padding: 3px 8px;
-      border-radius: 10px;
-      font-weight: 600;
-      font-size: 9px;
-      text-transform: uppercase;
-    `;
-
-    if (prediction.cooldownActive) {
-      statusBadge.textContent = '⏳ Cooldown';
-      statusBadge.style.cssText += 'background: rgba(244, 67, 54, 0.3); color: #f44336; border: 1px solid #f44336;';
-    } else if (prediction.tooEarly) {
-      statusBadge.textContent = '⏰ Too Early';
-      statusBadge.style.cssText += 'background: rgba(255, 152, 0, 0.3); color: #FF9800; border: 1px solid #FF9800;';
-    } else {
-      statusBadge.textContent = '📊 Monitoring';
-      statusBadge.style.cssText += 'background: rgba(66, 165, 245, 0.3); color: #42A5F5; border: 1px solid #42A5F5;';
-    }
-
-    statusContainer.appendChild(statusBadge);
-
-    // Next window time range (always visible) - combines both prediction methods
-    const nextWindowDisplay = document.createElement('div');
-    nextWindowDisplay.style.cssText = 'color: #42A5F5; font-size: 10px; font-weight: 600; text-align: right;';
-
-    if (!prediction.cooldownActive && !prediction.tooEarly) {
-      // Combine pseudo-RNG window and statistical prediction to show range
-      let earliestTime: number | null = null;
-      let latestTime: number | null = null;
-
-      const now = Date.now();
-
-      // Get earliest from pseudo-RNG windows (show windows that haven't ended yet)
-      if (prediction.nextWindows.length > 0) {
-        // Find first window where end time hasn't passed yet
-        const activeWindow = prediction.nextWindows.find(w => w.endTime >= now);
-        if (activeWindow) {
-          earliestTime = activeWindow.startTime;
-          latestTime = activeWindow.endTime;
-        }
+  let renderQueued = false;
+  let wantsPredictionsRender = false;
+  let wantsHistoryRender = false;
+  const scheduleRender = (predictions: boolean, history: boolean): void => {
+    wantsPredictionsRender ||= predictions;
+    wantsHistoryRender ||= history;
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      if (wantsPredictionsRender) {
+        wantsPredictionsRender = false;
+        renderPredictions();
       }
-
-      // Compare with statistical prediction range (show if range hasn't ended)
-      if (prediction.statisticalPrediction) {
-        const statEarliest = prediction.statisticalPrediction.certaintyRange.earliest;
-        const statLatest = prediction.statisticalPrediction.certaintyRange.latest;
-
-        // Include statistical prediction if the end time hasn't passed yet
-        if (statLatest >= now) {
-          earliestTime = earliestTime ? Math.min(earliestTime, statEarliest) : statEarliest;
-          latestTime = latestTime ? Math.max(latestTime, statLatest) : statLatest;
-        }
-      }
-
-      // Display if the prediction window hasn't completely passed
-      if (earliestTime && latestTime && latestTime >= now) {
-        const earliestDate = new Date(earliestTime);
-        const latestDate = new Date(latestTime);
-        const earliestStr = earliestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-        const latestStr = latestDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-        nextWindowDisplay.textContent = `${earliestStr} - ${latestStr}`;
-      }
-    } else if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
-      // Show cooldown countdown
-      nextWindowDisplay.style.color = '#f44336';
-      nextWindowDisplay.setAttribute('data-countdown-target', String(Date.now() + (prediction.hardCooldownRemaining * 60 * 60 * 1000)));
-      nextWindowDisplay.setAttribute('data-countdown-prefix', 'Cooldown: ');
-    } else if (prediction.tooEarly && prediction.practicalMinimumRemaining !== null) {
-      // Show practical minimum countdown
-      nextWindowDisplay.style.color = '#FF9800';
-      nextWindowDisplay.setAttribute('data-countdown-target', String(Date.now() + (prediction.practicalMinimumRemaining * 60 * 60 * 1000)));
-      nextWindowDisplay.setAttribute('data-countdown-prefix', 'Monitor in: ');
-    }
-
-    if (nextWindowDisplay.textContent || nextWindowDisplay.hasAttribute('data-countdown-target')) {
-      statusContainer.appendChild(nextWindowDisplay);
-    }
-
-    // Time since last seen
-    if (prediction.timeSinceLastSeen !== null) {
-      const timeSinceText = document.createElement('div');
-      timeSinceText.style.cssText = 'color: #aaa; font-size: 9px;';
-      const hours = prediction.timeSinceLastSeen.toFixed(1);
-      const days = (prediction.timeSinceLastSeen / 24).toFixed(1);
-      timeSinceText.textContent = `Last seen: ${days}d ago (${hours}h)`;
-      statusContainer.appendChild(timeSinceText);
-    }
-
-    itemRow.appendChild(leftSide);
-    itemRow.appendChild(statusContainer);
-    itemContainer.appendChild(itemRow);
-
-    // Details section (collapsible)
-    const detailsSection = document.createElement('div');
-    detailsSection.style.cssText = `
-      display: none;
-      padding: 12px;
-      background: linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(33, 150, 243, 0.1) 100%);
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
-      font-size: 10px;
-    `;
-
-    // Show cooldown/practical minimum if active
-    if (prediction.cooldownActive || prediction.tooEarly) {
-      const waitSection = document.createElement('div');
-      waitSection.style.cssText = `
-        padding: 10px;
-        background: rgba(255, 152, 0, 0.1);
-        border-left: 3px solid #FF9800;
-        border-radius: 3px;
-        margin-bottom: 10px;
-      `;
-
-      if (prediction.cooldownActive && prediction.hardCooldownRemaining !== null) {
-        const cooldownText = document.createElement('div');
-        cooldownText.style.cssText = 'color: #f44336; font-weight: 600; margin-bottom: 4px;';
-        cooldownText.setAttribute('data-countdown-target', String(Date.now() + (prediction.hardCooldownRemaining * 60 * 60 * 1000)));
-        cooldownText.setAttribute('data-countdown-prefix', '⏳ Hard cooldown: ');
-        waitSection.appendChild(cooldownText);
-      }
-
-      if (prediction.tooEarly && prediction.practicalMinimumRemaining !== null) {
-        const practicalText = document.createElement('div');
-        practicalText.style.cssText = 'color: #FF9800; font-weight: 600; margin-bottom: 4px;';
-        practicalText.setAttribute('data-countdown-target', String(Date.now() + (prediction.practicalMinimumRemaining * 60 * 60 * 1000)));
-        practicalText.setAttribute('data-countdown-prefix', '⏰ Practical minimum: ');
-        waitSection.appendChild(practicalText);
-
-        const explanation = document.createElement('div');
-        explanation.style.cssText = 'color: #888; font-size: 9px; margin-top: 4px; font-style: italic;';
-        explanation.textContent = 'Based on historical intervals - prevents false alarms';
-        waitSection.appendChild(explanation);
-      }
-
-      detailsSection.appendChild(waitSection);
-    }
-
-    // Show correlation signals
-    if (prediction.correlationSignals && prediction.correlationSignals.length > 0) {
-      const correlationSection = document.createElement('div');
-      correlationSection.style.cssText = `
-        padding: 10px;
-        background: rgba(206, 147, 216, 0.1);
-        border-left: 3px solid #CE93D8;
-        border-radius: 3px;
-        margin-bottom: 10px;
-      `;
-
-      const correlationTitle = document.createElement('div');
-      correlationTitle.style.cssText = 'color: #CE93D8; font-weight: 700; margin-bottom: 6px;';
-      correlationTitle.textContent = '🔗 Correlation Signals';
-      correlationSection.appendChild(correlationTitle);
-
-      for (const signal of prediction.correlationSignals) {
-        const signalRow = document.createElement('div');
-        signalRow.style.cssText = 'color: #fff; margin-bottom: 4px;';
-        const probabilityPercent = (signal.probability * 100).toFixed(0);
-        signalRow.innerHTML = `<span style="color: #FFD700;">Sunflower detected</span> → <span style="color: ${rareItem.color};">${rareItem.name} possible</span> <span style="color: #CE93D8;">(${probabilityPercent}%)</span>`;
-        correlationSection.appendChild(signalRow);
-
-        const timeAgo = document.createElement('div');
-        timeAgo.style.cssText = 'color: #888; font-size: 9px; margin-left: 12px;';
-        const hoursAgo = ((Date.now() - signal.detectedAt) / (1000 * 60 * 60)).toFixed(1);
-        timeAgo.textContent = `Detected ${hoursAgo}h ago`;
-        correlationSection.appendChild(timeAgo);
-      }
-
-      detailsSection.appendChild(correlationSection);
-    }
-
-    // Show next windows (filter out windows that have completely passed)
-    const now = Date.now();
-    const activeWindows = prediction.nextWindows.filter(w => w.endTime >= now);
-
-    if (activeWindows.length > 0) {
-      const windowsSection = document.createElement('div');
-      windowsSection.style.cssText = `
-        padding: 10px;
-        background: rgba(66, 165, 245, 0.1);
-        border-left: 3px solid #42A5F5;
-        border-radius: 3px;
-        margin-bottom: 10px;
-      `;
-
-      const windowsTitle = document.createElement('div');
-      windowsTitle.style.cssText = 'color: #42A5F5; font-weight: 700; margin-bottom: 6px;';
-      windowsTitle.textContent = '📅 Next Possible Windows';
-      windowsSection.appendChild(windowsTitle);
-
-      for (let i = 0; i < Math.min(5, activeWindows.length); i++) {
-        const window = activeWindows[i]!
-        const windowRow = document.createElement('div');
-        windowRow.style.cssText = `
-          padding: 6px 8px;
-          margin-bottom: 4px;
-          background: rgba(0, 0, 0, 0.3);
-          border-radius: 3px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        `;
-
-        const timeText = document.createElement('span');
-        timeText.style.cssText = 'color: #fff;';
-        timeText.textContent = formatTimeWindow(window);
-
-        const confidenceBadge = document.createElement('span');
-        confidenceBadge.style.cssText = `
-          padding: 2px 6px;
-          border-radius: 8px;
-          font-size: 8px;
-          font-weight: 700;
-          text-transform: uppercase;
-        `;
-        if (window.confidence === 'high') {
-          confidenceBadge.textContent = 'HIGH';
-          confidenceBadge.style.cssText += 'background: #4CAF50; color: white;';
-        } else if (window.confidence === 'medium') {
-          confidenceBadge.textContent = 'MED';
-          confidenceBadge.style.cssText += 'background: #FF9800; color: white;';
-        } else {
-          confidenceBadge.textContent = 'LOW';
-          confidenceBadge.style.cssText += 'background: #666; color: white;';
-        }
-
-        windowRow.appendChild(timeText);
-        windowRow.appendChild(confidenceBadge);
-        windowsSection.appendChild(windowRow);
-      }
-
-      detailsSection.appendChild(windowsSection);
-    }
-
-    // Show monitoring schedule
-    if (prediction.monitoringSchedule) {
-      const scheduleSection = document.createElement('div');
-      scheduleSection.style.cssText = `
-        padding: 10px;
-        background: rgba(76, 175, 80, 0.1);
-        border-left: 3px solid #4CAF50;
-        border-radius: 3px;
-        margin-bottom: 10px;
-      `;
-
-      const scheduleTitle = document.createElement('div');
-      scheduleTitle.style.cssText = 'color: #4CAF50; font-weight: 700; margin-bottom: 6px;';
-      scheduleTitle.textContent = '⏰ Monitoring Schedule';
-      scheduleSection.appendChild(scheduleTitle);
-
-      const scheduleText = document.createElement('div');
-      scheduleText.style.cssText = 'color: #aaa; margin-bottom: 6px;';
-      scheduleText.textContent = prediction.monitoringSchedule.message;
-      scheduleSection.appendChild(scheduleText);
-
-      const hoursContainer = document.createElement('div');
-      hoursContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px;';
-
-      const currentHour = new Date().getHours();
-
-      for (const hour of prediction.monitoringSchedule.optimalHours) {
-        const hourBadge = document.createElement('span');
-        const isCurrentHour = hour === currentHour;
-
-        hourBadge.style.cssText = `
-          padding: 3px 6px;
-          background: ${isCurrentHour ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'};
-          border: 1px solid ${isCurrentHour ? '#4CAF50' : '#f44336'};
-          border-radius: 4px;
-          font-size: 9px;
-          font-weight: 600;
-          color: ${isCurrentHour ? '#4CAF50' : '#f44336'};
-        `;
-        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-        const period = hour >= 12 ? 'PM' : 'AM';
-        hourBadge.textContent = `${hour12}${period}`;
-        hoursContainer.appendChild(hourBadge);
-      }
-
-      scheduleSection.appendChild(hoursContainer);
-      detailsSection.appendChild(scheduleSection);
-    }
-
-    // Past 3 restocks section
-    const allEvents = getAllRestockEvents();
-    const itemRestocks = allEvents
-      .filter(event => event.items.some(item => item.name === rareItem.name))
-      .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
-      .slice(0, 3);
-
-    if (itemRestocks.length > 0) {
-      const historySection = document.createElement('div');
-      historySection.style.cssText = `
-        padding: 10px;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 3px;
-      `;
-
-      const historyTitle = document.createElement('div');
-      historyTitle.style.cssText = 'color: #42A5F5; font-weight: 700; margin-bottom: 6px;';
-      historyTitle.textContent = '📊 Past 3 Restocks';
-      historySection.appendChild(historyTitle);
-
-      for (const event of itemRestocks) {
-        const restockDate = new Date(event.timestamp);
-        const historyRow = document.createElement('div');
-        historyRow.style.cssText = `
-          color: #aaa;
-          font-size: 9px;
-          margin-bottom: 4px;
-          padding: 4px 6px;
-          background: rgba(255, 255, 255, 0.03);
-          border-radius: 3px;
-        `;
-        historyRow.innerHTML = `
-          <span style="color: #4CAF50;">✓</span> ${restockDate.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
-        `;
-        historySection.appendChild(historyRow);
-      }
-
-      detailsSection.appendChild(historySection);
-    }
-
-    itemContainer.appendChild(detailsSection);
-
-    // Toggle expand/collapse
-    let isExpanded = false;
-    itemRow.addEventListener('click', () => {
-      isExpanded = !isExpanded;
-      detailsSection.style.display = isExpanded ? 'block' : 'none';
-      expandIndicator.style.transform = isExpanded ? 'rotate(180deg)' : '';
-    });
-
-    itemsList.appendChild(itemContainer);
-  }
-
-  section.appendChild(itemsList);
-
-  // Setup live countdowns (performance-friendly, update every second)
-  const updateCountdowns = () => {
-    const now = Date.now();
-    const countdownElements = section.querySelectorAll('[data-countdown-target]');
-
-    countdownElements.forEach(el => {
-      const element = el as HTMLElement;
-      const target = parseInt(element.getAttribute('data-countdown-target') || '0', 10);
-      const prefix = element.getAttribute('data-countdown-prefix') || '';
-
-      if (target > 0) {
-        const diff = target - now;
-
-        if (diff <= 0) {
-          // Countdown finished
-          element.textContent = prefix + '00d 00h 00m 00s';
-          element.style.color = '#4CAF50';
-        } else {
-          // Calculate dd:hh:mm:ss
-          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-          const formatted = `${days.toString().padStart(2, '0')}d ${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
-          element.textContent = prefix + formatted;
-        }
+      if (wantsHistoryRender) {
+        wantsHistoryRender = false;
+        renderHistory();
       }
     });
   };
 
-  // Initial update
-  updateCountdowns();
+  tableWrap.addEventListener('scroll', () => {
+    historyScrollTop = tableWrap.scrollTop;
+    scheduleSaveUiState();
+  }, { passive: true });
 
-  // Update every second (only if window is still in DOM) - pauses when tab hidden
-  if (state.countdownInterval !== null) {
-    state.countdownInterval();
+  // ETA DOM refs for live countdown
+  type EtaRef = { el: HTMLElement; ts: number };
+  let histEtaRefs: EtaRef[] = [];
+  let predEtaRefs: EtaRef[] = [];
+
+  // ── Icon wrap element (42×42, rarity border) ──
+  function makeIconWrap(item: RestockItem, size = 42): HTMLElement {
+    const rarity  = getItemRarity(item.item_id, item.shop_type);
+    const wrap    = document.createElement('div');
+    const spriteSize = Math.round(size * 0.76);
+    wrap.style.cssText = [
+      `width:${size}px`, `height:${size}px`, 'border-radius:10px',
+      'background:rgba(229,231,235,0.05)',
+      rarityBorderStyle(rarity),
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'flex-shrink:0', 'transition:border-color 0.2s',
+    ].join(';');
+
+    const url = getSpriteUrl(item);
+    if (url) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = `width:${spriteSize}px;height:${spriteSize}px;image-rendering:pixelated;object-fit:contain;`;
+      wrap.appendChild(img);
+    }
+    return wrap;
   }
-  state.countdownInterval = visibleInterval('shop-restock-countdown', () => {
-    // Check if section is still in DOM before updating
-    if (document.contains(section)) {
-      updateCountdowns();
+
+  // ── Predictions row ──
+  function buildPredRow(item: RestockItem, key: string): { row: HTMLElement; etaRef: EtaRef } {
+    const ts       = item.estimated_next_timestamp ?? 0;
+    const hasData  = (item.total_occurrences ?? 0) >= 2 && ts > 0;
+    const rate     = getItemProbability(item);
+    const rarity   = getItemRarity(item.item_id, item.shop_type);
+    const cel      = isCelestial(item.item_id);
+
+    const row = document.createElement('div');
+    row.style.cssText = [
+      'display:flex', 'align-items:center', 'justify-content:space-between', 'gap:12px',
+      'padding:10px 12px', 'min-height:52px',
+      `border:1px solid ${cel ? 'rgba(255,215,0,0.22)' : 'transparent'}`,
+      `background:${cel ? 'rgba(255,215,0,0.04)' : 'color-mix(in srgb, rgba(30,30,40,0.5) 50%, transparent)'}`,
+      'border-radius:10px', 'cursor:pointer',
+      'transition:transform 0.15s, background 0.15s',
+    ].join(';');
+    row.title = 'Click to unpin';
+    row.addEventListener('mouseenter', () => {
+      row.style.transform  = 'scale(1.01)';
+      row.style.background = cel ? 'rgba(255,215,0,0.09)' : 'rgba(255,255,255,0.06)';
+    });
+    row.addEventListener('mouseleave', () => {
+      row.style.transform  = '';
+      row.style.background = cel ? 'rgba(255,215,0,0.04)' : '';
+    });
+
+    // Left: icon-wrap + text
+    const left = document.createElement('div');
+    left.style.cssText = 'display:flex;align-items:center;gap:12px;min-width:0;flex:1;max-width:calc(100% - 220px);';
+    left.appendChild(makeIconWrap(item, 42));
+
+    const textBlock = document.createElement('div');
+    textBlock.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0;';
+
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `font-size:14px;font-weight:700;color:${rarityColor(rarity)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+    nameEl.textContent = getItemName(item.item_id, item.shop_type);
+    textBlock.appendChild(nameEl);
+
+    const subEl = document.createElement('div');
+    subEl.style.cssText = 'font-size:12px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    if (!hasData) {
+      const seen = item.total_occurrences ?? 0;
+      subEl.textContent = seen > 0
+        ? `${seen} sighting${seen !== 1 ? 's' : ''} recorded`
+        : 'Not enough data';
     } else {
-      // Cleanup if removed from DOM
-      if (state.countdownInterval !== null) {
-        state.countdownInterval();
-        state.countdownInterval = null;
+      subEl.textContent = item.last_seen ? `Seen ${formatRelative(item.last_seen)}` : 'Tracked';
+    }
+    textBlock.appendChild(subEl);
+    left.appendChild(textBlock);
+    row.appendChild(left);
+
+    // Right: metrics
+    const metrics = document.createElement('div');
+    metrics.style.cssText = 'display:flex;gap:18px;align-items:center;flex-shrink:0;';
+
+    if (!hasData) {
+      const dash = document.createElement('div');
+      dash.style.cssText = 'font-size:20px;color:#f87171;';
+      dash.textContent = '--';
+      metrics.appendChild(dash);
+    } else {
+      const etaLabel = formatETA(ts);
+      const etaCol   = etaColor(ts);
+
+      // ETA metric
+      const etaWrap = document.createElement('div');
+      etaWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;min-width:68px;width:68px;position:relative;';
+      const etaEl = document.createElement('div');
+      etaEl.style.cssText = `font-size:19px;font-weight:700;color:${etaCol};font-variant-numeric:tabular-nums;letter-spacing:-0.3px;line-height:1.15;white-space:nowrap;`;
+      etaEl.textContent = etaLabel;
+      const etaLbl = document.createElement('div');
+      etaLbl.style.cssText = 'font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;';
+      etaLbl.textContent = 'next';
+      etaWrap.append(etaEl, etaLbl);
+      metrics.appendChild(etaWrap);
+
+      // Rate metric with tooltip
+      const freqLine  = formatFrequency(rate, item.shop_type);
+      const avgLine   = formatAvgQty(item.average_quantity);
+      const tooltipTx = [avgLine, freqLine].filter(Boolean).join('\n');
+
+      const rateWrap = document.createElement('div');
+      rateWrap.className = 'qpm-sr-metric';
+      rateWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;min-width:70px;width:70px;position:relative;cursor:help;';
+      if (tooltipTx) rateWrap.dataset.tooltip = tooltipTx;
+      const rateEl = document.createElement('div');
+      rateEl.style.cssText = `font-size:19px;font-weight:700;color:${rateColor(rate)};font-variant-numeric:tabular-nums;letter-spacing:-0.3px;line-height:1.15;white-space:nowrap;`;
+      rateEl.textContent = ratePercent(rate);
+      const rateLbl = document.createElement('div');
+      rateLbl.style.cssText = 'font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;';
+      rateLbl.textContent = 'rate';
+      rateWrap.append(rateEl, rateLbl);
+      metrics.appendChild(rateWrap);
+
+      row.appendChild(metrics);
+      row.addEventListener('click', () => {
+        trackedItems.delete(key);
+        saveTracked(trackedItems);
+        scheduleRender(true, true);
+      });
+      return { row, etaRef: { el: etaEl, ts } };
+    }
+
+    row.addEventListener('click', () => {
+      trackedItems.delete(key);
+      saveTracked(trackedItems);
+      scheduleRender(true, true);
+    });
+    row.appendChild(metrics);
+    return { row, etaRef: { el: document.createElement('span'), ts: 0 } };
+  }
+
+  // ── Celestial card (Celestial filter view) ──
+  function buildCelestialCard(item: RestockItem, key: string, isPinned: boolean): { card: HTMLElement; etaRef: EtaRef } {
+    const ts      = item.estimated_next_timestamp ?? 0;
+    const rate    = getItemProbability(item);
+    const days    = item.last_seen ? (Date.now() - item.last_seen) / 86_400_000 : 0;
+    const pityPct = Math.min(100, (days / PITY_CAP_DAY) * 100);
+    const inRamp  = days >= PITY_RAMP_DAY;
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'display:flex', 'flex-direction:column', 'gap:6px',
+      'padding:10px 12px', 'border-radius:8px', 'cursor:pointer',
+      `border:1px solid ${inRamp ? 'rgba(255,165,0,0.35)' : 'rgba(255,215,0,0.15)'}`,
+      `background:${inRamp ? 'rgba(255,165,0,0.06)' : 'rgba(255,215,0,0.04)'}`,
+      'transition:background 0.15s',
+    ].join(';');
+    const hoverBg = inRamp ? 'rgba(255,165,0,0.11)' : 'rgba(255,215,0,0.09)';
+    const restBg  = inRamp ? 'rgba(255,165,0,0.06)' : 'rgba(255,215,0,0.04)';
+    card.addEventListener('mouseenter', () => { card.style.background = hoverBg; });
+    card.addEventListener('mouseleave', () => { card.style.background = restBg;  });
+    card.title = isPinned ? 'Click to unpin' : 'Click to pin';
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;align-items:center;gap:8px;';
+    topRow.appendChild(makeIconWrap(item, 28));
+
+    const nameGroup = document.createElement('div');
+    nameGroup.style.cssText = 'flex:1;min-width:0;';
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `font-size:13px;font-weight:700;color:${isPinned ? 'rgba(255,215,0,0.5)' : '#FFD700'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+    nameEl.textContent = getItemName(item.item_id, item.shop_type);
+    const categoryEl = document.createElement('div');
+    categoryEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);';
+    categoryEl.textContent = CATEGORY_LABELS[item.shop_type] ?? item.shop_type;
+    nameGroup.append(nameEl, categoryEl);
+    topRow.appendChild(nameGroup);
+
+    if (isPinned) {
+      const pin = document.createElement('span');
+      pin.style.cssText = 'font-size:13px;color:#8f82ff;flex-shrink:0;';
+      pin.textContent = '📌';
+      topRow.appendChild(pin);
+    }
+
+    const etaEl = document.createElement('div');
+    etaEl.style.cssText = `font-size:20px;font-weight:800;color:${etaColor(ts)};font-family:monospace;flex-shrink:0;`;
+    etaEl.textContent = formatETA(ts);
+    topRow.appendChild(etaEl);
+    card.appendChild(topRow);
+
+    const metaRow = document.createElement('div');
+    metaRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    const rateEl = document.createElement('span');
+    rateEl.style.cssText = `font-size:11px;color:${rateColor(rate)};`;
+    rateEl.textContent = rate != null ? `${ratePercent(rate)} chance` : '';
+    const lastSeenEl = document.createElement('span');
+    lastSeenEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.4);margin-left:auto;';
+    lastSeenEl.textContent = item.last_seen ? `Last: ${formatRelative(item.last_seen)}` : 'Never seen';
+    metaRow.append(rateEl, lastSeenEl);
+    card.appendChild(metaRow);
+
+    if (days > 0 || item.last_seen) {
+      const pityRow = document.createElement('div');
+      pityRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      const pityLabel = document.createElement('span');
+      pityLabel.style.cssText = `font-size:10px;color:${inRamp ? '#ff9800' : 'rgba(224,224,224,0.35)'};white-space:nowrap;`;
+      pityLabel.textContent = inRamp
+        ? `⚡ Pity day ${Math.floor(days)}/${PITY_CAP_DAY} (ramp active!)`
+        : `Pity: ${Math.floor(days)}/${PITY_CAP_DAY}d`;
+      const barWrap = document.createElement('div');
+      barWrap.style.cssText = 'flex:1;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;';
+      const barFill = document.createElement('div');
+      barFill.style.cssText = `height:100%;width:${pityPct}%;background:${inRamp ? '#ff9800' : 'rgba(255,215,0,0.45)'};border-radius:2px;`;
+      barWrap.appendChild(barFill);
+      pityRow.append(pityLabel, barWrap);
+      card.appendChild(pityRow);
+    }
+
+    card.addEventListener('click', () => {
+      if (trackedItems.has(key)) trackedItems.delete(key);
+      else trackedItems.add(key);
+      saveTracked(trackedItems);
+      scheduleRender(true, true);
+    });
+
+    return { card, etaRef: { el: etaEl, ts } };
+  }
+
+  // ── History table row ──
+  function buildHistRow(item: RestockItem, key: string): { row: HTMLElement } {
+    const rarity = getItemRarity(item.item_id, item.shop_type);
+    const price  = getItemPrice(item.item_id, item.shop_type);
+    const cel    = isCelestial(item.item_id);
+
+    const tr = document.createElement('tr');
+    tr.className = 'qpm-sr-tr';
+    tr.title = 'Click to pin to predictions';
+    if (cel) tr.style.background = 'rgba(255,215,0,0.025)';
+
+    // Item cell: icon-wrap (42px) + name (rarity color) + price
+    const itemTd = document.createElement('td');
+    itemTd.style.cssText = 'padding:8px 12px;';
+    const itemCell = document.createElement('div');
+    itemCell.style.cssText = 'display:flex;align-items:center;gap:12px;padding:4px 0;';
+    itemCell.appendChild(makeIconWrap(item, 42));
+
+    const itemInfo = document.createElement('div');
+    itemInfo.style.cssText = 'display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;';
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `font-weight:700;font-size:14px;color:${rarityColor(rarity)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;`;
+    nameEl.textContent = getItemName(item.item_id, item.shop_type);
+    itemInfo.appendChild(nameEl);
+
+    if (price > 0) {
+      const priceRow = document.createElement('div');
+      priceRow.style.cssText = 'font-size:12px;opacity:0.9;display:flex;align-items:center;gap:3px;line-height:1;';
+      const coinSrc = getCoinSpriteUrl();
+      const coinSpan = coinSrc ? document.createElement('img') : document.createElement('span');
+      if (coinSrc && coinSpan instanceof HTMLImageElement) {
+        coinSpan.src = coinSrc;
+        coinSpan.alt = 'Coin';
+        coinSpan.style.cssText = 'width:11px;height:11px;object-fit:contain;image-rendering:auto;opacity:0.95;';
+      } else {
+        coinSpan.style.cssText = `color:${RARITY_COLORS['legendary']};font-weight:700;font-size:11px;`;
+        coinSpan.textContent = '⊙';
+      }
+      const priceSpan = document.createElement('span');
+      priceSpan.style.cssText = `color:${RARITY_COLORS['legendary']};font-weight:700;`;
+      priceSpan.textContent = formatPrice(price);
+      priceRow.append(coinSpan, priceSpan);
+      itemInfo.appendChild(priceRow);
+    }
+    itemCell.appendChild(itemInfo);
+    itemTd.appendChild(itemCell);
+
+    // Qty cell
+    const qtyTd = document.createElement('td');
+    qtyTd.style.cssText = 'padding:8px 12px;text-align:center;font-variant-numeric:tabular-nums;font-weight:600;opacity:0.9;';
+    qtyTd.textContent = formatPrice(item.total_quantity ?? 0);
+
+    // Last seen cell
+    const lastTd = document.createElement('td');
+    lastTd.title = item.last_seen ? new Date(item.last_seen).toLocaleString() : '—';
+    const timeCell = document.createElement('div');
+    timeCell.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;font-variant-numeric:tabular-nums;font-weight:600;opacity:0.9;line-height:1.1;white-space:nowrap;padding:8px 12px;';
+    const clockEl = document.createElement('div');
+    clockEl.textContent = formatClock(item.last_seen);
+    const relDay = formatRelativeDay(item.last_seen);
+    timeCell.appendChild(clockEl);
+    if (relDay) {
+      const relEl = document.createElement('div');
+      relEl.style.cssText = 'opacity:0.7;font-size:11px;';
+      relEl.textContent = relDay;
+      timeCell.appendChild(relEl);
+    }
+    lastTd.appendChild(timeCell);
+
+    tr.append(itemTd, qtyTd, lastTd);
+    tr.addEventListener('click', () => {
+      trackedItems.add(key);
+      saveTracked(trackedItems);
+      scheduleRender(true, true);
+    });
+
+    return { row: tr };
+  }
+
+  // ── Render predictions ──
+  function renderPredictions(): void {
+    predBody.innerHTML = '';
+    predEtaRefs = [];
+    const frag = document.createDocumentFragment();
+
+    const pinned = allData
+      .filter(item => trackedItems.has(`${item.shop_type}:${item.item_id}`)
+        && !toolItemIds.has(item.item_id))
+      .sort((a, b) => {
+        const aEmpty = (a.total_occurrences ?? 0) < 2 || !(a.estimated_next_timestamp ?? 0);
+        const bEmpty = (b.total_occurrences ?? 0) < 2 || !(b.estimated_next_timestamp ?? 0);
+        if (aEmpty && !bEmpty) return 1;
+        if (!aEmpty && bEmpty) return -1;
+        return (getItemProbability(b) ?? -1) - (getItemProbability(a) ?? -1);
+      });
+
+    if (!pinned.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:8px 4px;font-size:12px;color:rgba(224,224,224,0.35);font-style:italic;';
+      empty.textContent = 'Click an item below to pin it here.';
+      frag.appendChild(empty);
+      predBody.appendChild(frag);
+      return;
+    }
+
+    for (const item of pinned) {
+      const key = `${item.shop_type}:${item.item_id}`;
+      const { row, etaRef } = buildPredRow(item, key);
+      frag.appendChild(row);
+      predEtaRefs.push(etaRef);
+    }
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'padding:6px 12px 2px;font-size:11px;opacity:0.5;';
+    hint.textContent = 'Click to deselect the item in Active Predictions';
+    frag.appendChild(hint);
+    predBody.appendChild(frag);
+  }
+
+  // ── Sort state helpers ──
+  function setSortColumn(col: Exclude<SortColumn, null>): void {
+    if (sortColumn === col) {
+      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortColumn = col;
+      sortDirection = 'asc';
+    }
+    scheduleSaveUiState();
+    scheduleRender(false, true);
+  }
+
+  // ── Render history ──
+  function renderHistory(): void {
+    if (historyChunkRaf !== null) {
+      cancelAnimationFrame(historyChunkRaf);
+      historyChunkRaf = null;
+    }
+    const renderToken = ++historyRenderToken;
+    const previousScrollTop = tableWrap.scrollTop;
+    if (tableWrap.childElementCount > 0 || previousScrollTop > 0) {
+      historyScrollTop = previousScrollTop;
+    }
+    tableWrap.innerHTML = '';
+    histEtaRefs = [];
+    const search = searchInput.value.trim().toLowerCase();
+    const now    = Date.now();
+
+    let filtered = allData.filter(item => {
+      const key = `${item.shop_type}:${item.item_id}`;
+      if (trackedItems.has(key)) return false;           // pinned items not shown in history
+      if (item.shop_type === 'tool') return false;
+      if (toolItemIds.has(item.item_id)) return false;   // tools/potions from API
+
+      const expiryMs = ITEM_EXPIRY[key] ?? null;
+      if (expiryMs && expiryMs <= now) return false;     // expired seasonal items
+
+      if (currentFilter === 'celestial') {
+        if (!isCelestial(item.item_id)) return false;
+      } else if (currentFilter !== 'all') {
+        if (item.shop_type !== currentFilter) return false;
+      }
+
+      if (search) {
+        const name = getItemName(item.item_id, item.shop_type).toLowerCase();
+        if (!name.includes(search) && !(item.item_id ?? '').toLowerCase().includes(search)) return false;
+      }
+      return true;
+    });
+
+    // Sort
+    if (sortColumn) {
+      filtered = filtered.slice().sort((a, b) => {
+        let aVal: unknown;
+        let bVal: unknown;
+        if (sortColumn === 'item') {
+          aVal = getItemName(a.item_id, a.shop_type).toLowerCase();
+          bVal = getItemName(b.item_id, b.shop_type).toLowerCase();
+        } else if (sortColumn === 'qty') {
+          aVal = a.total_quantity ?? (a.total_occurrences ?? 0);
+          bVal = b.total_quantity ?? (b.total_occurrences ?? 0);
+        } else { // last
+          aVal = a.last_seen ?? 0;
+          bVal = b.last_seen ?? 0;
+        }
+        if (aVal === bVal) return 0;
+        const cmp = (aVal as any) > (bVal as any) ? 1 : -1;
+        return sortDirection === 'asc' ? cmp : -cmp;
+      });
+    } else {
+      // Default: shopType → rarity → price → name
+      filtered = filtered.slice().sort((a, b) => {
+        const shopA = SHOP_ORDER[a.shop_type] ?? 99;
+        const shopB = SHOP_ORDER[b.shop_type] ?? 99;
+        if (shopA !== shopB) return shopA - shopB;
+
+        const rarA = RARITY_ORDER[getItemRarity(a.item_id, a.shop_type)] ?? 99;
+        const rarB = RARITY_ORDER[getItemRarity(b.item_id, b.shop_type)] ?? 99;
+        if (rarA !== rarB) return rarA - rarB;
+
+        const prcA = getItemPrice(a.item_id, a.shop_type);
+        const prcB = getItemPrice(b.item_id, b.shop_type);
+        if (prcA !== prcB) return prcA - prcB;
+
+        return getItemName(a.item_id, a.shop_type)
+          .localeCompare(getItemName(b.item_id, b.shop_type), undefined, { sensitivity: 'base' });
+      });
+    }
+
+    itemCountEl.textContent = `${filtered.length} item${filtered.length !== 1 ? 's' : ''}`;
+
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:40px;text-align:center;color:rgba(224,224,224,0.35);font-size:13px;';
+      empty.textContent = isLoading ? '⏳ Loading restock data…' : '📭 No items found.';
+      tableWrap.appendChild(empty);
+      historyScrollTop = 0;
+      tableWrap.scrollTop = 0;
+      return;
+    }
+
+    // Celestial view: card layout with pity bars
+    if (currentFilter === 'celestial') {
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:flex;flex-direction:column;gap:8px;padding:10px 12px;';
+      const frag = document.createDocumentFragment();
+      for (const item of filtered) {
+        const key = `${item.shop_type}:${item.item_id}`;
+        const { card, etaRef } = buildCelestialCard(item, key, trackedItems.has(key));
+        frag.appendChild(card);
+        histEtaRefs.push(etaRef);
+      }
+      grid.appendChild(frag);
+      tableWrap.appendChild(grid);
+      tableWrap.scrollTop = historyScrollTop;
+      return;
+    }
+
+    // Regular table
+    const sortIndicator = (col: 'item' | 'qty' | 'last'): string => {
+      if (sortColumn !== col) return '';
+      return sortDirection === 'asc' ? ' ▲' : ' ▼';
+    };
+
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:separate;border-spacing:0 2px;font-size:12px;';
+
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    const TH_BASE = 'padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:rgba(224,224,224,0.6);position:sticky;top:0;background:rgba(12,12,22,0.98);z-index:1;';
+
+    const thItem = document.createElement('th');
+    thItem.className = 'qpm-sr-th';
+    thItem.style.cssText = TH_BASE + 'text-align:left;width:60%;';
+    thItem.textContent = `Item${sortIndicator('item')}`;
+    thItem.addEventListener('click', () => setSortColumn('item'));
+
+    const thQty = document.createElement('th');
+    thQty.className = 'qpm-sr-th';
+    thQty.style.cssText = TH_BASE + 'text-align:center;width:20%;';
+    thQty.textContent = `Qty${sortIndicator('qty')}`;
+    thQty.addEventListener('click', () => setSortColumn('qty'));
+
+    const thLast = document.createElement('th');
+    thLast.className = 'qpm-sr-th';
+    thLast.style.cssText = TH_BASE + 'text-align:right;width:20%;';
+    thLast.textContent = `Seen${sortIndicator('last')}`;
+    thLast.addEventListener('click', () => setSortColumn('last'));
+
+    hr.append(thItem, thQty, thLast);
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    tableWrap.scrollTop = historyScrollTop;
+
+    let idx = 0;
+    const appendChunk = (): void => {
+      if (renderToken !== historyRenderToken) return;
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < HISTORY_CHUNK_SIZE && idx < filtered.length; i++, idx++) {
+        const item = filtered[idx]!;
+        const key = `${item.shop_type}:${item.item_id}`;
+        const { row } = buildHistRow(item, key);
+        frag.appendChild(row);
+      }
+      tbody.appendChild(frag);
+      if (idx < filtered.length) {
+        historyChunkRaf = requestAnimationFrame(appendChunk);
+        return;
+      }
+      historyChunkRaf = null;
+      tableWrap.scrollTop = historyScrollTop;
+    };
+    appendChunk();
+  }
+
+  const isWindowVisible = (): boolean => {
+    if (!root.isConnected || root.style.display === 'none') return false;
+    const win = root.closest('.qpm-window') as HTMLElement | null;
+    return !win || win.style.display !== 'none';
+  };
+
+  // ── Live ETA countdown (30s — ~Xm/~Xh granularity is fine) ──
+  const stopTicker = visibleInterval('shop-restock-countdown', () => {
+    if (!isWindowVisible()) return;
+    for (const ref of predEtaRefs) {
+      ref.el.textContent = formatETA(ref.ts);
+      ref.el.style.color  = etaColor(ref.ts);
+    }
+    updateRefreshBudgetUi();
+    updateLastUpdated();
+  }, 30_000);
+
+  const stopSpritesReady = onSpritesReady(() => {
+    // Rebuild rows once UI atlas sprites (including sprite/ui/Coin) are available.
+    scheduleRender(true, true);
+  });
+
+  // ── Cleanup when window is removed ──
+  const obs = new MutationObserver(() => {
+    if (!root.isConnected) {
+      obs.disconnect();
+      if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
+      if (saveUiTimer !== null) {
+        window.clearTimeout(saveUiTimer);
+        saveUiTimer = null;
+      }
+      if (historyChunkRaf !== null) {
+        cancelAnimationFrame(historyChunkRaf);
+        historyChunkRaf = null;
+      }
+      saveUiState();
+      stopTicker();
+      stopSpritesReady();
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  // ── Load data ──
+  const load = async (force = false): Promise<void> => {
+    if (isLoading) return;
+
+    if (force) {
+      const budget = getRestockRefreshBudget();
+      if (budget.blocked) {
+        updateRefreshBudgetUi();
+        return;
       }
     }
-  }, 1000);
 
-  return section;
-}
+    isLoading = true;
+    refreshBtn.textContent = 'Loading...';
+    updateRefreshBudgetUi();
 
-/**
- * Create import section
- */
-function createImportSection(state: ShopRestockWindowState): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = `
-    margin-bottom: 20px;
-    padding: 16px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 8px;
-    border: 2px dashed rgba(255, 255, 255, 0.2);
-  `;
-
-  const heading = document.createElement('h4');
-  heading.textContent = '📥 Import Discord Data';
-  heading.style.cssText = `
-    margin: 0 0 12px 0;
-    color: var(--qpm-accent, #4CAF50);
-    font-size: 14px;
-  `;
-  section.appendChild(heading);
-
-  const description = document.createElement('p');
-  description.style.cssText = `
-    margin: 0 0 12px 0;
-    font-size: 12px;
-    color: var(--qpm-text-muted, #aaa);
-    line-height: 1.5;
-  `;
-  description.textContent = 'Upload a Discord HTML export from the restock channel to import historical data. You can also import the smaller JSON export.';
-  section.appendChild(description);
-
-  // File input
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.html,.json';
-  fileInput.style.display = 'none';
-
-  const uploadBtn = document.createElement('button');
-  uploadBtn.textContent = '📁 Choose File';
-  uploadBtn.style.cssText = `
-    padding: 8px 16px;
-    background: var(--qpm-accent, #4CAF50);
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-    margin-right: 8px;
-  `;
-  uploadBtn.onclick = () => fileInput.click();
-
-  fileInput.onchange = async (e) => {
-    const target = e.target as HTMLInputElement;
-    const file = target.files?.[0];
-    if (!file) return;
-
-    uploadBtn.disabled = true;
-    uploadBtn.textContent = '⏳ Parsing...';
+    const cached = getRestockDataSync();
+    if (cached?.length) {
+      allData = cached;
+      scheduleRender(true, true);
+      updateLastUpdated();
+    }
 
     try {
-      const events = await parseRestockFile(file);
-      addRestockEvents(events);
-
-      uploadBtn.textContent = `✅ Imported ${events.length} restocks`;
-      setTimeout(() => {
-        uploadBtn.disabled = false;
-        uploadBtn.textContent = '📁 Choose File';
-      }, 3000);
-    } catch (error) {
-      log('❌ Failed to parse Discord HTML:', error);
-      uploadBtn.textContent = '❌ Import failed';
-      setTimeout(() => {
-        uploadBtn.disabled = false;
-        uploadBtn.textContent = '📁 Choose File';
-      }, 3000);
+      allData = await fetchRestockData(force);
+      scheduleRender(true, true);
+      updateLastUpdated();
+    } catch (err) {
+      log('[ShopRestock] Fetch failed', err);
+    } finally {
+      isLoading = false;
+      refreshBtn.textContent = 'Refresh';
+      updateRefreshBudgetUi();
     }
   };
 
-  section.appendChild(fileInput);
-  section.appendChild(uploadBtn);
+  refreshBtn.addEventListener('click', () => load(true));
 
-  // Export and Clear buttons
-  const events = getAllRestockEvents();
-  if (events.length > 0) {
-    const buttonContainer = document.createElement('div');
-    buttonContainer.style.cssText = 'display: flex; gap: 8px; margin-top: 12px;';
-
-    // Export HTML button
-    const exportBtn = document.createElement('button');
-    exportBtn.textContent = '📤 Export HTML';
-    exportBtn.style.cssText = `
-      padding: 8px 16px;
-      background: rgba(66, 165, 245, 0.2);
-      color: #42A5F5;
-      border: 1px solid #42A5F5;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    `;
-    exportBtn.onclick = () => {
-      exportRestockDataAsHtml();
-    };
-    buttonContainer.appendChild(exportBtn);
-
-    // Export JSON button (smaller payload for sharing)
-    const exportJsonBtn = document.createElement('button');
-    exportJsonBtn.textContent = '📦 Export JSON (small)';
-    exportJsonBtn.style.cssText = `
-      padding: 8px 16px;
-      background: rgba(66, 165, 245, 0.08);
-      color: #42A5F5;
-      border: 1px solid rgba(66, 165, 245, 0.6);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    `;
-    exportJsonBtn.onclick = () => {
-      exportRestockDataAsJson();
-    };
-    buttonContainer.appendChild(exportJsonBtn);
-
-    // Clear data button
-    const clearBtn = document.createElement('button');
-    clearBtn.textContent = '🗑️ Clear Restock Data';
-    clearBtn.style.cssText = `
-      padding: 8px 16px;
-      background: rgba(244, 67, 54, 0.2);
-      color: #f44336;
-      border: 1px solid #f44336;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    `;
-    clearBtn.onclick = () => {
-      if (confirm('⚠️ This will clear all Shop Restock history and prediction data.\n\nYour other QPM settings (auto-feed, XP tracking, etc.) will NOT be affected.\n\nThis cannot be undone. Are you sure?')) {
-        clearAllRestocks();
-        // Reload the UI to reflect cleared state
-        renderContent(state);
-        alert('✅ Shop restock history and prediction data has been cleared.');
-      }
-    };
-    buttonContainer.appendChild(clearBtn);
-
-    section.appendChild(buttonContainer);
-  }
-
-  return section;
+  // Kick off both in parallel — game data load doesn't block restock data
+  void initGameData().then(() => {
+    scheduleRender(true, true);
+  });
+  void load(false);
 }
 
-/**
- * Create summary section
- */
-function createSummarySection(summary: ReturnType<typeof getSummaryStats>): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = `
-    margin-bottom: 20px;
-    padding: 16px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 8px;
-  `;
-
-  const heading = document.createElement('h4');
-  heading.textContent = '📊 Summary Statistics';
-  heading.style.cssText = `
-    margin: 0 0 12px 0;
-    color: var(--qpm-accent, #4CAF50);
-    font-size: 14px;
-  `;
-  section.appendChild(heading);
-
-  const grid = document.createElement('div');
-  grid.style.cssText = `
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-  `;
-
-  const stats = [
-    { label: 'Total Restocks', value: formatNumber(summary.totalRestocks), icon: '🔄' },
-    { label: 'Unique Items', value: formatNumber(summary.uniqueItems), icon: '📦' },
-    { label: 'Avg Interval', value: `${summary.avgRestockInterval.toFixed(1)} min`, icon: '⏱️' },
-    { label: 'Total Items', value: formatNumber(summary.totalItems), icon: '📊' },
-  ];
-
-  if (summary.dateRange) {
-    stats.push(
-      { label: 'First Restock', value: formatDate(summary.dateRange.start), icon: '📅' },
-      { label: 'Last Restock', value: formatDate(summary.dateRange.end), icon: '📅' }
-    );
-  }
-
-  for (const stat of stats) {
-    const card = document.createElement('div');
-    card.style.cssText = `
-      padding: 12px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    `;
-
-    const label = document.createElement('div');
-    label.textContent = `${stat.icon} ${stat.label}`;
-    label.style.cssText = `
-      font-size: 11px;
-      color: var(--qpm-text-muted, #aaa);
-      margin-bottom: 4px;
-    `;
-
-    const value = document.createElement('div');
-    value.textContent = stat.value;
-    value.style.cssText = `
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--qpm-text, #fff);
-    `;
-
-    card.appendChild(label);
-    card.appendChild(value);
-    grid.appendChild(card);
-  }
-
-  section.appendChild(grid);
-  return section;
-}
-
-/**
- * Create item statistics section (virtualized for performance)
- */
-function createItemStatsSection(): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = `
-    margin-bottom: 20px;
-  `;
-
-  const heading = document.createElement('h4');
-  heading.textContent = '🎯 Item Statistics';
-  heading.style.cssText = `
-    margin: 0 0 12px 0;
-    color: var(--qpm-accent, #4CAF50);
-    font-size: 14px;
-  `;
-  section.appendChild(heading);
-
-  const statsMap = calculateItemStats();
-  const stats = Array.from(statsMap.values())
-    .filter(stat => stat.type !== 'unknown') // Filter out unknown items
-    .sort((a, b) => b.totalRestocks - a.totalRestocks);
-
-  // Performance: Only render top 30 items initially
-  const INITIAL_ITEMS = 30;
-  let currentlyShowing = INITIAL_ITEMS;
-  let isExpanded = false;
-
-  // Create table
-  const table = document.createElement('table');
-  table.style.cssText = `
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  `;
-
-  // Header
-  const thead = document.createElement('thead');
-  const headerRow = document.createElement('tr');
-  headerRow.style.cssText = `
-    border-bottom: 2px solid var(--qpm-border, #444);
-    background: rgba(255, 255, 255, 0.05);
-  `;
-
-  const headers = ['Item', 'Type', 'Restocks', 'Avg Qty', 'Rate', 'Rarity', 'Last Seen', 'Next Restock'];
-  for (const header of headers) {
-    const th = document.createElement('th');
-    th.textContent = header;
-    th.style.cssText = `
-      padding: 10px 12px;
-      text-align: left;
-      color: var(--qpm-text-muted, #aaa);
-      font-weight: 600;
-    `;
-    headerRow.appendChild(th);
-  }
-  thead.appendChild(headerRow);
-  table.appendChild(thead);
-
-  // Body
-  const tbody = document.createElement('tbody');
-
-  // Helper function to create a row
-  const createRow = (stat: ReturnType<typeof calculateItemStats> extends Map<string, infer T> ? T : never) => {
-    const row = document.createElement('tr');
-    row.style.cssText = `
-      border-bottom: 1px solid var(--qpm-border, #444);
-    `;
-
-    // Rarity colors
-    const rarityColors: Record<string, string> = {
-      'common': '#aaa',
-      'uncommon': '#4CAF50',
-      'rare': '#42A5F5',
-      'mythic': '#9C27B0',
-      'divine': '#FF9800',
-      'celestial': '#FFD700',
-    };
-
-    // Format next restock time for this specific item
-    let nextRestockValue = 'N/A';
-    let nextRestockStyle = 'font-size: 11px; color: #aaa;';
-    const itemNextAppearance = predictItemNextAppearance(stat.name);
-
-    if (itemNextAppearance) {
-      const nextRestockDate = new Date(itemNextAppearance);
-      const timeString = nextRestockDate.toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-      const dateString = nextRestockDate.toLocaleDateString([], {
-        month: 'short',
-        day: 'numeric'
-      });
-      nextRestockValue = `${dateString} ${timeString}`;
-      nextRestockStyle = 'font-size: 11px; color: #42A5F5; font-weight: 600;';
-    }
-
-    const cells = [
-      { value: stat.type, style: 'text-transform: capitalize; color: #aaa;' },
-      { value: formatNumber(stat.totalRestocks), style: '' },
-      { value: stat.avgQuantity.toFixed(1), style: '' },
-      { value: `${stat.appearanceRate.toFixed(1)}%`, style: '' },
-      { value: stat.rarity, style: `color: ${rarityColors[stat.rarity]}; text-transform: capitalize; font-weight: 600;` },
-      { value: new Date(stat.lastSeen).toLocaleDateString(), style: 'font-size: 11px; color: #aaa;' },
-      { value: nextRestockValue, style: nextRestockStyle },
-    ];
-
-    // Create name cell with sprite
-    const nameTd = document.createElement('td');
-    nameTd.style.cssText = 'padding: 10px 12px; font-weight: 600;';
-
-    const nameContainer = document.createElement('div');
-    nameContainer.style.cssText = 'display: flex; align-items: center; gap: 6px;';
-
-    // Get sprite
-    let spriteUrl: string | null = null;
-    if (stat.name === 'Mythical Eggs' || stat.name === 'Mythical Egg') {
-      spriteUrl = canvasToDataUrl(getPetSpriteCanvas('MythicalEgg'));
-    } else {
-      // Try crop sprite (works for seeds, crops, celestials)
-      spriteUrl = canvasToDataUrl(getCropSpriteCanvas(stat.name));
-    }
-
-    if (spriteUrl) {
-      const spriteImg = document.createElement('img');
-      spriteImg.src = spriteUrl;
-      spriteImg.alt = stat.name;
-      spriteImg.style.cssText = 'width: 20px; height: 20px; object-fit: contain; image-rendering: pixelated; flex-shrink: 0;';
-      nameContainer.appendChild(spriteImg);
-    }
-
-    const nameText = document.createElement('span');
-    nameText.textContent = stat.name;
-    nameContainer.appendChild(nameText);
-
-    nameTd.appendChild(nameContainer);
-    row.appendChild(nameTd);
-
-    for (const cell of cells) {
-      const td = document.createElement('td');
-      td.textContent = cell.value;
-      td.style.cssText = `
-        padding: 10px 12px;
-        ${cell.style}
-      `;
-      row.appendChild(td);
-    }
-
-    return row;
-  };
-
-  // Render initial items
-  for (let i = 0; i < Math.min(INITIAL_ITEMS, stats.length); i++) {
-    tbody.appendChild(createRow(stats[i]!));
-  }
-
-  table.appendChild(tbody);
-  section.appendChild(table);
-
-  // Add "Show More" button if there are more items
-  if (stats.length > INITIAL_ITEMS) {
-    const showMoreBtn = document.createElement('button');
-    showMoreBtn.textContent = `📋 Show All Items (${stats.length - INITIAL_ITEMS} more)`;
-    showMoreBtn.style.cssText = `
-      width: 100%;
-      padding: 10px;
-      margin-top: 12px;
-      background: rgba(66, 165, 245, 0.15);
-      border: 1px solid rgba(66, 165, 245, 0.3);
-      color: #42A5F5;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: all 0.2s;
-    `;
-
-    showMoreBtn.addEventListener('mouseenter', () => {
-      showMoreBtn.style.background = 'rgba(66, 165, 245, 0.25)';
-    });
-
-    showMoreBtn.addEventListener('mouseleave', () => {
-      showMoreBtn.style.background = isExpanded ? 'rgba(66, 165, 245, 0.2)' : 'rgba(66, 165, 245, 0.15)';
-    });
-
-    showMoreBtn.addEventListener('click', () => {
-      if (!isExpanded) {
-        // Show all remaining items
-        showMoreBtn.textContent = '⏳ Loading...';
-        showMoreBtn.disabled = true;
-
-        // Defer rendering to prevent UI freeze
-        requestAnimationFrame(() => {
-          for (let i = currentlyShowing; i < stats.length; i++) {
-            tbody.appendChild(createRow(stats[i]!));
-          }
-          currentlyShowing = stats.length;
-          isExpanded = true;
-
-          showMoreBtn.textContent = '📋 Show Less';
-          showMoreBtn.disabled = false;
-          showMoreBtn.style.background = 'rgba(66, 165, 245, 0.2)';
-        });
-      } else {
-        // Collapse back to initial items
-        while (tbody.children.length > INITIAL_ITEMS) {
-          tbody.removeChild(tbody.lastChild!);
-        }
-        currentlyShowing = INITIAL_ITEMS;
-        isExpanded = false;
-        showMoreBtn.textContent = `📋 Show All Items (${stats.length - INITIAL_ITEMS} more)`;
-        showMoreBtn.style.background = 'rgba(66, 165, 245, 0.15)';
-      }
-    });
-
-    section.appendChild(showMoreBtn);
-  }
-
-  return section;
-}
-
-/**
- * Export restock data as HTML (Discord-compatible format)
- */
-function exportRestockDataAsHtml(): void {
-  const events = getAllRestockEvents();
-  if (events.length === 0) {
-    log('⚠️ No restock data to export');
-    return;
-  }
-
-  // Sort events by timestamp
-  const sortedEvents = [...events].sort((a, b) => a.timestamp - b.timestamp);
-
-  // Build JSON payload for lossless import
-  const payload = buildRestockPayload(sortedEvents);
-
-  // Generate HTML
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Shop Restock Data Export</title>
-  <style>
-    body { font-family: Arial, sans-serif; background: #36393f; color: #dcddde; padding: 20px; }
-    .chatlog__message-group { margin-bottom: 20px; padding: 10px; background: #2f3136; border-radius: 4px; }
-    .chatlog__author { font-weight: 600; color: #7289da; margin-bottom: 8px; }
-    .chatlog__message-container { margin: 4px 0; padding: 4px 0; }
-    .chatlog__timestamp { font-size: 11px; color: #72767d; margin-right: 8px; }
-    .chatlog__short-timestamp { font-size: 11px; color: #72767d; margin-right: 8px; }
-    .chatlog__content { color: #dcddde; }
-  </style>
-</head>
-<body>
-  <h1>Shop Restock Data Export</h1>
-  <p>Total Events: ${events.length} | Exported: ${new Date().toLocaleString()}</p>
-  <p style="font-size: 12px; color: #72767d;">Note: All times are shown in your local timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone})</p>
-
-  <div class="chatlog__message-group">
-    <div class="chatlog__author">Magic Shopkeeper</div>
-${sortedEvents.map(event => {
-  const { full: dateStr, time: timeStr } = formatExportDate(event.timestamp);
-
-  const itemsText = event.items.map(item => {
-    return item.quantity > 0 ? `@${item.name} ${item.quantity}` : `@${item.name}`;
-  }).join(' | ');
-
-  return `    <div class="chatlog__message-container">
-      <span class="chatlog__timestamp"><a>${dateStr}</a></span>
-      <span class="chatlog__short-timestamp">${timeStr}</span>
-      <div class="chatlog__content">${itemsText}</div>
-    </div>`;
-}).join('\n')}
-  </div>
-  <script id="qpm-restock-data" type="application/json">${serializePayload(payload)}</script>
-</body>
-</html>`;
-
-  // Trigger download
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `qpm-shop-restock-export-${Date.now()}.html`;
-  a.click();
-  URL.revokeObjectURL(url);
-
-  log(`✅ Exported ${events.length} restock events to HTML`);
-}
-
-function exportRestockDataAsJson(): void {
-  const events = getAllRestockEvents();
-  if (events.length === 0) {
-    log('⚠️ No restock data to export');
-    return;
-  }
-
-  const payload = buildRestockPayload([...events].sort((a, b) => a.timestamp - b.timestamp));
-  const blob = new Blob([serializePayload(payload)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `qpm-shop-restock-export-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-
-  log(`✅ Exported ${events.length} restock events to JSON`);
-}
-
-/**
- * Clamp window position to ensure it stays visible within viewport
- */
-function clampWindowPosition(element: HTMLElement): void {
-  const rect = element.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const margin = 8; // Minimum margin from viewport edges
-
-  let top = parseFloat(element.style.top) || rect.top;
-  let left = parseFloat(element.style.left) || rect.left;
-  let right = parseFloat(element.style.right);
-
-  // If using right positioning, convert to left
-  if (!isNaN(right) && element.style.right !== '') {
-    left = vw - rect.right;
-    element.style.right = '';
-  }
-
-  // Clamp position to keep window visible
-  const maxLeft = Math.max(margin, vw - rect.width - margin);
-  const maxTop = Math.max(margin, vh - rect.height - margin);
-
-  left = Math.min(Math.max(left, margin), maxLeft);
-  top = Math.min(Math.max(top, margin), maxTop);
-
-  element.style.left = `${left}px`;
-  element.style.top = `${top}px`;
-}
-
-/**
- * Make element draggable
- */
-function makeDraggable(element: HTMLElement, handle: HTMLElement): void {
-  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-
-  handle.onmousedown = dragMouseDown;
-
-  function dragMouseDown(e: MouseEvent) {
-    e.preventDefault();
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    document.onmouseup = closeDragElement;
-    document.onmousemove = elementDrag;
-  }
-
-  function elementDrag(e: MouseEvent) {
-    e.preventDefault();
-    pos1 = pos3 - e.clientX;
-    pos2 = pos4 - e.clientY;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    element.style.top = element.offsetTop - pos2 + 'px';
-    element.style.left = element.offsetLeft - pos1 + 'px';
-  }
-
-  function closeDragElement() {
-    document.onmouseup = null;
-    document.onmousemove = null;
-    // Clamp position after dragging to ensure window stays visible
-    clampWindowPosition(element);
-  }
-}
-
-/**
- * Show shop restock window
- */
-export function showShopRestockWindow(state: ShopRestockWindowState): void {
-  state.root.style.display = 'block';
-}
-
-/**
- * Hide shop restock window
- */
-export function hideShopRestockWindow(state: ShopRestockWindowState): void {
-  state.root.style.display = 'none';
-}
-
-/**
- * Destroy shop restock window
- */
-export function destroyShopRestockWindow(state: ShopRestockWindowState): void {
-  // Clear countdown interval
-  if (state.countdownInterval !== null) {
-    state.countdownInterval();
-    state.countdownInterval = null;
-  }
-
-  // Remove resize listener
-  if (state.resizeListener !== null) {
-    window.removeEventListener('resize', state.resizeListener);
-    state.resizeListener = null;
-  }
-
-  // Unsubscribe from restock updates
-  if (state.restockUnsubscribe !== null) {
-    state.restockUnsubscribe();
-    state.restockUnsubscribe = null;
-  }
-
-  // Stop live tracking
-  stopLiveShopTracking();
-
-  state.root.remove();
+// ---------------------------------------------------------------------------
+// Public entry
+// ---------------------------------------------------------------------------
+
+export function openShopRestockWindow(): void {
+  toggleWindow('shop-restock', '🏪 Shop Restock', renderShopRestockWindow, '880px', '88vh');
 }

@@ -1,12 +1,11 @@
 // src/features/instantFeed.ts
-// WebSocket-based instant pet feeding using discovered FeedPet message format
+// WebSocket-based instant pet feeding using discovered FeedPet message format.
 
 import { log } from '../utils/logger';
-import { pageWindow } from '../core/pageContext';
-import { getActivePetInfos, type ActivePetInfo } from '../store/pets';
-import { recordInstantFeedUse } from '../store/achievements';
-import { readInventoryDirect, type InventoryItem } from '../store/inventory';
+import { getActivePetInfos } from '../store/pets';
+import { readInventoryDirect } from '../store/inventory';
 import { selectFoodForPet, type InventorySnapshot } from './petFoodRules';
+import { hasRoomConnection, sendRoomAction } from '../websocket/api';
 
 export interface InstantFeedResult {
   success: boolean;
@@ -16,70 +15,28 @@ export interface InstantFeedResult {
   error?: string;
 }
 
-export interface RoomConnection {
-  sendMessage: (payload: unknown) => void;
-}
-
-declare global {
-  interface Window {
-    MagicCircle_RoomConnection?: RoomConnection;
-    __mga_lastScopePath?: string[];
-  }
-}
-
 /**
- * Get the RoomConnection object from the page window
- */
-function getRoomConnection(): RoomConnection | null {
-  const global = pageWindow as Window;
-  return global.MagicCircle_RoomConnection ?? null;
-}
-
-/**
- * Get the current scope path for WebSocket messages
- */
-function getScopePath(): string[] {
-  const global = pageWindow as Window;
-  return global.__mga_lastScopePath?.slice() ?? ['Room', 'Quinoa'];
-}
-
-/**
- * Send a FeedPet WebSocket message
- *
- * Message format (discovered 2025-11-16):
- * {
- *   "type": "FeedPet",
- *   "petItemId": "<pet-uuid>",
- *   "cropItemId": "<crop-uuid>",
- *   "scopePath": ["Room", "Quinoa"]
- * }
+ * Send a FeedPet WebSocket message.
  */
 function sendFeedPetMessage(petItemId: string, cropItemId: string): boolean {
-  try {
-    const connection = getRoomConnection();
-    if (!connection) {
-      log('⚠️ MagicCircle_RoomConnection not found');
-      return false;
-    }
-
-    const payload = {
-      type: 'FeedPet',
-      petItemId,
-      cropItemId,
-      scopePath: getScopePath(),
-    };
-
-    log('📤 Sending FeedPet WebSocket message', payload);
-    connection.sendMessage(payload);
-    return true;
-  } catch (error) {
-    log('❌ Failed to send FeedPet message', error);
+  const sent = sendRoomAction('FeedPet', { petItemId, cropItemId }, { throttleMs: 120 });
+  if (!sent.ok && sent.reason !== 'throttled') {
+    log(`Failed to send FeedPet message (${sent.reason ?? 'unknown'})`);
     return false;
   }
+
+  // Dispatch event so petTeamsLogs can record feed events without direct coupling.
+  try {
+    window.dispatchEvent(new CustomEvent('qpm:feedPet', { detail: { petItemId, cropItemId } }));
+  } catch {
+    // no-op
+  }
+
+  return sent.ok;
 }
 
 /**
- * Feed a pet instantly using WebSocket (bypasses DOM clicks)
+ * Feed a pet instantly using WebSocket (bypasses DOM clicks).
  *
  * @param petIndex - Index of the pet in active slots (0-2)
  * @param respectFoodRules - Whether to respect pet food preferences
@@ -123,7 +80,7 @@ export async function feedPetInstantly(
       };
     }
 
-    // 2. Get inventory and select appropriate food
+    // 2. Get inventory and select appropriate food.
     const inventoryData = await readInventoryDirect();
     if (!inventoryData || !inventoryData.items || inventoryData.items.length === 0) {
       return {
@@ -135,15 +92,13 @@ export async function feedPetInstantly(
       };
     }
 
-    // Convert to InventorySnapshot format for selectFoodForPet
-    // IMPORTANT: Only include Produce items (harvested crops that can be fed to pets)
-    // Filter out: Plants (growing in garden), Seeds, and other non-feedable items
-    const feedableItems = inventoryData.items.filter(item =>
+    // IMPORTANT: Only include Produce/Crop items that are feedable.
+    const feedableItems = inventoryData.items.filter((item) => (
       item.itemType === 'Produce' || item.itemType === 'Crop'
-    );
+    ));
 
     const inventory: InventorySnapshot = {
-      items: feedableItems.map(item => ({
+      items: feedableItems.map((item) => ({
         id: item.id,
         species: item.species ?? null,
         itemType: item.itemType ?? null,
@@ -180,13 +135,12 @@ export async function feedPetInstantly(
       };
     }
 
-    // 3. Log pet state before feeding
     const hungerInfo = pet.hungerPct !== null
       ? `hunger: ${pet.hungerPct}%`
       : 'hunger: unknown';
-    log(`🍖 Attempting to feed ${pet.name || pet.species || 'pet'} (${hungerInfo}) with ${crop.species || 'food'}`);
+    log(`Attempting to feed ${pet.name || pet.species || 'pet'} (${hungerInfo}) with ${crop.species || 'food'}`);
 
-    // 4. Send WebSocket FeedPet message
+    // 3. Send WebSocket FeedPet message.
     const sent = sendFeedPetMessage(pet.petId, crop.id);
     if (!sent) {
       return {
@@ -198,8 +152,7 @@ export async function feedPetInstantly(
       };
     }
 
-    log(`✅ Fed ${pet.name || pet.species || 'pet'} with ${crop.species || 'food'}`);
-    recordInstantFeedUse(1);
+    log(`Fed ${pet.name || pet.species || 'pet'} with ${crop.species || 'food'}`);
     return {
       success: true,
       petName: pet.name,
@@ -207,7 +160,7 @@ export async function feedPetInstantly(
       foodSpecies: crop.species,
     };
   } catch (error) {
-    log('❌ Instant feed error', error);
+    log('Instant feed error', error);
     return {
       success: false,
       petName: null,
@@ -219,20 +172,15 @@ export async function feedPetInstantly(
 }
 
 /**
- * Feed a specific pet by petId
- *
- * @param petId - UUID of the pet to feed
- * @param cropId - UUID of the crop to feed
- * @returns Result of the feed operation
+ * Feed a specific pet by petId.
  */
 export async function feedPetByIds(
   petId: string,
   cropId: string,
 ): Promise<InstantFeedResult> {
   try {
-    // Find the pet to get metadata for logging
     const pets = getActivePetInfos();
-    const pet = pets.find(p => p.petId === petId);
+    const pet = pets.find((p) => p.petId === petId);
 
     const sent = sendFeedPetMessage(petId, cropId);
     if (!sent) {
@@ -245,8 +193,7 @@ export async function feedPetByIds(
       };
     }
 
-    log(`✅ Fed pet ${petId} with crop ${cropId}`);
-    recordInstantFeedUse(1);
+    log(`Fed pet ${petId} with crop ${cropId}`);
     return {
       success: true,
       petName: pet?.name ?? null,
@@ -254,7 +201,7 @@ export async function feedPetByIds(
       foodSpecies: null,
     };
   } catch (error) {
-    log('❌ Feed by IDs error', error);
+    log('Feed by IDs error', error);
     return {
       success: false,
       petName: null,
@@ -266,11 +213,7 @@ export async function feedPetByIds(
 }
 
 /**
- * Feed all active pets that are below hunger threshold
- *
- * @param hungerThreshold - Feed pets below this hunger percentage (0-100)
- * @param respectFoodRules - Whether to respect pet food preferences
- * @returns Array of feed results
+ * Feed all active pets that are below hunger threshold.
  */
 export async function feedAllPetsInstantly(
   hungerThreshold: number = 40,
@@ -285,17 +228,17 @@ export async function feedAllPetsInstantly(
 
     const hungerPct = pet.hungerPct ?? 100;
     if (hungerPct >= hungerThreshold) {
-      log(`⏭️ Skipping ${pet.name || pet.species} - hunger ${hungerPct}% >= ${hungerThreshold}%`);
+      log(`Skipping ${pet.name || pet.species} - hunger ${hungerPct}% >= ${hungerThreshold}%`);
       continue;
     }
 
-    log(`🍖 Feeding ${pet.name || pet.species} - hunger ${hungerPct}%`);
+    log(`Feeding ${pet.name || pet.species} - hunger ${hungerPct}%`);
     const result = await feedPetInstantly(i, respectFoodRules);
     results.push(result);
 
-    // Small delay between feeds to avoid overwhelming the server
+    // Small delay between feeds to avoid overwhelming the server.
     if (i < pets.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 
@@ -303,8 +246,8 @@ export async function feedAllPetsInstantly(
 }
 
 /**
- * Check if instant feed is available (RoomConnection exists)
+ * Check if instant feed is available (RoomConnection exists).
  */
 export function isInstantFeedAvailable(): boolean {
-  return getRoomConnection() !== null;
+  return hasRoomConnection();
 }

@@ -23,7 +23,7 @@ import { getWeatherSnapshot } from '../store/weatherHub';
 import type { DetailedWeather } from '../utils/weatherDetection';
 import { getAbilityName } from '../utils/catalogHelpers';
 import { storage } from '../utils/storage';
-import { swapPetIntoActiveSlot, type SwapPetFailureReason } from '../features/petSwap';
+import { swapPetIntoActiveSlot, placePetIntoActiveSlot, type SwapPetFailureReason } from '../features/petSwap';
 import { onCatalogsReady } from '../catalogs/gameCatalogs';
 
 // ============================================================================
@@ -939,7 +939,8 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
       const targetSlotId = normalizeId(activePet?.slotId) ?? normalizeId(activePet?.petId);
       return { slotIndex, visualIndex: visualIndex + 1, activePet, targetSlotId };
     });
-    const hasAnyTargetSlot = activeSlots.some((slot) => Boolean(slot.targetSlotId));
+    // We support both swap (occupied slot) and place (empty slot), so always allow interaction.
+    const hasAnySlot = activeSlots.length > 0;
 
     container.innerHTML = '';
 
@@ -1009,7 +1010,7 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
 
     for (const pet of filtered) {
       const petKey = getNearMaxPetKey(pet);
-      const canSwap = (pet.source === 'inventory' || pet.source === 'hutch') && Boolean(pet.itemId) && hasAnyTargetSlot;
+      const canSwap = (pet.source === 'inventory' || pet.source === 'hutch') && Boolean(pet.itemId) && hasAnySlot;
       const isExpanded = canSwap && state.nearMaxExpandedPetKey === petKey;
       const isBusy = state.nearMaxBusyPetKey === petKey;
       const hasBusyOperation = state.nearMaxBusyPetKey !== null;
@@ -1091,7 +1092,8 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
         for (const slot of activeSlots) {
           const targetSlotId = slot.targetSlotId;
           const slotPet = slot.activePet;
-          const slotDisabled = hasBusyOperation || !targetSlotId || !pet.itemId;
+          // Empty slots (no targetSlotId) use PlacePet, so they're still clickable.
+          const slotDisabled = hasBusyOperation || !pet.itemId;
           const slotButton = document.createElement('button');
           slotButton.type = 'button';
           slotButton.disabled = slotDisabled;
@@ -1132,19 +1134,28 @@ async function updateNearMaxLevelDisplay(state: XpTrackerWindowState): Promise<v
           slotButton.appendChild(slotName);
 
           slotButton.addEventListener('click', async () => {
-            if (state.nearMaxBusyPetKey || !targetSlotId || !pet.itemId) {
+            if (state.nearMaxBusyPetKey || !pet.itemId) {
               return;
             }
 
             state.nearMaxBusyPetKey = petKey;
             void updateNearMaxLevelDisplay(state);
 
-            const result = await swapPetIntoActiveSlot({
-              source: pet.source,
-              itemId: pet.itemId,
-              targetSlotId,
-              storageId: pet.source === 'hutch' ? pet.storageId : null,
-            });
+            if (pet.source !== 'hutch' && pet.source !== 'inventory') return;
+
+            // Empty slot → PlacePet; occupied slot → SwapPet
+            const result = targetSlotId
+              ? await swapPetIntoActiveSlot({
+                  source: pet.source,
+                  itemId: pet.itemId,
+                  targetSlotId,
+                  storageId: pet.source === 'hutch' ? pet.storageId : null,
+                })
+              : await placePetIntoActiveSlot({
+                  source: pet.source,
+                  itemId: pet.itemId,
+                  storageId: pet.source === 'hutch' ? pet.storageId : null,
+                });
 
             state.nearMaxBusyPetKey = null;
             if (result.ok) {

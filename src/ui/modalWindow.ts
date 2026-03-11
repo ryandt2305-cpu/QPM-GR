@@ -24,14 +24,40 @@ interface WindowState {
   closeBtn: HTMLElement;
   isMinimized: boolean;
   maxHeight: string;
+  restoreWidth: string | null;
+  restoreHeight: string | null;
+  restoreMinHeight: string | null;
+  restoreMaxHeight: string | null;
 }
 
 const WINDOW_POSITION_KEY = 'qpm-window-pos-';
 const WINDOW_STATE_KEY = 'qpm-window-state-';
+const WINDOW_SIZE_KEY = 'qpm-window-size-';
 const WINDOW_MARGIN = 8;
 const windows = new Map<string, WindowState>();
 let currentZ = 10000;
 let resizeListenerAdded = false;
+
+function emitWindowEvent(eventName: string, id: string): void {
+  window.dispatchEvent(new CustomEvent(eventName, { detail: { id } }));
+}
+
+function setResizeHandleVisible(w: WindowState, visible: boolean): void {
+  const handle = w.el.querySelector<HTMLElement>('.qpm-window-resize-handle');
+  if (handle) handle.style.display = visible ? '' : 'none';
+}
+
+function restoreWindowFromMinimize(w: WindowState): void {
+  w.body.style.display = '';
+  if (w.restoreWidth) w.el.style.width = w.restoreWidth;
+  if (w.restoreHeight) w.el.style.height = w.restoreHeight;
+  if (w.restoreMinHeight) w.el.style.minHeight = w.restoreMinHeight;
+  if (w.restoreMaxHeight) w.el.style.maxHeight = w.restoreMaxHeight;
+  w.minimizeBtn.textContent = '−';
+  w.minimizeBtn.title = 'Minimize';
+  setResizeHandleVisible(w, true);
+  requestAnimationFrame(() => clampWindowRect(w.el));
+}
 
 /**
  * Clamp window position to ensure it stays visible (Aries mod pattern)
@@ -74,7 +100,6 @@ function ensureResizeListener(): void {
   if (resizeListenerAdded) return;
   window.addEventListener('resize', clampAllWindows);
   resizeListenerAdded = true;
-  log('Window resize listener added');
 }
 
 /**
@@ -84,9 +109,13 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   if (windows.has(id)) {
     const w = windows.get(id)!;
     w.el.style.display = '';
-    w.isMinimized = false;
+    if (w.isMinimized) {
+      w.isMinimized = false;
+      restoreWindowFromMinimize(w);
+    }
     bumpZ(w.el);
     saveWindowState(id, true, false);
+    emitWindowEvent('qpm:window-restored', id);
     return;
   }
 
@@ -100,7 +129,10 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   win.id = `qpm-window-${id}`;
   win.style.cssText = `
     position: fixed;
+    display: flex;
+    flex-direction: column;
     min-width: 260px;
+    min-height: 120px;
     max-width: ${windowMaxWidth};
     max-height: ${windowMaxHeight};
     background: rgba(18, 20, 26, 0.96);
@@ -113,7 +145,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     color: #e0e0e0;
     z-index: ${currentZ++};
     box-sizing: border-box;
-    overflow: auto;
+    overflow: hidden;
   `;
 
   // Header
@@ -121,6 +153,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   head.className = 'qpm-window-head';
   head.style.cssText = `
     display: flex;
+    flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
     padding: 12px 16px;
@@ -153,10 +186,15 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   head.appendChild(titleEl);
   head.appendChild(btnContainer);
 
-  // Body - simple container (scrolling handled by window)
+  // Body - flex:1 so it fills remaining height; overflow:auto for scrolling
   const body = document.createElement('div');
   body.className = 'qpm-window-body';
   body.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
     padding: 16px;
     background: rgba(0, 0, 0, 0.25);
     box-sizing: border-box;
@@ -176,6 +214,9 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   // Restore position or center
   restoreWindowPosition(id, win);
 
+  // Restore saved size if available (overrides max-width/max-height)
+  restoreWindowSize(id, win);
+
   // Ensure window stays on screen after positioning
   requestAnimationFrame(() => {
     clampWindowRect(win);
@@ -184,8 +225,9 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   // Add resize listener to keep windows visible (Aries mod pattern)
   ensureResizeListener();
 
-  // Make draggable
+  // Make draggable and resizable
   makeDraggable(win, head, id);
+  makeResizable(win, id);
 
   // Prevent game zoom from interfering with window scrolling
   win.addEventListener('wheel', (e) => {
@@ -217,11 +259,14 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     closeBtn,
     isMinimized: false,
     maxHeight: windowMaxHeight,
+    restoreWidth: null,
+    restoreHeight: null,
+    restoreMinHeight: null,
+    restoreMaxHeight: null,
   };
 
   windows.set(id, state);
   saveWindowState(id, true, false);
-  log(`Window ${id} opened`);
 }
 
 /**
@@ -233,7 +278,6 @@ export function closeWindow(id: string): void {
 
   w.el.style.display = 'none';
   saveWindowState(id, false, w.isMinimized);
-  log(`Window ${id} closed`);
 }
 
 /**
@@ -251,9 +295,13 @@ export function toggleWindow(id: string, title: string, render: PanelRender, max
     return false;
   } else {
     existing.el.style.display = '';
-    existing.isMinimized = false;
+    if (existing.isMinimized) {
+      existing.isMinimized = false;
+      restoreWindowFromMinimize(existing);
+    }
     bumpZ(existing.el);
     saveWindowState(id, true, false);
+    emitWindowEvent('qpm:window-restored', id);
     return true;
   }
 }
@@ -268,15 +316,24 @@ export function toggleMinimize(id: string): void {
   w.isMinimized = !w.isMinimized;
 
   if (w.isMinimized) {
+    const rect = w.el.getBoundingClientRect();
+    w.restoreWidth = `${Math.round(rect.width)}px`;
+    w.restoreHeight = `${Math.round(rect.height)}px`;
+    w.restoreMinHeight = w.el.style.minHeight || '120px';
+    w.restoreMaxHeight = w.el.style.maxHeight || w.maxHeight;
     w.body.style.display = 'none';
-    w.el.style.maxHeight = 'auto';
+    w.el.style.width = w.restoreWidth;
+    const collapsed = Math.max(36, Math.round(w.head.getBoundingClientRect().height));
+    w.el.style.height = `${collapsed}px`;
+    w.el.style.minHeight = `${collapsed}px`;
+    w.el.style.maxHeight = `${collapsed}px`;
     w.minimizeBtn.textContent = '□';
     w.minimizeBtn.title = 'Restore';
+    setResizeHandleVisible(w, false);
+    emitWindowEvent('qpm:window-minimized', id);
   } else {
-    w.body.style.display = '';
-    w.el.style.maxHeight = w.maxHeight;
-    w.minimizeBtn.textContent = '−';
-    w.minimizeBtn.title = 'Minimize';
+    restoreWindowFromMinimize(w);
+    emitWindowEvent('qpm:window-restored', id);
   }
 
   saveWindowState(id, true, w.isMinimized);
@@ -401,6 +458,103 @@ function makeDraggable(win: HTMLElement, head: HTMLElement, id: string): void {
     document.addEventListener('mouseup', onUp);
     bumpZ(win);
   });
+}
+
+/**
+ * Make window resizable via bottom-right drag handle
+ */
+function makeResizable(win: HTMLElement, id: string): void {
+  const handle = document.createElement('div');
+  handle.className = 'qpm-window-resize-handle';
+  handle.title = 'Drag to resize';
+  handle.style.cssText = [
+    'position:absolute',
+    'bottom:0',
+    'right:0',
+    'width:16px',
+    'height:16px',
+    'cursor:se-resize',
+    'background:linear-gradient(135deg,transparent 50%,rgba(143,130,255,0.4) 50%)',
+    'border-radius:0 0 7px 0',
+    'z-index:2',
+    'flex-shrink:0',
+  ].join(';');
+  win.appendChild(handle);
+
+  let down = false;
+  let startX = 0;
+  let startY = 0;
+  let startW = 0;
+  let startH = 0;
+
+  const onMove = (e: MouseEvent): void => {
+    if (!down) return;
+    e.preventDefault();
+    const newW = Math.max(260, startW + (e.clientX - startX));
+    const newH = Math.max(120, startH + (e.clientY - startY));
+    win.style.width = `${newW}px`;
+    win.style.height = `${newH}px`;
+  };
+
+  const onUp = (): void => {
+    if (!down) return;
+    down = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    // Convert back to right-anchored (consistent with drag and initial positioning)
+    const r = win.getBoundingClientRect();
+    win.style.left = 'auto';
+    win.style.right = `${Math.max(0, window.innerWidth - r.right)}px`;
+    win.style.top = `${r.top}px`;
+    saveWindowSize(id, win);
+    saveWindowPosition(id, win);
+  };
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = win.getBoundingClientRect();
+    startW = rect.width;
+    startH = rect.height;
+    // Convert to left-anchored so resize handle tracks cursor correctly.
+    // Without this, right-anchored windows grow leftward while the handle stays
+    // pinned to the right viewport edge, making direction feel inverted.
+    win.style.left = `${rect.left}px`;
+    win.style.top = `${rect.top}px`;
+    win.style.right = 'auto';
+    win.style.bottom = 'auto';
+    win.style.width = `${startW}px`;
+    win.style.height = `${startH}px`;
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+    startX = e.clientX;
+    startY = e.clientY;
+    down = true;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    bumpZ(win);
+  });
+}
+
+/**
+ * Save window size to localStorage
+ */
+function saveWindowSize(id: string, win: HTMLElement): void {
+  const rect = win.getBoundingClientRect();
+  storage.set(WINDOW_SIZE_KEY + id, { width: Math.round(rect.width), height: Math.round(rect.height) });
+}
+
+/**
+ * Restore saved window size (overrides max constraints)
+ */
+function restoreWindowSize(id: string, win: HTMLElement): void {
+  const saved = storage.get<{ width: number; height: number }>(WINDOW_SIZE_KEY + id);
+  if (saved && saved.width > 0 && saved.height > 0) {
+    win.style.width = `${saved.width}px`;
+    win.style.height = `${saved.height}px`;
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+  }
 }
 
 /**
@@ -543,7 +697,6 @@ export function destroyWindow(id: string): void {
 
   w.el.remove();
   windows.delete(id);
-  log(`Window ${id} destroyed`);
 }
 
 /**

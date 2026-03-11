@@ -32,7 +32,6 @@ type DebugApiType = {
   testComparePets: (slotIndexA: number, slotIndexB: number) => void;
   testAbilityDefinitions: () => any;
   debugAriesIntegration: () => void;
-  toggleBadgePreview: (force?: boolean) => Promise<any>;
   debugInventoryAtoms: (labels?: string[]) => Promise<any>;
   scanSeeds: () => Promise<any>;
   auditRainbowPets: () => Promise<any>;
@@ -348,16 +347,6 @@ export async function createDebugApi(): Promise<DebugApiType> {
       });
     },
 
-    toggleBadgePreview: async (force?: boolean) => {
-      try {
-        const { toggleBadgePreview } = await import('../ui/achievementsWindow');
-        return toggleBadgePreview(force);
-      } catch (error) {
-        console.error('Failed to toggle badge preview', error);
-        return null;
-      }
-    },
-
     debugInventoryAtoms: async (labels = ['myInventoryAtom', 'myCropInventoryAtom']) => {
       for (const label of labels) {
         const atom = getAtomByLabel(label);
@@ -589,7 +578,7 @@ export function createLazyDebugProxy(): Record<string, any> {
     'viewAllSprites', 'checkTargetScale', 'debugSlotInfos', 'debugPetInventory',
     'searchPageWindow', 'inspectPetCards', 'findPetDataInDOM', 'extractStrengthFromUI',
     'debugLevels', 'debugInventory', 'testPetData', 'testComparePets', 'testAbilityDefinitions',
-    'debugAriesIntegration', 'toggleBadgePreview', 'debugInventoryAtoms', 'scanSeeds',
+    'debugAriesIntegration', 'debugInventoryAtoms', 'scanSeeds',
     'auditRainbowPets', 'openPetHub3v3', 'resetTutorial', 'showTutorial',
     'inspectGarden', 'exposeGarden', 'currentTile', 'verifyBulkFavorite', 'inspectJournal',
   ];

@@ -36,12 +36,13 @@ export function ensurePanelStyles(): void {
     border-radius: 14px;
     font: 12px/1.55 var(--qpm-font);
     box-shadow: var(--qpm-shadow);
-    min-width: 360px;
-    max-width: 430px;
+    min-width: 280px;
+    width: 360px;
     max-height: calc(100vh - 32px);
     overflow: hidden;
     backdrop-filter: blur(18px);
     border: 1px solid var(--qpm-border);
+    contain: layout style;
   }
 
   .qpm-panel__titlebar {
@@ -133,6 +134,7 @@ export function ensurePanelStyles(): void {
     overflow-y: auto;
     overflow-x: hidden;
     max-height: calc(100vh - 120px);
+    overscroll-behavior: contain;
   }
 
   .qpm-nav {
@@ -519,6 +521,112 @@ export function ensurePanelStyles(): void {
   }
   .qpm-content::-webkit-scrollbar-thumb:hover {
     background: rgba(143, 130, 255, 0.55);
+  }
+
+  /* ── Nav Sections ── */
+  .qpm-nav-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .qpm-nav-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .qpm-nav-section__header {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(150, 160, 200, 0.45);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 2px;
+  }
+  .qpm-nav-section__header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(150, 160, 200, 0.12);
+  }
+  .qpm-nav-section__row {
+    display: flex;
+    gap: 6px;
+  }
+
+  /* ── Status Tiles ── */
+  .qpm-tile {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--qpm-border);
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 10px;
+    padding: 8px 11px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    text-align: left;
+    will-change: transform, box-shadow;
+  }
+  .qpm-tile:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(143, 130, 255, 0.45);
+    transform: translateY(-1px);
+  }
+  .qpm-tile--active { color: var(--qpm-text); }
+  .qpm-tile__label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--qpm-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: color 0.2s ease;
+  }
+  .qpm-tile--active .qpm-tile__label,
+  .qpm-tile:hover .qpm-tile__label { color: var(--qpm-text); }
+  .qpm-tile__status {
+    font-size: 10px;
+    font-weight: 400;
+    color: rgba(140, 150, 190, 0.65);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+  }
+  .qpm-tile__status--alert  { color: #ffb347 !important; }
+  .qpm-tile__status--positive { color: #4fd18b !important; }
+
+  /* ── Resize handle ── */
+  .qpm-panel__resize-handle {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 20px;
+    height: 20px;
+    cursor: nwse-resize;
+    z-index: 10;
+    touch-action: none;
+  }
+  .qpm-panel__resize-handle::after {
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    width: 9px;
+    height: 9px;
+    border-bottom: 2px solid rgba(143, 130, 255, 0.3);
+    border-right: 2px solid rgba(143, 130, 255, 0.3);
+    border-radius: 0 0 3px 0;
+    transition: border-color 0.2s ease;
+  }
+  .qpm-panel__resize-handle:hover::after {
+    border-color: rgba(143, 130, 255, 0.7);
   }
   `;
   document.head.appendChild(style);

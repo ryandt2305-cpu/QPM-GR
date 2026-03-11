@@ -32,10 +32,15 @@ function matchesCategory(keyCat: string, requested: SpriteCategory): boolean {
 
 function findItem(state: SpriteState, category: SpriteCategory, id: string): SpriteItem | null {
   const normId = normalizeKey(id);
+  const normFullId = normalizeKey(String(id || '').replace(/^\/+/, ''));
 
   for (const it of state.items) {
     const keyCat = keyCategoryOf(it.key);
     if (!matchesCategory(keyCat, category)) continue;
+
+    // Support exact slash-key lookups such as "sprite/ui/Coin".
+    const normalizedItemKey = normalizeKey(String(it.key || '').replace(/^\/+/, ''));
+    if (normalizedItemKey === normFullId) return it;
 
     const base = normalizeKey(baseNameOf(it.key));
     if (base === normId) return it;

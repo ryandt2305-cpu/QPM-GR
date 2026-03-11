@@ -21,7 +21,7 @@
 
 **QPM-GR** is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, and tracking utilities. The project is currently in **ALPHA** - expect frequent updates and improvements as new features are integrated.
 
-**Current Version:** 3.0.64
+**Current Version:** 3.1.0
 
 ### Focus Areas
 
@@ -190,7 +190,7 @@ The Tampermonkey-ready userscript will be generated at `dist/QPM.user.js`.
 
 - Navigate to Magic Garden
 - Look for the QPM panel in the game UI
-- Check version number shows "3.0.64"
+- Check version number shows "3.1.0"
 
 ---
 

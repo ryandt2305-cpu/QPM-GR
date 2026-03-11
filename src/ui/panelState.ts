@@ -63,10 +63,6 @@ export interface UIState {
   mutationTrackerEmpty: HTMLElement | null;
   trackerAbilityHistoryUnsubscribe: (() => void) | null;
   trackerAbilityTicker: (() => void) | null;
-  xpTrackerWindow: any | null; // XpTrackerWindowState from xpTrackerWindow.ts
-  abilityTrackerWindow: any | null; // AbilityTrackerWindowState from trackerWindow.ts
-  turtleTimerWindow: any | null; // TurtleTimerWindowState from turtleTimerWindow.ts
-  shopRestockWindow: any | null; // ShopRestockWindowState from shopRestockWindow.ts
   mutationTrackerUnsubscribe: (() => void) | null;
   mutationTrackerTicker: (() => void) | null;
   turtleUnsubscribe: (() => void) | null;
@@ -160,10 +156,6 @@ export function createInitialUIState(): UIState {
     mutationTrackerEmpty: null,
     trackerAbilityHistoryUnsubscribe: null,
     trackerAbilityTicker: null,
-    xpTrackerWindow: null,
-    abilityTrackerWindow: null,
-    turtleTimerWindow: null,
-    shopRestockWindow: null,
     mutationTrackerUnsubscribe: null,
     mutationTrackerTicker: null,
     turtleUnsubscribe: null,

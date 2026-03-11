@@ -1,0 +1,364 @@
+// src/ui/utilityHubWindow.ts
+// Utility Hub — compact feature cards with Customize overlay
+
+import { toggleWindow } from './modalWindow';
+import { storage } from '../utils/storage';
+import { log } from '../utils/logger';
+
+const VISIBLE_CARDS_KEY = 'qpm.utilityHub.visibleCards';
+
+const FEATURE_DEFS = [
+  {
+    key: 'garden-filters',
+    label: 'Garden Filters',
+    icon: '🔍',
+    desc: 'Filter & highlight garden tiles by species, mutations, and attributes',
+    windowTitle: '🔍 Garden Filters',
+  },
+  {
+    key: 'auto-fav',
+    label: 'Auto-Favorite',
+    icon: '⭐',
+    desc: 'Automatically favorite inventory items matching your saved rules',
+    windowTitle: '⭐ Auto-Favorite',
+  },
+  {
+    key: 'bulk-fav',
+    label: 'Bulk Favorite',
+    icon: '❤️',
+    desc: 'Favorite or unfavorite all matching items in your inventory at once',
+    windowTitle: '❤️ Bulk Favorite',
+  },
+  {
+    key: 'reminders',
+    label: 'Reminders',
+    icon: '🔔',
+    desc: 'Timers and alerts for garden events, harvests, and shop restocks',
+    windowTitle: '🔔 Reminders',
+  },
+] as const;
+
+type FeatureKey = (typeof FEATURE_DEFS)[number]['key'];
+type FeatureDef = (typeof FEATURE_DEFS)[number];
+
+function loadVisibleCards(): FeatureKey[] {
+  const saved = storage.get<FeatureKey[] | null>(VISIBLE_CARDS_KEY, null);
+  if (Array.isArray(saved) && saved.length > 0) return saved;
+  return FEATURE_DEFS.map((f) => f.key);
+}
+
+// ---------------------------------------------------------------------------
+// Feature card opener — lazily loads each feature into a dedicated window
+// ---------------------------------------------------------------------------
+
+async function openFeatureWindow(feat: FeatureDef): Promise<void> {
+  const windowId = `utility-feature-${feat.key}`;
+  toggleWindow(windowId, feat.windowTitle, (windowRoot) => {
+    windowRoot.style.cssText =
+      'display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;padding:12px;';
+    (async () => {
+      try {
+        if (feat.key === 'reminders') {
+          const { renderRemindersContent } = await import('./originalPanel');
+          renderRemindersContent(windowRoot);
+        } else if (feat.key === 'bulk-fav') {
+          const { createBulkFavoriteSection } = await import('./sections/bulkFavoriteSection');
+          windowRoot.appendChild(createBulkFavoriteSection());
+        } else if (feat.key === 'auto-fav') {
+          const { createAutoFavoriteSection } = await import('./sections/autoFavoriteSection');
+          windowRoot.appendChild(await createAutoFavoriteSection());
+        } else if (feat.key === 'garden-filters') {
+          const { createGardenFiltersSection } = await import('./sections/gardenFiltersSection');
+          windowRoot.appendChild(await createGardenFiltersSection());
+        }
+      } catch (err) {
+        log('⚠️ Failed to load feature window', err);
+        windowRoot.textContent = '❌ Failed to load. Reload the page and try again.';
+      }
+    })();
+  }, '580px', '78vh');
+}
+
+// ---------------------------------------------------------------------------
+// Compact feature card
+// ---------------------------------------------------------------------------
+
+function buildFeatureCard(feat: FeatureDef): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'border:1px solid rgba(143,130,255,0.18)',
+    'background:rgba(255,255,255,0.03)',
+    'border-radius:10px',
+    'padding:14px 16px',
+    'display:flex',
+    'align-items:center',
+    'gap:14px',
+    'transition:border-color 0.15s,background 0.15s',
+  ].join(';');
+  card.addEventListener('mouseenter', () => {
+    card.style.background = 'rgba(143,130,255,0.06)';
+    card.style.borderColor = 'rgba(143,130,255,0.35)';
+  });
+  card.addEventListener('mouseleave', () => {
+    card.style.background = 'rgba(255,255,255,0.03)';
+    card.style.borderColor = 'rgba(143,130,255,0.18)';
+  });
+
+  const iconEl = document.createElement('div');
+  iconEl.style.cssText = 'font-size:28px;line-height:1;flex-shrink:0;user-select:none;';
+  iconEl.textContent = feat.icon;
+
+  const info = document.createElement('div');
+  info.style.cssText = 'flex:1;min-width:0;';
+
+  const nameEl = document.createElement('div');
+  nameEl.style.cssText = 'font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:3px;';
+  nameEl.textContent = feat.label;
+
+  const descEl = document.createElement('div');
+  descEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);line-height:1.5;';
+  descEl.textContent = feat.desc;
+
+  info.append(nameEl, descEl);
+
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button';
+  openBtn.textContent = 'Open →';
+  openBtn.style.cssText = [
+    'padding:6px 12px',
+    'font-size:12px',
+    'border:1px solid rgba(143,130,255,0.3)',
+    'border-radius:6px',
+    'background:rgba(143,130,255,0.12)',
+    'color:#c8c0ff',
+    'cursor:pointer',
+    'white-space:nowrap',
+    'flex-shrink:0',
+    'transition:background 0.15s,border-color 0.15s',
+  ].join(';');
+  openBtn.addEventListener('mouseenter', () => {
+    openBtn.style.background = 'rgba(143,130,255,0.24)';
+    openBtn.style.borderColor = 'rgba(143,130,255,0.55)';
+  });
+  openBtn.addEventListener('mouseleave', () => {
+    openBtn.style.background = 'rgba(143,130,255,0.12)';
+    openBtn.style.borderColor = 'rgba(143,130,255,0.3)';
+  });
+  openBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openFeatureWindow(feat).catch((err) => log('⚠️ Failed to open feature', err));
+  });
+
+  card.append(iconEl, info, openBtn);
+  card.addEventListener('click', () => {
+    openFeatureWindow(feat).catch((err) => log('⚠️ Failed to open feature', err));
+  });
+  return card;
+}
+
+// ---------------------------------------------------------------------------
+// Customize overlay
+// ---------------------------------------------------------------------------
+
+function buildCustomizeOverlay(
+  container: HTMLElement,
+  onClose: () => void,
+  onSave: (selected: FeatureKey[]) => void,
+): HTMLElement {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = [
+    'position:absolute',
+    'inset:0',
+    'background:rgba(10,12,18,0.97)',
+    'display:flex',
+    'flex-direction:column',
+    'padding:20px',
+    'gap:10px',
+    'z-index:20',
+  ].join(';');
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:15px;font-weight:700;color:#e0e0e0;';
+  title.textContent = '⚙ Customize Cards';
+  overlay.appendChild(title);
+
+  const subtext = document.createElement('div');
+  subtext.style.cssText = 'font-size:12px;color:rgba(224,224,224,0.45);margin-bottom:4px;';
+  subtext.textContent = 'Select which feature cards to show in the Utility hub.';
+  overlay.appendChild(subtext);
+
+  const current = loadVisibleCards();
+  const checkboxes = new Map<FeatureKey, HTMLInputElement>();
+
+  for (const feat of FEATURE_DEFS) {
+    const row = document.createElement('label');
+    row.style.cssText = [
+      'display:flex',
+      'align-items:center',
+      'gap:10px',
+      'padding:10px 12px',
+      'border-radius:8px',
+      'border:1px solid rgba(143,130,255,0.14)',
+      'background:rgba(255,255,255,0.03)',
+      'cursor:pointer',
+      'transition:background 0.12s',
+    ].join(';');
+    row.addEventListener('mouseenter', () => { row.style.background = 'rgba(143,130,255,0.07)'; });
+    row.addEventListener('mouseleave', () => { row.style.background = 'rgba(255,255,255,0.03)'; });
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = current.includes(feat.key);
+    cb.style.cssText = 'accent-color:#8f82ff;width:16px;height:16px;cursor:pointer;flex-shrink:0;';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.style.cssText = 'font-size:18px;line-height:1;user-select:none;';
+    iconSpan.textContent = feat.icon;
+
+    const labelText = document.createElement('span');
+    labelText.style.cssText = 'font-size:13px;color:#e0e0e0;flex:1;';
+    labelText.textContent = feat.label;
+
+    row.append(cb, iconSpan, labelText);
+    overlay.appendChild(row);
+    checkboxes.set(feat.key, cb);
+  }
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:auto;padding-top:8px;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = [
+    'flex:1', 'padding:9px', 'border-radius:7px', 'cursor:pointer',
+    'background:rgba(255,255,255,0.05)', 'border:1px solid rgba(255,255,255,0.1)',
+    'color:rgba(224,224,224,0.65)', 'font-size:13px',
+  ].join(';');
+  cancelBtn.addEventListener('click', onClose);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Save';
+  saveBtn.style.cssText = [
+    'flex:1', 'padding:9px', 'border-radius:7px', 'cursor:pointer',
+    'background:rgba(143,130,255,0.2)', 'border:1px solid rgba(143,130,255,0.4)',
+    'color:#c8c0ff', 'font-size:13px', 'font-weight:600',
+  ].join(';');
+  saveBtn.addEventListener('click', () => {
+    const selected = FEATURE_DEFS
+      .map((f) => f.key)
+      .filter((k) => checkboxes.get(k)?.checked) as FeatureKey[];
+    onSave(selected);
+  });
+
+  btnRow.append(cancelBtn, saveBtn);
+  overlay.appendChild(btnRow);
+
+  // Close on Escape
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { onClose(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
+
+  void container; // container used by caller to append this overlay
+  return overlay;
+}
+
+// ---------------------------------------------------------------------------
+// Main render
+// ---------------------------------------------------------------------------
+
+function renderUtilityHub(root: HTMLElement): void {
+  root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;position:relative;';
+
+  // ── Header ──
+  const header = document.createElement('div');
+  header.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'padding:12px 14px 10px',
+    'border-bottom:1px solid rgba(143,130,255,0.2)',
+    'flex-shrink:0',
+    'gap:8px',
+  ].join(';');
+
+  const headerTitle = document.createElement('span');
+  headerTitle.style.cssText = 'font-size:13px;font-weight:600;color:rgba(224,224,224,0.8);flex:1;';
+  headerTitle.textContent = 'Utility';
+
+  const customizeBtn = document.createElement('button');
+  customizeBtn.type = 'button';
+  customizeBtn.textContent = '⚙ Customize';
+  customizeBtn.style.cssText = [
+    'padding:5px 11px',
+    'font-size:11px',
+    'border:1px solid rgba(143,130,255,0.28)',
+    'border-radius:5px',
+    'background:rgba(143,130,255,0.1)',
+    'color:rgba(200,192,255,0.85)',
+    'cursor:pointer',
+    'transition:background 0.15s',
+  ].join(';');
+  customizeBtn.addEventListener('mouseenter', () => { customizeBtn.style.background = 'rgba(143,130,255,0.2)'; });
+  customizeBtn.addEventListener('mouseleave', () => { customizeBtn.style.background = 'rgba(143,130,255,0.1)'; });
+
+  header.append(headerTitle, customizeBtn);
+  root.appendChild(header);
+
+  // ── Cards area ──
+  const cardsArea = document.createElement('div');
+  cardsArea.style.cssText = [
+    'flex:1',
+    'overflow-y:auto',
+    'padding:14px',
+    'display:flex',
+    'flex-direction:column',
+    'gap:10px',
+  ].join(';');
+  root.appendChild(cardsArea);
+
+  // ── Render cards ──
+  let overlayEl: HTMLElement | null = null;
+
+  const renderCards = () => {
+    cardsArea.innerHTML = '';
+    const visible = loadVisibleCards();
+    const visibleFeatures = FEATURE_DEFS.filter((f) => visible.includes(f.key));
+
+    if (!visibleFeatures.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText =
+        'text-align:center;color:rgba(224,224,224,0.35);font-size:13px;padding:40px 20px;line-height:1.6;';
+      empty.textContent = 'No cards selected.\nClick ⚙ Customize to add feature cards.';
+      cardsArea.appendChild(empty);
+      return;
+    }
+
+    for (const feat of visibleFeatures) {
+      cardsArea.appendChild(buildFeatureCard(feat));
+    }
+  };
+
+  const closeOverlay = () => {
+    overlayEl?.remove();
+    overlayEl = null;
+  };
+
+  const openOverlay = () => {
+    if (overlayEl) { closeOverlay(); return; }
+    overlayEl = buildCustomizeOverlay(root, closeOverlay, (selected) => {
+      storage.set(VISIBLE_CARDS_KEY, selected);
+      closeOverlay();
+      renderCards();
+    });
+    root.appendChild(overlayEl);
+  };
+
+  customizeBtn.addEventListener('click', openOverlay);
+  renderCards();
+}
+
+export function openUtilityHubWindow(): void {
+  toggleWindow('utility-hub', '🔧 Utility', renderUtilityHub, '520px', '90vh');
+}

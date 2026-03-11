@@ -36,8 +36,8 @@ let initializing = false;
 function normalizeInventoryItem(raw: any): InventoryItem | null {
   if (!raw || typeof raw !== 'object') return null;
 
-  // Some seed entries do not have an id; fall back to species/name to keep them for Seed Hoarder.
-  const fallbackId = raw.species ?? raw.name ?? raw.displayName ?? raw.itemId ?? raw.id;
+  // UUID fields take priority. Species/name are fallbacks for seeds that have no UUID.
+  const fallbackId = raw.id ?? raw.itemId ?? raw.species ?? raw.name ?? raw.displayName;
   const id = String(fallbackId ?? '').trim();
   if (!id) return null;
 

@@ -7,14 +7,24 @@ import { debounce } from '../utils/helpers';
 import { log } from '../utils/logger';
 import { visibleInterval } from '../utils/timerManager';
 import { resetWeatherMutationTracking } from './weatherMutationTracking';
-import { buildAbilityValuationContext, resolveDynamicAbilityEffect } from './abilityValuation';
+import { buildAbilityValuationContext, resolveDynamicAbilityEffect, resolveGrantedMutationName } from './abilityValuation';
 import { calculateMutationValue } from '../utils/mutationValueCalculator';
-import { getMutationMultiplier } from '../catalogs/gameCatalogs';
+import { getMutationMultiplier, getAllAbilities } from '../catalogs/gameCatalogs';
 
 const STORAGE_KEY = 'qpm.mutationValueTracking.v1';
 const SAVE_DEBOUNCE_MS = 3000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+
+/** Ability IDs handled by the hardcoded paths — excluded from auto-discovery. */
+const KNOWN_GRANTER_IDS = new Set([
+  'GoldGranter',
+  'RainbowGranter',
+  'ProduceScaleBoost',
+  'ProduceScaleBoostII',
+  'ProduceMutationBoost',
+  'ProduceMutationBoostII',
+]);
 
 /**
  * Get mutation value dynamically from catalog (FUTUREPROOF!)
@@ -28,6 +38,15 @@ function getMutationValue(mutationId: string): number {
   // Fallback to conservative estimate based on multiplier
   const multiplier = getMutationMultiplier(mutationId);
   return Math.floor(5000 * multiplier); // 5000 * multiplier as fallback
+}
+
+export interface DiscoveredAbilityStats {
+  abilityId: string;
+  mutationName: string;
+  procs: number;
+  perHour: number;
+  totalValue: number;
+  lastProcAt: number | null;
 }
 
 export interface MutationValueStats {
@@ -58,6 +77,9 @@ export interface MutationValueStats {
   bestHourTime: number | null;
   bestSessionValue: number;
   bestSessionTime: number | null;
+
+  // Auto-discovered granter abilities (e.g. SnowGranter, AmberGranter)
+  discoveredAbilityStats: Record<string, DiscoveredAbilityStats>;
 }
 
 export interface SessionHistory {
@@ -124,6 +146,7 @@ let snapshot: MutationValueSnapshot = {
     bestHourTime: null,
     bestSessionValue: 0,
     bestSessionTime: null,
+    discoveredAbilityStats: {},
   },
   sessions: [],
   hourlyBreakdown: new Map(),
@@ -153,6 +176,31 @@ function countAbilityProcs(abilityId: string, since: number): {count: number, la
   }
 
   return { count, lastProcAt };
+}
+
+/**
+ * Scans the runtime petAbilities catalog for any *Granter ability IDs
+ * that aren't already handled by the hardcoded paths.
+ * Returns [] when the catalog hasn't loaded yet (safe to call any time).
+ */
+function discoverExtraGranterAbilities(): string[] {
+  return getAllAbilities().filter(
+    (id) => id.endsWith('Granter') && !KNOWN_GRANTER_IDS.has(id),
+  );
+}
+
+/** Build a value-per-proc map for a list of extra granter IDs. */
+function buildExtraGranterValues(
+  ids: string[],
+  context: ReturnType<typeof buildAbilityValuationContext>,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const id of ids) {
+    const effect = resolveDynamicAbilityEffect(id, context, null);
+    const mutationName = resolveGrantedMutationName(id);
+    map.set(id, effect?.effectPerProc ?? getMutationValue(mutationName));
+  }
+  return map;
 }
 
 function recalculateStats(): void {
@@ -206,17 +254,39 @@ function recalculateStats(): void {
   snapshot.stats.cropBoostTotalValue = cropBoostTotalValue;
   snapshot.stats.cropBoostPerHour = hours > 0 ? totalCropBoosts / hours : 0;
 
-  // Calculate session value
+  // Auto-discover and count extra granter abilities (SnowGranter, AmberGranter, etc.)
+  const extraGranterIds = discoverExtraGranterAbilities();
+  const extraGranterValues = buildExtraGranterValues(extraGranterIds, context);
+  const newDiscovered: Record<string, DiscoveredAbilityStats> = {};
+  let extraTotalValue = 0;
+  for (const abilityId of extraGranterIds) {
+    const valuePerProc = extraGranterValues.get(abilityId) ?? 0;
+    const data = countAbilityProcs(abilityId, sessionStart);
+    const totalValue = data.count * valuePerProc;
+    extraTotalValue += totalValue;
+    newDiscovered[abilityId] = {
+      abilityId,
+      mutationName: resolveGrantedMutationName(abilityId),
+      procs: data.count,
+      perHour: hours > 0 ? data.count / hours : 0,
+      totalValue,
+      lastProcAt: data.lastProcAt,
+    };
+  }
+  snapshot.stats.discoveredAbilityStats = newDiscovered;
+
+  // Calculate session value (includes all discovered granters)
   snapshot.stats.sessionValue =
     snapshot.stats.goldTotalValue +
     snapshot.stats.rainbowTotalValue +
-    snapshot.stats.cropBoostTotalValue;
+    snapshot.stats.cropBoostTotalValue +
+    extraTotalValue;
 
   // Calculate hourly breakdown
-  calculateHourlyBreakdown(context);
+  calculateHourlyBreakdown(context, extraGranterIds, extraGranterValues);
 
   // Update best hour/session
-  const currentHourValue = calculateCurrentHourValue(now, context);
+  const currentHourValue = calculateCurrentHourValue(now, context, extraGranterIds, extraGranterValues);
   if (currentHourValue > snapshot.stats.bestHourValue) {
     snapshot.stats.bestHourValue = currentHourValue;
     snapshot.stats.bestHourTime = now;
@@ -232,7 +302,12 @@ function recalculateStats(): void {
   notifyListeners();
 }
 
-function calculateCurrentHourValue(now: number, context: ReturnType<typeof buildAbilityValuationContext>): number {
+function calculateCurrentHourValue(
+  now: number,
+  context: ReturnType<typeof buildAbilityValuationContext>,
+  extraGranterIds: string[],
+  extraGranterValues: Map<string, number>,
+): number {
   const oneHourAgo = now - HOUR_MS;
   const goldData = countAbilityProcs('GoldGranter', oneHourAgo);
   const rainbowData = countAbilityProcs('RainbowGranter', oneHourAgo);
@@ -250,15 +325,26 @@ function calculateCurrentHourValue(now: number, context: ReturnType<typeof build
   const cropBoost1Value = cropBoostEffect1?.effectPerProc || getMutationValue('Rainbow');
   const cropBoost2Value = cropBoostEffect2?.effectPerProc || getMutationValue('Rainbow');
 
+  let extraHourValue = 0;
+  for (const id of extraGranterIds) {
+    const data = countAbilityProcs(id, oneHourAgo);
+    extraHourValue += data.count * (extraGranterValues.get(id) ?? 0);
+  }
+
   return (
     goldData.count * goldValue +
     rainbowData.count * rainbowValue +
     cropBoostData1.count * cropBoost1Value +
-    cropBoostData2.count * cropBoost2Value
+    cropBoostData2.count * cropBoost2Value +
+    extraHourValue
   );
 }
 
-function calculateHourlyBreakdown(context: ReturnType<typeof buildAbilityValuationContext>): void {
+function calculateHourlyBreakdown(
+  context: ReturnType<typeof buildAbilityValuationContext>,
+  extraGranterIds: string[],
+  extraGranterValues: Map<string, number>,
+): void {
   const hourlyTotals = new Map<number, {value: number, count: number}>();
 
   // Get dynamic ability values based on current garden state
@@ -287,6 +373,8 @@ function calculateHourlyBreakdown(context: ReturnType<typeof buildAbilityValuati
         value = cropBoost1Value;
       } else if (history.abilityId === 'ProduceScaleBoostII') {
         value = cropBoost2Value;
+      } else {
+        value = extraGranterValues.get(history.abilityId) ?? 0;
       }
 
       if (value > 0) {
@@ -441,6 +529,7 @@ export function clearAllMutationValueHistory(): void {
       bestHourTime: null,
       bestSessionValue: 0,
       bestSessionTime: null,
+      discoveredAbilityStats: {},
     },
     sessions: [],
     hourlyBreakdown: new Map(),
@@ -452,7 +541,10 @@ export function clearAllMutationValueHistory(): void {
 
 export function getMutationValueSnapshot(): MutationValueSnapshot {
   return {
-    stats: { ...snapshot.stats },
+    stats: {
+      ...snapshot.stats,
+      discoveredAbilityStats: { ...snapshot.stats.discoveredAbilityStats },
+    },
     sessions: [...snapshot.sessions],
     hourlyBreakdown: new Map(snapshot.hourlyBreakdown),
     updatedAt: snapshot.updatedAt,
@@ -500,6 +592,7 @@ export function resetMutationValueTracking(): void {
       bestHourTime: snapshot.stats.bestHourTime,
       bestSessionValue: snapshot.stats.bestSessionValue,
       bestSessionTime: snapshot.stats.bestSessionTime,
+      discoveredAbilityStats: {},
     },
     sessions: snapshot.sessions,
     hourlyBreakdown: new Map(),

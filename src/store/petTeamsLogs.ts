@@ -1,0 +1,179 @@
+// src/store/petTeamsLogs.ts
+// Persistent event log for the Pet Teams feature.
+// Tracks ability, feed, and team-apply events with a 5000-event cap and 30-day TTL.
+
+import { storage } from '../utils/storage';
+import { log } from '../utils/logger';
+import type { PetLogEvent, PetLogEventType } from '../types/petTeams';
+
+const STORAGE_KEY = 'qpm.petTeams.logs.v1';
+const MAX_EVENTS = 5000;
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+let cachedLogs: PetLogEvent[] = [];
+const listeners = new Set<(logs: PetLogEvent[]) => void>();
+let feedPetListener: ((e: Event) => void) | null = null;
+
+function generateId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pruneOld(events: PetLogEvent[]): PetLogEvent[] {
+  const cutoff = Date.now() - MAX_AGE_MS;
+  const filtered = events.filter(e => e.timestamp >= cutoff);
+  if (filtered.length > MAX_EVENTS) {
+    return filtered.slice(filtered.length - MAX_EVENTS);
+  }
+  return filtered;
+}
+
+function persist(): void {
+  try {
+    storage.set(STORAGE_KEY, cachedLogs);
+  } catch (error) {
+    log('⚠️ petTeamsLogs: failed to persist', error);
+  }
+}
+
+function notify(): void {
+  const snapshot = [...cachedLogs];
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      log('⚠️ petTeamsLogs: listener threw', error);
+    }
+  }
+}
+
+function appendEvent(event: PetLogEvent): void {
+  cachedLogs.push(event);
+  if (cachedLogs.length > MAX_EVENTS * 1.1) {
+    cachedLogs = pruneOld(cachedLogs);
+  }
+  persist();
+  notify();
+}
+
+export function initPetTeamsLogs(): void {
+  try {
+    const raw = storage.get<PetLogEvent[]>(STORAGE_KEY, []);
+    cachedLogs = pruneOld(Array.isArray(raw) ? raw : []);
+    log(`[PetTeamsLogs] Loaded ${cachedLogs.length} events`);
+  } catch (error) {
+    cachedLogs = [];
+    log('⚠️ petTeamsLogs: failed to load from storage', error);
+  }
+
+  // Subscribe to qpm:feedPet CustomEvents dispatched by instantFeed.ts
+  feedPetListener = (e: Event) => {
+    const { petItemId, petName, petSpecies, cropSpecies, usedFavoriteFallback } =
+      (e as CustomEvent<{
+        petItemId?: string;
+        petName?: string;
+        petSpecies?: string;
+        cropSpecies?: string;
+        usedFavoriteFallback?: boolean;
+      }>).detail ?? {};
+    logFeedEvent(
+      petItemId ?? '',
+      petName ?? null,
+      petSpecies ?? null,
+      cropSpecies ?? '?',
+      usedFavoriteFallback ?? false,
+    );
+  };
+  window.addEventListener('qpm:feedPet', feedPetListener);
+}
+
+export function stopPetTeamsLogs(): void {
+  if (feedPetListener) {
+    window.removeEventListener('qpm:feedPet', feedPetListener);
+    feedPetListener = null;
+  }
+  listeners.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Logging helpers
+// ---------------------------------------------------------------------------
+
+export function logAbilityEvent(
+  petItemId: string,
+  petName: string | null,
+  petSpecies: string | null,
+  abilityName: string,
+  extra?: Record<string, unknown>,
+): void {
+  const event: PetLogEvent = {
+    id: generateId(),
+    type: 'ability',
+    petItemId,
+    detail: `${petName ?? petSpecies ?? 'Pet'}: ${abilityName}`,
+    timestamp: Date.now(),
+  };
+  if (petName) event.petName = petName;
+  if (petSpecies) event.petSpecies = petSpecies;
+  if (extra) event.extra = extra;
+  appendEvent(event);
+}
+
+export function logFeedEvent(
+  petItemId: string,
+  petName: string | null,
+  petSpecies: string | null,
+  cropSpecies: string,
+  usedFavoriteFallback: boolean,
+): void {
+  const event: PetLogEvent = {
+    id: generateId(),
+    type: 'feed',
+    petItemId,
+    detail: `Fed ${petName ?? petSpecies ?? 'Pet'} → ${cropSpecies}${usedFavoriteFallback ? ' (fav fallback)' : ''}`,
+    timestamp: Date.now(),
+    extra: { cropSpecies, usedFavoriteFallback },
+  };
+  if (petName) event.petName = petName;
+  if (petSpecies) event.petSpecies = petSpecies;
+  appendEvent(event);
+}
+
+export function logTeamEvent(
+  teamId: string,
+  teamName: string,
+  appliedCount: number,
+  errors: string[],
+): void {
+  appendEvent({
+    id: generateId(),
+    type: 'team',
+    detail: errors.length === 0
+      ? `Applied "${teamName}" (${appliedCount} pets)`
+      : `Applied "${teamName}" with ${errors.length} error(s)`,
+    timestamp: Date.now(),
+    extra: { teamId, teamName, appliedCount, errors },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Read API
+// ---------------------------------------------------------------------------
+
+export function getLogs(type?: PetLogEventType, limit?: number): PetLogEvent[] {
+  let result = type ? cachedLogs.filter(e => e.type === type) : [...cachedLogs];
+  if (limit != null && result.length > limit) {
+    result = result.slice(result.length - limit);
+  }
+  return result.reverse(); // newest first
+}
+
+export function clearLogs(): void {
+  cachedLogs = [];
+  persist();
+  notify();
+}
+
+export function onLogsChange(cb: (logs: PetLogEvent[]) => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}

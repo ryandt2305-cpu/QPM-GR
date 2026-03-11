@@ -1,22 +1,9 @@
 // src/integrations/ariesBridge.ts
-// Exposes lightweight data snapshots for Aries Mod to consume (achievements + pet teams)
+// Exposes lightweight data snapshots for Aries Mod to consume (pet teams)
 
-import { getAchievementDefinitions, getAchievementProgress } from '../store/achievements';
 import { getActivePetInfos } from '../store/pets';
 import { log } from '../utils/logger';
 import { shareGlobal } from '../core/pageContext';
-
-export type AriesBridgeAchievement = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  rarity: string;
-  target: number | null;
-  current: number;
-  completedAt: number | null;
-  ineligible: boolean;
-};
 
 export type AriesBridgeTeam = {
   id: string;
@@ -26,6 +13,8 @@ export type AriesBridgeTeam = {
 };
 
 const TEAM_STORAGE_KEYS = [
+  'aries_mod',
+  'aries_storage',
   'qws:pets:teams:v1',
   'MGA_petPresets',
   'aries:teams',
@@ -35,6 +24,47 @@ const TEAM_STORAGE_KEYS = [
   'petTeams',
   'teams',
 ];
+
+function readPath(root: unknown, path: string[]): unknown {
+  let cur: unknown = root;
+  for (const part of path) {
+    if (!cur || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+function extractTeamArrays(parsed: unknown): unknown[][] {
+  const arrays: unknown[][] = [];
+  if (Array.isArray(parsed)) {
+    arrays.push(parsed);
+    return arrays;
+  }
+  if (!parsed || typeof parsed !== 'object') return arrays;
+
+  const obj = parsed as Record<string, unknown>;
+  const directKeys = ['teams', 'petTeams', 'presets'];
+  for (const key of directKeys) {
+    const value = obj[key];
+    if (Array.isArray(value)) arrays.push(value);
+  }
+
+  const nestedPaths = [
+    ['pets', 'teams'],
+    ['pets', 'petTeams'],
+    ['data', 'pets', 'teams'],
+  ];
+  for (const path of nestedPaths) {
+    const value = readPath(obj, path);
+    if (Array.isArray(value)) arrays.push(value);
+  }
+
+  // Backward-compatible fallback: look one level deep for arrays
+  Object.values(obj).forEach((val) => {
+    if (Array.isArray(val)) arrays.push(val);
+  });
+  return arrays;
+}
 
 function normalizeTeam(entry: any): AriesBridgeTeam | null {
   if (!entry || typeof entry !== 'object') return null;
@@ -72,26 +102,23 @@ function normalizeTeam(entry: any): AriesBridgeTeam | null {
   };
 }
 
-function readTeamsFromLocalStorage(): AriesBridgeTeam[] {
+export function readTeamsFromLocalStorage(): AriesBridgeTeam[] {
   const teams: AriesBridgeTeam[] = [];
+  const seen = new Set<string>();
   TEAM_STORAGE_KEYS.forEach((key) => {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      const arrays: any[] = [];
-      if (Array.isArray(parsed)) {
-        arrays.push(parsed);
-      } else if (parsed && typeof parsed === 'object') {
-        Object.values(parsed).forEach((val) => {
-          if (Array.isArray(val)) arrays.push(val);
-        });
-      }
+      const arrays = extractTeamArrays(parsed);
 
       arrays.forEach((arr) => {
         arr.forEach((entry: unknown) => {
           const normalized = normalizeTeam(entry);
           if (normalized) {
+            const fp = `${normalized.name}::${normalized.slotIds.map(s => s ?? '').join('|')}`;
+            if (seen.has(fp)) return;
+            seen.add(fp);
             normalized.source = 'localStorage';
             teams.push(normalized);
           }
@@ -117,25 +144,6 @@ function buildActivePetsTeam(): AriesBridgeTeam | null {
   };
 }
 
-function buildAchievementPayload(): AriesBridgeAchievement[] {
-  const defs = getAchievementDefinitions();
-  const progress = getAchievementProgress();
-  return defs.map((def) => {
-    const prog = progress.get(def.id);
-    return {
-      id: def.id,
-      title: def.title,
-      description: def.description,
-      category: def.category,
-      rarity: def.rarity,
-      target: typeof def.target === 'number' ? def.target : null,
-      current: prog?.current ?? 0,
-      completedAt: prog?.completedAt ?? null,
-      ineligible: !!prog?.ineligible,
-    } satisfies AriesBridgeAchievement;
-  });
-}
-
 function buildTeamsPayload(): AriesBridgeTeam[] {
   const teams: AriesBridgeTeam[] = [];
   teams.push(...readTeamsFromLocalStorage());
@@ -146,13 +154,12 @@ function buildTeamsPayload(): AriesBridgeTeam[] {
 
 export function exposeAriesBridge(): void {
   const payload = {
-    getAchievements: (): AriesBridgeAchievement[] => buildAchievementPayload(),
     getTeams: (): AriesBridgeTeam[] => buildTeamsPayload(),
   };
 
   try {
     shareGlobal('QPM_ARIES_BRIDGE', payload);
-    log('✅ AriesBridge: exposed QPM_ARIES_BRIDGE with achievements and teams');
+    log('✅ AriesBridge: exposed QPM_ARIES_BRIDGE with teams');
   } catch (error) {
     log('⚠️ AriesBridge: failed to expose bridge', error);
   }

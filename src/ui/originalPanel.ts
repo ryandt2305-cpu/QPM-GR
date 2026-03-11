@@ -1,165 +1,36 @@
-// src/ui/originalPanel.ts - Complete UI matching the working original
-import { onTurtleTimerState, setTurtleTimerEnabled, configureTurtleTimer, getTurtleTimerState, setManualOverride, clearManualOverride, getManualOverride, type PetManualOverride } from '../features/turtleTimer.ts';
-import type { TurtleTimerState, TurtleTimerChannel } from '../features/turtleTimer.ts';
-import { formatCoins } from '../features/valueCalculator';
-import { onNotifications, clearNotifications, type NotificationEvent, type NotificationLevel } from '../core/notifications';
-import { createJournalCheckerSection as createJournalCheckerSectionNew } from './journalCheckerSection';
-import { isVisible, getGameHudRoot } from '../utils/dom';
+// src/ui/originalPanel.ts - Main panel orchestrator
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
-import { isBulkFavoriteActive, refreshBulkFavorite } from '../features/bulkFavorite';
 import { getWeatherSnapshot } from '../store/weatherHub';
-import { formatSince } from '../utils/helpers';
-import { subscribeToStats, resetStats, getStatsSnapshot, type StatsSnapshot, type ShopCategoryKey } from '../store/stats';
-import { findWeatherCanvas, WEATHER_CANVAS_SELECTORS } from '../utils/weatherDetection';
-import { onActivePetInfos, startPetInfoStore, type ActivePetInfo } from '../store/pets';
-import { estimatePetXpTarget } from '../store/petXpTracker';
-import {
-  getAllMutationSummaries,
-  onMutationSummary,
-  type MutationSummary,
-  type MutationSummaryEnvelope,
-  type MutationSummarySource,
-  type MutationWeatherWindow,
-} from '../store/mutationSummary';
-import { startAbilityTriggerStore, onAbilityHistoryUpdate, findAbilityHistoryForIdentifiers, type AbilityHistory, type AbilityEvent } from '../store/abilityLogs';
-import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
-import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type DynamicAbilityEffect } from '../features/abilityValuation';
-import { toggleWindow, isWindowOpen, type PanelRender } from './modalWindow';
-import { calculateLiveETA } from './trackerWindow';
-import { getMutationValueSnapshot, subscribeToMutationValueTracking, resetMutationValueTracking } from '../features/mutationValueTracking';
-import { renderCompactPetSprite, renderPetSpeciesIcon, getAbilityColor } from '../utils/petCardRenderer';
-import {
-  getCropSpriteCanvas,
-  getCropSpriteWithMutations,
-  getPetSpriteCanvas,
-  getPetSpriteWithMutations,
-  spriteExtractor,
-  onSpritesReady,
-} from '../sprite-v2/compat';
-import { getWeatherMutationSnapshot, subscribeToWeatherMutationTracking } from '../features/weatherMutationTracking';
-import { getAutoFavoriteConfig, updateAutoFavoriteConfig, subscribeToAutoFavoriteConfig } from '../features/autoFavorite';
-import { getGardenFiltersConfig, updateGardenFiltersConfig, subscribeToGardenFiltersConfig, applyGardenFiltersNow, resetGardenFiltersNow, getAllPlantSpecies, getAllEggTypes } from '../features/gardenFilters';
-import { calculateItemStats, initializeRestockTracker, onRestockUpdate, getAllRestockEvents, getSummaryStats, clearAllRestocks } from '../features/shopRestockTracker';
-import { startLiveShopTracking } from '../features/shopRestockLiveTracker';
-import { startVersionChecker, onVersionChange, getVersionInfo, getCurrentVersion, UPDATE_URL, GITHUB_URL, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
-import { canvasToDataUrl } from '../utils/canvasHelpers';
-import { visibleInterval, criticalInterval, timerManager } from '../utils/timerManager';
-import { throttle, yieldToBrowser } from '../utils/scheduling';
-import { getAllPetSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
-import { ensurePanelStyles, ensureToastStyle, TOAST_STYLE_ID } from './panelStyles';
-import { ShopCountdownView, CheckboxChangeHandler, NumberOptionConfig, CardComponents, CardOptions, FOCUS_KEY_SEPARATOR, GROWTH_MINUTES_PER_PROC, formatRestockCountdown, formatDurationPretty, formatMinutesPretty, formatRatePretty, formatHungerPretty, createEditablePetValue, buildFocusTargetKey, parseFocusTargetKey, createCard, createHeaderSegment, btn, showToast, createToggleOption, createCheckboxOption, createNumberOption, capitalizeWord, formatWeatherLabel, formatDuration, formatPercentPretty, formatFeedsPerHour, formatMinutesWithUnit, formatMinutesPerHour, formatCompletionTime } from './panelHelpers';
+import { resetStats } from '../store/stats';
+import { startVersionChecker, onVersionChange, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
+import { yieldToBrowser } from '../utils/scheduling';
+import { ensurePanelStyles } from './panelStyles';
+import { showToast, formatWeatherLabel } from './panelHelpers';
+import { toggleWindow, isWindowOpen } from './modalWindow';
 import { UIState, createInitialUIState } from './panelState';
-import { AbilityContribution, AbilityGroup, AbilityTotals, AbilityAnalysis, TrackerTargetMode, analyzeActivePetAbilities, getPetDisplayName, computeObservedMetrics, ABILITY_HISTORY_LOOKBACK_MS } from './abilityAnalysis';
-import { TurtleTimerUIConfig, ensureTurtleTimerConfig, computeTimingSpread, updateTurtleTimerViews } from './turtleTimerLogic';
 import { createNotificationSection } from './notificationSection';
 import { createGuideSection } from './sections/guideSection';
-import { createBulkFavoriteSection } from './sections/bulkFavoriteSection';
-import { createTrackersSection } from './sections/trackersSection';
-import { createStatsSection } from './sections/statsSection';
-import { createStatsOverviewSection } from './sections/statsOverviewSection';
-import { createMutationValueSection, createMutationSection } from './sections/mutationValueSection';
-import { createGardenFiltersSection } from './sections/gardenFiltersSection';
-import { createAutoFavoriteSection } from './sections/autoFavoriteSection';
+import { createMutationSection } from './sections/mutationValueSection';
 import { createStatsHeader } from './sections/statsHeaderSection';
-import { createTurtleTimerSection } from './sections/turtleTimerSection';
-// Display Tweaker removed
+import { onActivePetInfos, type ActivePetInfo } from '../store/pets';
+import { getRestockDataSync } from '../utils/restockDataService';
+import { getCropSpriteCanvas, getPetSpriteCanvas } from '../sprite-v2/compat';
+import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { visibleInterval } from '../utils/timerManager';
+import { calculateMaxStrength } from '../store/xpTracker';
+import { listRooms } from '../services/ariesRooms';
+import { getMutationValueSnapshot } from '../features/mutationValueTracking';
 
 let uiState = createInitialUIState();
 
-const SHOP_COUNTDOWN_WARNING_THRESHOLD_MS = 10_000;
 const PANEL_POSITION_KEY = 'quinoa-ui-panel-position';
 const PANEL_COLLAPSED_KEY = 'quinoa-ui-panel-collapsed';
-const TRACKER_TARGET_MODE_KEY = 'quinoa-ui-tracker-target-mode';
-const TRACKER_TARGET_PET_KEY = 'quinoa-ui-tracker-target-pet';
-const TRACKER_ABILITY_FILTER_KEY = 'quinoa-ui-tracker-ability-filter';
-const MUTATION_TRACKER_SOURCE_KEY = 'quinoa-ui-mutation-tracker-source';
-const MUTATION_TRACKER_DETAIL_KEY = 'quinoa-ui-mutation-tracker-detail';
+const PANEL_SIZE_KEY = 'quinoa-ui-panel-size';
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 620;
 
-const shopCountdownViews: ShopCountdownView[] = [];
-let unregisterShopCountdownTimer: (() => void) | null = null;
-let latestRestockInfo: { nextRestockAt?: Record<string, number | null> } | null = null;
 let _panelResizeCleanup: (() => void) | null = null;
-
-
-interface ShopCategoryDefinition {
-  key: ShopCategoryKey;
-  label: string;
-  icon: string;
-}
-
-const SHOP_CATEGORY_DEFINITIONS: readonly ShopCategoryDefinition[] = [
-  { key: 'seeds', label: 'Seeds', icon: '🌱' },
-  { key: 'eggs', label: 'Eggs', icon: '🥚' },
-  { key: 'tools', label: 'Tools', icon: '🛠️' },
-  { key: 'decor', label: 'Decor', icon: '🪴' },
-];
-
-
-function ensureShopCountdownTimer(): void {
-  if (unregisterShopCountdownTimer != null) {
-    return;
-  }
-  // Use unified timer manager - pauses when page is hidden
-  unregisterShopCountdownTimer = visibleInterval('shop-countdown', updateShopCountdownViews, 1000);
-}
-
-function registerShopCountdownView(view: ShopCountdownView): void {
-  shopCountdownViews.push(view);
-  ensureShopCountdownTimer();
-  updateShopCountdownViews();
-}
-
-function updateShopCountdownViews(): void {
-  if (!shopCountdownViews.length) {
-    return;
-  }
-
-  const now = Date.now();
-
-  for (const view of shopCountdownViews) {
-    const summaryParts: string[] = [];
-    view.summaryEl.style.color = '#ccc';
-
-    for (const cat of SHOP_CATEGORY_DEFINITIONS) {
-      const valueEl = view.values[cat.key];
-      if (!valueEl) {
-        continue;
-      }
-
-      const row = valueEl.parentElement as HTMLElement | null;
-      if (row) {
-        row.style.opacity = '1';
-      }
-
-      const nextAt = latestRestockInfo?.nextRestockAt?.[cat.key] ?? null;
-      if (!nextAt) {
-        valueEl.textContent = '...';
-        valueEl.style.color = '#aaa';
-        summaryParts.push(`${cat.icon} ...`);
-        continue;
-      }
-
-      const remaining = nextAt - now;
-      if (remaining <= 1000) {
-        valueEl.textContent = 'now';
-        valueEl.style.color = '#4CAF50';
-        summaryParts.push(`${cat.icon} now`);
-      } else {
-        const formatted = formatRestockCountdown(remaining);
-        valueEl.textContent = formatted;
-        valueEl.style.color = remaining <= SHOP_COUNTDOWN_WARNING_THRESHOLD_MS ? '#FFEB3B' : '#ddd';
-        summaryParts.push(`${cat.icon} ${formatted}`);
-      }
-    }
-
-    if (summaryParts.length === 0) {
-      view.summaryEl.textContent = 'No shops tracked';
-    } else {
-      view.summaryEl.textContent = summaryParts.join(' | ');
-    }
-  }
-}
 
 // Configuration shape passed down from main.ts via setCfg()
 interface PanelCfg {
@@ -175,17 +46,9 @@ let cfg: PanelCfg = {};
 
 
 
-function createJournalCheckerSection(): HTMLElement {
-  // Use the new visually enhanced journal checker
-  return createJournalCheckerSectionNew();
-}
-
-
-
 export async function createOriginalUI(): Promise<HTMLElement> {
   ensurePanelStyles();
   if (uiState.panel) return uiState.panel;
-  shopCountdownViews.length = 0;
 
   const panel = document.createElement('div');
   panel.className = 'qpm-panel';
@@ -276,45 +139,56 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   const content = document.createElement('div');
   content.className = 'qpm-content';
 
-  const nav = document.createElement('div');
-  nav.className = 'qpm-nav';
+  const navSections = document.createElement('div');
+  navSections.className = 'qpm-nav-sections';
 
   const tabsContainer = document.createElement('div');
   tabsContainer.className = 'qpm-tabs';
 
-  content.append(nav, tabsContainer);
-  panel.append(titleBar, content);
+  // ── Section collapse divider (collapses just the tab content, not the nav tiles) ──
+  const SECTION_COLLAPSED_KEY = 'qpm.sectionCollapsed';
+  const sectionDivider = document.createElement('div');
+  sectionDivider.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'padding:3px 14px',
+    'cursor:pointer',
+    'user-select:none',
+    'flex-shrink:0',
+    'transition:background 0.15s',
+  ].join(';');
+  sectionDivider.addEventListener('mouseenter', () => { sectionDivider.style.background = 'rgba(143,130,255,0.04)'; });
+  sectionDivider.addEventListener('mouseleave', () => { sectionDivider.style.background = ''; });
 
-  // Create UI sections with yields to prevent freezing
+  const dividerLineL = document.createElement('div');
+  dividerLineL.style.cssText = 'flex:1;height:1px;background:rgba(143,130,255,0.1);';
+  const dividerIcon = document.createElement('span');
+  dividerIcon.style.cssText = 'font-size:9px;color:rgba(200,192,255,0.3);padding:0 6px;line-height:1;transition:color 0.15s;';
+  dividerIcon.textContent = '▼';
+  const dividerLineR = document.createElement('div');
+  dividerLineR.style.cssText = 'flex:1;height:1px;background:rgba(143,130,255,0.1);';
+  sectionDivider.append(dividerLineL, dividerIcon, dividerLineR);
+
+  let isSectionCollapsed = storage.get<boolean>(SECTION_COLLAPSED_KEY, false);
+  const applySectionCollapsed = (collapsed: boolean, save = true) => {
+    isSectionCollapsed = collapsed;
+    tabsContainer.style.display = collapsed ? 'none' : '';
+    dividerIcon.textContent = collapsed ? '▶' : '▼';
+    if (save) storage.set(SECTION_COLLAPSED_KEY, collapsed);
+  };
+  sectionDivider.addEventListener('click', () => applySectionCollapsed(!isSectionCollapsed));
+
+  content.append(navSections, sectionDivider, tabsContainer);
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'qpm-panel__resize-handle';
+  panel.append(titleBar, content, resizeHandle);
+
+  // Create UI sections
   const statsHeader = createStatsHeader(uiState, cfg, saveCfg, resetAllStats);
   await yieldToBrowser();
-  
-  const statsSection = createStatsSection(resetAllStats);
-  await yieldToBrowser();
-  
+
   const notificationsSection = createNotificationSection(uiState);
   await yieldToBrowser();
-  
-  const turtleSection = createTurtleTimerSection(uiState, cfg, saveCfg);
-  await yieldToBrowser();
-  
-  const trackerSections = createTrackersSection(uiState);
-  await yieldToBrowser();
-
-  // Bulk favorite section
-  const lockerSection = createBulkFavoriteSection();
-  await yieldToBrowser();
-
-  // Mutation reminder section
-  const mutationSection = createMutationSection(uiState, cfg, saveCfg);
-  await yieldToBrowser();
-
-  // Mutation value section
-  const mutationValueSection = createMutationValueSection(cfg, saveCfg);
-  await yieldToBrowser();
-
-  // Stats overview section
-  const statsOverviewSection = createStatsOverviewSection();
 
   const tabs = new Map<string, HTMLElement>();
   const tabButtons = new Map<string, HTMLButtonElement>();
@@ -323,12 +197,14 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   const activateTab = (key: string) => {
     if (activeTab === key) return;
     activeTab = key;
+    // Auto-expand section when switching to an inline tab with content
+    if (isSectionCollapsed) applySectionCollapsed(false);
     for (const [tabKey, tabContent] of tabs) {
       tabContent.classList.toggle('qpm-tab--active', tabKey === key);
     }
     for (const [tabKey, button] of tabButtons) {
       const isActive = tabKey === key;
-      button.classList.toggle('qpm-nav__button--active', isActive);
+      button.classList.toggle('qpm-tile--active', isActive);
       
       // Apply color coding with glow - each button has unique color
       if (button.dataset.tabColor) {
@@ -355,314 +231,396 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   };
 
-  const registerTab = (key: string, label: string, icon: string, elements: HTMLElement[]) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'qpm-nav__button';
-    button.innerHTML = `${icon}<span>${label}</span>`;
-    // Only activate tab if it has content (not a window-opening tab)
-    if (elements.length > 0) {
-      button.addEventListener('click', () => activateTab(key));
-    }
-    
-    // Add color coding for visual distinction - each button has unique color with glow
-    const tabColors: Record<string, string> = {
-      'dashboard': 'rgba(76, 175, 80, 0.28)',      // Green
-      'turtle': 'rgba(33, 150, 243, 0.28)',        // Blue
-      'trackers': 'rgba(156, 39, 176, 0.28)',      // Purple
-      'xp-tracker': 'rgba(255, 152, 0, 0.28)',     // Orange
-      'shop-restock': 'rgba(0, 188, 212, 0.28)',   // Cyan
-      'pet-hub': 'rgba(103, 58, 183, 0.28)',       // Deep Purple
-      'pet-optimizer': 'rgba(244, 67, 54, 0.28)',  // Red
-      'public-rooms': 'rgba(233, 30, 99, 0.28)',   // Pink
-      'crop-boost': 'rgba(139, 195, 74, 0.28)',    // Light Green
-      'achievements': 'rgba(255, 215, 64, 0.28)',  // Gold
-      'auto-favorite': 'rgba(255, 235, 59, 0.28)', // Yellow
-      'garden-filters': 'rgba(63, 81, 181, 0.28)', // Indigo
-      'journal-checker': 'rgba(121, 85, 72, 0.28)', // Brown
-      'guide': 'rgba(96, 125, 139, 0.28)',         // Blue Grey
-      'weather': 'rgba(156, 39, 176, 0.28)',       // Purple (Reminders)
-      'bulk-favorite': 'rgba(244, 143, 177, 0.28)', // Light Pink (Hearts)
-    };
-    
-    if (tabColors[key]) {
-      const baseColor = tabColors[key];
-      button.dataset.tabColor = baseColor;
-      // Set initial background with subtle glow
-      const rgbMatch = baseColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-      const glowColor = rgbMatch ? `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, 0.15)` : baseColor;
-      button.style.background = baseColor.replace('0.28', '0.12');
-      button.style.boxShadow = `0 2px 8px ${glowColor}`;
-      button.style.borderColor = baseColor.replace('0.28', '0.3');
-    }
-    
-    nav.appendChild(button);
-    tabButtons.set(key, button);
-
-    const tab = document.createElement('div');
-    tab.className = 'qpm-tab';
-    for (const el of elements) {
-      tab.appendChild(el);
-    }
-    tabsContainer.appendChild(tab);
-    tabs.set(key, tab);
+  const tabColors: Record<string, string> = {
+    'dashboard':       'rgba(76, 175, 80, 0.28)',   // Green
+    'trackers':        'rgba(156, 39, 176, 0.28)',  // Purple
+    'shop-restock':    'rgba(0, 188, 212, 0.28)',   // Cyan
+    'pet-teams':       'rgba(255, 152, 0, 0.28)',   // Orange
+    'public-rooms':    'rgba(233, 30, 99, 0.28)',   // Pink
+    'utility':         'rgba(63, 81, 181, 0.28)',   // Indigo
+    'journal-checker': 'rgba(121, 85, 72, 0.28)',   // Brown
+    'guide':           'rgba(96, 125, 139, 0.28)',  // Blue Grey
   };
 
-  // Auto-Favorite section
-  const autoFavoriteSection = await createAutoFavoriteSection();
+  const buildSection = (header: string) => {
+    const section = document.createElement('div');
+    section.className = 'qpm-nav-section';
+    const head = document.createElement('div');
+    head.className = 'qpm-nav-section__header';
+    head.textContent = header;
+    section.appendChild(head);
+    const addRow = (tiles: HTMLElement[]) => {
+      const row = document.createElement('div');
+      row.className = 'qpm-nav-section__row';
+      tiles.forEach(t => row.appendChild(t));
+      section.appendChild(row);
+    };
+    return { section, addRow };
+  };
 
-  // Garden Filters section
-  const gardenFiltersSection = await createGardenFiltersSection();
-
-  // Journal Checker section
-  const journalCheckerSection = createJournalCheckerSection();
+  const buildTile = (key: string, icon: string, label: string) => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'qpm-tile';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'qpm-tile__label';
+    labelEl.innerHTML = `${icon}<span>${label}</span>`;
+    const statusEl = document.createElement('div');
+    statusEl.className = 'qpm-tile__status';
+    tile.append(labelEl, statusEl);
+    const tabColor = tabColors[key];
+    if (tabColor) {
+      tile.dataset.tabColor = tabColor;
+      const rgbMatch = tabColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      const glowColor = rgbMatch
+        ? `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, 0.15)`
+        : tabColor;
+      tile.style.background = tabColor.replace('0.28', '0.12');
+      tile.style.boxShadow = `0 2px 8px ${glowColor}`;
+      tile.style.borderColor = tabColor.replace('0.28', '0.3');
+    }
+    const setStatus = (text: string, variant: 'alert' | 'positive' | '' = '') => {
+      statusEl.innerHTML = '';
+      statusEl.textContent = text;
+      statusEl.className = 'qpm-tile__status' + (variant ? ` qpm-tile__status--${variant}` : '');
+    };
+    const setStatusDom = (render: (el: HTMLElement) => void): void => {
+      statusEl.innerHTML = '';
+      statusEl.className = 'qpm-tile__status';
+      render(statusEl);
+    };
+    return { tile, setStatus, setStatusDom };
+  };
 
   // Guide section
   const guideSection = createGuideSection();
 
-  registerTab('dashboard', 'Dashboard', '📊', [statsHeader]);
-  // Tabs that open windows should have no content (empty array prevents tab content area)
-  registerTab('turtle', 'Turtle Timer', '🐢', []);
-  registerTab('trackers', 'Trackers', '📈', []);
-  registerTab('xp-tracker', 'XP Tracker', '✨', []);
-  registerTab('shop-restock', 'Shop Restock', '🏪', []);
-  registerTab('pet-hub', 'Pet Hub', '🐾', []);
-  registerTab('pet-optimizer', 'Pet Optimizer', '🎯', []);
-  registerTab('public-rooms', 'Public Rooms', '🌐', []);
-  registerTab('crop-boost', 'Crop Boosts', '🌱', []);
-  registerTab('achievements', 'Achievements', '🏆', []);
-  registerTab('auto-favorite', 'Auto-Favorite', '⭐', [autoFavoriteSection]);
-  registerTab('garden-filters', 'Garden Filters', '🔍', [gardenFiltersSection]);
-  registerTab('journal-checker', 'Journal', '📔', [journalCheckerSection]);
-  registerTab('guide', 'Guide', '📖', [guideSection]);
-  registerTab('weather', 'Reminders', '🔔', [mutationSection]);
-  registerTab('bulk-favorite', 'Bulk Favorite', '❤️', [lockerSection]);
-  // Display Tweaker tab removed
+  const registerTabPanel = (key: string, elements: HTMLElement[]) => {
+    const tab = document.createElement('div');
+    tab.className = 'qpm-tab';
+    for (const el of elements) tab.appendChild(el);
+    tabsContainer.appendChild(tab);
+    tabs.set(key, tab);
+  };
 
-  // Override tab click handlers to open windows instead
-  const trackersButton = tabButtons.get('trackers');
-  if (trackersButton) {
-    const newTrackersButton = trackersButton.cloneNode(true) as HTMLButtonElement;
-    newTrackersButton.addEventListener('click', async () => {
-      try {
-        const { createAbilityTrackerWindow, showAbilityTrackerWindow, hideAbilityTrackerWindow, setGlobalAbilityTrackerState } = await import('./trackerWindow');
+  // ── PETS ──
+  const { section: petsSection, addRow: petsRow } = buildSection('PETS');
+  const { tile: tPetTeams, setStatus: setPetTeamsStatus } = buildTile('pet-teams', '👥', 'Pet Teams');
+  tPetTeams.dataset.windowId = 'qpm-pets-window';
+  tPetTeams.addEventListener('click', async () => {
+    try {
+      const { togglePetsWindow } = await import('./petsWindow');
+      togglePetsWindow();
+    } catch (e) {
+      log('⚠️ Failed to toggle Pets window', e);
+    }
+  });
+  petsRow([tPetTeams]);
+  navSections.appendChild(petsSection);
+  tabButtons.set('pet-teams', tPetTeams);
 
-        if (!uiState.abilityTrackerWindow) {
-          uiState.abilityTrackerWindow = createAbilityTrackerWindow();
-          setGlobalAbilityTrackerState(uiState.abilityTrackerWindow);
-        }
+  // ── GAME ──
+  const { section: gameSection, addRow: gameRow } = buildSection('GAME');
+  const { tile: tTrackers, setStatus: setTrackersStatus } = buildTile('trackers', '📈', 'Trackers');
+  tTrackers.dataset.windowId = 'trackers-hub';
+  tTrackers.addEventListener('click', async () => {
+    try {
+      const { openTrackersHubWindow } = await import('./trackersHubWindow');
+      openTrackersHubWindow();
+    } catch (e) {
+      log('⚠️ Failed to open Trackers Hub', e);
+    }
+  });
+  const { tile: tShop, setStatus: setShopStatus, setStatusDom: setShopStatusDom } = buildTile('shop-restock', '🏪', 'Shop Restock');
+  tShop.dataset.windowId = 'shop-restock';
+  tShop.addEventListener('click', async () => {
+    try {
+      const { openShopRestockWindow } = await import('./shopRestockWindow');
+      openShopRestockWindow();
+    } catch (e) {
+      log('⚠️ Failed to open Shop Restock window', e);
+    }
+  });
+  gameRow([tTrackers, tShop]);
+  const { tile: tRooms, setStatus: setRoomsStatus } = buildTile('public-rooms', '🌐', 'Public Rooms');
+  tRooms.dataset.windowId = 'public-rooms';
+  tRooms.addEventListener('click', () => {
+    const renderFn = (root: HTMLElement) => {
+      import('./publicRoomsWindow')
+        .then(({ renderPublicRoomsWindow }) => renderPublicRoomsWindow(root))
+        .catch(e => log('⚠️ Failed to load Public Rooms', e));
+    };
+    toggleWindow('public-rooms', '🌐 Public Rooms', renderFn, '950px', '85vh');
+  });
+  gameRow([tRooms]);
+  navSections.appendChild(gameSection);
+  tabButtons.set('trackers', tTrackers);
+  tabButtons.set('shop-restock', tShop);
+  tabButtons.set('public-rooms', tRooms);
 
-        const isCurrentlyVisible = uiState.abilityTrackerWindow.root.style.display !== 'none';
-        if (isCurrentlyVisible) {
-          hideAbilityTrackerWindow(uiState.abilityTrackerWindow);
-        } else {
-          showAbilityTrackerWindow(uiState.abilityTrackerWindow);
-        }
-      } catch (error) {
-        log('⚠️ Failed to toggle Ability Tracker window', error);
-      }
-    });
-    trackersButton.replaceWith(newTrackersButton);
-    tabButtons.set('trackers', newTrackersButton);
-  }
+  // ── TOOLS ──
+  const { section: toolsSection, addRow: toolsRow } = buildSection('TOOLS');
+  const { tile: tUtility, setStatus: setUtilityStatus } = buildTile('utility', '🔧', 'Utility');
+  tUtility.dataset.windowId = 'utility-hub';
+  tUtility.addEventListener('click', async () => {
+    try {
+      const { openUtilityHubWindow } = await import('./utilityHubWindow');
+      openUtilityHubWindow();
+    } catch (e) {
+      log('⚠️ Failed to open Utility Hub window', e);
+    }
+  });
+  const { tile: tDash, setStatus: setDashStatus } = buildTile('dashboard', '📊', 'Dashboard');
+  tDash.addEventListener('click', () => activateTab('dashboard'));
+  toolsRow([tDash, tUtility]);
+  const { tile: tJournal, setStatus: setJournalStatus } = buildTile('journal-checker', '📔', 'Journal');
+  tJournal.dataset.windowId = 'journal-checker-window';
+  tJournal.addEventListener('click', () => {
+    toggleWindow('journal-checker-window', '📔 Journal Checker', (windowRoot) => {
+      // The modal body already has flex:1;min-height:0;overflow:auto — don't wipe those.
+      // Just remove the default 16px padding so the journal section can use its own.
+      windowRoot.style.padding = '0';
+      import('./journalCheckerSection').then(({ createJournalCheckerSection }) => {
+        windowRoot.appendChild(createJournalCheckerSection());
+      }).catch(e => {
+        log('⚠️ Failed to load Journal Checker', e);
+        windowRoot.textContent = '❌ Failed to load. Reload the page and try again.';
+      });
+    }, '900px', '90vh');
+  });
+  const { tile: tGuide, setStatus: setGuideStatus } = buildTile('guide', '📖', 'Guide');
+  tGuide.addEventListener('click', () => activateTab('guide'));
+  toolsRow([tJournal, tGuide]);
+  navSections.appendChild(toolsSection);
+  tabButtons.set('utility', tUtility);
+  tabButtons.set('dashboard', tDash);
+  tabButtons.set('journal-checker', tJournal);
+  tabButtons.set('guide', tGuide);
 
-  const xpTrackerButton = tabButtons.get('xp-tracker');
-  if (xpTrackerButton) {
-    const newXpTrackerButton = xpTrackerButton.cloneNode(true) as HTMLButtonElement;
-    newXpTrackerButton.addEventListener('click', async () => {
-      try {
-        const { createXpTrackerWindow, showXpTrackerWindow, hideXpTrackerWindow, setGlobalXpTrackerState } = await import('./xpTrackerWindow');
-
-        // Check if window already exists
-        if (!uiState.xpTrackerWindow) {
-          uiState.xpTrackerWindow = createXpTrackerWindow();
-          setGlobalXpTrackerState(uiState.xpTrackerWindow);
-        }
-
-        // Toggle visibility
-        const isCurrentlyVisible = uiState.xpTrackerWindow.root.style.display !== 'none';
-        if (isCurrentlyVisible) {
-          hideXpTrackerWindow(uiState.xpTrackerWindow);
-        } else {
-          showXpTrackerWindow(uiState.xpTrackerWindow);
-        }
-      } catch (error) {
-        log('⚠️ Failed to toggle XP Tracker window', error);
-      }
-    });
-    xpTrackerButton.replaceWith(newXpTrackerButton);
-    tabButtons.set('xp-tracker', newXpTrackerButton);
-  }
-
-  const shopRestockButton = tabButtons.get('shop-restock');
-  if (shopRestockButton) {
-    const newShopRestockButton = shopRestockButton.cloneNode(true) as HTMLButtonElement;
-    newShopRestockButton.addEventListener('click', async () => {
-      try {
-        const { createShopRestockWindow, showShopRestockWindow, hideShopRestockWindow } = await import('./shopRestockWindow');
-
-        // Check if window already exists
-        if (!uiState.shopRestockWindow) {
-          uiState.shopRestockWindow = createShopRestockWindow();
-        }
-
-        // Toggle visibility
-        const isCurrentlyVisible = uiState.shopRestockWindow.root.style.display !== 'none';
-        if (isCurrentlyVisible) {
-          hideShopRestockWindow(uiState.shopRestockWindow);
-        } else {
-          showShopRestockWindow(uiState.shopRestockWindow);
-        }
-      } catch (error) {
-        log('⚠️ Failed to toggle Shop Restock window', error);
-      }
-    });
-    shopRestockButton.replaceWith(newShopRestockButton);
-    tabButtons.set('shop-restock', newShopRestockButton);
-  }
-
-  const publicRoomsButton = tabButtons.get('public-rooms');
-  if (publicRoomsButton) {
-    const newPublicRoomsButton = publicRoomsButton.cloneNode(true) as HTMLButtonElement;
-    newPublicRoomsButton.dataset.windowId = 'public-rooms';
-    newPublicRoomsButton.addEventListener('click', () => {
-      const renderPublicRoomsWindow = (root: HTMLElement) => {
-        import('./publicRoomsWindow').then(({ renderPublicRoomsWindow }) => {
-          renderPublicRoomsWindow(root);
-        }).catch(error => {
-          log('⚠️ Failed to load Public Rooms window', error);
-        });
-      };
-      toggleWindow('public-rooms', '🌐 Public Rooms', renderPublicRoomsWindow, '950px', '85vh');
-    });
-    publicRoomsButton.replaceWith(newPublicRoomsButton);
-    tabButtons.set('public-rooms', newPublicRoomsButton);
-  }
-
-  const cropBoostButton = tabButtons.get('crop-boost');
-  if (cropBoostButton) {
-    const newCropBoostButton = cropBoostButton.cloneNode(true) as HTMLButtonElement;
-    newCropBoostButton.addEventListener('click', async () => {
-      try {
-        const { openCropBoostTrackerWindow } = await import('./cropBoostTrackerWindow');
-        openCropBoostTrackerWindow();
-      } catch (error) {
-        log('⚠️ Failed to open Crop Boost Tracker window', error);
-      }
-    });
-    cropBoostButton.replaceWith(newCropBoostButton);
-    tabButtons.set('crop-boost', newCropBoostButton);
-  }
-
-  // Display Tweaker toggle/hotkey removed
-
-  const achievementsButton = tabButtons.get('achievements');
-  if (achievementsButton) {
-    const newAchievementsButton = achievementsButton.cloneNode(true) as HTMLButtonElement;
-    newAchievementsButton.dataset.windowId = 'achievements';
-    newAchievementsButton.addEventListener('click', () => {
-      const renderAchievementsWindow = async (root: HTMLElement) => {
-        // Show loading state immediately
-        root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--qpm-text-dim);"><span>⏳ Loading Achievements...</span></div>';
-        // Yield to let loading state render
-        await new Promise(r => requestAnimationFrame(r));
-        try {
-          const { createAchievementsWindow } = await import('./achievementsWindow');
-          root.innerHTML = '';
-          const state = createAchievementsWindow();
-          state.root.dataset.achievementsRoot = 'true';
-          root.appendChild(state.root);
-        } catch (error) {
-          log('⚠️ Failed to load Achievements window', error);
-          root.innerHTML = '<div style="color:#ff6b6b;padding:20px;text-align:center;">Failed to load Achievements</div>';
-        }
-      };
-      toggleWindow('achievements', '🏆 Achievements', renderAchievementsWindow, undefined, '90vh');
-    });
-    achievementsButton.replaceWith(newAchievementsButton);
-    tabButtons.set('achievements', newAchievementsButton);
-  }
-
-  const turtleButton = tabButtons.get('turtle');
-  if (turtleButton) {
-    const newTurtleButton = turtleButton.cloneNode(true) as HTMLButtonElement;
-    newTurtleButton.addEventListener('click', async () => {
-      try {
-        const { createTurtleTimerWindow, showTurtleTimerWindow, hideTurtleTimerWindow } = await import('./turtleTimerWindow');
-
-        if (!uiState.turtleTimerWindow) {
-          uiState.turtleTimerWindow = createTurtleTimerWindow();
-        }
-
-        const isCurrentlyVisible = uiState.turtleTimerWindow.root.style.display !== 'none';
-        if (isCurrentlyVisible) {
-          hideTurtleTimerWindow(uiState.turtleTimerWindow);
-        } else {
-          showTurtleTimerWindow(uiState.turtleTimerWindow);
-        }
-      } catch (error) {
-        log('⚠️ Failed to toggle Turtle Timer window', error);
-      }
-    });
-    turtleButton.replaceWith(newTurtleButton);
-    tabButtons.set('turtle', newTurtleButton);
-  }
-
-  const weatherButton = tabButtons.get('weather');
-  if (weatherButton) {
-    const newWeatherButton = weatherButton.cloneNode(true) as HTMLButtonElement;
-    newWeatherButton.addEventListener('click', () => {
-      toggleWindow('reminders', '🔔 Reminders', renderRemindersWindow, '650px', '85vh');
-    });
-    weatherButton.replaceWith(newWeatherButton);
-    tabButtons.set('weather', newWeatherButton);
-  }
-
-  // Bulk Favorite now opens in the main panel (no separate window needed)
-  // The tab content is already registered with [lockerSection]
-
-  const petHubButton = tabButtons.get('pet-hub');
-  if (petHubButton) {
-    const newPetHubButton = petHubButton.cloneNode(true) as HTMLButtonElement;
-    newPetHubButton.dataset.windowId = 'pet-hub';
-    newPetHubButton.addEventListener('click', () => {
-      const renderPetHubWindow = async (root: HTMLElement) => {
-        // Show loading state immediately
-        root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--qpm-text-dim);"><span>⏳ Loading Pet Hub...</span></div>';
-        // Yield to let loading state render
-        await new Promise(r => requestAnimationFrame(r));
-        try {
-          const { renderPetHubWindow: render } = await import('./petHubWindow');
-          root.innerHTML = '';
-          render(root);
-        } catch (error) {
-          log('⚠️ Failed to load Pet Hub window', error);
-          root.innerHTML = '<div style="color:#ff6b6b;padding:20px;text-align:center;">Failed to load Pet Hub</div>';
-        }
-      };
-      toggleWindow('pet-hub', '🐾 Pet Hub', renderPetHubWindow, '1600px', '92vh');
-    });
-    petHubButton.replaceWith(newPetHubButton);
-    tabButtons.set('pet-hub', newPetHubButton);
-  }
-
-  const petOptimizerButton = tabButtons.get('pet-optimizer');
-  if (petOptimizerButton) {
-    const newPetOptimizerButton = petOptimizerButton.cloneNode(true) as HTMLButtonElement;
-    newPetOptimizerButton.dataset.windowId = 'pet-optimizer';
-    newPetOptimizerButton.addEventListener('click', async () => {
-      try {
-        const { openPetOptimizerWindow } = await import('./petOptimizerWindow');
-        openPetOptimizerWindow();
-      } catch (error) {
-        log('⚠️ Failed to load Pet Optimizer window', error);
-      }
-    });
-    petOptimizerButton.replaceWith(newPetOptimizerButton);
-    tabButtons.set('pet-optimizer', newPetOptimizerButton);
-  }
+  // ── Tab panels (inline content for dashboard/journal/guide; empty for window-openers) ──
+  registerTabPanel('pet-teams', []);
+  registerTabPanel('trackers', []);
+  registerTabPanel('shop-restock', []);
+  registerTabPanel('public-rooms', []);
+  registerTabPanel('utility', []);
+  registerTabPanel('dashboard', [statsHeader]);
+  registerTabPanel('guide', [guideSection]);
 
   activateTab('dashboard');
+  // Apply persisted section collapse state (after activateTab so auto-expand logic doesn't fight it)
+  applySectionCollapsed(isSectionCollapsed, false);
+
+  // ── Live status subscriptions ──
+
+  // Pet Teams tile — hunger + XP booster + avg % to each pet's own max strength
+  onActivePetInfos((pets: ActivePetInfo[]) => {
+    if (!pets.length) { setPetTeamsStatus('No active pets'); return; }
+    const hungry = pets.filter(p => p.hungerPct !== null && p.hungerPct < 30);
+    const hasXpBooster = pets.some(p =>
+      p.abilities.some(a => a.toLowerCase().includes('xp'))
+    );
+    // Per-pet: strength / maxStrength * 100 (each pet relative to its own max)
+    const pctToMax = pets.reduce<number[]>((acc, p) => {
+      if (p.strength === null || p.targetScale === null || p.species === null) return acc;
+      const maxStr = calculateMaxStrength(p.targetScale, p.species);
+      if (maxStr === null || maxStr <= 0) return acc;
+      acc.push(Math.round((p.strength / maxStr) * 100));
+      return acc;
+    }, []);
+    const avgPct = pctToMax.length
+      ? Math.round(pctToMax.reduce((a, b) => a + b, 0) / pctToMax.length)
+      : null;
+    // TODO: add XP/hr when rate tracking available; TODO: add gold/hr when field exists
+    const strText = avgPct !== null ? `avg ${avgPct}% max` : '';
+    if (hungry.length > 0) {
+      const lowestHunger = Math.min(...hungry.map(p => p.hungerPct as number));
+      setPetTeamsStatus(
+        `${hungry.length} hungry (${Math.round(lowestHunger)}%)${strText ? ` · ${strText}` : ''}`,
+        'alert',
+      );
+    } else if (hasXpBooster) {
+      setPetTeamsStatus(
+        `XP boost active · ${strText || 'all fed ✓'}`,
+        'positive',
+      );
+    } else {
+      // No XP booster — show $/hr from mutation + ability value tracking
+      // sessionValue = goldTotalValue + rainbowTotalValue + cropBoostTotalValue (actual coin values)
+      // Divide by session hours to get real $/hr (goldPerHour etc. are proc counts, not coin values)
+      const mvs = getMutationValueSnapshot();
+      const mvsStats = mvs?.stats;
+      const sessionHours = mvsStats
+        ? Math.max(1 / 60, (Date.now() - mvsStats.sessionStart) / 3_600_000)
+        : 0;
+      const totalPerHour = mvsStats && sessionHours > 0
+        ? mvsStats.sessionValue / sessionHours
+        : 0;
+      const earningsText = totalPerHour >= 1
+        ? `$${Math.round(totalPerHour).toLocaleString()}/hr`
+        : '';
+      const parts = ['All fed ✓', strText, earningsText].filter(Boolean).join(' · ');
+      setPetTeamsStatus(parts, 'positive');
+    }
+  });
+
+  // Trackers tile — top strength summary
+  onActivePetInfos((pets: ActivePetInfo[]) => {
+    const strengths = pets.map(p => p.strength).filter((s): s is number => s !== null);
+    const maxStr = strengths.length ? Math.max(...strengths) : null;
+    setTrackersStatus(maxStr !== null ? `Top: ${maxStr} STR · XP · Ability` : 'XP · Ability · Turtle');
+  });
+
+  // Shop Restock tile — sprite row for all tracked items (future items bright, overdue dimmed)
+  const shopSpriteCache = new Map<string, string | null>();
+  const getShopSpriteUrl = (id: string): string | null => {
+    if (shopSpriteCache.has(id)) return shopSpriteCache.get(id)!;
+    let url: string | null = null;
+    try { url = canvasToDataUrl(getCropSpriteCanvas(id)) || null; } catch { /* not ready */ }
+    if (!url) { try { url = canvasToDataUrl(getPetSpriteCanvas(id)) || null; } catch { /* not ready */ } }
+    shopSpriteCache.set(id, url);
+    return url;
+  };
+  const updateShopTile = () => {
+    const tracked = storage.get<string[] | null>('qpm.restock.tracked', null);
+    if (!tracked?.length) { setShopStatus(''); return; }
+    const data = getRestockDataSync();
+    if (!data?.length) { setShopStatus(`${tracked.length} tracked`); return; }
+    const trackedSet = new Set(tracked);
+    const now = Date.now();
+    const items = data
+      .filter(item => trackedSet.has(`${item.shop_type}:${item.item_id}`))
+      .sort((a, b) => {
+        // Future items first (soonest first), overdue/missing last
+        const aTs = (a.estimated_next_timestamp ?? 0) > now ? a.estimated_next_timestamp! : Infinity;
+        const bTs = (b.estimated_next_timestamp ?? 0) > now ? b.estimated_next_timestamp! : Infinity;
+        return aTs - bTs;
+      });
+    if (!items.length) { setShopStatus(''); return; }
+    setShopStatusDom(el => {
+      el.style.cssText += ';display:flex;align-items:center;gap:2px;flex-wrap:nowrap;overflow:hidden;';
+      for (const item of items.slice(0, 10)) {
+        const isOverdue = !item.estimated_next_timestamp || item.estimated_next_timestamp <= now;
+        const spriteUrl = getShopSpriteUrl(item.item_id);
+        const img = document.createElement('img');
+        img.style.cssText = `height:14px;width:auto;image-rendering:pixelated;flex-shrink:0;opacity:${isOverdue ? '0.3' : '1'};`;
+        if (spriteUrl) {
+          img.src = spriteUrl;
+        } else {
+          // Fallback dot when sprite not yet loaded
+          img.style.cssText += 'display:none;';
+        }
+        el.appendChild(img);
+      }
+      if (items.length > 10) {
+        const more = document.createElement('span');
+        more.style.cssText = 'font-size:9px;color:rgba(140,150,190,0.5);flex-shrink:0;';
+        more.textContent = `+${items.length - 10}`;
+        el.appendChild(more);
+      }
+    });
+  };
+  visibleInterval('qpm-nav-shop', updateShopTile, 10_000);
+  updateShopTile();
+
+  // Static tile statuses
+  setRoomsStatus('View active rooms');
+  setUtilityStatus('Filters · Reminders · Favs');
+  setDashStatus('Stats & overview');
+  setJournalStatus('Loading tips...');
+  setGuideStatus(`v${getCurrentVersion()}`);
+
+  // Journal tile — async smart tips: inline sprites only, mutation dot overlay
+  (async () => {
+    try {
+      const { generateJournalStrategy } = await import('../features/journalRecommendations');
+      const strategy = await generateJournalStrategy();
+      if (!strategy?.recommendedFocus?.length) {
+        setJournalStatus('Produce · Pets · Smart Tips');
+        return;
+      }
+      const top3 = strategy.recommendedFocus.slice(0, 3);
+      const {
+        getCropSpriteWithMutations,
+        getCropSpriteCanvas,
+        getPetSpriteCanvas,
+        getPetSpriteDataUrlWithMutations,
+      } = await import('../sprite-v2/compat');
+      const { canvasToDataUrl } = await import('../utils/canvasHelpers');
+
+      const statusEl = tJournal.querySelector('.qpm-tile__status') as HTMLElement | null;
+      if (!statusEl) return;
+
+
+      // Switch statusEl to flex row for inline sprites
+      statusEl.textContent = '';
+      statusEl.style.display = 'flex';
+      statusEl.style.alignItems = 'center';
+      statusEl.style.gap = '3px';
+      statusEl.style.overflow = 'hidden';
+      statusEl.style.whiteSpace = 'nowrap';
+      statusEl.style.flexWrap = 'nowrap';
+
+      let hasAny = false;
+      for (const rec of top3) {
+        const mutation = rec.missingVariants[0] ?? null;
+        const mutations = mutation ? [mutation] : [];
+        const name = rec.species;
+        const nameNoSpace = name.replace(/\s+/g, '');
+        let spriteUrl: string | null = null;
+        if (rec.type === 'produce') {
+          spriteUrl = (mutations.length
+            ? canvasToDataUrl(getCropSpriteWithMutations(name, mutations)) ||
+              canvasToDataUrl(getCropSpriteWithMutations(nameNoSpace, mutations))
+            : null) ||
+            canvasToDataUrl(getCropSpriteCanvas(name)) ||
+            canvasToDataUrl(getCropSpriteCanvas(nameNoSpace));
+        } else {
+          const hasRainbow = rec.missingVariants.some((variant) => variant.toLowerCase() === 'rainbow');
+          const hasGold = rec.missingVariants.some((variant) => variant.toLowerCase() === 'gold');
+          const mutation = hasRainbow ? 'Rainbow' : hasGold ? 'Gold' : null;
+          spriteUrl = (mutation
+            ? getPetSpriteDataUrlWithMutations(name, [mutation]) ||
+              getPetSpriteDataUrlWithMutations(nameNoSpace, [mutation])
+            : '') ||
+            canvasToDataUrl(getPetSpriteCanvas(name)) ||
+            canvasToDataUrl(getPetSpriteCanvas(nameNoSpace));
+        }
+        if (!spriteUrl) continue;
+        hasAny = true;
+
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'width:19px;height:19px;flex-shrink:0;display:inline-flex;';
+        wrapper.title = mutation ? `${name} (${mutation})` : name;
+
+        const img = document.createElement('img');
+        img.src = spriteUrl;
+        img.alt = name;
+        img.style.cssText = 'width:19px;height:19px;image-rendering:pixelated;display:block;';
+        wrapper.appendChild(img);
+
+        statusEl.appendChild(wrapper);
+      }
+
+      if (!hasAny) {
+        statusEl.style.display = '';
+        setJournalStatus('Produce · Pets · Smart Tips');
+      }
+    } catch {
+      setJournalStatus('Produce · Pets · Smart Tips');
+    }
+  })();
+
+  // Public Rooms tile — one-shot fetch for room count + full count (300 matches publicRooms feature)
+  listRooms(300).then(response => {
+    const rooms = response.data;
+    if (!Array.isArray(rooms) || rooms.length === 0) return;
+    const fullCount = rooms.filter(r => r.playersCount >= 3).length;
+    setRoomsStatus(
+      fullCount > 0
+        ? `${rooms.length} rooms · ${fullCount} full`
+        : `${rooms.length} active rooms`,
+    );
+  }).catch(() => { /* keep fallback */ });
 
   const applyPosition = (left: number, top: number) => {
     panel.style.left = `${left}px`;
@@ -676,11 +634,15 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     applyPosition(savedPosition.left, savedPosition.top);
   }
 
+  // Track collapsed state explicitly to avoid reading DOM display values
+  let isCollapsed = false;
+
   const applyCollapsed = (collapsed: boolean) => {
+    isCollapsed = collapsed;
+    // Hide entire content area for ultra-compact titlebar-only profile
     content.style.display = collapsed ? 'none' : '';
     collapseIcon.textContent = collapsed ? '▲' : '▼';
     collapseButton.setAttribute('aria-expanded', String(!collapsed));
-    panel.style.overflowY = collapsed ? 'visible' : 'auto';
     storage.set(PANEL_COLLAPSED_KEY, collapsed);
   };
 
@@ -690,8 +652,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
 
   collapseButton.addEventListener('click', (event) => {
     event.stopPropagation();
-    const collapsed = content.style.display === 'none';
-    applyCollapsed(!collapsed);
+    applyCollapsed(!isCollapsed);
   });
 
   applyCollapsed(!!storage.get<boolean>(PANEL_COLLAPSED_KEY, false));
@@ -704,6 +665,60 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   let suppressClick = false;
 
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+  // Apply saved panel width (user may have resized in a previous session)
+  const savedSize = storage.get<{ width: number } | null>(PANEL_SIZE_KEY, null);
+  if (savedSize?.width && Number.isFinite(savedSize.width)) {
+    panel.style.width = `${clamp(savedSize.width, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH)}px`;
+  }
+
+  // Resize handle — drag bottom-right corner to adjust panel width
+  let isResizing = false;
+  let resizeStartX = 0;
+  let resizeStartWidth = 0;
+  let resizePointerId: number | null = null;
+
+  resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (!e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // If the panel is CSS right-anchored (no explicit left set), convert to
+    // left-anchored so the resize handle tracks the cursor correctly.
+    // Without this, increasing width expands leftward while the handle stays
+    // pinned to the right viewport edge, making direction feel inverted.
+    if (!panel.style.left || panel.style.left === '') {
+      const rect = panel.getBoundingClientRect();
+      applyPosition(rect.left, rect.top);
+    }
+    isResizing = true;
+    resizeStartX = e.clientX;
+    resizeStartWidth = panel.offsetWidth;
+    resizePointerId = e.pointerId;
+    resizeHandle.setPointerCapture(e.pointerId);
+    panel.style.willChange = 'width';
+  });
+
+  resizeHandle.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!isResizing || resizePointerId !== e.pointerId) return;
+    const newWidth = clamp(resizeStartWidth + (e.clientX - resizeStartX), MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
+    panel.style.width = `${newWidth}px`;
+  });
+
+  resizeHandle.addEventListener('pointerup', (e: PointerEvent) => {
+    if (resizePointerId !== e.pointerId) return;
+    isResizing = false;
+    resizePointerId = null;
+    panel.style.willChange = '';
+    storage.set(PANEL_SIZE_KEY, { width: panel.offsetWidth });
+    clampPanelPosition();
+  });
+
+  resizeHandle.addEventListener('pointercancel', (e: PointerEvent) => {
+    if (resizePointerId !== e.pointerId) return;
+    isResizing = false;
+    resizePointerId = null;
+    panel.style.willChange = '';
+  });
 
   // Clamp panel position to keep it visible within viewport
   const clampPanelPosition = () => {
@@ -757,6 +772,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       } catch {}
     }
     titleBar.style.touchAction = '';
+    panel.style.willChange = '';
 
     if (dragMoved) {
       suppressClick = true;
@@ -799,6 +815,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       panel.setPointerCapture(event.pointerId);
     }
     titleBar.style.touchAction = 'none';
+    panel.style.willChange = 'transform';
     event.preventDefault();
   });
 
@@ -807,8 +824,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       suppressClick = false;
       return;
     }
-    const collapsed = content.style.display === 'none';
-    applyCollapsed(!collapsed);
+    applyCollapsed(!isCollapsed);
   });
 
   // Add resize listener to keep panel visible when viewport changes
@@ -858,6 +874,10 @@ function resetAllStats(): void {
 /**
  * Render function for the reminders modal window
  */
+export function renderRemindersContent(root: HTMLElement): void {
+  renderRemindersWindow(root);
+}
+
 function renderRemindersWindow(root: HTMLElement): void{
   root.style.cssText = 'display: flex; flex-direction: column; gap: 16px; min-width: 600px;';
 

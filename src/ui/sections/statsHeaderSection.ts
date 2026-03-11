@@ -16,6 +16,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.07', date: '2026-03', notes: [
+    'Anti-AFK',
+  ]},
   { version: '3.1.06', date: '2026-03', notes: [
     'Pets: Shift can now be used as a modifier key for team keybinds',
     'Teams: added polished ability value badges with accurate Hunger Restore team-based calculations',

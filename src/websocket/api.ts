@@ -8,6 +8,7 @@ export type RoomActionType =
   | 'FeedPet'
   | 'StorePet'
   | 'PlacePet'
+  | 'PlayerPosition'
   | 'RetrieveItemFromStorage'
   | 'SwapPet';
 
@@ -36,6 +37,10 @@ type PlacePetPayload = {
   position: { x: number; y: number };
   tileType: string;
   localTileIndex: number;
+};
+
+type PlayerPositionPayload = {
+  position: { x: number; y: number };
 };
 
 type RetrievePayload = { itemId: string; storageId: string };
@@ -86,6 +91,10 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
         isFiniteNumber(p.localTileIndex)
       );
     }
+    case 'PlayerPosition': {
+      const p = payload as PlayerPositionPayload;
+      return !!p.position && isFiniteNumber(p.position.x) && isFiniteNumber(p.position.y);
+    }
     case 'RetrieveItemFromStorage': {
       const p = payload as RetrievePayload;
       return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId);
@@ -109,6 +118,8 @@ function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>):
       return `${type}:${String(payload.petItemId ?? '')}:${String(payload.cropItemId ?? '')}`;
     case 'PlacePet':
       return `${type}:${String(payload.itemId ?? '')}`;
+    case 'PlayerPosition':
+      return type;
     case 'SwapPet':
       return `${type}:${String(payload.petSlotId ?? '')}:${String(payload.petInventoryId ?? '')}`;
     default:

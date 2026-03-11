@@ -30,6 +30,7 @@ import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
+import { initializeAntiAfk, stopAntiAfk } from './features/antiAfk';
 
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
 import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetHutchWindow } from './ui/petHutchWindow';
@@ -1167,6 +1168,7 @@ const _errorHandler = (event: ErrorEvent): boolean => {
 window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
+  stopAntiAfk();
   timerManager.destroy();
   stopNativeFeedIntercept();
   stopPetTeamsStore();
@@ -1248,6 +1250,9 @@ async function initialize(): Promise<void> {
 
   // Wait for game to be ready (parallel with sprite init)
   await waitForGame();
+  await initializeAntiAfk().catch((error) => {
+    log('⚠️ Anti-AFK initialization failed', error);
+  });
 
   // OPTIMIZATION: Initialize core stores in batches with yields to prevent main thread blocking
   // Phase 1: Critical stores that other features depend on

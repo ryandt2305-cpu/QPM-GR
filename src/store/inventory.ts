@@ -32,6 +32,7 @@ let cachedInventory: InventoryItem[] = [];
 let cachedFavorites: Set<string> = new Set();
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
+const listeners = new Set<(data: InventoryData) => void>();
 
 function normalizeInventoryItem(raw: any): InventoryItem | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -111,6 +112,25 @@ function updateCache(raw: any): void {
     cachedInventory = [];
     cachedFavorites = new Set();
   }
+  notifyListeners();
+}
+
+function getSnapshot(): InventoryData {
+  return {
+    items: [...cachedInventory],
+    favoritedItemIds: Array.from(cachedFavorites),
+  };
+}
+
+function notifyListeners(): void {
+  const snapshot = getSnapshot();
+  for (const listener of listeners) {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      log('⚠️ Inventory listener threw', error);
+    }
+  }
 }
 
 export async function startInventoryStore(): Promise<void> {
@@ -169,6 +189,23 @@ export function getInventoryItems(): InventoryItem[] {
  */
 export function getFavoritedItemIds(): Set<string> {
   return new Set(cachedFavorites);
+}
+
+export function onInventoryChange(
+  callback: (data: InventoryData) => void,
+  fireImmediately = false,
+): () => void {
+  listeners.add(callback);
+  if (fireImmediately) {
+    try {
+      callback(getSnapshot());
+    } catch (error) {
+      log('⚠️ Inventory listener immediate callback failed', error);
+    }
+  }
+  return () => {
+    listeners.delete(callback);
+  };
 }
 
 /**

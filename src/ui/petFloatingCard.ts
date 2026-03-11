@@ -1,18 +1,22 @@
 // src/ui/petFloatingCard.ts
-// Floating draggable pet card widget.
-// Each card shows a pet's sprite, name, hunger bar, and a Feed button.
-// Cards survive closing/reopening the Pets window.
-// Multiple cards can coexist, managed by a registry keyed by petId (entity UUID).
+// Detached, draggable feed cards bound to active slot indexes.
 
+import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
-import { getActivePetInfos, onActivePetInfos } from '../store/pets';
-import { feedPetInstantly } from '../features/instantFeed';
-import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
-import type { ActivePetInfo } from '../store/pets';
+import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../store/pets';
+import { onInventoryChange } from '../store/inventory';
+import { feedPetInstantly, getInstantFeedPlan } from '../features/instantFeed';
+import { PET_FOOD_RULES_CHANGED_EVENT } from '../features/petFoodRules';
+import {
+  getCropSpriteDataUrl,
+  getPetSpriteDataUrlWithMutations,
+  isSpritesReady,
+} from '../sprite-v2/compat';
 
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
+const STORAGE_KEY = 'qpm.petFloatingCards.v1';
+const FEED_EVENT = 'qpm:feedPet';
+const FLOATING_CARD_STATE_EVENT = 'qpm:floating-card-state';
+const MAX_SLOTS = 3;
 
 const STYLES = `
 .qpm-float-card {
@@ -20,7 +24,7 @@ const STYLES = `
   background: rgba(18,20,26,0.96);
   border: 1px solid rgba(143,130,255,0.45);
   border-radius: 9px;
-  width: 180px;
+  width: 172px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.55);
   z-index: 999990;
   font-family: inherit;
@@ -28,67 +32,170 @@ const STYLES = `
   overflow: hidden;
 }
 .qpm-float-card__header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 8px 5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
   cursor: grab;
   background: rgba(143,130,255,0.08);
   border-bottom: 1px solid rgba(143,130,255,0.18);
 }
 .qpm-float-card__header:active { cursor: grabbing; }
 .qpm-float-card__sprite-wrap {
-  width: 28px; height: 28px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
 }
 .qpm-float-card__sprite {
-  width: 28px; height: 28px;
-  image-rendering: pixelated; object-fit: contain;
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+  object-fit: contain;
 }
 .qpm-float-card__name {
-  flex: 1; font-size: 12px; font-weight: 500; color: #e0e0e0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e0e0e0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .qpm-float-card__close {
-  width: 18px; height: 18px;
-  background: none; border: none;
-  color: rgba(224,224,224,0.45); font-size: 14px;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  border-radius: 3px; flex-shrink: 0; padding: 0; line-height: 1;
+  width: 18px;
+  height: 18px;
+  background: none;
+  border: none;
+  color: rgba(224,224,224,0.45);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
   transition: color 0.12s, background 0.12s;
 }
 .qpm-float-card__close:hover { color: #e0e0e0; background: rgba(255,255,255,0.1); }
 .qpm-float-card__body {
-  padding: 8px 10px 10px;
-  display: flex; flex-direction: column; gap: 7px;
+  padding: 7px 9px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .qpm-float-card__hunger {
-  display: flex; align-items: center; gap: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .qpm-float-card__hunger-pct {
-  font-size: 11px; color: rgba(224,224,224,0.55); min-width: 30px; text-align: right;
+  font-size: 11px;
+  color: rgba(224,224,224,0.55);
+  min-width: 30px;
+  text-align: right;
 }
 .qpm-float-card__hunger-track {
-  flex: 1; height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;
+  flex: 1;
+  height: 5px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  overflow: hidden;
 }
-.qpm-float-card__hunger-fill { height: 100%; border-radius: 3px; }
+.qpm-float-card__hunger-fill {
+  height: 100%;
+  border-radius: 3px;
+}
 .qpm-float-card__feed-btn {
   width: 100%;
   background: rgba(143,130,255,0.2);
   border: 1px solid rgba(143,130,255,0.45);
-  border-radius: 5px; color: #d0c8ff;
-  font-size: 12px; font-weight: 500;
-  padding: 5px 0; cursor: pointer;
+  border-radius: 5px;
+  color: #d0c8ff;
+  font-size: 12px;
+  font-weight: 500;
+  min-height: 30px;
+  padding: 5px 42px 5px 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
   transition: background 0.15s;
 }
 .qpm-float-card__feed-btn:hover { background: rgba(143,130,255,0.35); }
 .qpm-float-card__feed-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.qpm-float-card__feed-label { pointer-events: none; }
+.qpm-float-card__food {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(143,130,255,0.09);
+  border: 1px solid rgba(143,130,255,0.22);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: rgba(224,224,224,0.72);
+  pointer-events: none;
+}
+.qpm-float-card__food--overlay {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+}
+.qpm-float-card__food-icon {
+  width: 10px;
+  height: 10px;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+.qpm-float-card__food-fallback {
+  font-size: 10px;
+  min-width: 12px;
+  text-align: center;
+  color: rgba(224,224,224,0.82);
+}
+.qpm-float-card__food-count {
+  font-weight: 700;
+  color: #ecefff;
+}
 .qpm-float-card__no-pet {
-  font-size: 11px; color: rgba(224,224,224,0.35); text-align: center;
+  font-size: 11px;
+  color: rgba(224,224,224,0.35);
+  text-align: center;
   padding: 4px 0;
 }
 `;
 
+interface PersistedFloatingCard {
+  slotIndex: number;
+  x: number;
+  y: number;
+}
+
+interface PersistedFloatingCardsState {
+  cards: PersistedFloatingCard[];
+  updatedAt: number;
+}
+
+interface FloatingCardEntry {
+  slotIndex: number;
+  el: HTMLElement;
+  destroy: () => void;
+  refreshAvailability: () => void;
+}
+
+const registry = new Map<number, FloatingCardEntry>();
 let stylesInjected = false;
+let initialized = false;
+
 function ensureStyles(): void {
   if (stylesInjected) return;
   const el = document.createElement('style');
@@ -98,57 +205,191 @@ function ensureStyles(): void {
   stylesInjected = true;
 }
 
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
-
-interface FloatingCardEntry {
-  petId: string;           // entity UUID (ActivePetInfo.petId)
-  el: HTMLElement;
-  destroy: () => void;
+function clampSlotIndex(slotIndex: number): number | null {
+  if (!Number.isInteger(slotIndex)) return null;
+  if (slotIndex < 0 || slotIndex >= MAX_SLOTS) return null;
+  return slotIndex;
 }
 
-const registry = new Map<string, FloatingCardEntry>();
+function clampPosition(x: number, y: number): { x: number; y: number } {
+  const maxX = Math.max(0, window.innerWidth - 200);
+  const maxY = Math.max(0, window.innerHeight - 100);
+  return {
+    x: Math.max(0, Math.min(maxX, Math.round(x))),
+    y: Math.max(0, Math.min(maxY, Math.round(y))),
+  };
+}
 
-// ---------------------------------------------------------------------------
-// Single card
-// ---------------------------------------------------------------------------
+function getDefaultPosition(slotIndex: number): { x: number; y: number } {
+  const offset = slotIndex * 18;
+  const x = window.innerWidth - 220 - offset;
+  const y = Math.max(16, window.innerHeight - 190 - offset);
+  return clampPosition(x, y);
+}
 
-function createFloatingCard(petId: string, initialPet: ActivePetInfo): FloatingCardEntry {
+function getCurrentPosition(el: HTMLElement): { x: number; y: number } {
+  const rect = el.getBoundingClientRect();
+  return clampPosition(rect.left, rect.top);
+}
+
+function applyPosition(el: HTMLElement, x: number, y: number): void {
+  const clamped = clampPosition(x, y);
+  el.style.left = `${clamped.x}px`;
+  el.style.top = `${clamped.y}px`;
+  el.style.right = '';
+  el.style.bottom = '';
+}
+
+function loadPersistedState(): PersistedFloatingCardsState {
+  const stored = storage.get<PersistedFloatingCardsState>(STORAGE_KEY, { cards: [], updatedAt: 0 });
+  if (!stored || typeof stored !== 'object' || !Array.isArray(stored.cards)) {
+    return { cards: [], updatedAt: 0 };
+  }
+
+  const cards = stored.cards
+    .map((entry): PersistedFloatingCard | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const slotIndex = clampSlotIndex(Number((entry as PersistedFloatingCard).slotIndex));
+      if (slotIndex == null) return null;
+      const x = Number((entry as PersistedFloatingCard).x);
+      const y = Number((entry as PersistedFloatingCard).y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { slotIndex, x, y };
+    })
+    .filter((entry): entry is PersistedFloatingCard => !!entry);
+
+  return {
+    cards,
+    updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : 0,
+  };
+}
+
+function persistRegistryState(): void {
+  const cards: PersistedFloatingCard[] = [];
+  for (const entry of registry.values()) {
+    const pos = getCurrentPosition(entry.el);
+    cards.push({
+      slotIndex: entry.slotIndex,
+      x: pos.x,
+      y: pos.y,
+    });
+  }
+
+  storage.set(STORAGE_KEY, {
+    cards,
+    updatedAt: Date.now(),
+  } satisfies PersistedFloatingCardsState);
+}
+
+function emitFloatingCardStateChanged(slotIndex: number, open: boolean): void {
+  try {
+    window.dispatchEvent(new CustomEvent(FLOATING_CARD_STATE_EVENT, {
+      detail: { slotIndex, open },
+    }));
+  } catch {
+    // no-op
+  }
+}
+
+function getActivePetForSlot(slotIndex: number): ActivePetInfo | null {
+  const active = getActivePetInfos();
+  return active.find((pet) => pet.slotIndex === slotIndex) ?? null;
+}
+
+function resolveSlotByPetId(petId: string): number | null {
+  const active = getActivePetInfos();
+  const pet = active.find((entry) => entry.petId === petId);
+  if (!pet) return null;
+  return clampSlotIndex(pet.slotIndex);
+}
+
+function setSpriteContent(
+  spriteWrap: HTMLElement,
+  pet: ActivePetInfo | null,
+): void {
+  spriteWrap.innerHTML = '';
+
+  if (pet?.species && isSpritesReady()) {
+    const src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []);
+    if (src) {
+      const img = document.createElement('img');
+      img.className = 'qpm-float-card__sprite';
+      img.src = src;
+      img.alt = pet.species;
+      spriteWrap.appendChild(img);
+      return;
+    }
+  }
+
+  const fallback = document.createElement('span');
+  fallback.textContent = '•';
+  fallback.style.color = 'rgba(224,224,224,0.65)';
+  fallback.style.fontSize = '13px';
+  fallback.style.fontWeight = '700';
+  spriteWrap.appendChild(fallback);
+}
+
+function setFoodCounter(
+  iconWrap: HTMLElement,
+  countEl: HTMLElement,
+  foodKey: string | null,
+  count: number,
+): void {
+  iconWrap.innerHTML = '';
+
+  if (foodKey) {
+    const sprite = getCropSpriteDataUrl(foodKey);
+    if (sprite) {
+      const img = document.createElement('img');
+      img.className = 'qpm-float-card__food-icon';
+      img.src = sprite;
+      img.alt = foodKey;
+      iconWrap.appendChild(img);
+    } else {
+      const fallback = document.createElement('span');
+      fallback.className = 'qpm-float-card__food-fallback';
+      fallback.textContent = foodKey.slice(0, 1).toUpperCase();
+      iconWrap.appendChild(fallback);
+    }
+  } else {
+    const fallback = document.createElement('span');
+    fallback.className = 'qpm-float-card__food-fallback';
+    fallback.textContent = '-';
+    iconWrap.appendChild(fallback);
+  }
+
+  countEl.textContent = `${Math.max(0, Math.floor(count))}`;
+}
+
+function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: number }): FloatingCardEntry {
   ensureStyles();
 
   const cleanups: Array<() => void> = [];
   const card = document.createElement('div');
   card.className = 'qpm-float-card';
 
-  // Default position: bottom-right area, stacked based on count
-  const offset = registry.size * 14;
-  card.style.right = `${24 + offset}px`;
-  card.style.bottom = `${80 + offset}px`;
+  const resolvedPos = initialPos ? clampPosition(initialPos.x, initialPos.y) : getDefaultPosition(slotIndex);
+  applyPosition(card, resolvedPos.x, resolvedPos.y);
 
-  // --- Header (drag handle + sprite + name + close) ---
   const header = document.createElement('div');
   header.className = 'qpm-float-card__header';
 
   const spriteWrap = document.createElement('div');
   spriteWrap.className = 'qpm-float-card__sprite-wrap';
-  spriteWrap.textContent = '🐾';
   header.appendChild(spriteWrap);
 
   const nameEl = document.createElement('div');
   nameEl.className = 'qpm-float-card__name';
-  nameEl.textContent = initialPet.name || initialPet.species || 'Pet';
   header.appendChild(nameEl);
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'qpm-float-card__close';
-  closeBtn.textContent = '×';
+  closeBtn.textContent = 'x';
   closeBtn.title = 'Close floating card';
   header.appendChild(closeBtn);
 
   card.appendChild(header);
 
-  // --- Body ---
   const body = document.createElement('div');
   body.className = 'qpm-float-card__body';
 
@@ -161,149 +402,186 @@ function createFloatingCard(petId: string, initialPet: ActivePetInfo): FloatingC
   const hungerFill = document.createElement('div');
   hungerFill.className = 'qpm-float-card__hunger-fill';
   hungerTrack.appendChild(hungerFill);
-  hungerRow.appendChild(hungerPct);
-  hungerRow.appendChild(hungerTrack);
+  hungerRow.append(hungerPct, hungerTrack);
   body.appendChild(hungerRow);
 
   const feedBtn = document.createElement('button');
   feedBtn.className = 'qpm-float-card__feed-btn';
-  feedBtn.textContent = 'Feed';
+  const feedLabel = document.createElement('span');
+  feedLabel.className = 'qpm-float-card__feed-label';
+  feedLabel.textContent = 'Feed';
+  feedBtn.appendChild(feedLabel);
+
+  const foodCounter = document.createElement('div');
+  foodCounter.className = 'qpm-float-card__food qpm-float-card__food--overlay';
+  const foodIconWrap = document.createElement('span');
+  const foodCount = document.createElement('span');
+  foodCount.className = 'qpm-float-card__food-count';
+  foodCounter.append(foodIconWrap, foodCount);
+  feedBtn.appendChild(foodCounter);
+
   body.appendChild(feedBtn);
 
   const noPetMsg = document.createElement('div');
   noPetMsg.className = 'qpm-float-card__no-pet';
-  noPetMsg.textContent = 'Pet not in active slots';
+  noPetMsg.textContent = 'No active pet in this slot';
   noPetMsg.style.display = 'none';
   body.appendChild(noPetMsg);
 
   card.appendChild(body);
+  document.body.appendChild(card);
 
-  // --- Render pet data ---
-  function renderPetData(pet: ActivePetInfo): void {
-    nameEl.textContent = pet.name || pet.species || 'Pet';
+  let destroyed = false;
+  let currentPet: ActivePetInfo | null = null;
+  let refreshSeq = 0;
+  let feeding = false;
 
-    // Sprite
-    if (pet.species && isSpritesReady()) {
-      const src = getPetSpriteDataUrlWithMutations(pet.species, pet.mutations ?? []);
-      if (src) {
-        spriteWrap.innerHTML = '';
-        const img = document.createElement('img');
-        img.className = 'qpm-float-card__sprite';
-        img.src = src;
-        img.alt = pet.species;
-        spriteWrap.appendChild(img);
-      }
+  const setFeedButtonState = (label: string, disabled: boolean): void => {
+    feedLabel.textContent = label;
+    feedBtn.disabled = disabled;
+  };
+
+  const renderPet = (pet: ActivePetInfo | null): void => {
+    currentPet = pet;
+    setSpriteContent(spriteWrap, pet);
+
+    if (!pet) {
+      nameEl.textContent = 'Empty slot';
+      hungerRow.style.display = 'none';
+      noPetMsg.style.display = '';
+      feedBtn.style.display = 'none';
+      foodCounter.style.display = 'none';
+      return;
     }
 
-    // Hunger
+    nameEl.textContent = pet.name || pet.species || 'Pet';
+    noPetMsg.style.display = 'none';
+    feedBtn.style.display = '';
+    foodCounter.style.display = '';
+
     if (pet.hungerPct != null) {
       hungerRow.style.display = '';
-      noPetMsg.style.display = 'none';
-      feedBtn.style.display = '';
       hungerPct.textContent = `${Math.round(pet.hungerPct)}%`;
       hungerFill.style.width = `${pet.hungerPct}%`;
-      hungerFill.style.background = pet.hungerPct < 30 ? '#ff6464' : pet.hungerPct < 60 ? '#ffb464' : '#64ff96';
+      hungerFill.style.background = pet.hungerPct < 30
+        ? '#ff6464'
+        : pet.hungerPct < 60
+          ? '#ffb464'
+          : '#64ff96';
     } else {
       hungerRow.style.display = 'none';
     }
-  }
+  };
 
-  function renderMissing(): void {
-    hungerRow.style.display = 'none';
-    feedBtn.style.display = 'none';
-    noPetMsg.style.display = '';
-  }
+  const refreshAvailability = async (): Promise<void> => {
+    const seq = ++refreshSeq;
+    if (destroyed) return;
 
-  // Initial render
-  renderPetData(initialPet);
-
-  // --- Subscribe to pet updates ---
-  const unsub = onActivePetInfos((pets) => {
-    const pet = pets.find(p => p.petId === petId);
-    if (pet) {
-      renderPetData(pet);
-    } else {
-      renderMissing();
+    if (!currentPet) {
+      setFoodCounter(foodIconWrap, foodCount, null, 0);
+      setFeedButtonState('Feed', true);
+      return;
     }
-  }, false);
-  cleanups.push(unsub);
 
-  // --- Feed button ---
-  feedBtn.addEventListener('click', async () => {
-    feedBtn.disabled = true;
-    feedBtn.textContent = '⏳';
     try {
-      const pets = getActivePetInfos();
-      const index = pets.findIndex(p => p.petId === petId);
-      if (index < 0) {
-        log(`[FloatingCard] Pet ${petId} not in active slots`);
-        return;
-      }
-      const result = await feedPetInstantly(index);
+      const plan = await getInstantFeedPlan(slotIndex);
+      if (destroyed || seq !== refreshSeq) return;
+
+      const selected = plan.foodSelection;
+      const foodKey = selected?.item.species ?? selected?.item.name ?? null;
+      setFoodCounter(foodIconWrap, foodCount, foodKey, plan.availableCount);
+
+      if (feeding) return;
+      const canFeed = !!plan.petId && !!selected && plan.availableCount > 0;
+      setFeedButtonState('Feed', !canFeed);
+      feedBtn.title = canFeed ? `Feed with ${foodKey ?? 'food'}` : (plan.error ?? 'No suitable food');
+    } catch {
+      if (destroyed || seq !== refreshSeq) return;
+      setFoodCounter(foodIconWrap, foodCount, null, 0);
+      if (!feeding) setFeedButtonState('Feed', true);
+      feedBtn.title = 'Unable to evaluate food availability';
+    }
+  };
+
+  const onPetChange = (pets: ActivePetInfo[]): void => {
+    const pet = pets.find((entry) => entry.slotIndex === slotIndex) ?? null;
+    renderPet(pet);
+    void refreshAvailability();
+  };
+
+  const unsubscribePets = onActivePetInfos(onPetChange);
+  cleanups.push(unsubscribePets);
+
+  const unsubscribeInventory = onInventoryChange(() => {
+    void refreshAvailability();
+  });
+  cleanups.push(unsubscribeInventory);
+
+  const onRulesChanged = (): void => {
+    void refreshAvailability();
+  };
+  window.addEventListener(PET_FOOD_RULES_CHANGED_EVENT, onRulesChanged as EventListener);
+  cleanups.push(() => window.removeEventListener(PET_FOOD_RULES_CHANGED_EVENT, onRulesChanged as EventListener));
+
+  const onFeedEvent = (): void => {
+    void refreshAvailability();
+  };
+  window.addEventListener(FEED_EVENT, onFeedEvent as EventListener);
+  cleanups.push(() => window.removeEventListener(FEED_EVENT, onFeedEvent as EventListener));
+
+  feedBtn.addEventListener('click', async () => {
+    if (feeding) return;
+
+    feeding = true;
+    setFeedButtonState('...', true);
+
+    try {
+      const result = await feedPetInstantly(slotIndex);
       if (result.success) {
-        feedBtn.textContent = '✓ Fed!';
-        setTimeout(() => { feedBtn.textContent = 'Feed'; }, 1500);
+        setFeedButtonState('Fed', true);
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
       } else {
-        feedBtn.textContent = result.error?.includes('food') ? 'No food' : 'Failed';
-        setTimeout(() => { feedBtn.textContent = 'Feed'; }, 2000);
+        setFeedButtonState(result.error?.toLowerCase().includes('food') ? 'No food' : 'Failed', true);
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
       }
     } finally {
-      feedBtn.disabled = false;
+      feeding = false;
+      void refreshAvailability();
     }
   });
 
-  // --- Close button ---
-  const destroy = (): void => {
-    cleanups.forEach(fn => fn());
-    card.remove();
-    registry.delete(petId);
-  };
-  closeBtn.addEventListener('click', destroy);
-
-  // --- Drag support ---
   let dragStartX = 0;
   let dragStartY = 0;
   let cardStartLeft = 0;
   let cardStartTop = 0;
   let isDragging = false;
 
-  function getCardRect(): DOMRect {
-    return card.getBoundingClientRect();
-  }
+  const onMouseDown = (event: MouseEvent): void => {
+    if ((event.target as Element).closest('.qpm-float-card__close')) return;
+    if ((event.target as Element).closest('.qpm-float-card__feed-btn')) return;
 
-  function snapToFixed(): void {
-    const rect = getCardRect();
-    // Convert from right/bottom to left/top for easier dragging
-    card.style.right = '';
-    card.style.bottom = '';
-    card.style.left = `${rect.left}px`;
-    card.style.top = `${rect.top}px`;
-  }
+    const rect = card.getBoundingClientRect();
+    applyPosition(card, rect.left, rect.top);
 
-  const onMouseDown = (e: MouseEvent): void => {
-    // Only drag from header, not from close button
-    if ((e.target as Element).closest('.qpm-float-card__close')) return;
-    snapToFixed();
     isDragging = true;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    cardStartLeft = parseInt(card.style.left, 10);
-    cardStartTop = parseInt(card.style.top, 10);
-    e.preventDefault();
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    cardStartLeft = rect.left;
+    cardStartTop = rect.top;
+    event.preventDefault();
   };
 
-  const onMouseMove = (e: MouseEvent): void => {
+  const onMouseMove = (event: MouseEvent): void => {
     if (!isDragging) return;
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
-    const newLeft = Math.max(0, Math.min(window.innerWidth - 180, cardStartLeft + dx));
-    const newTop = Math.max(0, Math.min(window.innerHeight - 80, cardStartTop + dy));
-    card.style.left = `${newLeft}px`;
-    card.style.top = `${newTop}px`;
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    applyPosition(card, cardStartLeft + dx, cardStartTop + dy);
   };
 
   const onMouseUp = (): void => {
+    if (!isDragging) return;
     isDragging = false;
+    persistRegistryState();
   };
 
   header.addEventListener('mousedown', onMouseDown);
@@ -315,53 +593,106 @@ function createFloatingCard(petId: string, initialPet: ActivePetInfo): FloatingC
     document.removeEventListener('mouseup', onMouseUp);
   });
 
-  document.body.appendChild(card);
+  const destroy = (): void => {
+    if (destroyed) return;
+    destroyed = true;
+    cleanups.forEach((fn) => fn());
+    card.remove();
+    registry.delete(slotIndex);
+    persistRegistryState();
+    emitFloatingCardStateChanged(slotIndex, false);
+  };
 
-  return { petId, el: card, destroy };
+  closeBtn.addEventListener('click', destroy);
+
+  return {
+    slotIndex,
+    el: card,
+    destroy,
+    refreshAvailability: () => {
+      void refreshAvailability();
+    },
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+function openFloatingCardInternal(slotIndex: number, initialPos?: { x: number; y: number }): void {
+  if (registry.has(slotIndex)) {
+    const existing = registry.get(slotIndex);
+    if (existing) {
+      existing.el.style.border = '1px solid rgba(143,130,255,0.9)';
+      window.setTimeout(() => {
+        if (existing.el.isConnected) {
+          existing.el.style.border = '1px solid rgba(143,130,255,0.45)';
+        }
+      }, 450);
+      existing.refreshAvailability();
+    }
+    return;
+  }
 
-/**
- * Open or focus a floating card for the given pet.
- * petId should be the entity UUID (ActivePetInfo.petId).
- */
+  const entry = createFloatingCard(slotIndex, initialPos);
+  registry.set(slotIndex, entry);
+  persistRegistryState();
+  emitFloatingCardStateChanged(slotIndex, true);
+  entry.refreshAvailability();
+  log(`[FloatingCard] Opened slot-bound card for slot ${slotIndex + 1}`);
+}
+
+function restorePersistedCards(): void {
+  const persisted = loadPersistedState();
+  for (const card of persisted.cards) {
+    openFloatingCardInternal(card.slotIndex, { x: card.x, y: card.y });
+  }
+}
+
+export function initFloatingCards(): void {
+  if (initialized) return;
+  initialized = true;
+  restorePersistedCards();
+}
+
+export function openFloatingCardForSlot(slotIndex: number): void {
+  const normalized = clampSlotIndex(slotIndex);
+  if (normalized == null) return;
+  initFloatingCards();
+  openFloatingCardInternal(normalized);
+}
+
+export function closeFloatingCardForSlot(slotIndex: number): void {
+  registry.get(slotIndex)?.destroy();
+}
+
+export function hasFloatingCardForSlot(slotIndex: number): boolean {
+  return registry.has(slotIndex);
+}
+
 export function openFloatingCard(petId: string): void {
-  if (registry.has(petId)) {
-    // Already open — flash the card briefly to indicate it's there
-    const existing = registry.get(petId)!;
-    existing.el.style.border = '1px solid rgba(143,130,255,0.9)';
-    setTimeout(() => { existing.el.style.border = '1px solid rgba(143,130,255,0.45)'; }, 600);
+  const slotIndex = resolveSlotByPetId(petId);
+  if (slotIndex == null) {
+    log(`[FloatingCard] Pet ${petId} not found in active slots - cannot open slot-bound card`);
+    return;
+  }
+  openFloatingCardForSlot(slotIndex);
+}
+
+export function closeFloatingCard(target: string | number): void {
+  if (typeof target === 'number') {
+    closeFloatingCardForSlot(target);
     return;
   }
 
-  const pets = getActivePetInfos();
-  const pet = pets.find(p => p.petId === petId);
-  if (!pet) {
-    log(`[FloatingCard] Pet ${petId} not found in active slots — cannot open card`);
-    return;
-  }
-
-  const entry = createFloatingCard(petId, pet);
-  registry.set(petId, entry);
-  log(`[FloatingCard] Opened card for ${pet.name || pet.species} (${petId})`);
+  const slotIndex = resolveSlotByPetId(target);
+  if (slotIndex == null) return;
+  closeFloatingCardForSlot(slotIndex);
 }
 
-/** Close a specific floating card by petId. */
-export function closeFloatingCard(petId: string): void {
-  registry.get(petId)?.destroy();
-}
-
-/** Close all floating cards. */
 export function closeAllFloatingCards(): void {
-  for (const entry of registry.values()) {
+  for (const entry of Array.from(registry.values())) {
     entry.destroy();
   }
 }
 
-/** Returns true if a floating card is currently open for the given petId. */
 export function hasFloatingCard(petId: string): boolean {
-  return registry.has(petId);
+  const slotIndex = resolveSlotByPetId(petId);
+  return slotIndex != null ? registry.has(slotIndex) : false;
 }

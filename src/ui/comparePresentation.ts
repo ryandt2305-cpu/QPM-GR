@@ -1,9 +1,10 @@
-// src/ui/comparePresentation.ts
+﻿// src/ui/comparePresentation.ts
 // Shared compare presentation adapter built on top of petCompareEngine.
 
 import type { PooledPet } from '../types/petTeams';
 import {
   buildPetCompareProfile,
+  getAbilityFamilyKey,
   type AbilityContribution,
   type ProgressionSignalSnapshot,
   type ProgressionStageSnapshot,
@@ -55,6 +56,7 @@ interface ContributionCompareSnapshot {
   abilityId: string;
   abilityName: string;
   groupId: CompareGroupId;
+  unit: AbilityContribution['unit'];
   isAction: boolean;
   reviewOnly: boolean;
   triggerLabel: string;
@@ -66,6 +68,10 @@ interface ContributionCompareSnapshot {
   primaryValue: number;
   tieBreakerValue: number;
   metricLabel: string;
+}
+
+interface CompareFormattingOptions {
+  compactNumbers: boolean;
 }
 
 const EMPTY_SIGNALS: ProgressionSignalSnapshot = {
@@ -114,8 +120,14 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function formatPercent(value: number): string {
+function formatPercent(value: number, compact = false): string {
   const n = clamp(value, 0, 100);
+  if (compact) {
+    if (n < 0.1) return `${n.toFixed(2)}%`;
+    if (n < 1) return `${n.toFixed(1)}%`;
+    return `${n.toFixed(1).replace(/\.0$/, '')}%`;
+  }
+
   if (n < 0.1) return `${n.toFixed(3)}%`;
   if (n < 1) return `${n.toFixed(2)}%`;
   if (n < 10) return `${n.toFixed(1)}%`;
@@ -140,31 +152,51 @@ function formatCompactNumber(value: number): string {
   return `${sign}${Math.round(abs)}`;
 }
 
-function formatMinutes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '0min';
+function formatMinutes(value: number, compact = false): string {
+  if (!Number.isFinite(value) || value <= 0) return compact ? '0m' : '0min';
   const totalMinutes = Math.max(1, Math.round(value));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
+
+  if (compact) {
+    if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h`;
+    return `${minutes}m`;
+  }
+
   if (hours > 0 && minutes > 0) return `${hours}hr ${minutes}min`;
   if (hours > 0) return `${hours}hr`;
   return `${minutes}min`;
 }
 
-function formatValue(value: number, unit: AbilityContribution['unit'], suffix: 'proc' | 'trigger' | 'hour'): string {
+function formatValue(
+  value: number,
+  unit: AbilityContribution['unit'],
+  suffix: 'proc' | 'trigger' | 'hour',
+  compact = false,
+): string {
   if (!Number.isFinite(value) || value <= 0) return '0';
+
   if (unit === 'coins') {
     const base = formatCompactNumber(Math.max(0, value));
-    if (suffix === 'hour') return `${base}`;
-    return `${base}`;
+    return suffix === 'hour' ? `${base}` : `${base}`;
   }
+
   if (unit === 'minutes') {
-    const base = formatMinutes(value);
+    const base = formatMinutes(value, compact);
     return suffix === 'hour' ? `${base}/hr` : `${base}/${suffix}`;
   }
+
   if (unit === 'xp') {
     const base = formatCompactNumber(Math.max(0, value));
     return suffix === 'hour' ? `${base} xp/hr` : `${base} xp/${suffix}`;
   }
+
+  if (Math.abs(value) >= 1000) {
+    const base = formatCompactNumber(value);
+    return suffix === 'hour' ? `${base}/hr` : `${base}/${suffix}`;
+  }
+
   const rounded = value >= 10 ? value.toFixed(1) : value.toFixed(2);
   return suffix === 'hour' ? `${rounded}/hr` : `${rounded}/${suffix}`;
 }
@@ -187,32 +219,187 @@ function normalizeAbilityFilter(filter: string): string {
   return filter.trim().toLowerCase();
 }
 
-function matchesAbilityFilter(entry: AbilityContribution, filter: string): boolean {
-  if (filter === 'all') return true;
-  const norm = normalizeAbilityFilter(filter);
-  return entry.abilityId.toLowerCase() === norm || entry.rawAbilityId.toLowerCase() === norm;
+function normalizeAbilityId(value: string): string {
+  return value.trim().toLowerCase();
 }
 
-function chooseBestContribution(entries: AbilityContribution[], abilityFilter: string): AbilityContribution | null {
-  const candidates = entries.filter((entry) => matchesAbilityFilter(entry, abilityFilter));
-  if (!candidates.length) return null;
+function resolveEntryFamily(entry: AbilityContribution): string {
+  const abilityId = normalizeAbilityId(entry.abilityId);
+  return normalizeAbilityId(getAbilityFamilyKey(abilityId));
+}
 
-  const sorted = [...candidates].sort((a, b) => {
-    if (a.isReview !== b.isReview) return a.isReview ? 1 : -1;
-    if (a.isIgnored !== b.isIgnored) return a.isIgnored ? 1 : -1;
+function isExactAbilityMatch(entry: AbilityContribution, abilityId: string): boolean {
+  const normalized = normalizeAbilityId(abilityId);
+  return normalizeAbilityId(entry.abilityId) === normalized || normalizeAbilityId(entry.rawAbilityId) === normalized;
+}
 
-    const pa = getPrimaryValue(a);
-    const pb = getPrimaryValue(b);
-    if (pb !== pa) return pb - pa;
+function isFamilyMatch(entry: AbilityContribution, familyId: string): boolean {
+  if (!familyId) return false;
+  return resolveEntryFamily(entry) === familyId;
+}
 
-    const ta = getTieValue(a);
-    const tb = getTieValue(b);
-    if (tb !== ta) return tb - ta;
+function compareEntries(
+  a: AbilityContribution,
+  b: AbilityContribution,
+  preferredAbilityId: string | null = null,
+): number {
+  if (preferredAbilityId) {
+    const aExact = isExactAbilityMatch(a, preferredAbilityId);
+    const bExact = isExactAbilityMatch(b, preferredAbilityId);
+    if (aExact !== bExact) return aExact ? -1 : 1;
+  }
 
-    return a.abilityId.localeCompare(b.abilityId);
-  });
+  if (a.isReview !== b.isReview) return a.isReview ? 1 : -1;
+  if (a.isIgnored !== b.isIgnored) return a.isIgnored ? 1 : -1;
 
+  const pa = getPrimaryValue(a);
+  const pb = getPrimaryValue(b);
+  if (pb !== pa) return pb - pa;
+
+  const ta = getTieValue(a);
+  const tb = getTieValue(b);
+  if (tb !== ta) return tb - ta;
+
+  return a.abilityId.localeCompare(b.abilityId);
+}
+
+function chooseBestContribution(
+  entries: AbilityContribution[],
+  candidates: AbilityContribution[],
+  preferredAbilityId: string | null = null,
+  allowFallback = true,
+): AbilityContribution | null {
+  const list = candidates.length > 0 ? candidates : (allowFallback ? entries : []);
+  if (!list.length) return null;
+
+  const sorted = [...list].sort((a, b) => compareEntries(a, b, preferredAbilityId));
   return sorted[0] ?? null;
+}
+
+function pairComparable(a: AbilityContribution, b: AbilityContribution): boolean {
+  return !a.isReview && !a.isIgnored && !b.isReview && !b.isIgnored && areCompareGroupsCompatible(a.group, b.group);
+}
+
+function comparePairRank(
+  pairA: [AbilityContribution, AbilityContribution],
+  pairB: [AbilityContribution, AbilityContribution],
+): number {
+  const [a1, a2] = pairA;
+  const [b1, b2] = pairB;
+
+  const aComparable = pairComparable(a1, a2);
+  const bComparable = pairComparable(b1, b2);
+  if (aComparable !== bComparable) return aComparable ? -1 : 1;
+
+  const aPrimary = getPrimaryValue(a1) + getPrimaryValue(a2);
+  const bPrimary = getPrimaryValue(b1) + getPrimaryValue(b2);
+  if (bPrimary !== aPrimary) return bPrimary - aPrimary;
+
+  const aTie = getTieValue(a1) + getTieValue(a2);
+  const bTie = getTieValue(b1) + getTieValue(b2);
+  if (bTie !== aTie) return bTie - aTie;
+
+  const aKey = `${a1.abilityId}|${a2.abilityId}`;
+  const bKey = `${b1.abilityId}|${b2.abilityId}`;
+  return aKey.localeCompare(bKey);
+}
+
+function pickBestExactPair(
+  entriesA: AbilityContribution[],
+  entriesB: AbilityContribution[],
+): [AbilityContribution, AbilityContribution] | null {
+  const idsA = new Set(entriesA.map((entry) => normalizeAbilityId(entry.abilityId)));
+  const sharedIds = new Set<string>();
+  for (const entry of entriesB) {
+    const id = normalizeAbilityId(entry.abilityId);
+    if (idsA.has(id)) sharedIds.add(id);
+  }
+  if (sharedIds.size === 0) return null;
+
+  const pairs: Array<[AbilityContribution, AbilityContribution]> = [];
+  for (const sharedId of sharedIds) {
+    const aCandidates = entriesA.filter((entry) => normalizeAbilityId(entry.abilityId) === sharedId);
+    const bCandidates = entriesB.filter((entry) => normalizeAbilityId(entry.abilityId) === sharedId);
+    const bestA = chooseBestContribution(entriesA, aCandidates, sharedId, false);
+    const bestB = chooseBestContribution(entriesB, bCandidates, sharedId, false);
+    if (bestA && bestB) pairs.push([bestA, bestB]);
+  }
+
+  if (pairs.length === 0) return null;
+  return pairs.sort(comparePairRank)[0] ?? null;
+}
+
+function pickBestFamilyPair(
+  entriesA: AbilityContribution[],
+  entriesB: AbilityContribution[],
+): [AbilityContribution, AbilityContribution] | null {
+  const familiesA = new Set(entriesA.map((entry) => resolveEntryFamily(entry)).filter(Boolean));
+  const sharedFamilies = new Set<string>();
+  for (const entry of entriesB) {
+    const family = resolveEntryFamily(entry);
+    if (family && familiesA.has(family)) sharedFamilies.add(family);
+  }
+  if (sharedFamilies.size === 0) return null;
+
+  const pairs: Array<[AbilityContribution, AbilityContribution]> = [];
+  for (const family of sharedFamilies) {
+    const aCandidates = entriesA.filter((entry) => isFamilyMatch(entry, family));
+    const bCandidates = entriesB.filter((entry) => isFamilyMatch(entry, family));
+    const bestA = chooseBestContribution(entriesA, aCandidates, null, false);
+    const bestB = chooseBestContribution(entriesB, bCandidates, null, false);
+    if (bestA && bestB) pairs.push([bestA, bestB]);
+  }
+
+  if (pairs.length === 0) return null;
+  return pairs.sort(comparePairRank)[0] ?? null;
+}
+
+function pickBestComparableGroupPair(
+  entriesA: AbilityContribution[],
+  entriesB: AbilityContribution[],
+): [AbilityContribution, AbilityContribution] | null {
+  const pairs: Array<[AbilityContribution, AbilityContribution]> = [];
+  for (const left of entriesA) {
+    for (const right of entriesB) {
+      if (!pairComparable(left, right)) continue;
+      pairs.push([left, right]);
+    }
+  }
+  if (pairs.length === 0) return null;
+  return pairs.sort(comparePairRank)[0] ?? null;
+}
+
+function selectCompareContributions(
+  entriesA: AbilityContribution[],
+  entriesB: AbilityContribution[],
+  abilityFilter: string,
+): { left: AbilityContribution | null; right: AbilityContribution | null } {
+  const normalizedFilter = normalizeAbilityFilter(abilityFilter);
+
+  if (normalizedFilter !== 'all') {
+    const filterFamily = normalizeAbilityId(getAbilityFamilyKey(normalizedFilter));
+    const aFamily = entriesA.filter((entry) => isFamilyMatch(entry, filterFamily));
+    const bFamily = entriesB.filter((entry) => isFamilyMatch(entry, filterFamily));
+
+    return {
+      left: chooseBestContribution(entriesA, aFamily, normalizedFilter, false),
+      right: chooseBestContribution(entriesB, bFamily, normalizedFilter, false),
+    };
+  }
+
+  const exactPair = pickBestExactPair(entriesA, entriesB);
+  if (exactPair) return { left: exactPair[0], right: exactPair[1] };
+
+  const familyPair = pickBestFamilyPair(entriesA, entriesB);
+  if (familyPair) return { left: familyPair[0], right: familyPair[1] };
+
+  const groupPair = pickBestComparableGroupPair(entriesA, entriesB);
+  if (groupPair) return { left: groupPair[0], right: groupPair[1] };
+
+  return {
+    left: chooseBestContribution(entriesA, entriesA),
+    right: chooseBestContribution(entriesB, entriesB),
+  };
 }
 
 function toSnapshot(entry: AbilityContribution | null): ContributionCompareSnapshot | null {
@@ -221,6 +408,7 @@ function toSnapshot(entry: AbilityContribution | null): ContributionCompareSnaps
     abilityId: entry.abilityId,
     abilityName: entry.name,
     groupId: entry.group,
+    unit: entry.unit,
     isAction: entry.isAction,
     reviewOnly: entry.isReview || entry.isIgnored,
     triggerLabel: entry.triggerLabel,
@@ -235,7 +423,7 @@ function toSnapshot(entry: AbilityContribution | null): ContributionCompareSnaps
   };
 }
 
-function toSideMetrics(snapshot: ContributionCompareSnapshot | null): CompareSideMetrics {
+function toSideMetrics(snapshot: ContributionCompareSnapshot | null, format: CompareFormattingOptions): CompareSideMetrics {
   if (!snapshot) {
     return {
       hasData: false,
@@ -253,13 +441,14 @@ function toSideMetrics(snapshot: ContributionCompareSnapshot | null): CompareSid
     };
   }
 
+  const inferredUnit = inferUnit(snapshot);
   const valuePerProc = snapshot.isAction
-    ? formatValue(snapshot.valuePerProc, snapshot.groupId === 'hatch_trio' ? 'none' : inferUnit(snapshot), 'trigger')
-    : formatValue(snapshot.valuePerProc, inferUnit(snapshot), 'proc');
+    ? formatValue(snapshot.valuePerProc, inferredUnit, 'trigger', format.compactNumbers)
+    : formatValue(snapshot.valuePerProc, inferredUnit, 'proc', format.compactNumbers);
 
   const impactPerHour = snapshot.isAction
-    ? formatValue(snapshot.expectedValuePerTrigger, inferUnit(snapshot), 'trigger')
-    : formatValue(snapshot.impactPerHour, inferUnit(snapshot), 'hour');
+    ? formatValue(snapshot.expectedValuePerTrigger, inferredUnit, 'trigger', format.compactNumbers)
+    : formatValue(snapshot.impactPerHour, inferredUnit, 'hour', format.compactNumbers);
 
   const procsPerHour = snapshot.isAction ? '—' : `${snapshot.procsPerHour.toFixed(1)}`;
 
@@ -271,8 +460,8 @@ function toSideMetrics(snapshot: ContributionCompareSnapshot | null): CompareSid
     valuePerProc,
     impactPerHour,
     procsPerHour,
-    triggerPercent: formatPercent(snapshot.triggerPercent),
-    rawValuePerProc: snapshot.isAction ? snapshot.valuePerProc : snapshot.valuePerProc,
+    triggerPercent: formatPercent(snapshot.triggerPercent, format.compactNumbers),
+    rawValuePerProc: snapshot.valuePerProc,
     rawImpactPerHour: snapshot.isAction ? snapshot.expectedValuePerTrigger : snapshot.impactPerHour,
     rawProcsPerHour: snapshot.isAction ? 0 : snapshot.procsPerHour,
     rawTriggerPercent: snapshot.triggerPercent,
@@ -280,6 +469,9 @@ function toSideMetrics(snapshot: ContributionCompareSnapshot | null): CompareSid
 }
 
 function inferUnit(snapshot: ContributionCompareSnapshot): AbilityContribution['unit'] {
+  if (snapshot.unit && snapshot.unit !== 'none') return snapshot.unit;
+  if (snapshot.groupId === 'food') return 'minutes';
+  if (snapshot.groupId === 'sale' || snapshot.groupId === 'hatch_dollar' || snapshot.groupId === 'per_hour') return 'coins';
   if (snapshot.metricLabel.includes('$')) return 'coins';
   if (snapshot.metricLabel.includes('xp')) return 'xp';
   if (snapshot.metricLabel.includes('saved')) return 'minutes';
@@ -301,14 +493,21 @@ export function buildCompareCardViewModel(params: {
   valuationContext: AbilityValuationContext | null;
   stage: CompareStage;
   poolForRank: PooledPet[];
+  compactNumbers?: boolean;
 }): CompareCardViewModel | null {
-  const { petA, petB, abilityFilter, valuationContext, stage } = params;
+  const { petA, petB, abilityFilter, valuationContext, stage, compactNumbers = false } = params;
   const stageSnapshot = toStageSnapshot(stage);
 
   const profileA = petA ? buildPetCompareProfile(toCompareInput(petA), stageSnapshot, valuationContext) : null;
   const profileB = petB ? buildPetCompareProfile(toCompareInput(petB), stageSnapshot, valuationContext) : null;
-  const snapA = toSnapshot(profileA ? chooseBestContribution(profileA.abilities, abilityFilter) : null);
-  const snapB = toSnapshot(profileB ? chooseBestContribution(profileB.abilities, abilityFilter) : null);
+  const selected = selectCompareContributions(
+    profileA?.abilities ?? [],
+    profileB?.abilities ?? [],
+    abilityFilter,
+  );
+
+  const snapA = toSnapshot(selected.left);
+  const snapB = toSnapshot(selected.right);
 
   if (!snapA && !snapB) return null;
   const active = snapA ?? snapB;
@@ -331,8 +530,8 @@ export function buildCompareCardViewModel(params: {
     else verdict = 'tie';
   }
 
-  const sideA = toSideMetrics(snapA);
-  const sideB = toSideMetrics(snapB);
+  const sideA = toSideMetrics(snapA, { compactNumbers });
+  const sideB = toSideMetrics(snapB, { compactNumbers });
   const isActionCompare = !!((snapA?.isAction ?? false) || (snapB?.isAction ?? false));
 
   const ledgerRows: CompareLedgerRow[] = isActionCompare
@@ -401,3 +600,4 @@ export function buildCompareCardViewModel(params: {
     ledgerRows,
   };
 }
+

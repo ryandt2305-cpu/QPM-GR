@@ -2,9 +2,16 @@
 // WebSocket-based instant pet feeding using discovered FeedPet message format.
 
 import { log } from '../utils/logger';
-import { getActivePetInfos } from '../store/pets';
+import { getActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { readInventoryDirect } from '../store/inventory';
-import { selectFoodForPet, type InventorySnapshot } from './petFoodRules';
+import { getFeedPolicy } from '../store/petTeams';
+import {
+  buildFoodInventorySnapshot,
+  evaluateFoodAvailabilityForPet,
+  getPetFoodRules,
+  type FoodSelection,
+  type SpeciesOverride,
+} from './petFoodRules';
 import { hasRoomConnection, sendRoomAction } from '../websocket/api';
 
 export interface InstantFeedResult {
@@ -12,6 +19,20 @@ export interface InstantFeedResult {
   petName: string | null;
   petSpecies: string | null;
   foodSpecies: string | null;
+  error?: string;
+}
+
+export interface InstantFeedPlan {
+  ok: boolean;
+  petIndex: number;
+  petName: string | null;
+  petSpecies: string | null;
+  petId: string | null;
+  slotId: string | null;
+  respectFoodRules: boolean;
+  avoidFavorited: boolean;
+  availableCount: number;
+  foodSelection: FoodSelection | null;
   error?: string;
 }
 
@@ -35,6 +56,98 @@ function sendFeedPetMessage(petItemId: string, cropItemId: string): boolean {
   return sent.ok;
 }
 
+function toItemOverride(pet: ActivePetInfo): SpeciesOverride | null {
+  if (!pet.slotId) return null;
+  const feedPolicy = getFeedPolicy();
+  const raw = feedPolicy.petItemOverrides[pet.slotId];
+  if (!raw) return null;
+
+  const normalized: SpeciesOverride = {};
+  if (Array.isArray(raw.allowed) && raw.allowed.length > 0) normalized.allowed = [...raw.allowed];
+  if (Array.isArray(raw.forbidden) && raw.forbidden.length > 0) normalized.forbidden = [...raw.forbidden];
+  if (typeof raw.preferred === 'string' && raw.preferred.length > 0) normalized.preferred = raw.preferred;
+
+  if (!normalized.allowed && !normalized.forbidden && !normalized.preferred) return null;
+  return normalized;
+}
+
+function makeMissingPetPlan(petIndex: number, error: string): InstantFeedPlan {
+  return {
+    ok: false,
+    petIndex,
+    petName: null,
+    petSpecies: null,
+    petId: null,
+    slotId: null,
+    respectFoodRules: false,
+    avoidFavorited: true,
+    availableCount: 0,
+    foodSelection: null,
+    error,
+  };
+}
+
+export async function getInstantFeedPlan(
+  petIndex: number,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedPlan> {
+  const pets = getActivePetInfos();
+  if (pets.length === 0) {
+    return makeMissingPetPlan(petIndex, 'No active pets found');
+  }
+
+  const pet = pets[petIndex];
+  if (!pet) {
+    return makeMissingPetPlan(petIndex, `Pet at index ${petIndex} not found`);
+  }
+
+  const rules = getPetFoodRules();
+  const resolvedRespectRules = typeof respectFoodRules === 'boolean' ? respectFoodRules : rules.respectRules;
+  const override = toItemOverride(pet);
+
+  const inventoryData = await readInventoryDirect();
+  const snapshot = buildFoodInventorySnapshot(inventoryData);
+  if (!snapshot || snapshot.items.length === 0) {
+    return {
+      ok: false,
+      petIndex,
+      petName: pet.name,
+      petSpecies: pet.species,
+      petId: pet.petId,
+      slotId: pet.slotId,
+      respectFoodRules: resolvedRespectRules,
+      avoidFavorited: rules.avoidFavorited,
+      availableCount: 0,
+      foodSelection: null,
+      error: 'No feedable produce found in inventory',
+    };
+  }
+
+  const availability = evaluateFoodAvailabilityForPet(
+    pet.species,
+    snapshot,
+    {
+      respectRules: resolvedRespectRules,
+      avoidFavorited: rules.avoidFavorited,
+      itemOverride: override,
+    },
+  );
+
+  return {
+    ok: !!availability.selected,
+    petIndex,
+    petName: pet.name,
+    petSpecies: pet.species,
+    petId: pet.petId,
+    slotId: pet.slotId,
+    respectFoodRules: resolvedRespectRules,
+    avoidFavorited: rules.avoidFavorited,
+    availableCount: availability.availableCount,
+    foodSelection: availability.selected,
+    ...(availability.selected ? {} : { error: 'No suitable food found in inventory' }),
+  };
+}
+
 /**
  * Feed a pet instantly using WebSocket (bypasses DOM clicks).
  *
@@ -44,120 +157,65 @@ function sendFeedPetMessage(petItemId: string, cropItemId: string): boolean {
  */
 export async function feedPetInstantly(
   petIndex: number,
-  respectFoodRules = false,
+  respectFoodRules?: boolean,
 ): Promise<InstantFeedResult> {
   try {
-    // 1. Get active pets
-    const pets = getActivePetInfos();
-    if (pets.length === 0) {
+    const plan = await getInstantFeedPlan(petIndex, respectFoodRules);
+    if (!plan.ok || !plan.foodSelection) {
       return {
         success: false,
-        petName: null,
-        petSpecies: null,
+        petName: plan.petName,
+        petSpecies: plan.petSpecies,
         foodSpecies: null,
-        error: 'No active pets found',
+        error: plan.error ?? 'No suitable food found in inventory',
       };
     }
 
-    const pet = pets[petIndex];
-    if (!pet) {
+    if (!plan.petId) {
       return {
         success: false,
-        petName: null,
-        petSpecies: null,
-        foodSpecies: null,
-        error: `Pet at index ${petIndex} not found`,
-      };
-    }
-
-    if (!pet.petId) {
-      return {
-        success: false,
-        petName: pet.name,
-        petSpecies: pet.species,
+        petName: plan.petName,
+        petSpecies: plan.petSpecies,
         foodSpecies: null,
         error: 'Pet has no petId (UUID)',
       };
     }
 
-    // 2. Get inventory and select appropriate food.
-    const inventoryData = await readInventoryDirect();
-    if (!inventoryData || !inventoryData.items || inventoryData.items.length === 0) {
-      return {
-        success: false,
-        petName: pet.name,
-        petSpecies: pet.species,
-        foodSpecies: null,
-        error: 'Failed to read inventory',
-      };
-    }
-
-    // IMPORTANT: Only include Produce/Crop items that are feedable.
-    const feedableItems = inventoryData.items.filter((item) => (
-      item.itemType === 'Produce' || item.itemType === 'Crop'
-    ));
-
-    const inventory: InventorySnapshot = {
-      items: feedableItems.map((item) => ({
-        id: item.id,
-        species: item.species ?? null,
-        itemType: item.itemType ?? null,
-        name: item.name ?? null,
-      })),
-      favoritedIds: new Set(inventoryData.favoritedItemIds ?? []),
-      source: 'myInventoryAtom',
-    };
-
-    const foodSelection = selectFoodForPet(
-      pet.species,
-      inventory,
-      { avoidFavorited: true },
-    );
-
-    if (!foodSelection) {
-      return {
-        success: false,
-        petName: pet.name,
-        petSpecies: pet.species,
-        foodSpecies: null,
-        error: 'No suitable food found in inventory',
-      };
-    }
-
-    const crop = foodSelection.item;
+    const crop = plan.foodSelection.item;
     if (!crop.id) {
       return {
         success: false,
-        petName: pet.name,
-        petSpecies: pet.species,
-        foodSpecies: crop.species,
+        petName: plan.petName,
+        petSpecies: plan.petSpecies,
+        foodSpecies: crop.species ?? crop.name,
         error: 'Crop has no ID',
       };
     }
 
-    const hungerInfo = pet.hungerPct !== null
-      ? `hunger: ${pet.hungerPct}%`
-      : 'hunger: unknown';
-    log(`Attempting to feed ${pet.name || pet.species || 'pet'} (${hungerInfo}) with ${crop.species || 'food'}`);
+    log(
+      `Attempting to feed ${plan.petName || plan.petSpecies || 'pet'} ` +
+      `with ${crop.species || crop.name || 'food'} ` +
+      `(rules: ${plan.respectFoodRules ? 'on' : 'off'}, available: ${plan.availableCount})`,
+    );
 
     // 3. Send WebSocket FeedPet message.
-    const sent = sendFeedPetMessage(pet.petId, crop.id);
+    const sent = sendFeedPetMessage(plan.petId, crop.id);
     if (!sent) {
       return {
         success: false,
-        petName: pet.name,
-        petSpecies: pet.species,
-        foodSpecies: crop.species,
+        petName: plan.petName,
+        petSpecies: plan.petSpecies,
+        foodSpecies: crop.species ?? crop.name,
         error: 'Failed to send WebSocket message',
       };
     }
 
-    log(`Fed ${pet.name || pet.species || 'pet'} with ${crop.species || 'food'}`);
+    log(`Fed ${plan.petName || plan.petSpecies || 'pet'} with ${crop.species || crop.name || 'food'}`);
     return {
       success: true,
-      petName: pet.name,
-      petSpecies: pet.species,
-      foodSpecies: crop.species,
+      petName: plan.petName,
+      petSpecies: plan.petSpecies,
+      foodSpecies: crop.species ?? crop.name,
     };
   } catch (error) {
     log('Instant feed error', error);
@@ -217,7 +275,7 @@ export async function feedPetByIds(
  */
 export async function feedAllPetsInstantly(
   hungerThreshold: number = 40,
-  respectFoodRules = false,
+  respectFoodRules?: boolean,
 ): Promise<InstantFeedResult[]> {
   const pets = getActivePetInfos();
   const results: InstantFeedResult[] = [];
@@ -233,7 +291,7 @@ export async function feedAllPetsInstantly(
     }
 
     log(`Feeding ${pet.name || pet.species} - hunger ${hungerPct}%`);
-    const result = await feedPetInstantly(i, respectFoodRules);
+    const result = await feedPetInstantly(pet.slotIndex, respectFoodRules);
     results.push(result);
 
     // Small delay between feeds to avoid overwhelming the server.

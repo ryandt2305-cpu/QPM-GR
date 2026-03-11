@@ -74,6 +74,7 @@ const QPM_STORAGE_KEYS = [
   'qpm.petTeams.feedPolicy.v1',
   'qpm.petTeams.logs.v1',
   'qpm.petTeams.uiState.v1',
+  'qpm.petFloatingCards.v1',
 
   // Shop Restock (Supabase)
   'qpm.restockCache',

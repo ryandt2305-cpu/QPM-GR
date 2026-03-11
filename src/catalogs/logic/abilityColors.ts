@@ -80,7 +80,8 @@ function parseAbilityColorsFromSwitch(switchBlock: string): Record<string, Runti
   const findProp = (segment: string, prop: 'bg' | 'hover'): string | null => {
     const propRe = new RegExp(`${prop}\\s*:\\s*(['"])([\\s\\S]*?)\\1`);
     const propMatch = segment.match(propRe);
-    return propMatch ? propMatch[2] : null;
+    const value = propMatch?.[2];
+    return typeof value === 'string' ? value : null;
   };
 
   let match: RegExpExecArray | null;

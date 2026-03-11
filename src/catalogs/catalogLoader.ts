@@ -514,7 +514,7 @@ function deepScan(obj: unknown, depth: number): void {
 
     if (!capturedCatalogs.weatherCatalog && looksLikeWeatherCatalog(record, keys)) {
       capturedCatalogs.weatherCatalog = normalizeWeatherCatalog(record) as GameCatalogs['weatherCatalog'];
-      catalogLog(`Captured weatherCatalog with ${Object.keys(capturedCatalogs.weatherCatalog).length} entries.`);
+      catalogLog(`Captured weatherCatalog with ${Object.keys(capturedCatalogs.weatherCatalog ?? {}).length} entries.`);
       didCapture = true;
       stopWeatherCatalogPolling();
     }

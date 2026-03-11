@@ -11,15 +11,14 @@ import {
   buildPetCompareProfile,
   captureProgressionStage,
   createValuationContext,
+  type CompareAbilityGroup,
   type ComparePetInput,
   type ProgressionStageSnapshot,
 } from './petCompareEngine';
 import {
-  STRATEGY_DEFINITIONS,
-  getAbilityStrategy,
-  NON_STACKING_ABILITIES,
-  type StrategyCategory,
-} from '../data/abilityStrategies';
+  COMPARE_GROUP_FILTER_OPTIONS,
+  isCompareGroupId,
+} from '../data/petCompareRules';
 
 /**
  * Parse max level from pet name (e.g., "Food (99)" -> 99, "Worm [100]" -> 100)
@@ -177,6 +176,8 @@ export interface PetComparison {
   upgradeOpportunities: string[]; // Higher tier abilities available
 }
 
+export type OptimizerCompareFilter = CompareAbilityGroup | 'all';
+
 export interface OptimizerAnalysis {
   allPets: CollectedPet[];
   comparisons: PetComparison[];
@@ -188,8 +189,8 @@ export interface OptimizerAnalysis {
   upgrades: PetComparison[];
   review: PetComparison[];
 
-  // Strategy-filtered
-  strategyPets: Map<StrategyCategory, PetComparison[]>;
+  // Compare-group filtered
+  strategyPets: Map<CompareAbilityGroup, PetComparison[]>;
 
   // Summary stats
   totalPets: number;
@@ -202,7 +203,7 @@ export interface OptimizerAnalysis {
 }
 
 export interface OptimizerConfig {
-  selectedStrategy: StrategyCategory | 'all';
+  selectedStrategy: OptimizerCompareFilter;
   showObsoleteOnly: boolean;
   groupBySpecies: boolean; // Group pets by species within each status section
   sortBy: 'strength' | 'maxStrength' | 'score' | 'location';
@@ -282,12 +283,19 @@ function saveConfig(): void {
   });
 }
 
+function normalizeStoredStrategy(value: unknown): OptimizerCompareFilter {
+  if (typeof value !== 'string') return 'all';
+  if (value === 'all') return 'all';
+  return isCompareGroupId(value) ? value : 'all';
+}
+
 function loadConfig(): void {
-  const stored = storage.get<Partial<OptimizerConfig>>('petOptimizer:config.v2');
+  const stored = storage.get<Partial<OptimizerConfig> & { selectedStrategy?: unknown }>('petOptimizer:config.v2');
   if (stored) {
     config = {
       ...DEFAULT_CONFIG,
       ...stored,
+      selectedStrategy: normalizeStoredStrategy(stored.selectedStrategy),
       protectedPetIds: new Set(stored.protectedPetIds || []),
     };
   }
@@ -646,6 +654,7 @@ interface OptimizerCompareSnapshot {
   score: number;
   reviewCount: number;
   groupSignature: string;
+  groups: CompareAbilityGroup[];
 }
 
 function toCompareInput(pet: CollectedPet): ComparePetInput {
@@ -668,16 +677,18 @@ function createCompareSnapshotMap(
 
   for (const pet of pets) {
     const profile = buildPetCompareProfile(toCompareInput(pet), stage, valuationContext);
-    const grouped = profile.abilities
+    const groups = profile.abilities
       .filter((entry) => !entry.isIgnored && !entry.isReview)
       .map((entry) => entry.group)
-      .sort()
-      .join('|');
+      .filter((group, index, all) => all.indexOf(group) === index)
+      .sort();
+    const grouped = groups.join('|');
 
     byPetId.set(pet.id, {
       score: profile.score,
       reviewCount: profile.reviewCount,
       groupSignature: grouped || 'review',
+      groups: groups.length > 0 ? groups : ['isolated'],
     });
   }
 
@@ -731,13 +742,14 @@ export async function analyzePetsAsync(pets: CollectedPet[], onProgress?: (perce
   const upgrades = comparisons.filter(c => c.status === 'upgrade');
   const review = comparisons.filter(c => c.status === 'review');
 
-  // Group by strategy (fast, synchronous)
-  const strategyPets = new Map<StrategyCategory, PetComparison[]>();
-  for (const strategy of STRATEGY_DEFINITIONS) {
-    const filtered = comparisons.filter(c =>
-      c.pet.abilityIds.some(id => getAbilityStrategy(id) === strategy.id)
-    );
-    strategyPets.set(strategy.id, filtered);
+  // Group by compare category (fast, synchronous)
+  const strategyPets = new Map<CompareAbilityGroup, PetComparison[]>();
+  for (const option of COMPARE_GROUP_FILTER_OPTIONS) {
+    const filtered = comparisons.filter((comparison) => {
+      const snapshot = compareSnapshots.byPetId.get(comparison.pet.id);
+      return !!snapshot?.groups.includes(option.id);
+    });
+    strategyPets.set(option.id, filtered);
   }
 
   return {
@@ -791,13 +803,14 @@ export function analyzePets(pets: CollectedPet[]): OptimizerAnalysis {
   const upgrades = comparisons.filter(c => c.status === 'upgrade');
   const review = comparisons.filter(c => c.status === 'review');
 
-  // Group by strategy
-  const strategyPets = new Map<StrategyCategory, PetComparison[]>();
-  for (const strategy of STRATEGY_DEFINITIONS) {
-    const filtered = comparisons.filter(c =>
-      c.pet.abilityIds.some(id => getAbilityStrategy(id) === strategy.id)
-    );
-    strategyPets.set(strategy.id, filtered);
+  // Group by compare category
+  const strategyPets = new Map<CompareAbilityGroup, PetComparison[]>();
+  for (const option of COMPARE_GROUP_FILTER_OPTIONS) {
+    const filtered = comparisons.filter((comparison) => {
+      const snapshot = compareSnapshots.byPetId.get(comparison.pet.id);
+      return !!snapshot?.groups.includes(option.id);
+    });
+    strategyPets.set(option.id, filtered);
   }
 
   return {

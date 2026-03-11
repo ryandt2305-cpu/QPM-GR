@@ -1,17 +1,19 @@
 // src/ui/petOptimizerWindow.ts
 // Pet Optimizer UI - Smart pet management interface
 
-import { toggleWindow } from './modalWindow';
+import { isWindowOpen, toggleWindow } from './modalWindow';
 import {
   getOptimizerAnalysis,
   getOptimizerConfig,
   setOptimizerConfig,
   protectPet,
   unprotectPet,
+  type OptimizerCompareFilter,
   type PetComparison,
   type OptimizerAnalysis,
 } from '../features/petOptimizer';
-import { STRATEGY_DEFINITIONS, type StrategyCategory } from '../data/abilityStrategies';
+import { COMPARE_GROUP_FILTER_OPTIONS } from '../data/petCompareRules';
+import { createTeam, setTeamSlot } from '../store/petTeams';
 import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
 import { getAbilityColor, normalizeAbilityName } from '../utils/petCardRenderer';
 import { formatCoins } from '../features/valueCalculator';
@@ -25,6 +27,96 @@ interface WindowState {
 }
 
 let globalState: WindowState | null = null;
+let filtersCleanup: (() => void) | null = null;
+const PETS_WINDOW_ID = 'qpm-pets-window';
+const PETS_WINDOW_SWITCH_TAB_EVENT = 'qpm:pets-window-switch-tab';
+
+type PetsWindowTabId = 'manager' | 'feeding' | 'pet-optimizer';
+interface PetsWindowSwitchDetail {
+  tab: PetsWindowTabId;
+  teamId?: string | null;
+}
+
+function dispatchPetsWindowSwitch(detail: PetsWindowSwitchDetail): void {
+  window.dispatchEvent(new CustomEvent(PETS_WINDOW_SWITCH_TAB_EVENT, { detail }));
+}
+
+function ensureManagerView(teamId: string): void {
+  const detail: PetsWindowSwitchDetail = { tab: 'manager', teamId };
+  if (isWindowOpen(PETS_WINDOW_ID)) {
+    dispatchPetsWindowSwitch(detail);
+    return;
+  }
+
+  import('./petsWindow')
+    .then(({ togglePetsWindow }) => {
+      togglePetsWindow();
+      requestAnimationFrame(() => dispatchPetsWindowSwitch(detail));
+    })
+    .catch((error) => {
+      console.error('[Pet Optimizer] Failed to open Pets Manager window:', error);
+    });
+}
+
+function getTopTeamCandidatesForAbility(pets: PetComparison[]): PetComparison[] {
+  const byPetId = new Map<string, PetComparison>();
+  for (const comparison of pets) {
+    if (!byPetId.has(comparison.pet.id)) {
+      byPetId.set(comparison.pet.id, comparison);
+    }
+  }
+
+  return [...byPetId.values()]
+    .sort((a, b) => {
+      const aScore = (a.score.total || 0) + (a.score.granterBonus || 0);
+      const bScore = (b.score.total || 0) + (b.score.granterBonus || 0);
+      if (bScore !== aScore) return bScore - aScore;
+      const aMax = a.pet.maxStrength || a.pet.strength || 0;
+      const bMax = b.pet.maxStrength || b.pet.strength || 0;
+      if (bMax !== aMax) return bMax - aMax;
+      return (b.pet.strength || 0) - (a.pet.strength || 0);
+    })
+    .slice(0, 3);
+}
+
+function buildTopCandidatesByAbility(comparisons: PetComparison[]): Map<string, PetComparison[]> {
+  const byAbility = new Map<string, PetComparison[]>();
+  const seenByAbility = new Map<string, Set<string>>();
+
+  for (const comparison of comparisons) {
+    for (const ability of comparison.pet.abilities) {
+      if (!byAbility.has(ability)) {
+        byAbility.set(ability, []);
+        seenByAbility.set(ability, new Set<string>());
+      }
+      const seen = seenByAbility.get(ability)!;
+      if (seen.has(comparison.pet.id)) continue;
+      seen.add(comparison.pet.id);
+      byAbility.get(ability)!.push(comparison);
+    }
+  }
+
+  const topByAbility = new Map<string, PetComparison[]>();
+  for (const [ability, abilityComparisons] of byAbility.entries()) {
+    topByAbility.set(ability, getTopTeamCandidatesForAbility(abilityComparisons));
+  }
+  return topByAbility;
+}
+
+function createAbilityTeam(ability: string, pets: PetComparison[]): void {
+  const topPets = getTopTeamCandidatesForAbility(pets);
+  if (topPets.length === 0) return;
+
+  const teamName = normalizeAbilityName(ability) || ability;
+  const team = createTeam(teamName);
+
+  for (let slotIndex = 0; slotIndex < 3; slotIndex += 1) {
+    const petId = topPets[slotIndex]?.pet.id ?? null;
+    setTeamSlot(team.id, slotIndex as 0 | 1 | 2, petId);
+  }
+
+  ensureManagerView(team.id);
+}
 
 function getPetSprite(species: string | null | undefined, hasRainbow: boolean, hasGold: boolean): string {
   if (!isSpritesReady()) return '';
@@ -48,6 +140,9 @@ export function openPetOptimizerWindow(): void {
 }
 
 export function renderPetOptimizerWindow(body: HTMLElement): void {
+  filtersCleanup?.();
+  filtersCleanup = null;
+
   // Clear any existing content
   body.innerHTML = '';
 
@@ -210,43 +305,96 @@ function renderSummary(analysis: OptimizerAnalysis): void {
 
 function renderFilters(): void {
   if (!globalState) return;
+  filtersCleanup?.();
+  filtersCleanup = null;
 
   const config = getOptimizerConfig();
 
   const filtersDiv = document.createElement('div');
   filtersDiv.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;';
 
-  // Strategy select
-  const strategySel = document.createElement('select');
-  strategySel.style.cssText = [
+  // Compare-group custom dropdown
+  const groupWrap = document.createElement('div');
+  groupWrap.style.cssText = 'position:relative; min-width:190px;';
+  const groupBtn = document.createElement('button');
+  groupBtn.type = 'button';
+  groupBtn.style.cssText = [
     'height:30px',
+    'width:100%',
     'padding:0 10px',
     'border-radius:6px',
-    'border:1px solid rgba(143,130,255,0.3)',
-    'background:rgba(255,255,255,0.06)',
-    'color:#e0e0e0',
+    'border:1px solid rgba(143,130,255,0.45)',
+    'background:rgba(12,16,24,0.95)',
+    'color:#ecefff',
     'font-size:12px',
-    'min-width:180px',
-    'outline:none',
+    'text-align:left',
+    'cursor:pointer',
   ].join(';');
-  {
-    const allOpt = document.createElement('option');
-    allOpt.value = 'all';
-    allOpt.textContent = 'All strategies';
-    strategySel.appendChild(allOpt);
+  const groupMenu = document.createElement('div');
+  groupMenu.style.cssText = [
+    'position:absolute',
+    'left:0',
+    'right:0',
+    'top:calc(100% + 4px)',
+    'background:rgba(10,14,22,0.98)',
+    'border:1px solid rgba(143,130,255,0.45)',
+    'border-radius:8px',
+    'padding:4px',
+    'display:none',
+    'z-index:40',
+    'box-shadow:0 8px 24px rgba(0,0,0,0.45)',
+  ].join(';');
+  const groupOptions: Array<{ id: OptimizerCompareFilter; label: string }> = [
+    { id: 'all', label: 'All groups' },
+    ...COMPARE_GROUP_FILTER_OPTIONS.map((entry) => ({ id: entry.id as OptimizerCompareFilter, label: entry.label })),
+  ];
+  let open = false;
+  const setOpen = (next: boolean): void => {
+    open = next;
+    groupMenu.style.display = open ? '' : 'none';
+    groupBtn.style.borderColor = open ? 'rgba(143,130,255,0.8)' : 'rgba(143,130,255,0.45)';
+  };
+  const selectedLabel = groupOptions.find((entry) => entry.id === config.selectedStrategy)?.label ?? 'All groups';
+  groupBtn.textContent = `${selectedLabel} ▾`;
+  groupBtn.addEventListener('click', () => setOpen(!open));
+  for (const option of groupOptions) {
+    const optionBtn = document.createElement('button');
+    optionBtn.type = 'button';
+    optionBtn.textContent = option.label;
+    optionBtn.style.cssText = [
+      'width:100%',
+      'padding:6px 8px',
+      'border-radius:6px',
+      'border:1px solid transparent',
+      'background:transparent',
+      `color:${option.id === config.selectedStrategy ? '#cfc6ff' : '#e0e0e0'}`,
+      'font-size:12px',
+      'text-align:left',
+      'cursor:pointer',
+    ].join(';');
+    optionBtn.addEventListener('mouseenter', () => {
+      optionBtn.style.background = 'rgba(143,130,255,0.16)';
+      optionBtn.style.borderColor = 'rgba(143,130,255,0.35)';
+    });
+    optionBtn.addEventListener('mouseleave', () => {
+      optionBtn.style.background = 'transparent';
+      optionBtn.style.borderColor = 'transparent';
+    });
+    optionBtn.addEventListener('click', () => {
+      setOptimizerConfig({ selectedStrategy: option.id });
+      groupBtn.textContent = `${option.label} ▾`;
+      setOpen(false);
+      if (globalState?.currentAnalysis) renderResults(globalState.currentAnalysis);
+    });
+    groupMenu.appendChild(optionBtn);
   }
-  for (const strategy of STRATEGY_DEFINITIONS) {
-    const opt = document.createElement('option');
-    opt.value = strategy.id;
-    opt.textContent = `${strategy.icon} ${strategy.name}`;
-    strategySel.appendChild(opt);
-  }
-  strategySel.value = config.selectedStrategy;
-  strategySel.addEventListener('change', () => {
-    setOptimizerConfig({ selectedStrategy: strategySel.value as StrategyCategory | 'all' });
-    if (globalState?.currentAnalysis) renderResults(globalState.currentAnalysis);
-  });
-  filtersDiv.appendChild(strategySel);
+  const outsideClick = (event: MouseEvent): void => {
+    if (!groupWrap.contains(event.target as Node)) setOpen(false);
+  };
+  document.addEventListener('mousedown', outsideClick);
+  filtersCleanup = () => document.removeEventListener('mousedown', outsideClick);
+  groupWrap.append(groupBtn, groupMenu);
+  filtersDiv.appendChild(groupWrap);
 
   const obsoleteCheckbox = document.createElement('input');
   obsoleteCheckbox.type = 'checkbox';
@@ -361,6 +509,8 @@ function renderResults(analysis: OptimizerAnalysis): void {
     return;
   }
 
+  const topCandidatesByAbility = buildTopCandidatesByAbility(comparisons);
+
   // Group by status
   const byStatus = {
     review: comparisons.filter(c => c.status === 'review'),
@@ -373,7 +523,7 @@ function renderResults(analysis: OptimizerAnalysis): void {
   for (const [status, pets] of Object.entries(byStatus)) {
     if (pets.length === 0) continue;
 
-      const section = createStatusSection(status as any, pets);
+      const section = createStatusSection(status as any, pets, topCandidatesByAbility);
       globalState.resultsContainer.appendChild(section);
     }
 
@@ -385,7 +535,11 @@ function renderResults(analysis: OptimizerAnalysis): void {
 }
 
 
-function createStatusSection(status: 'review' | 'obsolete' | 'upgrade' | 'consider' | 'keep', comparisons: PetComparison[]): HTMLElement {
+function createStatusSection(
+  status: 'review' | 'obsolete' | 'upgrade' | 'consider' | 'keep',
+  comparisons: PetComparison[],
+  topCandidatesByAbility: Map<string, PetComparison[]>,
+): HTMLElement {
   const statusConfig = {
     review: { icon: '📝', title: 'Review Needed', color: '#FFC107', bgColor: 'rgba(255, 193, 7, 0.1)', desc: 'Contains unknown or unmapped abilities' },
     obsolete: { icon: '❌', title: 'Obsolete Pets', color: '#f44336', bgColor: 'rgba(244, 67, 54, 0.1)', desc: 'Can safely sell these pets' },
@@ -495,19 +649,58 @@ function createStatusSection(status: 'review' | 'obsolete' | 'upgrade' | 'consid
       // Ability header
       const abilityHeader = document.createElement('div');
       abilityHeader.style.cssText = `
-        font-size: 12px;
-        font-weight: 600;
-        color: #aaa;
         margin-top: 8px;
         margin-bottom: 4px;
         padding: 6px 10px;
         background: rgba(66, 165, 245, 0.1);
         border-radius: 4px;
         border-left: 3px solid #42A5F5;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
       `;
       const color = getAbilityColor(ability);
       abilityHeader.style.borderLeftColor = color.base;
-      abilityHeader.textContent = `${normalizeAbilityName(ability)} (${pets.length} pet${pets.length > 1 ? 's' : ''})`;
+
+      const headerTitle = document.createElement('span');
+      headerTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #aaa;';
+      headerTitle.textContent = `${normalizeAbilityName(ability)} (${pets.length} pet${pets.length > 1 ? 's' : ''})`;
+      abilityHeader.appendChild(headerTitle);
+
+      const topCandidates = topCandidatesByAbility.get(ability) ?? getTopTeamCandidatesForAbility(pets);
+      if (topCandidates.length > 0) {
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.textContent = 'Create Team';
+        createBtn.style.cssText = [
+          'padding:4px 9px',
+          'font-size:11px',
+          'font-weight:600',
+          'border-radius:6px',
+          'border:1px solid rgba(143,130,255,0.45)',
+          'background:linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))',
+          'color:#e7e2ff',
+          'cursor:pointer',
+          'white-space:nowrap',
+          'transition:all 0.15s ease',
+        ].join(';');
+        createBtn.title = `Create "${normalizeAbilityName(ability)}" team from top ${topCandidates.length} pet${topCandidates.length > 1 ? 's' : ''}`;
+        createBtn.addEventListener('mouseenter', () => {
+          createBtn.style.borderColor = 'rgba(143,130,255,0.75)';
+          createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.35), rgba(143,130,255,0.20))';
+        });
+        createBtn.addEventListener('mouseleave', () => {
+          createBtn.style.borderColor = 'rgba(143,130,255,0.45)';
+          createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))';
+        });
+        createBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          createAbilityTeam(ability, topCandidates);
+        });
+        abilityHeader.appendChild(createBtn);
+      }
+
       petsContainer.appendChild(abilityHeader);
 
       // Add pet cards

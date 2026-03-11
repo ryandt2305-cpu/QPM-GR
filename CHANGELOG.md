@@ -5,7 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.05] - Current
+## [3.1.06] - Current
+
+### Changed
+- Pets: Shift can now be used as a modifier key for team keybinds
+- Teams: added polished ability value badges with accurate Hunger Restore team-based calculations
+- Feeding: feed buttons now show how much selected food remains in inventory
+- Pet Optimizer: each ability section now includes `Create Team` from your top 3 pets
+
+---
+
+## [3.1.05]
 
 ### Changed
 - Standardized one emoji-safe font fallback stack across panel and feature window roots

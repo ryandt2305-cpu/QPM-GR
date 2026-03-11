@@ -999,6 +999,7 @@ function buildComparePanel(
     valuationContext,
     stage,
     poolForRank: [petA, petB],
+    compactNumbers: true,
   });
 
   const sharedHeader = document.createElement('div');

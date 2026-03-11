@@ -16,6 +16,12 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  { version: '3.1.06', date: '2026-03', notes: [
+    'Pets: Shift can now be used as a modifier key for team keybinds',
+    'Teams: added polished ability value badges with accurate Hunger Restore team-based calculations',
+    'Feeding: feed buttons now show how much selected food remains in inventory',
+    'Pet Optimizer: each ability section now includes Create Team from your top 3 pets',
+  ]},
   { version: '3.1.05', date: '2026-03', notes: [
     'UI: standardized emoji-safe font fallback across panel and window roots',
     'UI: removed temporary text-repair observer workaround',
@@ -353,7 +359,8 @@ function buildChangelogCard(): HTMLElement {
   title.style.cssText = 'font-size:11px;font-weight:700;color:#8f82ff;';
   title.textContent = '📋 Changelog';
 
-  const latest = CHANGELOG[0]!;
+  const visibleEntries = CHANGELOG.slice(0, 3);
+  const latest = visibleEntries[0]!;
   const latestBadge = document.createElement('div');
   latestBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.5);';
   latestBadge.textContent = `v${latest.version}`;
@@ -370,11 +377,9 @@ function buildChangelogCard(): HTMLElement {
   const body = document.createElement('div');
   body.style.display = 'none';
 
-  const latestEntry = buildChangelogEntry(latest, true);
-  body.appendChild(latestEntry);
-
-  for (const entry of CHANGELOG.slice(1)) {
-    body.appendChild(buildChangelogEntry(entry, false));
+  for (let index = 0; index < visibleEntries.length; index += 1) {
+    const entry = visibleEntries[index]!;
+    body.appendChild(buildChangelogEntry(entry, index === 0));
   }
   card.appendChild(body);
 

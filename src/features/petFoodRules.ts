@@ -24,6 +24,7 @@ export interface InventoryItemSnapshot {
   species: string | null;
   itemType: string | null;
   name: string | null;
+  quantity: number | null;
 }
 
 export interface InventorySnapshot {
@@ -39,6 +40,7 @@ export interface FoodSelection {
 
 export interface FoodSelectionOptions {
   avoidFavorited?: boolean;
+  respectRules?: boolean;
   /**
    * Per-pet-item override. When provided, takes precedence over the species-level override.
    * Callers (e.g. instantFeed.ts) should read this from the Pet Teams feed policy.
@@ -46,7 +48,19 @@ export interface FoodSelectionOptions {
   itemOverride?: SpeciesOverride | null;
 }
 
+export interface FoodAvailabilityResult {
+  selected: FoodSelection | null;
+  availableCount: number;
+}
+
+export interface FoodInventorySource {
+  items?: unknown[];
+  favoritedItemIds?: unknown;
+}
+
 const STORAGE_KEY = 'quinoa-pet-food-rules';
+const PET_FOOD_RULES_EVENT = 'qpm:pet-food-rules-changed';
+export const PET_FOOD_RULES_CHANGED_EVENT = PET_FOOD_RULES_EVENT;
 
 const DEFAULT_STATE: PetFoodRulesState = {
   respectRules: false,
@@ -114,7 +128,7 @@ function formatFriendlyName(raw: string): string {
   return raw
     .replace(/[_-]+/g, ' ')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([a-z])/g, (match) => match.toUpperCase())
+    .replace(/\b([a-z])/g, (match) => match.toUpperCase())
     .trim();
 }
 
@@ -146,6 +160,20 @@ function saveState(): void {
   storage.set(STORAGE_KEY, rulesState);
 }
 
+function emitRulesChanged(): void {
+  try {
+    window.dispatchEvent(new CustomEvent(PET_FOOD_RULES_EVENT, {
+      detail: {
+        respectRules: rulesState.respectRules,
+        avoidFavorited: rulesState.avoidFavorited,
+        updatedAt: rulesState.updatedAt,
+      },
+    }));
+  } catch {
+    // no-op
+  }
+}
+
 export function getPetFoodRules(): PetFoodRulesState {
   return {
     respectRules: rulesState.respectRules,
@@ -169,6 +197,7 @@ export function setRespectPetFoodRules(enabled: boolean): void {
     updatedAt: Date.now(),
   };
   saveState();
+  emitRulesChanged();
   log(enabled ? '⚖️ Pet food rules enabled' : '⚖️ Pet food rules disabled');
 }
 
@@ -182,6 +211,7 @@ export function setAvoidFavoritedFoods(enabled: boolean): void {
     updatedAt: Date.now(),
   };
   saveState();
+  emitRulesChanged();
 }
 
 export function updateSpeciesOverride(species: string, override: SpeciesOverride | null): void {
@@ -229,11 +259,13 @@ export function updateSpeciesOverride(species: string, override: SpeciesOverride
     updatedAt: Date.now(),
   };
   saveState();
+  emitRulesChanged();
 }
 
 export function resetPetFoodRules(): void {
   rulesState = { ...DEFAULT_STATE, updatedAt: Date.now() };
   saveState();
+  emitRulesChanged();
 }
 
 function ensureInventoryArray(candidate: unknown): any[] | null {
@@ -371,6 +403,71 @@ function resolveInventoryItemType(rawItem: any): string | null {
   return null;
 }
 
+function resolveInventoryQuantity(rawItem: any): number | null {
+  if (!rawItem || typeof rawItem !== 'object') {
+    return null;
+  }
+
+  const candidatePaths: string[][] = [
+    ['quantity'],
+    ['count'],
+    ['amount'],
+    ['stackSize'],
+    ['item', 'quantity'],
+    ['item', 'count'],
+    ['item', 'amount'],
+  ];
+
+  for (const path of candidatePaths) {
+    const value = readNestedValue(rawItem, path);
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return Math.max(0, Math.floor(parsed));
+    }
+  }
+
+  return null;
+}
+
+function isFeedableProduceItemType(itemType: string | null): boolean {
+  if (!itemType) return false;
+  const normalized = itemType.trim().toLowerCase();
+  return normalized === 'produce' || normalized === 'crop';
+}
+
+function coerceFavoritedIds(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set<string>();
+  return new Set(value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0));
+}
+
+export function buildFoodInventorySnapshot(source: FoodInventorySource | null | undefined): InventorySnapshot | null {
+  if (!source || !Array.isArray(source.items)) return null;
+
+  const items: InventoryItemSnapshot[] = [];
+  for (const rawItem of source.items) {
+    const id = resolveInventoryItemId(rawItem);
+    if (!id) continue;
+
+    const itemType = resolveInventoryItemType(rawItem);
+    if (!isFeedableProduceItemType(itemType)) continue;
+
+    items.push({
+      id,
+      species: resolveInventorySpecies(rawItem),
+      itemType,
+      name: resolveInventoryName(rawItem),
+      quantity: resolveInventoryQuantity(rawItem),
+    });
+  }
+
+  return {
+    items,
+    favoritedIds: coerceFavoritedIds(source.favoritedItemIds),
+    source: 'myInventoryAtom',
+  };
+}
+
 export function readInventorySnapshot(): InventorySnapshot | null {
   try {
     const global: Record<string, unknown> = pageWindow as unknown as Record<string, unknown>;
@@ -391,12 +488,15 @@ export function readInventorySnapshot(): InventorySnapshot | null {
         if (!id) continue;
         const species = resolveInventorySpecies(rawItem);
         const itemType = resolveInventoryItemType(rawItem);
+        if (!isFeedableProduceItemType(itemType)) continue;
         const name = resolveInventoryName(rawItem);
+        const quantity = resolveInventoryQuantity(rawItem);
         items.push({
           id,
           species: species ?? null,
           itemType: itemType ?? null,
           name: name ?? null,
+          quantity,
         });
       }
 
@@ -564,6 +664,7 @@ export function setSpeciesPreferredFood(species: string, foodKey: string | null)
     updatedAt: Date.now(),
   };
   saveState();
+  emitRulesChanged();
 
   const speciesLabel = formatFriendlyName(species);
   if (hasPreferred && nextOverride.preferred) {
@@ -574,110 +675,172 @@ export function setSpeciesPreferredFood(species: string, foodKey: string | null)
   }
 }
 
+function sumItemQuantities(items: InventoryItemSnapshot[]): number {
+  return items.reduce((sum, item) => sum + (item.quantity != null ? Math.max(0, item.quantity) : 1), 0);
+}
+
+function getFoodRulesContext(
+  petSpecies: string | null,
+  options: FoodSelectionOptions,
+): {
+  respectRules: boolean;
+  avoidFavorited: boolean;
+  preferredNormalized: string | null;
+  allowedNormalized: Set<string>;
+  forbiddenNormalized: Set<string>;
+} {
+  const respectRules = options.respectRules ?? rulesState.respectRules;
+  const avoidFavorited = options.avoidFavorited ?? rulesState.avoidFavorited;
+
+  const allowedNormalized = new Set<string>();
+  const forbiddenNormalized = new Set<string>();
+  let preferredNormalized: string | null = null;
+
+  if (respectRules) {
+    const diet = resolveDiet(petSpecies);
+    const override = options.itemOverride !== undefined ? options.itemOverride : resolveOverride(petSpecies);
+
+    diet.normalized.forEach((entry) => allowedNormalized.add(entry));
+
+    preferredNormalized = override?.preferred ? normalizeSpeciesKey(override.preferred) : null;
+    if (preferredNormalized) {
+      allowedNormalized.add(preferredNormalized);
+    }
+
+    if (override?.allowed) {
+      for (const entry of override.allowed) {
+        const normalized = normalizeSpeciesKey(entry);
+        if (normalized) allowedNormalized.add(normalized);
+      }
+    }
+
+    if (override?.forbidden) {
+      for (const entry of override.forbidden) {
+        const normalized = normalizeSpeciesKey(entry);
+        if (normalized) forbiddenNormalized.add(normalized);
+      }
+    }
+
+    if (allowedNormalized.size === 0) {
+      DEFAULT_SAFE_NORMALIZED.forEach((value) => allowedNormalized.add(value));
+    }
+  }
+
+  return {
+    respectRules,
+    avoidFavorited,
+    preferredNormalized,
+    allowedNormalized,
+    forbiddenNormalized,
+  };
+}
+
+function findMatchingFood(
+  snapshot: InventorySnapshot,
+  skipFavorited: boolean,
+  predicate: (normalized: string, item: InventoryItemSnapshot) => boolean,
+): InventoryItemSnapshot | null {
+  for (const item of snapshot.items) {
+    const normalized = normalizeInventoryFood(item);
+    if (!normalized) continue;
+    if (skipFavorited && snapshot.favoritedIds.has(item.id)) continue;
+    if (!predicate(normalized, item)) continue;
+    return item;
+  }
+  return null;
+}
+
+function listMatchingFood(
+  snapshot: InventorySnapshot,
+  skipFavorited: boolean,
+  predicate: (normalized: string, item: InventoryItemSnapshot) => boolean,
+): InventoryItemSnapshot[] {
+  const result: InventoryItemSnapshot[] = [];
+  for (const item of snapshot.items) {
+    const normalized = normalizeInventoryFood(item);
+    if (!normalized) continue;
+    if (skipFavorited && snapshot.favoritedIds.has(item.id)) continue;
+    if (!predicate(normalized, item)) continue;
+    result.push(item);
+  }
+  return result;
+}
+
+export function evaluateFoodAvailabilityForPet(
+  petSpecies: string | null,
+  snapshot: InventorySnapshot | null,
+  options: FoodSelectionOptions = {},
+): FoodAvailabilityResult {
+  if (!snapshot || snapshot.items.length === 0) {
+    return { selected: null, availableCount: 0 };
+  }
+
+  const context = getFoodRulesContext(petSpecies, options);
+  const matchPreferred = (normalized: string): boolean => {
+    if (!context.preferredNormalized) return false;
+    return normalized === context.preferredNormalized;
+  };
+  const matchAllowed = (normalized: string): boolean => {
+    if (!context.respectRules) return true;
+    return context.allowedNormalized.has(normalized) && !context.forbiddenNormalized.has(normalized);
+  };
+
+  const selectWithFavoritedPolicy = (
+    selector: (skipFavorited: boolean) => InventoryItemSnapshot | null,
+  ): FoodSelection | null => {
+    const primary = selector(true);
+    if (primary) {
+      return { item: primary, usedFavoriteFallback: false };
+    }
+    if (!context.avoidFavorited) return null;
+
+    const fallback = selector(false);
+    if (!fallback) return null;
+    return {
+      item: fallback,
+      usedFavoriteFallback: snapshot.favoritedIds.has(fallback.id),
+    };
+  };
+
+  let selected: FoodSelection | null = null;
+  if (context.respectRules) {
+    selected = selectWithFavoritedPolicy((skipFavorited) => findMatchingFood(snapshot, skipFavorited, (normalized) => matchPreferred(normalized)));
+    if (!selected) {
+      selected = selectWithFavoritedPolicy((skipFavorited) => findMatchingFood(snapshot, skipFavorited, (normalized) => matchAllowed(normalized)));
+    }
+  } else {
+    selected = selectWithFavoritedPolicy((skipFavorited) => findMatchingFood(snapshot, skipFavorited, () => true));
+  }
+
+  if (!selected) {
+    return { selected: null, availableCount: 0 };
+  }
+
+  const countPredicate = context.respectRules
+    ? (context.preferredNormalized ? ((normalized: string) => matchPreferred(normalized) || matchAllowed(normalized)) : matchAllowed)
+    : (() => true);
+  const skipFavoritedForCount = context.avoidFavorited && !selected.usedFavoriteFallback;
+  const countItems = listMatchingFood(snapshot, skipFavoritedForCount, (normalized) => countPredicate(normalized));
+
+  return {
+    selected,
+    availableCount: sumItemQuantities(countItems),
+  };
+}
+
+export function selectFoodForPetLegacyCompatibility(
+  petSpecies: string | null,
+  snapshot: InventorySnapshot | null,
+  options: FoodSelectionOptions = {},
+): FoodSelection | null {
+  // Legacy alias for integrations that still expect this helper path.
+  return selectFoodForPet(petSpecies, snapshot, options);
+}
+
 export function selectFoodForPet(
   petSpecies: string | null,
   snapshot: InventorySnapshot | null,
   options: FoodSelectionOptions = {},
 ): FoodSelection | null {
-  if (!snapshot || snapshot.items.length === 0) {
-    return null;
-  }
-
-  const diet = resolveDiet(petSpecies);
-  // Per-item override takes precedence over species-level override
-  const override = options.itemOverride !== undefined ? options.itemOverride : resolveOverride(petSpecies);
-
-  const allowedNormalized = new Set<string>(diet.normalized);
-
-  const preferredNormalized = override?.preferred
-    ? normalizeSpeciesKey(override.preferred)
-    : null;
-  if (preferredNormalized) {
-    allowedNormalized.add(preferredNormalized);
-  }
-
-  if (override?.allowed) {
-    for (const entry of override.allowed) {
-      const normalized = normalizeSpeciesKey(entry);
-      if (normalized) {
-        allowedNormalized.add(normalized);
-      }
-    }
-  }
-
-  const forbiddenNormalized = new Set<string>();
-  if (override?.forbidden) {
-    for (const entry of override.forbidden) {
-      const normalized = normalizeSpeciesKey(entry);
-      if (normalized) {
-        forbiddenNormalized.add(normalized);
-      }
-    }
-  }
-
-  if (allowedNormalized.size === 0) {
-    DEFAULT_SAFE_NORMALIZED.forEach(value => allowedNormalized.add(value));
-  }
-
-  const avoidFavorited = options.avoidFavorited ?? rulesState.avoidFavorited;
-  const matchItem = (
-    skipFavorited: boolean,
-    predicate: (normalized: string, item: InventoryItemSnapshot) => boolean,
-  ): InventoryItemSnapshot | null => {
-    for (const item of snapshot.items) {
-      const normalized = normalizeInventoryFood(item);
-      if (!normalized) continue;
-      if (skipFavorited && snapshot.favoritedIds.has(item.id)) continue;
-      if (!predicate(normalized, item)) continue;
-      return item;
-    }
-    return null;
-  };
-
-  const selectPreferred = (skipFavorited: boolean): InventoryItemSnapshot | null => {
-    if (!preferredNormalized) return null;
-    return matchItem(skipFavorited, normalized => normalized === preferredNormalized);
-  };
-
-  const selectAllowed = (skipFavorited: boolean): InventoryItemSnapshot | null => {
-    return matchItem(skipFavorited, normalized => allowedNormalized.has(normalized) && !forbiddenNormalized.has(normalized));
-  };
-
-  const preferredPrimary = selectPreferred(true);
-  if (preferredPrimary) {
-    return {
-      item: preferredPrimary,
-      usedFavoriteFallback: false,
-    };
-  }
-
-  if (avoidFavorited) {
-    const preferredFallback = selectPreferred(false);
-    if (preferredFallback) {
-      return {
-        item: preferredFallback,
-        usedFavoriteFallback: snapshot.favoritedIds.has(preferredFallback.id),
-      };
-    }
-  }
-
-  const allowedPrimary = selectAllowed(true);
-  if (allowedPrimary) {
-    return {
-      item: allowedPrimary,
-      usedFavoriteFallback: false,
-    };
-  }
-
-  if (avoidFavorited) {
-    const allowedFallback = selectAllowed(false);
-    if (allowedFallback) {
-      return {
-        item: allowedFallback,
-        usedFavoriteFallback: snapshot.favoritedIds.has(allowedFallback.id),
-      };
-    }
-  }
-
-  return null;
+  return evaluateFoodAvailabilityForPet(petSpecies, snapshot, options).selected;
 }

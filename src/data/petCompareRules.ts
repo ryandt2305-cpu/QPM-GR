@@ -10,25 +10,25 @@ import {
 export type CompareStage = ProgressionStage;
 export type CompareGroupId = CompareAbilityGroup;
 
+export const COMPARE_GROUP_FILTER_OPTIONS: Array<{ id: CompareGroupId; label: string }> = [
+  { id: 'per_hour', label: 'Per Hour' },
+  { id: 'sale', label: 'Sell' },
+  { id: 'hatch_dollar', label: 'Hatch $' },
+  { id: 'food', label: 'Food' },
+  { id: 'hatch_trio', label: 'Hatch Trio' },
+  { id: 'isolated', label: 'Review' },
+];
+
+export function isCompareGroupId(value: string): value is CompareGroupId {
+  return COMPARE_GROUP_FILTER_OPTIONS.some((entry) => entry.id === value);
+}
+
 export function areCompareGroupsCompatible(groupA: CompareGroupId, groupB: CompareGroupId): boolean {
   return areAbilityGroupsComparable(groupA, groupB);
 }
 
 export function getCompareGroupLabel(groupId: CompareGroupId): string {
-  switch (groupId) {
-    case 'per_hour':
-      return 'Per-Hour';
-    case 'sale':
-      return 'Sale';
-    case 'hatch_dollar':
-      return 'Hatch-$';
-    case 'food':
-      return 'Food';
-    case 'hatch_trio':
-      return 'Hatch Trio';
-    default:
-      return 'Review';
-  }
+  return COMPARE_GROUP_FILTER_OPTIONS.find((entry) => entry.id === groupId)?.label ?? 'Review';
 }
 
 export function getCompareMetricLabel(groupId: CompareGroupId, isAction: boolean): string {

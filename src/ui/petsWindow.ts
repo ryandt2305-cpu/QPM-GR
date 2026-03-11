@@ -28,11 +28,14 @@ import { getPetSpriteDataUrlWithMutations, isSpritesReady, getAnySpriteDataUrl, 
 import { calculateMaxStrength } from '../store/xpTracker';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
-import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour } from '../data/petAbilities';
-import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type AbilityValuationContext } from '../features/abilityValuation';
+import { getAbilityDefinition } from '../data/petAbilities';
+import { getHungerCapForSpecies, DEFAULT_HUNGER_CAP } from '../data/petHungerCaps';
+import { buildAbilityValuationContext, type AbilityValuationContext } from '../features/abilityValuation';
 import {
+  buildPetCompareProfile,
   buildTeamCompareProfile,
   captureProgressionStage,
+  getAbilityFamilyKey,
   type ComparePetInput,
   type TeamCompareProfile,
 } from '../features/petCompareEngine';
@@ -45,10 +48,11 @@ import {
   setAvoidFavoritedFoods,
   getDietOptionsForSpecies,
   updateSpeciesOverride,
+  PET_FOOD_RULES_CHANGED_EVENT,
 } from '../features/petFoodRules';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { feedPetInstantly, feedAllPetsInstantly } from '../features/instantFeed';
-import { openFloatingCard, hasFloatingCard } from './petFloatingCard';
+import { initFloatingCards, openFloatingCardForSlot, hasFloatingCardForSlot } from './petFloatingCard';
 import { importAriesTeams } from '../utils/ariesTeamImport';
 import type { PetTeam, PooledPet } from '../types/petTeams';
 import {
@@ -57,7 +61,9 @@ import {
 import type { CompareStage } from '../data/petCompareRules';
 
 const WINDOW_ID = 'qpm-pets-window';
+const PETS_WINDOW_SWITCH_TAB_EVENT = 'qpm:pets-window-switch-tab';
 const DEFAULT_KEYBIND = 'p';
+const FLOATING_CARD_STATE_EVENT = 'qpm:floating-card-state';
 let currentKeybind = DEFAULT_KEYBIND;
 const PET_TEAMS_UI_STATE_KEY = 'qpm.petTeams.uiState.v1';
 const ARIES_IMPORT_ONCE_KEY = 'petHub:ariesImportOnce.v1';
@@ -115,14 +121,56 @@ function getCompareAbilityForPair(pairKey: string): string | null {
   return typeof ability === 'string' ? ability : null;
 }
 
+function canonicalKeyFromEvent(e: KeyboardEvent): string {
+  const code = e.code || '';
+  if (code.startsWith('Key') && code.length === 4) return code.slice(3).toLowerCase();
+  if (code.startsWith('Digit') && code.length === 6) return code.slice(5);
+  if (/^F\d{1,2}$/.test(code)) return code.toLowerCase();
+
+  switch (code) {
+    case 'Space': return 'space';
+    case 'Minus': return '-';
+    case 'Equal': return '=';
+    case 'BracketLeft': return '[';
+    case 'BracketRight': return ']';
+    case 'Backslash': return '\\';
+    case 'Semicolon': return ';';
+    case 'Quote': return '\'';
+    case 'Backquote': return '`';
+    case 'Comma': return ',';
+    case 'Period': return '.';
+    case 'Slash': return '/';
+    case 'ArrowUp': return 'arrowup';
+    case 'ArrowDown': return 'arrowdown';
+    case 'ArrowLeft': return 'arrowleft';
+    case 'ArrowRight': return 'arrowright';
+    case 'Enter': return 'enter';
+    case 'Tab': return 'tab';
+    case 'Escape': return 'escape';
+    case 'Backspace': return 'backspace';
+    case 'Delete': return 'delete';
+    case 'Home': return 'home';
+    case 'End': return 'end';
+    case 'PageUp': return 'pageup';
+    case 'PageDown': return 'pagedown';
+    case 'Insert': return 'insert';
+    default: {
+      const key = e.key.toLowerCase();
+      return key.length > 0 ? key : '';
+    }
+  }
+}
+
 function normalizeKeybind(e: KeyboardEvent): string {
   const SKIP = ['Control', 'Shift', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Dead', 'Unidentified'];
   if (SKIP.includes(e.key)) return '';
   const parts: string[] = [];
   if (e.ctrlKey || e.metaKey) parts.push('ctrl');
   if (e.altKey) parts.push('alt');
-  if (e.shiftKey && (e.ctrlKey || e.metaKey || e.altKey)) parts.push('shift');
-  parts.push(e.key.toLowerCase());
+  if (e.shiftKey) parts.push('shift');
+  const key = canonicalKeyFromEvent(e);
+  if (!key) return '';
+  parts.push(key);
   return parts.join('+');
 }
 
@@ -132,6 +180,9 @@ function formatKeybind(combo: string): string {
     if (p === 'ctrl') return IS_MAC ? '⌘' : 'Ctrl';
     if (p === 'alt') return IS_MAC ? '⌥' : 'Alt';
     if (p === 'shift') return IS_MAC ? '⇧' : 'Shift';
+    if (p === 'space') return 'Space';
+    if (p.startsWith('arrow')) return p.replace('arrow', 'Arrow ');
+    if (p.length > 1 && p.startsWith('f') && /^f\d{1,2}$/.test(p)) return p.toUpperCase();
     return p.length === 1 ? p.toUpperCase() : p;
   }).join(IS_MAC ? '' : '+');
 }
@@ -571,10 +622,32 @@ const STYLES = `
 .qpm-team-summary__sep { width: 1px; height: 28px; background: rgba(143,130,255,0.15); }
 .qpm-team-summary__dots { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
 .qpm-team-summary__pill {
-  display: inline-flex; align-items: center; gap: 4px;
-  background: rgba(143,130,255,0.1); border: 1px solid rgba(143,130,255,0.2);
-  border-radius: 12px; padding: 2px 8px;
-  font-size: 11px; color: rgba(224,224,224,0.75); white-space: nowrap;
+  display: inline-flex; align-items: center;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 10px; padding: 2px 7px;
+  font-size: 10px; font-weight: 700;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.35);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+}
+.qpm-team-summary__pill--ability {
+  cursor: default;
+}
+.qpm-team-summary__pill--rainbow {
+  border-color: rgba(255,255,255,0.45);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.6), 0 0 8px rgba(0,0,0,0.35);
+}
+.qpm-team-summary__pill-coin {
+  width: 11px;
+  height: 11px;
+  image-rendering: pixelated;
+  object-fit: contain;
+  margin: 0 1px;
+}
+.qpm-team-summary__pill-suffix {
+  font-size: 9px;
+  font-weight: 700;
+  opacity: 0.92;
 }
 .qpm-tcmp-grid { display:flex; flex-direction:column; gap:10px; }
 .qpm-tcmp-team-summary {
@@ -604,7 +677,9 @@ const STYLES = `
   font-size:12px;
   font-weight:700;
   color:#dfe6ff;
+  text-align:left;
 }
+.qpm-tcmp-team-score--right { text-align:right; }
 .qpm-tcmp-team-score--win { color:#74ffb5; }
 .qpm-tcmp-team-score--lose { color:rgba(224,224,224,0.38); }
 .qpm-tcmp-team-table {
@@ -621,6 +696,9 @@ const STYLES = `
   border-bottom:1px solid rgba(143,130,255,0.18);
   padding-bottom:3px;
 }
+.qpm-tcmp-team-table-head--a { text-align:left; }
+.qpm-tcmp-team-table-head--mid { text-align:center; }
+.qpm-tcmp-team-table-head--b { text-align:right; }
 .qpm-tcmp-team-a { text-align:left; font-size:12px; font-weight:700; color:#e7e8ff; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .qpm-tcmp-team-b { text-align:right; font-size:12px; font-weight:700; color:#e7e8ff; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .qpm-tcmp-team-mid {
@@ -953,8 +1031,34 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
 
 function computeTeamAbilityPills(
   slots: Array<{ abilities: string[]; strength: number | null; targetScale: number | null; species: string }>,
-): Array<{ icon: string; label: string; value: string }> {
-  const totals = { coins: 0, plant: 0, egg: 0, xp: 0 };
+): Array<{
+  abilityId: string;
+  abilityName: string;
+  hoverTitle: string;
+  unit: 'coins' | 'minutes' | 'xp' | 'food' | 'none';
+  valueText: string;
+  valueSuffix: ' /hr' | ' /proc' | ' food /hr';
+  sortValue: number;
+}> {
+  const inputs = slots.map((slot, index) => ({
+    id: `team-summary-${index}`,
+    species: slot.species,
+    strength: slot.strength,
+    targetScale: slot.targetScale,
+    abilities: slot.abilities,
+    mutations: [],
+  }));
+  const stage = captureProgressionStage(inputs);
+  const teamFoodBarValues = inputs
+    .map((input) => {
+      const cap = getHungerCapForSpecies(input.species);
+      return Number.isFinite(cap) && (cap as number) > 0 ? (cap as number) : DEFAULT_HUNGER_CAP;
+    })
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const averageTeamFoodBar = teamFoodBarValues.length > 0
+    ? teamFoodBarValues.reduce((sum, value) => sum + value, 0) / teamFoodBarValues.length
+    : DEFAULT_HUNGER_CAP;
+
   let valuationContext: AbilityValuationContext | null = null;
   try {
     valuationContext = buildAbilityValuationContext();
@@ -962,44 +1066,145 @@ function computeTeamAbilityPills(
     valuationContext = null;
   }
 
-  for (const slot of slots) {
-    const str = slot.strength ?? calculateMaxStrength(slot.targetScale, slot.species) ?? 100;
-    for (const abilityId of slot.abilities) {
-      const def = getAbilityDefinition(abilityId);
-      if (!def) continue;
-      const stats = computeAbilityStats(def, str);
-      if (def.effectUnit === 'coins' || def.category === 'coins') {
-        if (def.trigger === 'continuous') {
-          totals.coins += computeEffectPerHour(def, stats);
-          continue;
-        }
+  type Unit = 'coins' | 'minutes' | 'xp' | 'food' | 'none';
+  const resolveHungerRestorePerProcFood = (abilityId: string): number | null => {
+    if (!abilityId.startsWith('HungerRestore')) return null;
+    if (/IV$/i.test(abilityId)) return 0.45;
+    if (/III$/i.test(abilityId)) return 0.40;
+    if (/II$/i.test(abilityId)) return 0.35;
+    return 0.30;
+  };
+  const byAbility = new Map<string, {
+    abilityId: string;
+    abilityName: string;
+    unit: Unit;
+    displayValue: number;
+    valueSuffix: ' /hr' | ' /proc' | ' food /hr';
+    sortValue: number;
+    representativeSortValue: number;
+    isGranter: boolean;
+    abilityNames: Set<string>;
+  }>();
+  for (const input of inputs) {
+    const profile = buildPetCompareProfile(input, stage, valuationContext);
+    for (const entry of profile.abilities) {
+      if (entry.isIgnored || entry.isReview) continue;
+      if (entry.group === 'hatch_trio' || entry.group === 'hatch_dollar') continue;
 
-        const dynamic = valuationContext ? resolveDynamicAbilityEffect(def.id, valuationContext, str) : null;
-        const effectPerProc = dynamic?.effectPerProc && Number.isFinite(dynamic.effectPerProc) && dynamic.effectPerProc > 0
-          ? dynamic.effectPerProc
-          : (Number.isFinite(def.effectValuePerProc) ? Math.max(0, def.effectValuePerProc ?? 0) : 0);
-        if (effectPerProc > 0) {
-          const triggerChance = Math.max(0, Math.min(1, stats.chancePerMinute / 100));
-          totals.coins += effectPerProc * triggerChance * stats.procsPerHour;
-        } else {
-          totals.coins += computeEffectPerHour(def, stats);
-        }
-        continue;
+      let unit: Unit = entry.unit !== 'none'
+        ? entry.unit
+        : entry.group === 'food'
+          ? 'minutes'
+          : entry.group === 'sale' || entry.group === 'per_hour'
+            ? 'coins'
+            : 'none';
+      let rawDisplayValue = entry.isAction ? entry.expectedValuePerTrigger : entry.impactPerHour;
+      let rawSortValue = entry.isAction ? entry.expectedValuePerHour : entry.impactPerHour;
+      let valueSuffix: ' /hr' | ' /proc' | ' food /hr' = entry.isAction ? ' /proc' : ' /hr';
+
+      // Hunger Restore should be shown as food/hr, not coin-value proxy.
+      const restoreFoodPerProc = resolveHungerRestorePerProcFood(entry.abilityId);
+      if (restoreFoodPerProc != null) {
+        unit = 'food';
+        rawDisplayValue = Math.max(0, entry.procsPerHour) * restoreFoodPerProc * averageTeamFoodBar;
+        rawSortValue = rawDisplayValue;
+        valueSuffix = ' food /hr';
       }
 
-      const eph = computeEffectPerHour(def, stats);
-      if (def.category === 'plantGrowth') totals.plant += eph;
-      else if (def.category === 'eggGrowth') totals.egg += eph;
-      else if (def.category === 'xp' && def.trigger === 'continuous') totals.xp += eph;
+      const displayValue = Number.isFinite(rawDisplayValue) ? Math.max(0, rawDisplayValue) : 0;
+      const sortValue = Number.isFinite(rawSortValue) ? Math.max(0, rawSortValue) : 0;
+      const familyKeyRaw = getAbilityFamilyKey(entry.abilityId).trim();
+      const familyKey = (familyKeyRaw || entry.abilityId).toLowerCase();
+      const existing = byAbility.get(familyKey);
+      if (existing) {
+        existing.displayValue += displayValue;
+        existing.sortValue += sortValue;
+        existing.abilityNames.add(entry.name);
+        if (existing.unit === 'none' && unit !== 'none') existing.unit = unit;
+        if (sortValue > existing.representativeSortValue) {
+          existing.abilityId = entry.abilityId;
+          existing.abilityName = entry.name;
+          existing.representativeSortValue = sortValue;
+        }
+      } else {
+        byAbility.set(familyKey, {
+          abilityId: entry.abilityId,
+          abilityName: entry.name,
+          unit,
+          displayValue,
+          valueSuffix,
+          sortValue,
+          representativeSortValue: sortValue,
+          isGranter: entry.abilityId.endsWith('Granter'),
+          abilityNames: new Set([entry.name]),
+        });
+      }
     }
   }
 
-  const pills: Array<{ icon: string; label: string; value: string }> = [];
-  if (totals.coins > 0) pills.push({ icon: '💰', label: '/hr', value: formatCoinsAbbreviated(totals.coins) });
-  if (totals.plant > 0) pills.push({ icon: '🌱', label: 'min/hr', value: totals.plant.toFixed(1) });
-  if (totals.egg > 0)   pills.push({ icon: '🥚', label: 'min/hr', value: totals.egg.toFixed(1) });
-  if (totals.xp > 0)    pills.push({ icon: '✨', label: 'xp/hr', value: formatCoinsAbbreviated(totals.xp) });
-  return pills;
+  const formatDisplayValue = (value: number, unit: Unit): string => {
+    if (unit === 'coins') return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
+    if (unit === 'food') {
+      if (value >= 1000) return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
+      return value.toFixed(value >= 10 ? 1 : 2);
+    }
+    if (unit === 'minutes') return `${value.toFixed(value >= 10 ? 1 : 2)}min`;
+    if (unit === 'xp') return `${formatCoinsAbbreviated(Math.max(0, Math.round(value)))} xp`;
+    return `${formatCoinsAbbreviated(Math.max(0, Math.round(value)))}`;
+  };
+
+  return [...byAbility.values()]
+    .filter((entry) => entry.sortValue > 0.001 || entry.isGranter)
+    .sort((a, b) => {
+      if (a.isGranter !== b.isGranter) return a.isGranter ? -1 : 1;
+      return b.sortValue - a.sortValue;
+    })
+    .map((entry) => ({
+      // Show all merged tier names when a family badge represents multiple abilities.
+      hoverTitle: entry.abilityNames.size > 1
+        ? `Abilities:\n${[...entry.abilityNames].join('\n')}`
+        : (entry.abilityName || [...entry.abilityNames][0] || ''),
+      abilityId: entry.abilityId,
+      abilityName: entry.abilityName,
+      unit: entry.unit,
+      valueText: formatDisplayValue(entry.displayValue, entry.unit),
+      valueSuffix: entry.valueSuffix,
+      sortValue: entry.sortValue,
+    }));
+}
+
+function parseHexChannelPair(hex: string): number | null {
+  if (!/^[0-9a-f]{2}$/i.test(hex)) return null;
+  const parsed = Number.parseInt(hex, 16);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getReadableBadgeTextColor(background: string, fallback: string): string {
+  const hexMatch = background.trim().match(/^#([0-9a-f]{6})$/i);
+  if (hexMatch?.[1]) {
+    const raw = hexMatch[1];
+    const r = parseHexChannelPair(raw.slice(0, 2));
+    const g = parseHexChannelPair(raw.slice(2, 4));
+    const b = parseHexChannelPair(raw.slice(4, 6));
+    if (r != null && g != null && b != null) {
+      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return luminance > 0.6 ? '#101318' : '#f6f8ff';
+    }
+  }
+
+  const rgbMatch = background.trim().match(/^rgba?\(([^)]+)\)$/i);
+  if (rgbMatch?.[1]) {
+    const pieces = rgbMatch[1].split(',').map((part) => Number.parseFloat(part.trim()));
+    const r = pieces[0];
+    const g = pieces[1];
+    const b = pieces[2];
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+      const luminance = (0.299 * (r as number) + 0.587 * (g as number) + 0.114 * (b as number)) / 255;
+      return luminance > 0.6 ? '#101318' : '#f6f8ff';
+    }
+  }
+
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1235,7 @@ function formatActionExpectedValue(profile: TeamCompareProfile, key: 'harvest' |
   if (unit === 'coins') return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
   if (unit === 'minutes') return value.toFixed(1);
   if (unit === 'xp') return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
+  if (Math.abs(value) >= 1000) return formatCoinsAbbreviated(Math.max(0, Math.round(value)));
   return value.toFixed(value >= 10 ? 1 : 2);
 }
 
@@ -1070,15 +1276,13 @@ function renderTeamSummaryCompare(params: {
   table.className = 'qpm-tcmp-team-table';
 
   const hA = document.createElement('div');
-  hA.className = 'qpm-tcmp-team-table-head';
+  hA.className = 'qpm-tcmp-team-table-head qpm-tcmp-team-table-head--a';
   hA.textContent = teamAName;
   const hMid = document.createElement('div');
-  hMid.className = 'qpm-tcmp-team-table-head';
-  hMid.style.textAlign = 'center';
+  hMid.className = 'qpm-tcmp-team-table-head qpm-tcmp-team-table-head--mid';
   hMid.textContent = 'Metric';
   const hB = document.createElement('div');
-  hB.className = 'qpm-tcmp-team-table-head';
-  hB.style.textAlign = 'right';
+  hB.className = 'qpm-tcmp-team-table-head qpm-tcmp-team-table-head--b';
   hB.textContent = teamBName;
   table.append(hA, hMid, hB);
 
@@ -1168,8 +1372,7 @@ function renderTeamSummaryCompare(params: {
   scoreMid.className = 'qpm-tcmp-team-mid';
   scoreMid.textContent = 'Team Score';
   const scoreB = document.createElement('div');
-  scoreB.className = 'qpm-tcmp-team-score';
-  scoreB.style.textAlign = 'right';
+  scoreB.className = 'qpm-tcmp-team-score qpm-tcmp-team-score--right';
   scoreB.textContent = formatTeamScoreCompact(profileB.score);
   if (profileA.score > profileB.score) scoreA.classList.add('qpm-tcmp-team-score--win');
   else if (profileB.score > profileA.score) scoreB.classList.add('qpm-tcmp-team-score--win');
@@ -1667,6 +1870,7 @@ function buildCompareTeamsPanel(
 interface ManagerState {
   selectedTeamId: string | null;
   searchTerm: string;
+  selectTeam: (teamId: string | null) => void;
   cleanups: Array<() => void>;
 }
 
@@ -1675,7 +1879,12 @@ function buildManagerTab(
   onCompareStateChange?: (state: { visible: boolean; stage: CompareStage | null }) => void,
 ): ManagerState {
   const initialTeams = getTeamsConfig().teams;
-  const state: ManagerState = { selectedTeamId: initialTeams[0]?.id ?? null, searchTerm: '', cleanups: [] };
+  const state: ManagerState = {
+    selectedTeamId: initialTeams[0]?.id ?? null,
+    searchTerm: '',
+    selectTeam: () => {},
+    cleanups: [],
+  };
   let petPool: PooledPet[] = [];
 
   const mgr = document.createElement('div');
@@ -2043,8 +2252,44 @@ function buildManagerTab(
         pillsWrap.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;align-items:center;';
         for (const pill of pills) {
           const p = document.createElement('span');
-          p.className = 'qpm-team-summary__pill';
-          p.textContent = `${pill.icon} ${pill.value} ${pill.label}`;
+          p.className = 'qpm-team-summary__pill qpm-team-summary__pill--ability';
+          const colors = getAbilityColor(pill.abilityId);
+          if (pill.abilityId === 'RainbowGranter') {
+            p.classList.add('qpm-team-summary__pill--rainbow');
+            p.style.background = 'linear-gradient(135deg,#ff477e,#ff9f1c,#35d9c8,#4b7bec,#a55eea,#ff477e)';
+            p.style.color = '#f6f8ff';
+          } else {
+            p.style.background = colors.base;
+            p.style.color = getReadableBadgeTextColor(colors.base, colors.text);
+          }
+          p.title = pill.hoverTitle || pill.abilityName;
+
+          if (pill.unit === 'coins') {
+            const valueEl = document.createElement('span');
+            valueEl.textContent = pill.valueText;
+            p.appendChild(valueEl);
+
+            const coin = getCoinSpriteUrl();
+            if (coin) {
+              const coinEl = document.createElement('img');
+              coinEl.className = 'qpm-team-summary__pill-coin';
+              coinEl.src = coin;
+              coinEl.alt = '$';
+              p.appendChild(coinEl);
+            } else {
+              const coinFallback = document.createElement('span');
+              coinFallback.textContent = '$';
+              p.appendChild(coinFallback);
+            }
+
+            const suffix = document.createElement('span');
+            suffix.className = 'qpm-team-summary__pill-suffix';
+            suffix.textContent = pill.valueSuffix;
+            p.appendChild(suffix);
+          } else {
+            p.textContent = `${pill.valueText}${pill.valueSuffix}`;
+          }
+
           pillsWrap.appendChild(p);
         }
         summary.appendChild(pillsWrap);
@@ -2309,6 +2554,25 @@ function buildManagerTab(
   renderTeamList();
   renderEditor();
 
+  state.selectTeam = (teamId: string | null): void => {
+    const teams = getTeamsConfig().teams;
+    if (teamId && teams.some((team) => team.id === teamId)) {
+      state.selectedTeamId = teamId;
+    } else {
+      state.selectedTeamId = teams[0]?.id ?? null;
+    }
+    if (compareOpen) {
+      compareOpen = false;
+      normalizeComparePair();
+      editor.style.display = '';
+      compareWrapper.style.display = 'none';
+      compareTeamsBtn.textContent = '⚖ Compare';
+      emitCompareState();
+    }
+    renderTeamList();
+    renderEditor();
+  };
+
   return state;
 }
 
@@ -2350,7 +2614,10 @@ function buildFeedingTab(root: HTMLElement): () => void {
     const respectCb = document.createElement('input');
     respectCb.type = 'checkbox'; respectCb.className = 'qpm-toggle';
     respectCb.checked = rules.respectRules;
-    respectCb.addEventListener('change', () => setRespectPetFoodRules(respectCb.checked));
+    respectCb.addEventListener('change', () => {
+      setRespectPetFoodRules(respectCb.checked);
+      queueRender();
+    });
     respectRow.appendChild(respectCb);
     respectRow.append('Respect pet diet rules');
     togglesWrap.appendChild(respectRow);
@@ -2360,7 +2627,10 @@ function buildFeedingTab(root: HTMLElement): () => void {
     const favCb = document.createElement('input');
     favCb.type = 'checkbox'; favCb.className = 'qpm-toggle';
     favCb.checked = rules.avoidFavorited;
-    favCb.addEventListener('change', () => setAvoidFavoritedFoods(favCb.checked));
+    favCb.addEventListener('change', () => {
+      setAvoidFavoritedFoods(favCb.checked);
+      queueRender();
+    });
     favRow.appendChild(favCb);
     favRow.append('Avoid feeding favorited items');
     togglesWrap.appendChild(favRow);
@@ -2372,7 +2642,8 @@ function buildFeedingTab(root: HTMLElement): () => void {
       feedAllBtn.disabled = true;
       feedAllBtn.textContent = '⏳ Feeding…';
       try {
-        const results = await feedAllPetsInstantly(100, rules.respectRules);
+        const latestRules = getPetFoodRules();
+        const results = await feedAllPetsInstantly(100, latestRules.respectRules);
         const ok = results.filter(r => r.success).length;
         const fail = results.filter(r => !r.success).length;
         if (results.length === 0) showToast('No pets needed feeding', 'info');
@@ -2463,7 +2734,8 @@ function buildFeedingTab(root: HTMLElement): () => void {
         feedBtn.disabled = true;
         feedBtn.textContent = '⏳';
         try {
-          const result = await feedPetInstantly(i, rules.respectRules);
+          const latestRules = getPetFoodRules();
+          const result = await feedPetInstantly(pet.slotIndex, latestRules.respectRules);
           if (result.success) {
             showToast(`Fed ${result.petName || 'pet'}${result.foodSpecies ? ` (${result.foodSpecies})` : ''}`, 'success');
           } else {
@@ -2476,20 +2748,17 @@ function buildFeedingTab(root: HTMLElement): () => void {
       });
       header.appendChild(feedBtn);
 
-      // Pop-out button — opens a draggable floating card for this pet
-      if (pet.petId) {
-        const popoutBtn = document.createElement('button');
-        popoutBtn.className = `qpm-feed__popout-btn${hasFloatingCard(pet.petId) ? ' qpm-feed__popout-btn--active' : ''}`;
-        popoutBtn.title = 'Open as floating card';
-        popoutBtn.textContent = '↗';
-        popoutBtn.addEventListener('click', () => {
-          if (pet.petId) {
-            openFloatingCard(pet.petId);
-            popoutBtn.classList.add('qpm-feed__popout-btn--active');
-          }
-        });
-        header.appendChild(popoutBtn);
-      }
+      // Pop-out button — opens a draggable floating card bound to this slot.
+      const slotIndex = pet.slotIndex;
+      const popoutBtn = document.createElement('button');
+      popoutBtn.className = `qpm-feed__popout-btn${hasFloatingCardForSlot(slotIndex) ? ' qpm-feed__popout-btn--active' : ''}`;
+      popoutBtn.title = 'Open detached feed card';
+      popoutBtn.textContent = '↗';
+      popoutBtn.addEventListener('click', () => {
+        openFloatingCardForSlot(slotIndex);
+        popoutBtn.classList.add('qpm-feed__popout-btn--active');
+      });
+      header.appendChild(popoutBtn);
 
       card.appendChild(header);
 
@@ -2538,10 +2807,16 @@ function buildFeedingTab(root: HTMLElement): () => void {
   render();
   const unsubscribePets = onActivePetInfos(() => queueRender(), false);
   const unsubscribeSprites = onSpritesReady(() => queueRender());
+  const onFoodRulesChanged = (): void => queueRender();
+  const onFloatingCardState = (): void => queueRender();
+  window.addEventListener(PET_FOOD_RULES_CHANGED_EVENT, onFoodRulesChanged as EventListener);
+  window.addEventListener(FLOATING_CARD_STATE_EVENT, onFloatingCardState as EventListener);
   return () => {
     destroyed = true;
     unsubscribePets();
     unsubscribeSprites();
+    window.removeEventListener(PET_FOOD_RULES_CHANGED_EVENT, onFoodRulesChanged as EventListener);
+    window.removeEventListener(FLOATING_CARD_STATE_EVENT, onFloatingCardState as EventListener);
   };
 }
 
@@ -2688,6 +2963,18 @@ function renderPetsWindow(root: HTMLElement): void {
   window.addEventListener('qpm:window-restored', onWindowRestore as EventListener);
   allCleanups.push(() => window.removeEventListener('qpm:window-restored', onWindowRestore as EventListener));
 
+  const onPetsWindowSwitchTab = (event: Event): void => {
+    const detail = (event as CustomEvent<{ tab?: string; teamId?: string | null }>).detail;
+    if (!detail?.tab) return;
+    if (detail.tab !== 'manager' && detail.tab !== 'feeding' && detail.tab !== 'pet-optimizer') return;
+    switchTab(detail.tab);
+    if (detail.tab === 'manager' && managerState) {
+      managerState.selectTeam(detail.teamId ?? null);
+    }
+  };
+  window.addEventListener(PETS_WINDOW_SWITCH_TAB_EVENT, onPetsWindowSwitchTab as EventListener);
+  allCleanups.push(() => window.removeEventListener(PETS_WINDOW_SWITCH_TAB_EVENT, onPetsWindowSwitchTab as EventListener));
+
   // Cleanup on window root removal (MutationObserver)
   const observer = new MutationObserver(() => {
     if (!root.isConnected) {
@@ -2705,6 +2992,7 @@ function renderPetsWindow(root: HTMLElement): void {
 let keybindHandler: ((e: KeyboardEvent) => void) | null = null;
 
 export function initPetsWindow(): void {
+  initFloatingCards();
   if (keybindHandler) return; // idempotent
 
   keybindHandler = (e: KeyboardEvent) => {

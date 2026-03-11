@@ -52,10 +52,14 @@ export function renderPetOptimizerWindow(body: HTMLElement): void {
   body.innerHTML = '';
 
   const root = document.createElement('div');
+  root.className = 'qpm-pet-optimizer-root';
   root.style.cssText = `
     color: #fff;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    max-height: 100%;
   `;
 
   // Add shimmer animation CSS

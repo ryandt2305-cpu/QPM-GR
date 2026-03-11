@@ -16,7 +16,12 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
-  { version: '3.1.02', date: '2026-03', notes: [
+  { version: '3.1.03', date: '2026-03', notes: [
+    'Resize handling fixes for feature windows',
+    'Minimize/restore handling fixes',
+    'Scroll handling fixes for Pets Manager and Pet Optimizer',
+  ]},
+  { version: '3.1.0', date: '2026-03', notes: [
     'Consolidated tabs into hub windows (Trackers, Utility, Pets)',
     'Shop Restock rewritten with Supabase data',
     'Dashboard: Changelog card, shop restock cards, dashboard modules',

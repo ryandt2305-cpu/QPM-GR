@@ -212,12 +212,13 @@ const STYLES = `
 .qpm-pets__tab--active { color: #8f82ff; border-color: #8f82ff; }
 .qpm-pets__body {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
-.qpm-pets__panel { display: none; flex: 1; overflow: hidden; }
-.qpm-pets__panel--active { display: flex; flex-direction: column; }
+.qpm-pets__panel { display: none; flex: 1; min-height: 0; overflow: hidden; }
+.qpm-pets__panel--active { display: flex; flex-direction: column; min-height: 0; }
 
 /* Manager tab */
 .qpm-mgr {
@@ -2593,7 +2594,7 @@ function renderPetsWindow(root: HTMLElement): void {
     panel.style.overflow = 'hidden';
 
     const scrollTargets = panel.querySelectorAll<HTMLElement>(
-      '.qpm-mgr__teams, .qpm-mgr__editor, .qpm-editor, .qpm-feed, .qpm-tcmp-grid, .qpm-window-body',
+      '.qpm-mgr__teams, .qpm-mgr__editor, .qpm-editor, .qpm-feed, .qpm-tcmp-grid, .qpm-window-body, .qpm-pet-optimizer-root',
     );
     scrollTargets.forEach((target) => {
       if (!target.style.minHeight) target.style.minHeight = '0';

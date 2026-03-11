@@ -34,6 +34,8 @@ const WINDOW_POSITION_KEY = 'qpm-window-pos-';
 const WINDOW_STATE_KEY = 'qpm-window-state-';
 const WINDOW_SIZE_KEY = 'qpm-window-size-';
 const WINDOW_MARGIN = 8;
+const WINDOW_MIN_WIDTH = 260;
+const WINDOW_MIN_HEIGHT = 120;
 const windows = new Map<string, WindowState>();
 let currentZ = 10000;
 let resizeListenerAdded = false;
@@ -42,13 +44,17 @@ function emitWindowEvent(eventName: string, id: string): void {
   window.dispatchEvent(new CustomEvent(eventName, { detail: { id } }));
 }
 
+function showWindowElement(el: HTMLElement, displayMode: 'flex' | 'block' = 'flex'): void {
+  el.style.display = displayMode;
+}
+
 function setResizeHandleVisible(w: WindowState, visible: boolean): void {
   const handle = w.el.querySelector<HTMLElement>('.qpm-window-resize-handle');
   if (handle) handle.style.display = visible ? '' : 'none';
 }
 
 function restoreWindowFromMinimize(w: WindowState): void {
-  w.body.style.display = '';
+  showWindowElement(w.body, 'flex');
   if (w.restoreWidth) w.el.style.width = w.restoreWidth;
   if (w.restoreHeight) w.el.style.height = w.restoreHeight;
   if (w.restoreMinHeight) w.el.style.minHeight = w.restoreMinHeight;
@@ -56,12 +62,38 @@ function restoreWindowFromMinimize(w: WindowState): void {
   w.minimizeBtn.textContent = '−';
   w.minimizeBtn.title = 'Minimize';
   setResizeHandleVisible(w, true);
-  requestAnimationFrame(() => clampWindowRect(w.el));
+  requestAnimationFrame(() => {
+    clampWindowSize(w.el);
+    clampWindowRect(w.el);
+  });
 }
 
 /**
  * Clamp window position to ensure it stays visible (Aries mod pattern)
  */
+function clampWindowSizeToViewport(width: number, height: number): { width: number; height: number } {
+  const maxWidth = Math.max(160, window.innerWidth - (WINDOW_MARGIN * 2));
+  const maxHeight = Math.max(80, window.innerHeight - (WINDOW_MARGIN * 2));
+  const minWidth = Math.min(WINDOW_MIN_WIDTH, maxWidth);
+  const minHeight = Math.min(WINDOW_MIN_HEIGHT, maxHeight);
+  return {
+    width: Math.min(Math.max(width, minWidth), maxWidth),
+    height: Math.min(Math.max(height, minHeight), maxHeight),
+  };
+}
+
+function clampWindowSize(win: HTMLElement): void {
+  const rect = win.getBoundingClientRect();
+  const clamped = clampWindowSizeToViewport(rect.width, rect.height);
+
+  if (Math.abs(clamped.width - rect.width) > 0.5) {
+    win.style.width = `${Math.round(clamped.width)}px`;
+  }
+  if (Math.abs(clamped.height - rect.height) > 0.5) {
+    win.style.height = `${Math.round(clamped.height)}px`;
+  }
+}
+
 function clampWindowRect(win: HTMLElement): void {
   const rect = win.getBoundingClientRect();
   const vw = window.innerWidth;
@@ -88,6 +120,7 @@ function clampWindowRect(win: HTMLElement): void {
 function clampAllWindows(): void {
   windows.forEach((state) => {
     if (!state.isMinimized) {
+      clampWindowSize(state.el);
       clampWindowRect(state.el);
     }
   });
@@ -108,7 +141,7 @@ function ensureResizeListener(): void {
 export function openWindow(id: string, title: string, render: PanelRender, maxWidth?: string, maxHeight?: string): void {
   if (windows.has(id)) {
     const w = windows.get(id)!;
-    w.el.style.display = '';
+    showWindowElement(w.el, 'flex');
     if (w.isMinimized) {
       w.isMinimized = false;
       restoreWindowFromMinimize(w);
@@ -219,6 +252,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
 
   // Ensure window stays on screen after positioning
   requestAnimationFrame(() => {
+    clampWindowSize(win);
     clampWindowRect(win);
   });
 
@@ -294,7 +328,7 @@ export function toggleWindow(id: string, title: string, render: PanelRender, max
     closeWindow(id);
     return false;
   } else {
-    existing.el.style.display = '';
+    showWindowElement(existing.el, 'flex');
     if (existing.isMinimized) {
       existing.isMinimized = false;
       restoreWindowFromMinimize(existing);
@@ -486,12 +520,20 @@ function makeResizable(win: HTMLElement, id: string): void {
   let startY = 0;
   let startW = 0;
   let startH = 0;
+  let startLeft = 0;
+  let startTop = 0;
 
   const onMove = (e: MouseEvent): void => {
     if (!down) return;
     e.preventDefault();
-    const newW = Math.max(260, startW + (e.clientX - startX));
-    const newH = Math.max(120, startH + (e.clientY - startY));
+    const rawWidth = startW + (e.clientX - startX);
+    const rawHeight = startH + (e.clientY - startY);
+    const maxWidth = Math.max(160, window.innerWidth - startLeft - WINDOW_MARGIN);
+    const maxHeight = Math.max(80, window.innerHeight - startTop - WINDOW_MARGIN);
+    const minWidth = Math.min(WINDOW_MIN_WIDTH, maxWidth);
+    const minHeight = Math.min(WINDOW_MIN_HEIGHT, maxHeight);
+    const newW = Math.min(Math.max(rawWidth, minWidth), maxWidth);
+    const newH = Math.min(Math.max(rawHeight, minHeight), maxHeight);
     win.style.width = `${newW}px`;
     win.style.height = `${newH}px`;
   };
@@ -506,6 +548,8 @@ function makeResizable(win: HTMLElement, id: string): void {
     win.style.left = 'auto';
     win.style.right = `${Math.max(0, window.innerWidth - r.right)}px`;
     win.style.top = `${r.top}px`;
+    clampWindowSize(win);
+    clampWindowRect(win);
     saveWindowSize(id, win);
     saveWindowPosition(id, win);
   };
@@ -516,6 +560,8 @@ function makeResizable(win: HTMLElement, id: string): void {
     const rect = win.getBoundingClientRect();
     startW = rect.width;
     startH = rect.height;
+    startLeft = rect.left;
+    startTop = rect.top;
     // Convert to left-anchored so resize handle tracks cursor correctly.
     // Without this, right-anchored windows grow leftward while the handle stays
     // pinned to the right viewport edge, making direction feel inverted.
@@ -550,8 +596,9 @@ function saveWindowSize(id: string, win: HTMLElement): void {
 function restoreWindowSize(id: string, win: HTMLElement): void {
   const saved = storage.get<{ width: number; height: number }>(WINDOW_SIZE_KEY + id);
   if (saved && saved.width > 0 && saved.height > 0) {
-    win.style.width = `${saved.width}px`;
-    win.style.height = `${saved.height}px`;
+    const clamped = clampWindowSizeToViewport(saved.width, saved.height);
+    win.style.width = `${Math.round(clamped.width)}px`;
+    win.style.height = `${Math.round(clamped.height)}px`;
     win.style.maxWidth = 'none';
     win.style.maxHeight = 'none';
   }

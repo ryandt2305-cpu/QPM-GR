@@ -5,7 +5,7 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { onInventoryChange } from '../store/inventory';
-import { feedPetInstantly, getInstantFeedPlan } from '../features/instantFeed';
+import { feedPetInstantly, feedPetInstantlyByPetId, getInstantFeedPlan, getInstantFeedPlanByPetId } from '../features/instantFeed';
 import { PET_FOOD_RULES_CHANGED_EVENT } from '../features/petFoodRules';
 import {
   getCropSpriteDataUrl,
@@ -484,7 +484,9 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     }
 
     try {
-      const plan = await getInstantFeedPlan(slotIndex);
+      const plan = currentPet.petId
+        ? await getInstantFeedPlanByPetId(currentPet.petId)
+        : await getInstantFeedPlan(slotIndex);
       if (destroyed || seq !== refreshSeq) return;
 
       const selected = plan.foodSelection;
@@ -536,7 +538,9 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     setFeedButtonState('...', true);
 
     try {
-      const result = await feedPetInstantly(slotIndex);
+      const result = currentPet?.petId
+        ? await feedPetInstantlyByPetId(currentPet.petId)
+        : await feedPetInstantly(slotIndex);
       if (result.success) {
         setFeedButtonState('Fed', true);
         await new Promise((resolve) => window.setTimeout(resolve, 700));

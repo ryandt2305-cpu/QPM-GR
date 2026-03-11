@@ -5,7 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.08] - Current
+## [3.1.09] - Current
+
+### Changed
+- fix feed cards
+
+---
+
+## [3.1.08]
 
 ### Changed
 - slot specific diet quantity

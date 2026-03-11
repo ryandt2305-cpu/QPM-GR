@@ -51,6 +51,15 @@ function resolvePetForFeed(
   return pets[normalized] ?? null;
 }
 
+function resolvePetForFeedById(
+  pets: ActivePetInfo[],
+  petId: string,
+): ActivePetInfo | null {
+  const normalizedPetId = String(petId ?? '').trim();
+  if (!normalizedPetId) return null;
+  return pets.find((pet) => pet.petId === normalizedPetId) ?? null;
+}
+
 /**
  * Send a FeedPet WebSocket message.
  */
@@ -102,23 +111,11 @@ function makeMissingPetPlan(petIndex: number, error: string): InstantFeedPlan {
   };
 }
 
-export async function getInstantFeedPlan(
+async function buildPlanForPet(
+  pet: ActivePetInfo,
   petSlotOrIndex: number,
   respectFoodRules?: boolean,
 ): Promise<InstantFeedPlan> {
-  const pets = getActivePetInfos();
-  if (pets.length === 0) {
-    return makeMissingPetPlan(petSlotOrIndex, 'No active pets found');
-  }
-
-  const pet = resolvePetForFeed(pets, petSlotOrIndex);
-  if (!pet) {
-    return makeMissingPetPlan(
-      petSlotOrIndex,
-      `Pet for slot/index ${petSlotOrIndex} not found`,
-    );
-  }
-
   const rules = getPetFoodRules();
   const resolvedRespectRules = typeof respectFoodRules === 'boolean' ? respectFoodRules : rules.respectRules;
   const override = toItemOverride(pet);
@@ -166,6 +163,105 @@ export async function getInstantFeedPlan(
   };
 }
 
+function resultFromPlanFailure(plan: InstantFeedPlan): InstantFeedResult {
+  return {
+    success: false,
+    petName: plan.petName,
+    petSpecies: plan.petSpecies,
+    foodSpecies: null,
+    error: plan.error ?? 'No suitable food found in inventory',
+  };
+}
+
+function executeFeedPlan(plan: InstantFeedPlan): InstantFeedResult {
+  if (!plan.ok || !plan.foodSelection) {
+    return resultFromPlanFailure(plan);
+  }
+
+  if (!plan.petId) {
+    return {
+      success: false,
+      petName: plan.petName,
+      petSpecies: plan.petSpecies,
+      foodSpecies: null,
+      error: 'Pet has no petId (UUID)',
+    };
+  }
+
+  const crop = plan.foodSelection.item;
+  if (!crop.id) {
+    return {
+      success: false,
+      petName: plan.petName,
+      petSpecies: plan.petSpecies,
+      foodSpecies: crop.species ?? crop.name,
+      error: 'Crop has no ID',
+    };
+  }
+
+  log(
+    `Attempting to feed ${plan.petName || plan.petSpecies || 'pet'} ` +
+    `with ${crop.species || crop.name || 'food'} ` +
+    `(rules: ${plan.respectFoodRules ? 'on' : 'off'}, available: ${plan.availableCount})`,
+  );
+
+  const sent = sendFeedPetMessage(plan.petId, crop.id);
+  if (!sent) {
+    return {
+      success: false,
+      petName: plan.petName,
+      petSpecies: plan.petSpecies,
+      foodSpecies: crop.species ?? crop.name,
+      error: 'Failed to send WebSocket message',
+    };
+  }
+
+  log(`Fed ${plan.petName || plan.petSpecies || 'pet'} with ${crop.species || crop.name || 'food'}`);
+  return {
+    success: true,
+    petName: plan.petName,
+    petSpecies: plan.petSpecies,
+    foodSpecies: crop.species ?? crop.name,
+  };
+}
+
+export async function getInstantFeedPlan(
+  petSlotOrIndex: number,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedPlan> {
+  const pets = getActivePetInfos();
+  if (pets.length === 0) {
+    return makeMissingPetPlan(petSlotOrIndex, 'No active pets found');
+  }
+
+  const pet = resolvePetForFeed(pets, petSlotOrIndex);
+  if (!pet) {
+    return makeMissingPetPlan(
+      petSlotOrIndex,
+      `Pet for slot/index ${petSlotOrIndex} not found`,
+    );
+  }
+
+  return buildPlanForPet(pet, petSlotOrIndex, respectFoodRules);
+}
+
+export async function getInstantFeedPlanByPetId(
+  petId: string,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedPlan> {
+  const pets = getActivePetInfos();
+  if (pets.length === 0) {
+    return makeMissingPetPlan(-1, 'No active pets found');
+  }
+
+  const pet = resolvePetForFeedById(pets, petId);
+  if (!pet) {
+    return makeMissingPetPlan(-1, `Pet with id ${petId} not found`);
+  }
+
+  return buildPlanForPet(pet, pet.slotIndex, respectFoodRules);
+}
+
 /**
  * Feed a pet instantly using WebSocket (bypasses DOM clicks).
  *
@@ -179,62 +275,26 @@ export async function feedPetInstantly(
 ): Promise<InstantFeedResult> {
   try {
     const plan = await getInstantFeedPlan(petSlotOrIndex, respectFoodRules);
-    if (!plan.ok || !plan.foodSelection) {
-      return {
-        success: false,
-        petName: plan.petName,
-        petSpecies: plan.petSpecies,
-        foodSpecies: null,
-        error: plan.error ?? 'No suitable food found in inventory',
-      };
-    }
-
-    if (!plan.petId) {
-      return {
-        success: false,
-        petName: plan.petName,
-        petSpecies: plan.petSpecies,
-        foodSpecies: null,
-        error: 'Pet has no petId (UUID)',
-      };
-    }
-
-    const crop = plan.foodSelection.item;
-    if (!crop.id) {
-      return {
-        success: false,
-        petName: plan.petName,
-        petSpecies: plan.petSpecies,
-        foodSpecies: crop.species ?? crop.name,
-        error: 'Crop has no ID',
-      };
-    }
-
-    log(
-      `Attempting to feed ${plan.petName || plan.petSpecies || 'pet'} ` +
-      `with ${crop.species || crop.name || 'food'} ` +
-      `(rules: ${plan.respectFoodRules ? 'on' : 'off'}, available: ${plan.availableCount})`,
-    );
-
-    // 3. Send WebSocket FeedPet message.
-    const sent = sendFeedPetMessage(plan.petId, crop.id);
-    if (!sent) {
-      return {
-        success: false,
-        petName: plan.petName,
-        petSpecies: plan.petSpecies,
-        foodSpecies: crop.species ?? crop.name,
-        error: 'Failed to send WebSocket message',
-      };
-    }
-
-    log(`Fed ${plan.petName || plan.petSpecies || 'pet'} with ${crop.species || crop.name || 'food'}`);
+    return executeFeedPlan(plan);
+  } catch (error) {
+    log('Instant feed error', error);
     return {
-      success: true,
-      petName: plan.petName,
-      petSpecies: plan.petSpecies,
-      foodSpecies: crop.species ?? crop.name,
+      success: false,
+      petName: null,
+      petSpecies: null,
+      foodSpecies: null,
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
+  }
+}
+
+export async function feedPetInstantlyByPetId(
+  petId: string,
+  respectFoodRules?: boolean,
+): Promise<InstantFeedResult> {
+  try {
+    const plan = await getInstantFeedPlanByPetId(petId, respectFoodRules);
+    return executeFeedPlan(plan);
   } catch (error) {
     log('Instant feed error', error);
     return {

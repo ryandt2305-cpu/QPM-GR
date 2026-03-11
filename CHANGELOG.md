@@ -5,7 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.06] - Current
+## [3.1.08] - Current
+
+### Changed
+- slot specific diet quantity
+
+---
+
+## [3.1.07]
+
+### Changed
+- Anti-AFK
+
+---
+
+## [3.1.06]
 
 ### Changed
 - Pets: Shift can now be used as a modifier key for team keybinds

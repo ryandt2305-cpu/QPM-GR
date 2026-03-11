@@ -36,6 +36,21 @@ export interface InstantFeedPlan {
   error?: string;
 }
 
+function resolvePetForFeed(
+  pets: ActivePetInfo[],
+  petSlotOrIndex: number,
+): ActivePetInfo | null {
+  if (!Number.isFinite(petSlotOrIndex)) return null;
+  const normalized = Math.max(0, Math.round(petSlotOrIndex));
+
+  // Primary path: callers should pass the active slot index (0-2).
+  const bySlot = pets.find((pet) => pet.slotIndex === normalized);
+  if (bySlot) return bySlot;
+
+  // Backward compatibility: older callers may still pass array index.
+  return pets[normalized] ?? null;
+}
+
 /**
  * Send a FeedPet WebSocket message.
  */
@@ -88,17 +103,20 @@ function makeMissingPetPlan(petIndex: number, error: string): InstantFeedPlan {
 }
 
 export async function getInstantFeedPlan(
-  petIndex: number,
+  petSlotOrIndex: number,
   respectFoodRules?: boolean,
 ): Promise<InstantFeedPlan> {
   const pets = getActivePetInfos();
   if (pets.length === 0) {
-    return makeMissingPetPlan(petIndex, 'No active pets found');
+    return makeMissingPetPlan(petSlotOrIndex, 'No active pets found');
   }
 
-  const pet = pets[petIndex];
+  const pet = resolvePetForFeed(pets, petSlotOrIndex);
   if (!pet) {
-    return makeMissingPetPlan(petIndex, `Pet at index ${petIndex} not found`);
+    return makeMissingPetPlan(
+      petSlotOrIndex,
+      `Pet for slot/index ${petSlotOrIndex} not found`,
+    );
   }
 
   const rules = getPetFoodRules();
@@ -110,7 +128,7 @@ export async function getInstantFeedPlan(
   if (!snapshot || snapshot.items.length === 0) {
     return {
       ok: false,
-      petIndex,
+      petIndex: petSlotOrIndex,
       petName: pet.name,
       petSpecies: pet.species,
       petId: pet.petId,
@@ -135,7 +153,7 @@ export async function getInstantFeedPlan(
 
   return {
     ok: !!availability.selected,
-    petIndex,
+    petIndex: petSlotOrIndex,
     petName: pet.name,
     petSpecies: pet.species,
     petId: pet.petId,
@@ -151,16 +169,16 @@ export async function getInstantFeedPlan(
 /**
  * Feed a pet instantly using WebSocket (bypasses DOM clicks).
  *
- * @param petIndex - Index of the pet in active slots (0-2)
+ * @param petSlotOrIndex - Active slot index (preferred), with array-index fallback for legacy callers
  * @param respectFoodRules - Whether to respect pet food preferences
  * @returns Result of the feed operation
  */
 export async function feedPetInstantly(
-  petIndex: number,
+  petSlotOrIndex: number,
   respectFoodRules?: boolean,
 ): Promise<InstantFeedResult> {
   try {
-    const plan = await getInstantFeedPlan(petIndex, respectFoodRules);
+    const plan = await getInstantFeedPlan(petSlotOrIndex, respectFoodRules);
     if (!plan.ok || !plan.foodSelection) {
       return {
         success: false,

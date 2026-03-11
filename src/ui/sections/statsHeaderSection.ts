@@ -16,6 +16,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.08', date: '2026-03', notes: [
+    'slot specific diet quantity',
+  ]},
 { version: '3.1.07', date: '2026-03', notes: [
     'Anti-AFK',
   ]},

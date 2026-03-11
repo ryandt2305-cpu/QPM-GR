@@ -20,7 +20,7 @@ let captureListener: ((e: Event) => void) | null = null;
 // petId resolution — triple fallback
 // ---------------------------------------------------------------------------
 
-function resolvePetIndex(btn: HTMLElement): number {
+function resolvePetSlotIndex(btn: HTMLElement): number {
   const pets = getActivePetInfos();
   if (pets.length === 0) return -1;
 
@@ -28,14 +28,14 @@ function resolvePetIndex(btn: HTMLElement): number {
 
   // Fallback 1: match btn.dataset.petId against ActivePetInfo.petId (entity UUID)
   if (rawId) {
-    const byPetId = pets.findIndex(p => p.petId === rawId);
-    if (byPetId >= 0) return byPetId;
+    const byPetId = pets.find(p => p.petId === rawId);
+    if (byPetId) return byPetId.slotIndex;
   }
 
   // Fallback 2: match against slotId (item UUID)
   if (rawId) {
-    const bySlotId = pets.findIndex(p => p.slotId === rawId);
-    if (bySlotId >= 0) return bySlotId;
+    const bySlotId = pets.find(p => p.slotId === rawId);
+    if (bySlotId) return bySlotId.slotIndex;
   }
 
   // Fallback 3: parse species from aria-label="Instant Feed: <Species>"
@@ -43,12 +43,12 @@ function resolvePetIndex(btn: HTMLElement): number {
   const match = ariaLabel.match(/^Instant Feed:\s*(.+)$/i);
   if (match) {
     const species = match[1]!.trim().toLowerCase();
-    const bySpecies = pets.findIndex(p => (p.species ?? '').toLowerCase() === species);
-    if (bySpecies >= 0) return bySpecies;
+    const bySpecies = pets.find(p => (p.species ?? '').toLowerCase() === species);
+    if (bySpecies) return bySpecies.slotIndex;
   }
 
   // Fallback 4: only one pet active — feed it
-  if (pets.length === 1) return 0;
+  if (pets.length === 1) return pets[0]?.slotIndex ?? -1;
 
   return -1;
 }
@@ -58,18 +58,18 @@ function resolvePetIndex(btn: HTMLElement): number {
 // ---------------------------------------------------------------------------
 
 async function handleFeed(btn: HTMLElement): Promise<void> {
-  const index = resolvePetIndex(btn);
+  const slotIndex = resolvePetSlotIndex(btn);
 
-  if (index < 0) {
+  if (slotIndex < 0) {
     log('⚠️ [NativeFeedIntercept] Could not resolve pet from button — skipping');
     return;
   }
 
   const pets = getActivePetInfos();
-  const pet = pets[index];
-  log(`🎯 [NativeFeedIntercept] Intercepted — feeding slot ${index} (${pet?.species ?? '?'})`);
+  const pet = pets.find((entry) => entry.slotIndex === slotIndex);
+  log(`🎯 [NativeFeedIntercept] Intercepted — feeding slot ${slotIndex} (${pet?.species ?? '?'})`);
 
-  const result = await feedPetInstantly(index);
+  const result = await feedPetInstantly(slotIndex);
 
   if (result.success) {
     log(`✅ [NativeFeedIntercept] Fed ${result.petName ?? result.petSpecies ?? 'pet'} with ${result.foodSpecies}`);

@@ -61,11 +61,14 @@ function loadVisibleTrackers(): TrackerKey[] {
  * Also hides the inner title bar and resize handle — the modal window provides the chrome.
  */
 function embedWindowRoot(windowRoot: HTMLElement, container: HTMLElement): void {
-  // Hide each tracker's own title bar (cursor:move) and resize grip (cursor:se-resize)
+  // Hide each tracker's own title bar (cursor:move/grab) and resize grip (cursor:se-resize)
   // so the outer modal window's chrome is the only chrome visible.
+  const chromeCursors = new Set(['move', 'grab', 'grabbing', 'se-resize']);
   for (const child of Array.from(windowRoot.children) as HTMLElement[]) {
-    const cur = child.style.cursor;
-    if (cur === 'move' || cur === 'se-resize') {
+    const inlineCursor = child.style.cursor?.trim().toLowerCase();
+    const computedCursor = window.getComputedStyle(child).cursor?.trim().toLowerCase();
+    const cursor = inlineCursor || computedCursor;
+    if (cursor && chromeCursors.has(cursor)) {
       child.style.display = 'none';
     }
   }

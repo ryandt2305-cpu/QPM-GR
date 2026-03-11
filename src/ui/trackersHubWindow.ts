@@ -230,23 +230,39 @@ function buildCustomizeOverlay(
   overlay.style.cssText = [
     'position:absolute',
     'inset:0',
+    'z-index:20',
+    'pointer-events:none',
+  ].join(';');
+
+  // Keep the bottom-right corner clear so the window resize handle stays usable.
+  const panel = document.createElement('div');
+  panel.style.cssText = [
+    'position:absolute',
+    'inset:0 18px 18px 0',
     'background:rgba(10,12,18,0.97)',
     'display:flex',
     'flex-direction:column',
     'padding:20px',
     'gap:10px',
-    'z-index:20',
+    'min-height:0',
+    'box-sizing:border-box',
+    'pointer-events:auto',
   ].join(';');
+  overlay.appendChild(panel);
 
   const title = document.createElement('div');
   title.style.cssText = 'font-size:15px;font-weight:700;color:#e0e0e0;';
   title.textContent = '⚙ Customize Cards';
-  overlay.appendChild(title);
+  panel.appendChild(title);
 
   const subtext = document.createElement('div');
   subtext.style.cssText = 'font-size:12px;color:rgba(224,224,224,0.45);margin-bottom:4px;';
   subtext.textContent = 'Select which tracker cards to show in the Trackers hub.';
-  overlay.appendChild(subtext);
+  panel.appendChild(subtext);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;overflow-y:auto;padding-right:2px;';
+  panel.appendChild(list);
 
   const current = loadVisibleTrackers();
   const checkboxes = new Map<TrackerKey, HTMLInputElement>();
@@ -281,12 +297,12 @@ function buildCustomizeOverlay(
     labelText.textContent = tracker.label;
 
     row.append(cb, iconSpan, labelText);
-    overlay.appendChild(row);
+    list.appendChild(row);
     checkboxes.set(tracker.key, cb);
   }
 
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:auto;padding-top:8px;';
+  btnRow.style.cssText = 'display:flex;gap:8px;padding-top:8px;flex-shrink:0;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
@@ -296,7 +312,12 @@ function buildCustomizeOverlay(
     'background:rgba(255,255,255,0.05)', 'border:1px solid rgba(255,255,255,0.1)',
     'color:rgba(224,224,224,0.65)', 'font-size:13px',
   ].join(';');
-  cancelBtn.addEventListener('click', onClose);
+  let onKey: ((e: KeyboardEvent) => void) | null = null;
+  const closeWithCleanup = () => {
+    if (onKey) document.removeEventListener('keydown', onKey);
+    onClose();
+  };
+  cancelBtn.addEventListener('click', closeWithCleanup);
 
   const saveBtn = document.createElement('button');
   saveBtn.type = 'button';
@@ -310,15 +331,16 @@ function buildCustomizeOverlay(
     const selected = TRACKER_DEFS
       .map((t) => t.key)
       .filter((k) => checkboxes.get(k)?.checked) as TrackerKey[];
+    if (onKey) document.removeEventListener('keydown', onKey);
     onSave(selected);
   });
 
   btnRow.append(cancelBtn, saveBtn);
-  overlay.appendChild(btnRow);
+  panel.appendChild(btnRow);
 
   // Close on Escape
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { onClose(); document.removeEventListener('keydown', onKey); }
+  onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeWithCleanup();
   };
   document.addEventListener('keydown', onKey);
 

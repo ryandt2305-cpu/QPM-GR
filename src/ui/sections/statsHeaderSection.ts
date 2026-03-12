@@ -16,6 +16,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.14', date: '2026-03', notes: [
+    'added sprite decoder for MG v114+ compressed sprites..... eeeeeee',
+    'if youre reading this hello, i hope you have a good day',
+  ]},
 { version: '3.1.13', date: '2026-03', notes: [
     'Pet Teams: hutch-balanced apply now pairs hutch pulls with outgoing active pets (favorited pets preferred) and reports clearer failure reasons',
     'Activity Log: added extended native activity logging and enabled the Utility Hub Activity Log card by default (customize choices persist)',

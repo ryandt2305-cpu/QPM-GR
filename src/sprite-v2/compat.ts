@@ -2,10 +2,12 @@
 
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { scheduleNonBlocking, delay } from '../utils/scheduling';
-import { log } from '../utils/logger';
+import { log, isVerboseLogsEnabled } from '../utils/logger';
 import type { SpriteService } from './types';
+import { spriteLog } from './diagnostics';
 
 let service: SpriteService | null = null;
+let hasLoggedServiceNotReady = false;
 let serviceReadyResolve: ((svc: SpriteService | null) => void) | null = null;
 export const serviceReady: Promise<SpriteService | null> = new Promise((resolve) => {
   serviceReadyResolve = resolve;
@@ -26,7 +28,9 @@ export function onSpritesReady(callback: () => void): () => void {
     try {
       callback();
     } catch (e) {
-      console.error('[Sprite Compat] onSpritesReady callback error:', e);
+      spriteLog('error', 'on-sprites-ready-callback', 'onSpritesReady callback failed', {
+        error: String((e as Error)?.message ?? e),
+      });
     }
     return () => {}; // No-op unsubscribe since already called
   } else {
@@ -54,7 +58,9 @@ function notifySpritesReady(): void {
     try {
       cb();
     } catch (e) {
-      console.error('[Sprite Compat] onSpritesReady callback error:', e);
+      spriteLog('error', 'on-sprites-ready-callback', 'onSpritesReady callback failed', {
+        error: String((e as Error)?.message ?? e),
+      });
     }
   }
   spritesReadyCallbacks.length = 0; // Clear callbacks
@@ -75,6 +81,7 @@ const CROP_CATEGORIES = ['plant', 'tallplant', 'crop', 'item', 'decor', 'seed', 
 
 const dataUrlCache = new Map<string, string>();
 const MAX_DATAURL_CACHE_SIZE = 500;
+let hydrationEventListenerBound = false;
 
 function makeCacheKey(category: string, id: string, mutations: string[] = []): string {
   const mutStr = mutations.length > 0 ? mutations.join(',') : '';
@@ -96,9 +103,111 @@ function cacheDataUrl(key: string, value: string | null): string {
   return value;
 }
 
+export function clearSpriteDataUrlCache(): void {
+  dataUrlCache.clear();
+}
+
+type QpmSpriteDescriptor = {
+  kind: 'crop' | 'pet' | 'any' | 'produce' | 'unknown';
+  id: string;
+  mutations: string[];
+};
+
+function parseQpmSpriteDescriptor(raw: string): QpmSpriteDescriptor {
+  const value = String(raw || '').trim();
+  if (!value) return { kind: 'unknown', id: '', mutations: [] };
+
+  const [kindRaw, idRaw = '', mutRaw = ''] = value.split(':');
+  const kind = kindRaw === 'crop' || kindRaw === 'pet' || kindRaw === 'any' || kindRaw === 'produce'
+    ? kindRaw
+    : 'unknown';
+  const mutations = mutRaw
+    ? mutRaw.split(',').map((m) => m.trim()).filter(Boolean)
+    : [];
+
+  return {
+    kind,
+    id: idRaw,
+    mutations,
+  };
+}
+
+function applySpriteUrlToElement(el: Element, url: string): boolean {
+  if (!url) return false;
+  if (el instanceof HTMLImageElement) {
+    if (el.src !== url) {
+      el.src = url;
+    }
+    return true;
+  }
+  if (el instanceof HTMLElement) {
+    const next = `url(${url})`;
+    if (el.style.backgroundImage !== next) {
+      el.style.backgroundImage = next;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function refreshMarkedSpriteElements(): number {
+  let updated = 0;
+  const elements = document.querySelectorAll('[data-qpm-sprite]');
+  for (const el of elements) {
+    const raw = (el as HTMLElement).dataset.qpmSprite || '';
+    const parsed = parseQpmSpriteDescriptor(raw);
+    if (!parsed.id) continue;
+
+    let url = '';
+    switch (parsed.kind) {
+      case 'crop':
+        url = parsed.mutations.length > 0
+          ? getCropSpriteDataUrlWithMutations(parsed.id, parsed.mutations)
+          : getCropSpriteDataUrl(parsed.id);
+        break;
+      case 'pet':
+        url = parsed.mutations.length > 0
+          ? getPetSpriteDataUrlWithMutations(parsed.id, parsed.mutations)
+          : getPetSpriteDataUrl(parsed.id);
+        break;
+      case 'produce':
+        url = parsed.mutations.length > 0
+          ? getProduceSpriteDataUrlWithMutations(parsed.id, parsed.mutations)
+          : getProduceSpriteDataUrl(parsed.id);
+        break;
+      case 'any':
+        url = getAnySpriteDataUrl(parsed.id);
+        break;
+      default:
+        break;
+    }
+
+    if (applySpriteUrlToElement(el, url)) {
+      updated++;
+    }
+  }
+  return updated;
+}
+
+function ensureHydrationEventListener(): void {
+  if (hydrationEventListenerBound) return;
+  hydrationEventListenerBound = true;
+
+  window.addEventListener('qpm:sprite-hydration-state-change', () => {
+    if (!service) return;
+    clearSpriteDataUrlCache();
+    const updated = refreshMarkedSpriteElements();
+    if (updated > 0 && isVerboseLogsEnabled()) {
+      log(`[Sprite Compat] Refreshed ${updated} marked sprite elements after hydration event`);
+    }
+  });
+}
+
 // Legacy compat used data URL caches and warmup; the canvas-first path relies on PIXI's internal cache.
 export function setSpriteService(svc: SpriteService): void {
   service = svc;
+  hasLoggedServiceNotReady = false;
+  ensureHydrationEventListener();
   serviceReadyResolve?.(service);
   // Notify all waiting callbacks that sprites are ready
   notifySpritesReady();
@@ -208,14 +317,21 @@ function getIdVariations(category: string, id: string): string[] {
 
 function tryRenderCanvas(category: string, id: string, mutations: string[] = []): HTMLCanvasElement | null {
   if (!service) {
-    console.warn('[Sprite Compat] Service not initialized yet');
+    if (!hasLoggedServiceNotReady) {
+      hasLoggedServiceNotReady = true;
+      spriteLog('warn', 'compat-service-not-ready', 'Sprite service not initialized yet', undefined, {
+        onceKey: 'compat-service-not-ready',
+      });
+    }
     return null;
   }
 
   try {
     return service.renderToCanvas({ category: category as any, id, mutations });
   } catch (e) {
-    console.error(`[Sprite Compat] render failed for ${category}:${id}`, e);
+    spriteLog('warn', 'compat-render-failed', `Sprite render failed for ${category}:${id}`, {
+      error: String((e as Error)?.message ?? e),
+    });
     return null;
   }
 }
@@ -418,7 +534,11 @@ export function renderPlantWithMutations(
   }
 
   // If it's a canvas, we can't easily reverse-engineer the species
-  console.warn('[Sprite Compat] renderPlantWithMutations called with canvas - cannot apply mutations without species ID');
+  spriteLog(
+    'warn',
+    'compat-render-plant-with-canvas',
+    'renderPlantWithMutations called with canvas; cannot apply mutations without species id'
+  );
   return baseOrId;
 }
 
@@ -488,12 +608,12 @@ export const spriteExtractor = {
 
   loadSheetFromUrl: async (_url: string, _alias?: string, _forceSize?: 256 | 512): Promise<boolean> => {
     // In new system, all sprites are loaded from manifest automatically
-    console.log('[Sprite Compat] loadSheetFromUrl is deprecated - sprites auto-loaded from manifest');
+    spriteLog('info', 'compat-deprecated-load-sheet', 'loadSheetFromUrl is deprecated; sprites auto-load from manifest');
     return true;
   },
 
   init: (): void => {
-    console.log('[Sprite Compat] init() is deprecated - sprite system initializes automatically');
+    spriteLog('info', 'compat-deprecated-init', 'spriteExtractor.init() is deprecated; sprite system initializes automatically');
   },
 };
 
@@ -502,7 +622,7 @@ export const spriteExtractor = {
  */
 export const Sprites = {
   init: () => {
-    console.log('[Sprite Compat] Sprites.init() is deprecated');
+    spriteLog('info', 'compat-deprecated-sprites-init', 'Sprites.init() is deprecated');
   },
   clearCaches: () => {
     if (service) {
@@ -523,36 +643,37 @@ export const Sprites = {
  * Initialize function
  */
 export function initSprites(): void {
-  console.log('[Sprite Compat] initSprites() called - system initializes automatically');
+  spriteLog('info', 'compat-deprecated-init-sprites', 'initSprites() is deprecated; sprite system initializes automatically');
 }
 
 // Debug helpers
 export async function inspectPetSprites(): Promise<void> {
   if (!service) {
-    console.error('[Sprite Compat] Service not initialized');
+    spriteLog('warn', 'compat-inspect-pets-no-service', 'inspectPetSprites called before service initialization');
     return;
   }
 
   const pets = service.list('pet');
-  console.log('🐾 Pet sprites loaded:', pets.length);
-  console.table(pets.slice(0, 20).map((p) => ({ key: p.key, isAnim: p.isAnim, frames: p.count })));
+  spriteLog('info', 'compat-inspect-pets', `Pet sprites loaded: ${pets.length}`, {
+    sample: pets.slice(0, 20).map((p) => ({ key: p.key, isAnim: p.isAnim, frames: p.count })),
+  });
 }
 
 export function renderSpriteGridOverlay(_sheetName = 'plants', _maxTiles = 80): void {
-  console.warn('[Sprite Compat] renderSpriteGridOverlay is deprecated in sprite-v2');
+  spriteLog('warn', 'compat-deprecated-grid-overlay', 'renderSpriteGridOverlay is deprecated in sprite-v2');
 }
 
 export function renderAllSpriteSheetsOverlay(_maxTilesPerSheet = 80): void {
-  console.warn('[Sprite Compat] renderAllSpriteSheetsOverlay is deprecated in sprite-v2');
+  spriteLog('warn', 'compat-deprecated-all-overlays', 'renderAllSpriteSheetsOverlay is deprecated in sprite-v2');
 }
 
 export function listTrackedSpriteResources(_category = 'all'): Array<{ url: string; families: string[] }> {
-  console.warn('[Sprite Compat] listTrackedSpriteResources is deprecated in sprite-v2');
+  spriteLog('warn', 'compat-deprecated-list-resources', 'listTrackedSpriteResources is deprecated in sprite-v2');
   return [];
 }
 
 export function loadTrackedSpriteSheets(_maxSheets = 3, _category = 'all'): Promise<string[]> {
-  console.warn('[Sprite Compat] loadTrackedSpriteSheets is deprecated in sprite-v2');
+  spriteLog('warn', 'compat-deprecated-load-tracked-sheets', 'loadTrackedSpriteSheets is deprecated in sprite-v2');
   return Promise.resolve([]);
 }
 
@@ -727,3 +848,4 @@ export function scheduleWarmup(delayMs: number = 2000): void {
     });
   }
 }
+

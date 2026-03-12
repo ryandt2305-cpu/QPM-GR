@@ -87,6 +87,9 @@ const QPM_STORAGE_KEYS = [
   // Pet Optimizer
   'petOptimizer:config.v2',
 
+  // Sprite Debug
+  'qpm.debug.sprite.allowLegacyFallbackOnKtx2',
+
   // Activity Log Enhancer
   'qpm.activityLogEnhanced.entries.v1',
   'qpm.activityLogEnhanced.entries.v2',

@@ -5,7 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.13] - Current
+## [3.1.14] - Current
+
+### Added
+- Sprite-v2: added a native decoder path for Magic Garden v114+ compressed (`.ktx2`) atlases so sprites load from the current runtime version instead of relying on cross-version compatibility fallbacks.
+- Decoder pipeline now reports per-atlas hydration/source telemetry in `spriteBootReport()` (expected vs hydrated frames, source mode, and decoder success/failure counters) to make runtime verification deterministic.
+- Compressed atlas handling is now stable through the in-script decoder flow, with compatibility behavior preserved for pre-v114 legacy image atlases.
+
+### Notes
+- if youre reading this hello, i hope you have a good day
+
+---
+
+## [3.1.13]
 
 ### Changed
 - Pet Teams: hutch-balanced apply now pairs hutch pulls with outgoing active pets (favorited pets preferred) and reports clearer failure reasons

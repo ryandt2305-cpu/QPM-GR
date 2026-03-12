@@ -10,11 +10,13 @@ function mkRect(Rectangle: any, x: number, y: number, w: number, h: number): any
 
 function mkSubTex(Texture: any, baseTex: any, frame: any, orig: any, trim: any, rotate: number, anchor: { x: number; y: number } | null): any {
   let t: any;
+  const sourceRef = baseTex?.source ?? baseTex?._source ?? baseTex;
 
   try {
-    t = new Texture({ source: baseTex.source, frame, orig, trim: trim || undefined, rotate: rotate || 0 });
+    t = new Texture({ source: sourceRef, frame, orig, trim: trim || undefined, rotate: rotate || 0 });
   } catch (e) {
-    t = new Texture(baseTex.baseTexture ?? baseTex, frame, orig, trim || undefined, rotate || 0);
+    const fallbackSource = sourceRef ?? baseTex?._baseTexture ?? baseTex;
+    t = new Texture(fallbackSource, frame, orig, trim || undefined, rotate || 0);
   }
 
   try {

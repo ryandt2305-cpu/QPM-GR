@@ -226,7 +226,14 @@ function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig): HTMLC
     const orig = tex?.orig || tex?._orig;
     const trim = tex?.trim || tex?._trim;
     const rot = tex?.rotate || tex?._rotate || 0;
-    const src = tex?.baseTexture?.resource?.source || tex?.baseTexture?.resource || tex?.source?.resource?.source || tex?.source?.resource || tex?._source?.resource?.source || null;
+    const src =
+      tex?.source?.resource?.source ||
+      tex?.source?.resource ||
+      tex?._source?.resource?.source ||
+      tex?._source?.resource ||
+      tex?._baseTexture?.resource?.source ||
+      tex?._baseTexture?.resource ||
+      null;
 
     if (!fr || !src) throw new Error('textureToCanvas failed');
 
@@ -361,7 +368,7 @@ function computeIconLayout(tex: any, baseName: string, isTall: boolean) {
 export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, state: SpriteState, cfg: SpriteConfig): any {
   try {
     if (!tex || !state.renderer || !state.ctors?.Container || !state.ctors?.Sprite || !state.ctors?.Texture) {
-      return null;
+      return tex ?? null;
     }
 
     const { Container, Sprite, Texture } = state.ctors;
@@ -509,7 +516,8 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
 
     return outTex;
   } catch (e) {
-    return null;
+    // Mutation pipeline should degrade to base sprite instead of hiding visuals.
+    return tex ?? null;
   }
 }
 

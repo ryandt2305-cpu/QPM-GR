@@ -25,9 +25,10 @@ import { startVersionChecker } from './utils/versionChecker';
 import { startCropBoostTracker } from './features/cropBoostTracker';
 import { initPublicRooms } from './features/publicRooms';
 // New sprite system (sprite-v2)
-import { initSpriteSystem } from './sprite-v2/index';
+import { initSpriteSystem, getSpriteBootReport, spriteProbe } from './sprite-v2/index';
 import type { SpriteService } from './sprite-v2/types';
 import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridOverlay, renderAllSpriteSheetsOverlay, listTrackedSpriteResources, loadTrackedSpriteSheets, scheduleWarmup } from './sprite-v2/compat';
+import { isSpriteLogsEnabled, printSpriteLogDump, setSpriteLogsEnabled } from './sprite-v2/diagnostics';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
 import { initializeAntiAfk, stopAntiAfk } from './features/antiAfk';
@@ -82,6 +83,17 @@ const QPM_DEBUG_API = {
     return { verboseLogs: isVerboseLogsEnabled() };
   },
   getVerboseLogs: () => isVerboseLogsEnabled(),
+  spriteLogs: (enabled?: boolean) => {
+    if (typeof enabled === 'boolean') {
+      setSpriteLogsEnabled(enabled);
+      setVerboseLogsEnabled(enabled);
+    }
+    return {
+      spriteLogs: isSpriteLogsEnabled(),
+      verboseLogs: isVerboseLogsEnabled(),
+    };
+  },
+  spriteLogDump: (limit?: number) => printSpriteLogDump(limit),
   activityLogList: () => listActivityLogEnhancerEntries(),
   activityLogExport: () => exportActivityLogEnhancerEntries(),
   activityLogClear: () => clearActivityLogEnhancerEntries(),
@@ -168,6 +180,21 @@ const QPM_DEBUG_API = {
   showAllSpriteSheets: (maxTilesPerSheet = 120) => renderAllSpriteSheetsOverlay(maxTilesPerSheet),
   listSpriteResources: (category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => listTrackedSpriteResources(category),
   loadTrackedSpriteSheets: (maxSheets = 8, category: 'plants' | 'pets' | 'unknown' | 'all' = 'all') => loadTrackedSpriteSheets(maxSheets, category),
+  spriteBootReport: () => getSpriteBootReport(),
+  spriteProbe: (keys?: Array<string | { key?: string; category?: string; id?: string; mutations?: string[] }>) => {
+    const rows = spriteProbe(keys as any);
+    console.table(rows.map((r) => ({
+      input: r.input,
+      ok: r.ok ? 'yes' : 'no',
+      category: r.category,
+      id: r.id,
+      mutations: r.mutations.join(','),
+      width: r.width,
+      height: r.height,
+      error: r.error ?? '',
+    })));
+    return rows;
+  },
 
   // Expose sprite extractor for debugging
   spriteExtractor: spriteExtractor,

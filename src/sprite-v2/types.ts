@@ -121,6 +121,16 @@ export interface SpriteState {
   pool: any[];
   active: Map<any, any>;
   anim: Set<any>;
+  loadMode?: 'legacy' | 'ktx2-native' | 'ktx2-native-failed' | 'legacy-fallback';
+  fallbackBase?: string | null;
+  decoder?: {
+    workerReady: boolean;
+    decodeAttempts: number;
+    decodeSuccesses: number;
+    decodeFailures: number;
+    totalDecodeMs: number;
+  };
+  runtimeTextureHints?: any[];
 }
 
 export interface PixiConstructors {

@@ -93,9 +93,8 @@ export function getCtors(app: any, renderer?: any): PixiConstructors {
  */
 export function baseTexOf(tex: any): any {
   return (
-    tex?.baseTexture ??
-    tex?.source?.baseTexture ??
     tex?.source ??
+    tex?._source ??
     tex?._baseTexture ??
     null
   );

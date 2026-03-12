@@ -1,6 +1,11 @@
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { pageWindow } from '../core/pageContext';
-import { getAnySpriteDataUrl, getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
+import {
+  getAnySpriteDataUrl,
+  getCropSpriteDataUrlWithMutations,
+  getPetSpriteDataUrlWithMutations,
+  getProduceSpriteDataUrlWithMutations,
+} from '../sprite-v2/compat';
 import { getInventoryItems, type InventoryItem } from '../store/inventory';
 import { getActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { getAbilityDefinition, computeAbilityStats } from '../data/petAbilities';
@@ -150,14 +155,8 @@ interface ModalHandles {
   toolbar: HTMLElement;
   summary: HTMLElement;
   controls: {
-    search: HTMLInputElement;
-    source: HTMLSelectElement;
     category: HTMLSelectElement;
-    petSpecies: HTMLInputElement;
-    plantSpecies: HTMLInputElement;
     sort: HTMLSelectElement;
-    exportBtn: HTMLButtonElement;
-    clearBtn: HTMLButtonElement;
   };
   listObserver: MutationObserver;
   onListClick: (event: Event) => void;
@@ -176,6 +175,33 @@ interface NativeRowTemplate {
   highlightClass: string;
   iconHTML: string;
 }
+
+function createPresetRowTemplate(): NativeRowTemplate {
+  return {
+    rowClass: 'McGrid qpm-activity-row',
+    textWrapClass: 'qpm-activity-row-text',
+    messageClass: 'qpm-activity-row-message',
+    timeWrapClass: 'qpm-activity-row-time-wrap',
+    timeClass: 'qpm-activity-row-time',
+    iconWrapClass: 'qpm-activity-row-icon-wrap',
+    iconInnerClass: 'qpm-activity-row-icon-slot',
+    highlightClass: 'qpm-activity-highlight',
+    iconHTML: '',
+  };
+}
+
+const PRESET_ROW_TEMPLATES: Record<ActivityCategory | 'other', NativeRowTemplate> = {
+  purchase: createPresetRowTemplate(),
+  sell: createPresetRowTemplate(),
+  feed: createPresetRowTemplate(),
+  plant: createPresetRowTemplate(),
+  harvest: createPresetRowTemplate(),
+  hatch: createPresetRowTemplate(),
+  boost: createPresetRowTemplate(),
+  travel: createPresetRowTemplate(),
+  storage: createPresetRowTemplate(),
+  other: createPresetRowTemplate(),
+};
 
 const STORAGE_KEY_ENTRIES = 'qpm.activityLogEnhanced.entries.v3';
 const STORAGE_KEY_ENTRIES_V2 = 'qpm.activityLogEnhanced.entries.v2';
@@ -218,12 +244,6 @@ const CATEGORY_OPTIONS: Array<{ value: CategoryFilter; label: string }> = [
   { value: 'travel', label: 'Travel' },
   { value: 'storage', label: 'Storage' },
   { value: 'other', label: 'Other' },
-];
-
-const SOURCE_OPTIONS: Array<{ value: SourceFilter; label: string }> = [
-  { value: 'all', label: 'All Sources' },
-  { value: 'native', label: 'Native' },
-  { value: 'fallback', label: 'Fallback' },
 ];
 
 const IGNORED_ACTION_TYPES = new Set<string>([
@@ -271,6 +291,7 @@ let isApplyingListRender = false;
 
 const seenStableKeys = new Map<string, number>();
 const entryByFingerprint = new Map<string, ActivityEntry>();
+const nativeRowSignatures = new WeakMap<HTMLElement, string>();
 
 interface ResolverSnapshot {
   builtAt: number;
@@ -361,7 +382,8 @@ function parseRelativeTimestamp(label: string, now = Date.now()): number {
   if (minSecMatch) {
     const minutes = Number(minSecMatch[1] ?? 0);
     const seconds = Number(minSecMatch[2] ?? 0);
-    return now - (minutes * 60 + seconds) * 1000;
+    const raw = now - (minutes * 60 + seconds) * 1000;
+    return Math.floor(raw / 1000) * 1000;
   }
 
   const singleMatch = normalized.match(/^(\d+)\s*(s|m|h|d|w|mo|y)\s*ago$/);
@@ -378,7 +400,9 @@ function parseRelativeTimestamp(label: string, now = Date.now()): number {
     mo: 2_592_000_000,
     y: 31_536_000_000,
   };
-  return now - amount * (unitMs[unit] ?? 1000);
+  const ms = unitMs[unit] ?? 1000;
+  const raw = now - amount * ms;
+  return Math.floor(raw / ms) * ms;
 }
 
 function splitMessageAndTime(rawText: string): { message: string; timeLabel: string | null } {
@@ -536,7 +560,83 @@ function resolveInventoryDisplayLabel(item: InventoryItem | null): string | null
     ?? null;
 }
 
-function resolvePetFromCandidate(candidate: string | null | undefined): { displayName: string | null; species: string | null } | null {
+function normalizeMutationLabel(value: unknown): string | null {
+  const clean = readString(value);
+  if (!clean) return null;
+  const normalized = normalizeToken(clean).replace(/[^a-z]/g, '');
+  if (!normalized) return null;
+  switch (normalized) {
+    case 'gold':
+    case 'golden':
+      return 'Gold';
+    case 'rainbow':
+      return 'Rainbow';
+    case 'wet':
+      return 'Wet';
+    case 'chilled':
+      return 'Chilled';
+    case 'frozen':
+      return 'Frozen';
+    case 'dawnlit':
+      return 'Dawnlit';
+    case 'dawnbound':
+      return 'Dawnbound';
+    case 'amberlit':
+      return 'Amberlit';
+    case 'amberbound':
+      return 'Amberbound';
+    default:
+      return toTitleCase(clean);
+  }
+}
+
+function dedupeMutationList(mutations: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const mutation of mutations) {
+    const normalized = normalizeMutationLabel(mutation);
+    if (!normalized) continue;
+    const key = normalizeToken(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function inferGranterMutationsFromAbilities(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const out: string[] = [];
+  for (const ability of values) {
+    const id = normalizeToken(
+      readString(ability)
+      ?? (isRecord(ability) ? readString(ability.id) : null)
+      ?? (isRecord(ability) ? readString(ability.name) : null)
+      ?? '',
+    );
+    if (!id) continue;
+    if (id.includes('rainbowgranter')) out.push('Rainbow');
+    if (id.includes('goldgranter')) out.push('Gold');
+  }
+  return out;
+}
+
+function extractMutationsFromUnknown(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const base = Array.isArray(value.mutations) ? value.mutations : [];
+  const nested = isRecord(value.pet) && Array.isArray(value.pet.mutations) ? value.pet.mutations : [];
+  const asStrings = [...base, ...nested]
+    .filter((mutation): mutation is string => typeof mutation === 'string');
+  return dedupeMutationList(asStrings);
+}
+
+interface ResolvedPetAppearance {
+  displayName: string | null;
+  species: string | null;
+  mutations: string[];
+}
+
+function resolvePetAppearanceFromCandidate(candidate: string | null | undefined): ResolvedPetAppearance | null {
   const clean = readString(candidate);
   if (!clean) return null;
 
@@ -546,18 +646,28 @@ function resolvePetFromCandidate(candidate: string | null | undefined): { displa
 
   const directPet = snapshot.petsByKey.get(normalized);
   if (directPet) {
+    const mutations = dedupeMutationList([
+      ...directPet.mutations,
+      ...inferGranterMutationsFromAbilities(directPet.abilities),
+    ]);
     return {
       displayName: readString(directPet.name) ?? readString(directPet.species) ?? clean,
       species: readString(directPet.species)?.toLowerCase() ?? null,
+      mutations,
     };
   }
 
   const invPet = resolveInventoryItem(clean, true);
   if (invPet) {
     const species = readString(invPet.species)?.toLowerCase() ?? null;
+    const mutations = dedupeMutationList([
+      ...extractMutationsFromUnknown(invPet.raw),
+      ...inferGranterMutationsFromAbilities(invPet.abilities),
+    ]);
     return {
       displayName: resolveInventoryDisplayLabel(invPet) ?? clean,
       species,
+      mutations,
     };
   }
 
@@ -568,6 +678,16 @@ function resolvePetFromCandidate(candidate: string | null | undefined): { displa
   return {
     displayName: clean,
     species: readString(clean)?.toLowerCase() ?? null,
+    mutations: [],
+  };
+}
+
+function resolvePetFromCandidate(candidate: string | null | undefined): { displayName: string | null; species: string | null } | null {
+  const resolved = resolvePetAppearanceFromCandidate(candidate);
+  if (!resolved) return null;
+  return {
+    displayName: resolved.displayName,
+    species: resolved.species,
   };
 }
 
@@ -1140,6 +1260,7 @@ function extractPetSpecies(message: string): string | null {
   const checks = [
     /you fed your\s+([a-z][a-z0-9' -]*)/i,
     /your\s+([a-z][a-z0-9' -]*)\s+boosted/i,
+    /your\s+([a-z][a-z0-9' -]*)\s+found/i,
     /got\s+\d+\s+([a-z][a-z0-9' -]*)/i,
   ];
   for (const pattern of checks) {
@@ -1166,7 +1287,7 @@ function extractPlantSpecies(message: string): string | null {
 }
 
 function stableKeyForEntry(entry: ActivityEntry): string {
-  const roundedTs = Math.round(entry.timestamp / 1000);
+  const roundedTs = Math.round(entry.timestamp / 60_000);
   return `${entry.source}:${entry.family}:${normalizeToken(entry.message)}:${roundedTs}`;
 }
 
@@ -1328,6 +1449,52 @@ function normalizeLoadedEntries(rawEntries: ActivityEntry[]): ActivityEntry[] {
   }
 
   return ordered;
+}
+
+function suppressSemanticDuplicates(rawEntries: ActivityEntry[]): void {
+  const ordered = [...rawEntries].sort((a, b) => a.timestamp - b.timestamp);
+  const activeByMessage = new Map<string, ActivityEntry[]>();
+  const SEMANTIC_WINDOW_MS = 90_000;
+
+  for (const entry of ordered) {
+    if (entry.supersededBy) continue;
+    const messageKey = normalizeToken(stripTrailingAgeLabel(entry.message));
+    if (!messageKey) continue;
+
+    const group = activeByMessage.get(messageKey) ?? [];
+    let matched: ActivityEntry | null = null;
+    for (let index = group.length - 1; index >= 0; index -= 1) {
+      const candidate = group[index];
+      if (!candidate || candidate.supersededBy) continue;
+      if (entry.timestamp - candidate.timestamp > SEMANTIC_WINDOW_MS) break;
+      if (Math.abs(candidate.timestamp - entry.timestamp) <= SEMANTIC_WINDOW_MS) {
+        matched = candidate;
+        break;
+      }
+    }
+
+    if (!matched) {
+      group.push(entry);
+      activeByMessage.set(messageKey, group);
+      continue;
+    }
+
+    const existingScore = scoreEntry(matched);
+    const nextScore = scoreEntry(entry);
+    const keepIncoming = nextScore > existingScore
+      || (nextScore === existingScore && entry.timestamp > matched.timestamp);
+
+    if (keepIncoming) {
+      markSuperseded(matched, entry.id);
+      const idx = group.findIndex((candidate) => candidate.id === matched.id);
+      if (idx >= 0) {
+        group[idx] = entry;
+      }
+      continue;
+    }
+
+    markSuperseded(entry, matched.id);
+  }
 }
 
 function loadEntriesFromStorage(): ActivityEntry[] {
@@ -1705,11 +1872,21 @@ function ingestNativeRows(list: HTMLElement, explicitRows?: HTMLElement[]): void
     if (!child) continue;
     if (child.tagName.toLowerCase() === 'button') continue;
     if (!isRealNativeRow(child)) continue;
-    const existingEntryId = child.getAttribute(NATIVE_ENTRY_ID_ATTR);
-    if (existingEntryId && modalHandles) {
-      modalHandles.nativeRowsByEntryId.set(existingEntryId, child);
+
+    const rawText = normalizeWhitespace(child.innerText || child.textContent || '');
+    if (!rawText || /load\s+\d+\s+more/i.test(rawText)) continue;
+    const parsed = splitMessageAndTime(rawText);
+    const signature = normalizeToken(stripTrailingAgeLabel(parsed.message || rawText));
+    const existingSignature = nativeRowSignatures.get(child);
+    if (existingSignature === signature) {
+      const existingEntryId = child.getAttribute(NATIVE_ENTRY_ID_ATTR);
+      if (existingEntryId && modalHandles) {
+        modalHandles.nativeRowsByEntryId.set(existingEntryId, child);
+      }
       continue;
     }
+    nativeRowSignatures.set(child, signature);
+
     const entry = parseNativeRow(child, index, now);
     if (!entry) continue;
     const key = stableKeyForEntry(entry);
@@ -2178,41 +2355,52 @@ function ensureStyles(): void {
   style.id = STYLE_ID;
   style.textContent = `
     .qpm-activity-toolbar {
-      margin: 8px 0 10px;
-      border: 1px solid rgba(168, 176, 190, 0.62);
-      border-radius: 8px;
-      background: rgba(219, 224, 232, 0.9);
-      padding: 8px;
+      margin: 4px 0 8px;
+      padding: 0;
+      border: 0;
+      background: transparent;
       box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     .qpm-activity-controls {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(110px, 1fr));
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-    .qpm-activity-controls input,
-    .qpm-activity-controls select,
-    .qpm-activity-controls button {
-      width: 100%;
-      min-height: 28px;
-      border: 1px solid rgba(138, 150, 168, 0.55);
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 12px;
-      background: rgba(247, 248, 250, 0.97);
-      color: #2e3644;
-      box-sizing: border-box;
-    }
-    .qpm-activity-actions {
       display: flex;
-      gap: 6px;
       align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0;
+    }
+    .qpm-activity-control {
+      min-height: 24px;
+      border: 1px solid rgba(138, 150, 168, 0.45);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 11px;
+      line-height: 1.2;
+      background: rgba(247, 248, 250, 0.82);
+      color: #2f3a4a;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+    .qpm-activity-control:focus {
+      outline: none;
+      border-color: rgba(110, 124, 146, 0.72);
     }
     .qpm-activity-summary {
       font-size: 11px;
       color: #3f4a5e;
       font-weight: 600;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    @media (max-width: 780px) {
+      .qpm-activity-summary {
+        width: 100%;
+        margin-left: 0;
+        white-space: normal;
+      }
     }
     .qpm-activity-fallback-badge {
       margin-left: 6px;
@@ -2234,6 +2422,66 @@ function ensureStyles(): void {
       margin-left: 2px;
       display: inline-block !important;
       image-rendering: pixelated;
+    }
+    .qpm-activity-row {
+      margin-bottom: 4px;
+      min-height: 68px;
+      border-radius: 10px;
+      background: #e6d8b5;
+      border: 1px solid rgba(140, 112, 70, 0.22);
+      display: grid;
+      grid-template-columns: 1fr 56px;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 10px 8px;
+      box-sizing: border-box;
+    }
+    .qpm-activity-row-text {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .qpm-activity-row-message {
+      color: #2e2a24;
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .qpm-activity-row-time-wrap {
+      display: flex;
+      align-items: center;
+      min-height: 16px;
+    }
+    .qpm-activity-row-time {
+      margin: 0;
+      color: #595246;
+      font-size: 11px;
+      line-height: 1.2;
+      font-weight: 500;
+    }
+    .qpm-activity-row-icon-wrap {
+      height: 100%;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .qpm-activity-row-icon-slot {
+      width: 42px;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+    }
+    .qpm-activity-highlight {
+      color: #c2502a;
+      font-weight: 700;
     }
     .qpm-activity-icon-img {
       width: 100%;
@@ -2304,55 +2552,52 @@ function buildToolbar(): Omit<ModalHandles, 'root' | 'header' | 'content' | 'lis
   const controls = document.createElement('div');
   controls.className = 'qpm-activity-controls';
 
-  const searchInput = document.createElement('input');
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Search message/action';
-  searchInput.value = filters.search;
+  const normalizedSort: SortMode = filters.sort === 'time_asc' ? 'time_asc' : 'time_desc';
+  const shouldResetHiddenFilters = Boolean(filters.search || filters.petSpecies || filters.plantSpecies || filters.source !== 'all');
+  if (filters.sort !== normalizedSort || shouldResetHiddenFilters) {
+    filters = {
+      ...filters,
+      sort: normalizedSort,
+      search: '',
+      source: 'all',
+      petSpecies: '',
+      plantSpecies: '',
+    };
+    queueFiltersSave();
+  }
 
-  const sourceSelect = createSelect(SOURCE_OPTIONS, filters.source);
-  const categorySelect = createSelect(CATEGORY_OPTIONS, filters.category);
-
-  const petSpeciesInput = document.createElement('input');
-  petSpeciesInput.type = 'text';
-  petSpeciesInput.placeholder = 'Pet species filter';
-  petSpeciesInput.value = filters.petSpecies;
-
-  const plantSpeciesInput = document.createElement('input');
-  plantSpeciesInput.type = 'text';
-  plantSpeciesInput.placeholder = 'Plant species filter';
-  plantSpeciesInput.value = filters.plantSpecies;
-
-  const sortSelect = createSelect(
+  const categorySelect = createSelect(
     [
-      { value: 'time_desc', label: 'Time (Newest)' },
-      { value: 'time_asc', label: 'Time (Oldest)' },
-      { value: 'action_asc', label: 'Action (A-Z)' },
-      { value: 'action_desc', label: 'Action (Z-A)' },
+      { value: 'all', label: 'Type: All' },
+      { value: 'purchase', label: 'Type: Purchase' },
+      { value: 'sell', label: 'Type: Sell' },
+      { value: 'feed', label: 'Type: Feed' },
+      { value: 'plant', label: 'Type: Plant' },
+      { value: 'harvest', label: 'Type: Harvest' },
+      { value: 'hatch', label: 'Type: Hatch' },
+      { value: 'boost', label: 'Type: Boost' },
+      { value: 'travel', label: 'Type: Travel' },
+      { value: 'storage', label: 'Type: Storage' },
+      { value: 'other', label: 'Type: Other' },
     ],
-    filters.sort,
+    filters.category,
   );
+  categorySelect.className = 'qpm-activity-control';
+  categorySelect.title = 'Filter by activity type';
 
-  const actionRow = document.createElement('div');
-  actionRow.className = 'qpm-activity-actions';
-
-  const exportBtn = document.createElement('button');
-  exportBtn.type = 'button';
-  exportBtn.textContent = 'Export JSON';
-
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.textContent = 'Clear Saved Logs';
-
-  actionRow.append(exportBtn, clearBtn);
+  const sortSelect = createSelect<SortMode>(
+    [
+      { value: 'time_desc', label: 'Order: Newest' },
+      { value: 'time_asc', label: 'Order: Oldest' },
+    ],
+    normalizedSort,
+  );
+  sortSelect.className = 'qpm-activity-control';
+  sortSelect.title = 'Sort order';
 
   controls.append(
-    searchInput,
-    sourceSelect,
     categorySelect,
-    petSpeciesInput,
-    plantSpeciesInput,
     sortSelect,
-    actionRow,
   );
 
   const summary = document.createElement('div');
@@ -2364,14 +2609,8 @@ function buildToolbar(): Omit<ModalHandles, 'root' | 'header' | 'content' | 'lis
     toolbar,
     summary,
     controls: {
-      search: searchInput,
-      source: sourceSelect,
       category: categorySelect,
-      petSpecies: petSpeciesInput,
-      plantSpecies: plantSpeciesInput,
       sort: sortSelect,
-      exportBtn,
-      clearBtn,
     },
   };
 }
@@ -2390,50 +2629,19 @@ function wireControlEvents(handles: ModalHandles): void {
   const { controls } = handles;
   const syncAndRender = () => {
     filters = {
-      search: controls.search.value,
-      source: controls.source.value as SourceFilter,
+      search: '',
+      source: 'all',
       category: controls.category.value as CategoryFilter,
-      petSpecies: controls.petSpecies.value,
-      plantSpecies: controls.plantSpecies.value,
+      petSpecies: '',
+      plantSpecies: '',
       sort: controls.sort.value as SortMode,
     };
     queueFiltersSave();
     scheduleRender();
   };
 
-  controls.search.addEventListener('input', syncAndRender);
-  controls.source.addEventListener('change', syncAndRender);
   controls.category.addEventListener('change', syncAndRender);
-  controls.petSpecies.addEventListener('input', syncAndRender);
-  controls.plantSpecies.addEventListener('input', syncAndRender);
   controls.sort.addEventListener('change', syncAndRender);
-
-  controls.exportBtn.addEventListener('click', () => {
-    const filtered = getFilteredEntries();
-    const payload = JSON.stringify(filtered, null, 2);
-    const blob = new Blob([payload], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    link.href = url;
-    link.download = `qpm-activity-log-${stamp}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  });
-
-  controls.clearBtn.addEventListener('click', () => {
-    if (!window.confirm('Clear all saved enhanced activity logs?')) return;
-    entries = [];
-    pendingActions = [];
-    seenStableKeys.clear();
-    entryByFingerprint.clear();
-    storage.set(STORAGE_KEY_ENTRIES, entries);
-    storage.remove(STORAGE_KEY_ENTRIES_V2);
-    storage.remove(STORAGE_KEY_ENTRIES_LEGACY);
-    scheduleRender();
-  });
 }
 
 function isRealNativeRow(element: Element): element is HTMLElement {
@@ -2517,31 +2725,12 @@ function captureNativeRowTemplateFromRow(sourceRow: HTMLElement): NativeRowTempl
 }
 
 function captureNativeRowTemplates(list: HTMLElement): Partial<Record<ActivityCategory, NativeRowTemplate>> {
-  const templates: Partial<Record<ActivityCategory, NativeRowTemplate>> = {};
-  for (const child of Array.from(list.children)) {
-    if (!isRealNativeRow(child)) continue;
-    const parsed = parseNativeRow(child);
-    if (!parsed) continue;
-    if (!templates[parsed.category]) {
-      const template = captureNativeRowTemplateFromRow(child);
-      if (template) templates[parsed.category] = template;
-    }
-    if (!templates.other) {
-      const template = captureNativeRowTemplateFromRow(child);
-      if (template) templates.other = template;
-    }
-  }
-  return templates;
+  void list;
+  return { ...PRESET_ROW_TEMPLATES };
 }
 
 function resolveTemplateForEntry(entry: ActivityEntry): NativeRowTemplate | null {
-  if (!modalHandles) return null;
-  return (
-    modalHandles.rowTemplates[entry.category]
-    ?? modalHandles.rowTemplates.other
-    ?? Object.values(modalHandles.rowTemplates)[0]
-    ?? null
-  );
+  return PRESET_ROW_TEMPLATES[entry.category] ?? PRESET_ROW_TEMPLATES.other;
 }
 
 function toPascalCase(value: string): string {
@@ -2660,7 +2849,8 @@ function renderEnhancedMessage(messageElement: HTMLElement, entry: ActivityEntry
     }
   }
 
-  if (/\bfor\s+[\d,]+$/i.test(message)) {
+  const hasCoinAmount = /\bfor\s+[\d,]+$/i.test(message) || /\bfound\s+[\d,]+$/i.test(message);
+  if (hasCoinAmount) {
     const coinUrl = getCoinSpriteUrl();
     if (coinUrl) {
       messageElement.appendChild(document.createTextNode('\u00A0'));
@@ -2688,9 +2878,47 @@ function resolveItemIconUrl(entry: ActivityEntry): string | null {
     ?? extractItemLabelFromMessage(entry.message);
   const normalized = hinted ? toPascalCase(hinted) : '';
   if (!normalized) return null;
-  const cacheKey = normalized.toLowerCase();
+  const inventoryMatch = resolveInventoryItem(hinted, false);
+  const resolveMutations = (text: string): string[] => {
+    const hits: string[] = [];
+    const patterns: Array<{ label: string; regex: RegExp }> = [
+      { label: 'Rainbow', regex: /\brainbow\b/i },
+      { label: 'Gold', regex: /\bgold(?:en)?\b/i },
+      { label: 'Wet', regex: /\bwet\b/i },
+      { label: 'Chilled', regex: /\bchilled\b/i },
+      { label: 'Frozen', regex: /\bfrozen\b/i },
+      { label: 'Dawnlit', regex: /\bdawnlit\b/i },
+      { label: 'Dawnbound', regex: /\bdawnbound\b/i },
+      { label: 'Amberlit', regex: /\bamberlit\b/i },
+      { label: 'Amberbound', regex: /\bamberbound\b/i },
+    ];
+    for (const pattern of patterns) {
+      if (pattern.regex.test(text)) hits.push(pattern.label);
+    }
+    return hits;
+  };
+  const mutationHints = dedupeMutationList([
+    ...resolveMutations(entry.message),
+    ...resolveMutations(entry.rawMessage),
+    ...entry.iconHints.flatMap((hint) => resolveMutations(hint)),
+    ...resolveMutations(entry.itemLabel ?? ''),
+    ...extractMutationsFromUnknown(inventoryMatch?.raw),
+  ]);
+  const mutationKey = mutationHints.map((mutation) => normalizeToken(mutation)).sort().join(',');
+  const cacheKey = `${normalized.toLowerCase()}::${mutationKey}`;
   if (itemIconUrlCache.has(cacheKey)) {
     return itemIconUrlCache.get(cacheKey) ?? null;
+  }
+
+  const produceWithMutations = getProduceSpriteDataUrlWithMutations(normalized, mutationHints);
+  if (produceWithMutations) {
+    itemIconUrlCache.set(cacheKey, produceWithMutations);
+    return produceWithMutations;
+  }
+  const cropWithMutations = getCropSpriteDataUrlWithMutations(normalized, mutationHints);
+  if (cropWithMutations) {
+    itemIconUrlCache.set(cacheKey, cropWithMutations);
+    return cropWithMutations;
   }
 
   const singular = normalized.replace(/Seeds$/i, 'Seed').replace(/Eggs$/i, 'Egg').replace(/s$/i, '');
@@ -2733,20 +2961,24 @@ function resolveItemIconUrl(entry: ActivityEntry): string | null {
   return resolved;
 }
 
-function resolvePetIconUrl(species: string | null): string | null {
-  if (!species) return null;
-  const normalized = normalizeToken(species);
-  if (!normalized) return null;
-  if (petIconUrlCache.has(normalized)) {
-    return petIconUrlCache.get(normalized) ?? null;
+function resolvePetIconUrl(species: string | null, hint: string | null = null): string | null {
+  const candidate = readString(species) ?? readString(hint);
+  if (!candidate) return null;
+  const appearance = resolvePetAppearanceFromCandidate(candidate);
+  const normalizedSpecies = normalizeToken(appearance?.species ?? candidate);
+  if (!normalizedSpecies) return null;
+  const mutationKey = (appearance?.mutations ?? []).map((mutation) => normalizeToken(mutation)).sort().join(',');
+  const cacheKey = `${normalizedSpecies}::${mutationKey}`;
+  if (petIconUrlCache.has(cacheKey)) {
+    return petIconUrlCache.get(cacheKey) ?? null;
   }
   try {
-    const url = getPetSpriteDataUrlWithMutations(normalized, []);
+    const url = getPetSpriteDataUrlWithMutations(normalizedSpecies, appearance?.mutations ?? []);
     const resolved = url || null;
-    petIconUrlCache.set(normalized, resolved);
+    petIconUrlCache.set(cacheKey, resolved);
     return resolved;
   } catch {
-    petIconUrlCache.set(normalized, null);
+    petIconUrlCache.set(cacheKey, null);
     return null;
   }
 }
@@ -2757,15 +2989,22 @@ function resolveEntryIconUrls(entry: ActivityEntry): string[] {
     if (!url) return;
     if (!out.includes(url)) out.push(url);
   };
+  const normalizedMessage = normalizeToken(stripTrailingAgeLabel(entry.message));
+  const isPetFindCoins = /\byour\s+.+\s+found\s+[\d,]+\b/.test(normalizedMessage);
+
+  if (isPetFindCoins) {
+    push(resolvePetIconUrl(entry.petSpecies, entry.secondaryLabel ?? entry.itemLabel));
+    return out.slice(0, 1);
+  }
 
   if (entry.category === 'feed') {
     push(resolveItemIconUrl(entry));
-    push(resolvePetIconUrl(entry.petSpecies ?? entry.secondaryLabel));
+    push(resolvePetIconUrl(entry.petSpecies, entry.secondaryLabel));
     return out;
   }
 
   if (entry.category === 'sell' || entry.category === 'hatch' || entry.category === 'boost') {
-    push(resolvePetIconUrl(entry.petSpecies ?? entry.secondaryLabel ?? entry.itemLabel));
+    push(resolvePetIconUrl(entry.petSpecies, entry.secondaryLabel ?? entry.itemLabel));
   }
   if (entry.category === 'hatch') {
     push(resolveItemIconUrl(entry));
@@ -2777,14 +3016,17 @@ function resolveEntryIconUrls(entry: ActivityEntry): string[] {
 
   if (!out.length) {
     push(resolveItemIconUrl(entry));
-    push(resolvePetIconUrl(entry.petSpecies));
+    push(resolvePetIconUrl(entry.petSpecies, entry.secondaryLabel ?? entry.itemLabel));
   }
 
   return out.slice(0, 2);
 }
 
 function renderEnhancedIcons(iconWrap: HTMLElement, entry: ActivityEntry, template: NativeRowTemplate): void {
+  void template;
   const iconUrls = resolveEntryIconUrls(entry);
+  iconWrap.replaceChildren();
+
   if (!iconUrls.length) {
     const placeholder = getPlaceholderIconUrl();
     if (placeholder) {
@@ -2792,42 +3034,22 @@ function renderEnhancedIcons(iconWrap: HTMLElement, entry: ActivityEntry, templa
     }
   }
   if (!iconUrls.length) {
-    iconWrap.innerHTML = template.iconHTML;
     return;
   }
 
-  iconWrap.innerHTML = template.iconHTML;
-  const slots = Array.from(iconWrap.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
-  if (!slots.length) {
-    const fallbackSlot = document.createElement('div');
-    fallbackSlot.className = template.iconInnerClass || 'McFlex';
-    iconWrap.appendChild(fallbackSlot);
-    slots.push(fallbackSlot);
-  }
-
-  while (slots.length < iconUrls.length) {
-    const cloneSource = slots[slots.length - 1] ?? slots[0];
-    if (!cloneSource) break;
-    const cloned = cloneSource.cloneNode(true) as HTMLElement;
-    iconWrap.appendChild(cloned);
-    slots.push(cloned);
-  }
-
-  for (let index = 0; index < slots.length; index += 1) {
-    const slot = slots[index];
-    if (!slot) continue;
+  for (let index = 0; index < iconUrls.length; index += 1) {
     const url = iconUrls[index];
-    slot.replaceChildren();
     if (!url) {
-      slot.style.display = 'none';
       continue;
     }
-    slot.style.display = '';
+    const slot = document.createElement('div');
+    slot.className = 'qpm-activity-row-icon-slot';
     const img = document.createElement('img');
     img.className = 'qpm-activity-icon-img';
     img.alt = '';
     img.src = url;
     slot.appendChild(img);
+    iconWrap.appendChild(slot);
   }
 }
 
@@ -2866,6 +3088,7 @@ function createEnhancedRow(entry: ActivityEntry, template: NativeRowTemplate): H
 
 function renderInjectedRows(): void {
   if (!modalHandles) return;
+  const previousScrollTop = modalHandles.list.scrollTop;
   const filtered = getFilteredEntries();
   const renderLimit = showAllAfterNativeLoadMore ? filtered.length : MAX_RENDERED_ENTRIES;
   const rendered = filtered.slice(0, Math.max(0, renderLimit));
@@ -2880,34 +3103,16 @@ function renderInjectedRows(): void {
   }
 
   clearEnhancedRows(modalHandles.list);
-  restoreNativeRows(modalHandles.list);
+  hideNativeRows(modalHandles.list);
 
   modalHandles.listObserver.disconnect();
   isApplyingListRender = true;
   try {
     const fragment = document.createDocumentFragment();
-    const usedNativeEntryIds = new Set<string>();
     for (const entry of rendered) {
-      const nativeRow = modalHandles.nativeRowsByEntryId.get(entry.id);
-      if (nativeRow && nativeRow.isConnected && nativeRow.parentElement === modalHandles.list) {
-        nativeRow.style.display = '';
-        usedNativeEntryIds.add(entry.id);
-        fragment.appendChild(nativeRow);
-        continue;
-      }
-
       const template = resolveTemplateForEntry(entry);
       if (!template) continue;
       fragment.appendChild(createEnhancedRow(entry, template));
-    }
-
-    for (const child of Array.from(modalHandles.list.children)) {
-      if (!isRealNativeRow(child)) continue;
-      const entryId = child.getAttribute(NATIVE_ENTRY_ID_ATTR);
-      if (!entryId) continue;
-      if (!usedNativeEntryIds.has(entryId)) {
-        child.style.display = 'none';
-      }
     }
 
     const loadButton = Array.from(modalHandles.list.children).find((child) => child.tagName.toLowerCase() === 'button');
@@ -2917,8 +3122,10 @@ function renderInjectedRows(): void {
       modalHandles.list.appendChild(fragment);
     }
   } finally {
+    const maxScrollable = Math.max(0, modalHandles.list.scrollHeight - modalHandles.list.clientHeight);
+    modalHandles.list.scrollTop = Math.min(Math.max(0, previousScrollTop), maxScrollable);
     isApplyingListRender = false;
-    modalHandles.listObserver.observe(modalHandles.list, { childList: true, subtree: false });
+    modalHandles.listObserver.observe(modalHandles.list, { childList: true, subtree: true, characterData: true });
   }
 }
 
@@ -2969,6 +3176,10 @@ function attachModal(modal: { root: HTMLElement; header: HTMLElement; content: H
     const addedRows: HTMLElement[] = [];
     let sawRelevantMutation = false;
     for (const record of records) {
+      if (record.type === 'characterData') {
+        sawRelevantMutation = true;
+        continue;
+      }
       for (const node of Array.from(record.addedNodes)) {
         if (!(node instanceof HTMLElement)) {
           continue;
@@ -2989,7 +3200,9 @@ function attachModal(modal: { root: HTMLElement; header: HTMLElement; content: H
     }
     if (!sawRelevantMutation) return;
 
-    ingestNativeRows(modal.list, addedRows.length ? addedRows : undefined);
+    if (addedRows.length > 0) {
+      ingestNativeRows(modal.list, addedRows);
+    }
     modalHandles.rowTemplates = captureNativeRowTemplates(modal.list);
     for (const [entryId, row] of Array.from(modalHandles.nativeRowsByEntryId.entries())) {
       if (!row.isConnected || row.parentElement !== modal.list) {
@@ -2998,7 +3211,7 @@ function attachModal(modal: { root: HTMLElement; header: HTMLElement; content: H
     }
     scheduleRender();
   });
-  listObserver.observe(modal.list, { childList: true, subtree: false });
+  listObserver.observe(modal.list, { childList: true, subtree: true, characterData: true });
 
   const onListClick = (event: Event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -3156,6 +3369,45 @@ function stopMyDataActivitySubscription(): void {
   myDataUnsubscribe = null;
 }
 
+function triggerExportJson(entriesToExport: ActivityEntry[]): number {
+  const payload = JSON.stringify(entriesToExport, null, 2);
+  const blob = new Blob([payload], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  link.href = url;
+  link.download = `qpm-activity-log-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  return entriesToExport.length;
+}
+
+export function listActivityLogEnhancerEntries(): unknown[] {
+  return entries.map((entry) => ({
+    ...entry,
+    iconHints: [...entry.iconHints],
+  }));
+}
+
+export function exportActivityLogEnhancerEntries(): number {
+  return triggerExportJson(getFilteredEntries());
+}
+
+export function clearActivityLogEnhancerEntries(): number {
+  const removed = entries.length;
+  entries = [];
+  pendingActions = [];
+  seenStableKeys.clear();
+  entryByFingerprint.clear();
+  storage.set(STORAGE_KEY_ENTRIES, entries);
+  storage.remove(STORAGE_KEY_ENTRIES_V2);
+  storage.remove(STORAGE_KEY_ENTRIES_LEGACY);
+  scheduleRender();
+  return removed;
+}
+
 export async function startActivityLogEnhancer(): Promise<void> {
   if (started) return;
   started = true;
@@ -3163,6 +3415,8 @@ export async function startActivityLogEnhancer(): Promise<void> {
   try {
     resolverSnapshotCache = null;
     entries = loadEntriesFromStorage();
+    suppressSemanticDuplicates(entries);
+    queueEntriesSave();
     rebuildEntryFingerprintIndex();
     startModalObserver();
     startPendingSweepLoop();

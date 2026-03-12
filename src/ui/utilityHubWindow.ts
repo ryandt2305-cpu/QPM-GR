@@ -6,6 +6,7 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 
 const VISIBLE_CARDS_KEY = 'qpm.utilityHub.visibleCards';
+const ACTIVITY_LOG_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.activityLogDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -30,6 +31,13 @@ const FEATURE_DEFS = [
     windowTitle: '❤️ Bulk Favorite',
   },
   {
+    key: 'activity-log',
+    label: 'Activity Log',
+    icon: '📜',
+    desc: 'Native activity history with persistent storage and safe replay',
+    windowTitle: '📜 Activity Log',
+  },
+  {
     key: 'reminders',
     label: 'Reminders',
     icon: '🔔',
@@ -43,8 +51,31 @@ type FeatureDef = (typeof FEATURE_DEFS)[number];
 
 function loadVisibleCards(): FeatureKey[] {
   const saved = storage.get<FeatureKey[] | null>(VISIBLE_CARDS_KEY, null);
-  if (Array.isArray(saved) && saved.length > 0) return saved;
-  return FEATURE_DEFS.map((f) => f.key);
+  const defaultVisible = FEATURE_DEFS.map((f) => f.key) as FeatureKey[];
+  const validKeys = new Set<FeatureKey>(defaultVisible);
+
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return defaultVisible;
+  }
+
+  const selected = saved.filter((key): key is FeatureKey => validKeys.has(key as FeatureKey));
+  if (selected.length === 0) {
+    return defaultVisible;
+  }
+
+  const migrated = storage.get<boolean>(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, false);
+  if (!migrated && !selected.includes('activity-log')) {
+    const next: FeatureKey[] = [...selected, 'activity-log'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
+    return next;
+  }
+
+  if (!migrated) {
+    storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
+  }
+
+  return selected;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +95,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'bulk-fav') {
           const { createBulkFavoriteSection } = await import('./sections/bulkFavoriteSection');
           windowRoot.appendChild(createBulkFavoriteSection());
+        } else if (feat.key === 'activity-log') {
+          const { createActivityLogSection } = await import('./sections/activityLogSection');
+          windowRoot.appendChild(createActivityLogSection());
         } else if (feat.key === 'auto-fav') {
           const { createAutoFavoriteSection } = await import('./sections/autoFavoriteSection');
           windowRoot.appendChild(await createAutoFavoriteSection());
@@ -371,6 +405,7 @@ function renderUtilityHub(root: HTMLElement): void {
     if (overlayEl) { closeOverlay(); return; }
     overlayEl = buildCustomizeOverlay(root, closeOverlay, (selected) => {
       storage.set(VISIBLE_CARDS_KEY, selected);
+      storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

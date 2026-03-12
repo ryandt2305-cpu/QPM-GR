@@ -2562,7 +2562,8 @@ function buildManagerTab(
         if (result.errors.length === 0) {
           showToast(`Applied "${team.name}"`, 'success');
         } else {
-          showToast(`Applied with ${result.errors.length} error(s)`, 'error');
+          const summary = result.errorSummary ? `: ${result.errorSummary}` : '';
+          showToast(`Applied "${team.name}" with ${result.errors.length} error(s)${summary}`, 'error');
           // errors logged via showToast above
         }
       } catch (err) {
@@ -3507,7 +3508,8 @@ export function initPetsWindow(): void {
         if (result.errors.length === 0) {
           showToast(`Applied "${team.name}"`, 'success');
         } else {
-          showToast(`Applied "${team.name}" with ${result.errors.length} error(s)`, 'error');
+          const summary = result.errorSummary ? `: ${result.errorSummary}` : '';
+          showToast(`Applied "${team.name}" with ${result.errors.length} error(s)${summary}`, 'error');
         }
       })
       .catch(() => showToast('Team apply failed', 'error'));

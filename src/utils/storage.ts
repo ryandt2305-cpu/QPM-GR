@@ -89,7 +89,21 @@ const QPM_STORAGE_KEYS = [
 
   // Activity Log Enhancer
   'qpm.activityLogEnhanced.entries.v1',
+  'qpm.activityLogEnhanced.entries.v2',
+  'qpm.activityLogEnhanced.entries.v3',
   'qpm.activityLogEnhanced.filters.v1',
+  'qpm.activityLog.history.v1',
+  'qpm.activityLog.history.backup.v1',
+  'qpm.activityLog.history.meta.v1',
+  'qpm.activityLog.filter.action.v1',
+  'qpm.activityLog.filter.type.v1',
+  'qpm.activityLog.filter.order.v1',
+  'qpm.activityLog.filter.petSpecies.v1',
+  'qpm.activityLog.filter.plantSpecies.v1',
+  'qpm.activityLog.migration.v1',
+  'qpm.activityLog.ariesImport.v1',
+  'qpm.activityLog.enabled.v1',
+  'qpm.activityLog.debug.summary.v1',
 
   // Sell All Pets
   'qpm.petTeams.sellAllPets.v1',

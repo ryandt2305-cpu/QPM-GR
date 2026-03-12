@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.12] - Current
+## [3.1.13] - Current
+
+### Changed
+- Pet Teams: hutch-balanced apply now pairs hutch pulls with outgoing active pets (favorited pets preferred) and reports clearer failure reasons
+- Activity Log: added extended native activity logging and enabled the Utility Hub Activity Log card by default (customize choices persist)
+
+---
+
+## [3.1.12]
 
 ### Changed
 - fixed Bulk Favorite, added toggle in Utility

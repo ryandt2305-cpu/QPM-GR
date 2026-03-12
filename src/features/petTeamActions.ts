@@ -3,21 +3,21 @@
 // SwapPet is handled by existing swapPetIntoActiveSlot() in petSwap.ts.
 
 import { log } from '../utils/logger';
-import { sendRoomAction } from '../websocket/api';
+import { sendRoomAction, type WebSocketSendResult } from '../websocket/api';
 
-function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem', payload: Record<string, unknown>): boolean {
+function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem', payload: Record<string, unknown>): WebSocketSendResult {
   const sent = sendRoomAction(type, payload, { throttleMs: 90 });
   if (!sent.ok && sent.reason !== 'throttled') {
     log(`[PetTeamActions] send failed (${type})`, sent.reason);
   }
-  return sent.ok;
+  return sent;
 }
 
 /**
  * Send an active pet to the hutch.
  * itemId = ActivePetInfo.slotId (the pet item UUID).
  */
-export function sendStorePet(itemId: string): boolean {
+export function sendStorePet(itemId: string): WebSocketSendResult {
   return sendAction('StorePet', { itemId });
 }
 
@@ -32,7 +32,7 @@ export function sendPlacePet(
   position: { x: number; y: number },
   tileType: string,
   localTileIndex: number,
-): boolean {
+): WebSocketSendResult {
   return sendAction('PlacePet', { itemId, position, tileType, localTileIndex });
 }
 
@@ -41,7 +41,7 @@ export function sendPlacePet(
  * itemId = inventory item UUID.
  */
 export function sendToggleFavoriteItem(itemId: string): boolean {
-  return sendAction('ToggleFavoriteItem', { itemId });
+  return sendAction('ToggleFavoriteItem', { itemId }).ok;
 }
 
 /**

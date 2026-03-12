@@ -31,7 +31,19 @@ import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridO
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
 import { initializeAntiAfk, stopAntiAfk } from './features/antiAfk';
-import { startActivityLogEnhancer, stopActivityLogEnhancer } from './features/activityLogEnhancer';
+import {
+  startActivityLogEnhancer,
+  stopActivityLogEnhancer,
+  listActivityLogEnhancerEntries,
+  exportActivityLogEnhancerEntries,
+  clearActivityLogEnhancerEntries,
+  setActivityLogEnhancerSummaryVisible,
+  getActivityLogEnhancerStatus,
+  forceActivityLogEnhancerReplay,
+  verifyActivityLogEnhancerEntries,
+  isActivityLogEnhancerEnabled,
+  setActivityLogEnhancerEnabled,
+} from './features/activityLogNativeEnhancer';
 import { startAbilityTriggerStore, stopAbilityTriggerStore } from './store/abilityLogs';
 
 import { testPetData, testComparePets, testAbilityDefinitions } from './utils/petDataTester';
@@ -62,7 +74,6 @@ import {
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 const DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
-const ACTIVITY_LOG_ENHANCER_ENABLED = false;
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -71,6 +82,20 @@ const QPM_DEBUG_API = {
     return { verboseLogs: isVerboseLogsEnabled() };
   },
   getVerboseLogs: () => isVerboseLogsEnabled(),
+  activityLogList: () => listActivityLogEnhancerEntries(),
+  activityLogExport: () => exportActivityLogEnhancerEntries(),
+  activityLogClear: () => clearActivityLogEnhancerEntries(),
+  activityLogSummary: (enabled?: boolean) => setActivityLogEnhancerSummaryVisible(enabled),
+  activityLogVerify: () => verifyActivityLogEnhancerEntries(),
+  activityLogEnabled: async (enabled?: boolean) => {
+    if (typeof enabled === 'boolean') {
+      await setActivityLogEnhancerEnabled(enabled);
+    }
+    return {
+      enabled: isActivityLogEnhancerEnabled(),
+      status: getActivityLogEnhancerStatus(),
+    };
+  },
   debugPets: () => {
     const pets = getActivePetsDebug();
     console.log('=== Active Pets Debug (v2024-11-13-DOM-STRENGTH) ===');
@@ -1020,6 +1045,29 @@ const QPM_DEBUG_API = {
   },
 };
 
+const QPM_ACTIVITY_LOG_API = {
+  list: () => listActivityLogEnhancerEntries(),
+  export: () => exportActivityLogEnhancerEntries(),
+  clear: () => clearActivityLogEnhancerEntries(),
+  summary: (enabled?: boolean) => setActivityLogEnhancerSummaryVisible(enabled),
+  verify: () => verifyActivityLogEnhancerEntries(),
+  status: () => getActivityLogEnhancerStatus(),
+  replay: () => forceActivityLogEnhancerReplay(),
+  enabled: async (enabled?: boolean) => {
+    if (typeof enabled === 'boolean') {
+      await setActivityLogEnhancerEnabled(enabled);
+    }
+    return isActivityLogEnhancerEnabled();
+  },
+};
+
+try {
+  shareGlobal('QPM_ACTIVITY_LOG', QPM_ACTIVITY_LOG_API);
+  (window as any).QPM_ACTIVITY_LOG = QPM_ACTIVITY_LOG_API;
+} catch (error) {
+  log('[Main] Failed to expose QPM_ACTIVITY_LOG API', error);
+}
+
 if (DEBUG_GLOBALS_ENABLED) {
   registerInspectFriendHelper();
   registerInspectPlayerHelper();
@@ -1267,12 +1315,12 @@ async function initialize(): Promise<void> {
   await startAbilityTriggerStore().catch((error) => {
     log('Ability trigger store pre-init failed', error);
   });
-  if (ACTIVITY_LOG_ENHANCER_ENABLED) {
+  if (isActivityLogEnhancerEnabled()) {
     await startActivityLogEnhancer().catch((error) => {
       log('Activity Log enhancer initialization failed', error);
     });
   } else {
-    log('[Main] Activity Log enhancer disabled');
+    log('[Main] Activity Log enhancer disabled by config');
   }
   // OPTIMIZATION: Initialize core stores in batches with yields to prevent main thread blocking
   // Phase 1: Critical stores that other features depend on

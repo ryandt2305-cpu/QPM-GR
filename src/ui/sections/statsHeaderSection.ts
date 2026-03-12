@@ -16,6 +16,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.12', date: '2026-03', notes: [
+    'fixed Bulk Favorite, added toggle in Utility',
+  ]},
 { version: '3.1.11', date: '2026-03', notes: [
     'removed default pets keybind',
   ]},

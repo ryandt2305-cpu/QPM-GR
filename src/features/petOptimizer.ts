@@ -209,6 +209,7 @@ export interface OptimizerAnalysis {
 export interface OptimizerConfig {
   selectedStrategy: OptimizerCompareFilter;
   showObsoleteOnly: boolean;
+  showTop3Only: boolean; // Limit ability-family rows to top 3 ranked pets
   groupBySpecies: boolean; // Group pets by species within each status section
   sortBy: 'strength' | 'maxStrength' | 'score' | 'location';
   sortDirection: 'asc' | 'desc';
@@ -232,6 +233,7 @@ export interface OptimizerConfig {
 const DEFAULT_CONFIG: OptimizerConfig = {
   selectedStrategy: 'all',
   showObsoleteOnly: false,
+  showTop3Only: false,
   groupBySpecies: false,
   sortBy: 'score',
   sortDirection: 'desc',

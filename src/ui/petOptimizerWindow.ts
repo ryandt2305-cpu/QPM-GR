@@ -17,6 +17,7 @@ import { createTeam, setTeamSlot } from '../store/petTeams';
 import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
 import { getAbilityColor, normalizeAbilityName } from '../utils/petCardRenderer';
 import { formatCoins } from '../features/valueCalculator';
+import { getAbilityFamilyKey } from '../features/petCompareEngine';
 
 interface WindowState {
   root: HTMLElement;
@@ -58,56 +59,162 @@ function ensureManagerView(teamId: string): void {
     });
 }
 
-function getTopTeamCandidatesForAbility(pets: PetComparison[]): PetComparison[] {
-  const byPetId = new Map<string, PetComparison>();
-  for (const comparison of pets) {
-    if (!byPetId.has(comparison.pet.id)) {
-      byPetId.set(comparison.pet.id, comparison);
-    }
-  }
+const TIER_VALUE_BY_LABEL: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4 };
 
-  return [...byPetId.values()]
-    .sort((a, b) => {
-      const aScore = (a.score.total || 0) + (a.score.granterBonus || 0);
-      const bScore = (b.score.total || 0) + (b.score.granterBonus || 0);
-      if (bScore !== aScore) return bScore - aScore;
-      const aMax = a.pet.maxStrength || a.pet.strength || 0;
-      const bMax = b.pet.maxStrength || b.pet.strength || 0;
-      if (bMax !== aMax) return bMax - aMax;
-      return (b.pet.strength || 0) - (a.pet.strength || 0);
-    })
-    .slice(0, 3);
+interface FamilyPetEntry {
+  comparison: PetComparison;
+  tierValue: number;
+  tierLabel: string | null;
+  representativeAbilityName: string;
 }
 
-function buildTopCandidatesByAbility(comparisons: PetComparison[]): Map<string, PetComparison[]> {
-  const byAbility = new Map<string, PetComparison[]>();
-  const seenByAbility = new Map<string, Set<string>>();
+interface FamilyAbilityGroup {
+  familyKey: string;
+  familyLabel: string;
+  highestTierValue: number;
+  highestTierLabel: string | null;
+  representativeAbilityName: string;
+  pets: FamilyPetEntry[];
+}
+
+function extractTierLabel(value: string): string | null {
+  const match = String(value ?? '').match(/(IV|III|II|I)(?:_NEW)?$/i);
+  return match && match[1] ? match[1].toUpperCase() : null;
+}
+
+function toTierValue(tierLabel: string | null): number {
+  if (!tierLabel) return 0;
+  return TIER_VALUE_BY_LABEL[tierLabel] ?? 0;
+}
+
+function stripTierSuffix(label: string): string {
+  return label.trim().replace(/\s+(IV|III|II|I)$/i, '').replace(/\s+[1-4]$/i, '').trim();
+}
+
+function resolveFamilyKey(abilityId: string, fallbackAbility: string): string {
+  const rawFamily = getAbilityFamilyKey(abilityId).trim();
+  const base = rawFamily || abilityId || fallbackAbility;
+  return base.trim().toLowerCase();
+}
+
+function resolveFamilyLabel(abilityId: string, fallbackAbility: string): string {
+  const fromId = normalizeAbilityName(getAbilityFamilyKey(abilityId) || abilityId);
+  const fromName = stripTierSuffix(normalizeAbilityName(fallbackAbility || abilityId));
+  return (fromName || fromId || fallbackAbility || abilityId).trim();
+}
+
+function getComparisonRankScore(comparison: PetComparison): number {
+  return (comparison.score.total || 0) + (comparison.score.granterBonus || 0);
+}
+
+function compareFamilyPetEntries(a: FamilyPetEntry, b: FamilyPetEntry): number {
+  if (b.tierValue !== a.tierValue) return b.tierValue - a.tierValue;
+
+  const aScore = getComparisonRankScore(a.comparison);
+  const bScore = getComparisonRankScore(b.comparison);
+  if (bScore !== aScore) return bScore - aScore;
+
+  const aMax = a.comparison.pet.maxStrength || a.comparison.pet.strength || 0;
+  const bMax = b.comparison.pet.maxStrength || b.comparison.pet.strength || 0;
+  if (bMax !== aMax) return bMax - aMax;
+
+  const strDiff = (b.comparison.pet.strength || 0) - (a.comparison.pet.strength || 0);
+  if (strDiff !== 0) return strDiff;
+  return a.comparison.pet.id.localeCompare(b.comparison.pet.id);
+}
+
+function buildFamilyGroups(comparisons: PetComparison[]): Map<string, FamilyAbilityGroup> {
+  const byFamily = new Map<string, FamilyAbilityGroup>();
 
   for (const comparison of comparisons) {
-    for (const ability of comparison.pet.abilities) {
-      if (!byAbility.has(ability)) {
-        byAbility.set(ability, []);
-        seenByAbility.set(ability, new Set<string>());
+    const petFamilies = new Map<string, {
+      familyKey: string;
+      familyLabel: string;
+      tierValue: number;
+      tierLabel: string | null;
+      representativeAbilityName: string;
+    }>();
+
+    const maxLen = Math.max(comparison.pet.abilityIds.length, comparison.pet.abilities.length);
+    for (let i = 0; i < maxLen; i += 1) {
+      const abilityId = comparison.pet.abilityIds[i] ?? comparison.pet.abilities[i] ?? '';
+      if (!abilityId) continue;
+      const abilityName = comparison.pet.abilities[i] ?? abilityId;
+      const familyKey = resolveFamilyKey(abilityId, abilityName);
+      if (!familyKey) continue;
+
+      const tierLabel = extractTierLabel(abilityId) ?? extractTierLabel(abilityName);
+      const tierValue = toTierValue(tierLabel);
+      const familyLabel = resolveFamilyLabel(abilityId, abilityName);
+      const existing = petFamilies.get(familyKey);
+
+      if (!existing || tierValue > existing.tierValue) {
+        petFamilies.set(familyKey, {
+          familyKey,
+          familyLabel,
+          tierValue,
+          tierLabel,
+          representativeAbilityName: abilityName,
+        });
       }
-      const seen = seenByAbility.get(ability)!;
-      if (seen.has(comparison.pet.id)) continue;
-      seen.add(comparison.pet.id);
-      byAbility.get(ability)!.push(comparison);
+    }
+
+    for (const entry of petFamilies.values()) {
+      const existingGroup = byFamily.get(entry.familyKey);
+      if (!existingGroup) {
+        byFamily.set(entry.familyKey, {
+          familyKey: entry.familyKey,
+          familyLabel: entry.familyLabel,
+          highestTierValue: entry.tierValue,
+          highestTierLabel: entry.tierLabel,
+          representativeAbilityName: entry.representativeAbilityName,
+          pets: [{
+            comparison,
+            tierValue: entry.tierValue,
+            tierLabel: entry.tierLabel,
+            representativeAbilityName: entry.representativeAbilityName,
+          }],
+        });
+        continue;
+      }
+
+      existingGroup.pets.push({
+        comparison,
+        tierValue: entry.tierValue,
+        tierLabel: entry.tierLabel,
+        representativeAbilityName: entry.representativeAbilityName,
+      });
+      if (entry.tierValue > existingGroup.highestTierValue) {
+        existingGroup.highestTierValue = entry.tierValue;
+        existingGroup.highestTierLabel = entry.tierLabel;
+        existingGroup.representativeAbilityName = entry.representativeAbilityName;
+      }
     }
   }
 
-  const topByAbility = new Map<string, PetComparison[]>();
-  for (const [ability, abilityComparisons] of byAbility.entries()) {
-    topByAbility.set(ability, getTopTeamCandidatesForAbility(abilityComparisons));
+  for (const group of byFamily.values()) {
+    group.pets.sort(compareFamilyPetEntries);
   }
-  return topByAbility;
+
+  return byFamily;
 }
 
-function createAbilityTeam(ability: string, pets: PetComparison[]): void {
-  const topPets = getTopTeamCandidatesForAbility(pets);
+function sortFamilyGroups(groups: Map<string, FamilyAbilityGroup>): FamilyAbilityGroup[] {
+  return [...groups.values()].sort((a, b) => {
+    if (b.highestTierValue !== a.highestTierValue) return b.highestTierValue - a.highestTierValue;
+    return a.familyLabel.localeCompare(b.familyLabel);
+  });
+}
+
+function getTopTeamCandidatesForFamily(group: FamilyAbilityGroup): PetComparison[] {
+  return group.pets.slice(0, 3).map((entry) => entry.comparison);
+}
+
+function createFamilyTeam(familyLabel: string, pets: PetComparison[]): void {
+  const topPets = pets.slice(0, 3);
   if (topPets.length === 0) return;
 
-  const teamName = normalizeAbilityName(ability) || ability;
+  const teamName = familyLabel.trim() || 'Ability Team';
   const team = createTeam(teamName);
 
   for (let slotIndex = 0; slotIndex < 3; slotIndex += 1) {
@@ -412,6 +519,22 @@ function renderFilters(): void {
   obsoleteLabel.textContent = 'Show obsolete only';
   filtersDiv.append(obsoleteCheckbox, obsoleteLabel);
 
+  const top3Checkbox = document.createElement('input');
+  top3Checkbox.type = 'checkbox';
+  top3Checkbox.checked = config.showTop3Only;
+  top3Checkbox.id = 'top3-only-checkbox';
+  top3Checkbox.style.cssText = 'cursor: pointer;';
+  top3Checkbox.addEventListener('change', () => {
+    setOptimizerConfig({ showTop3Only: top3Checkbox.checked });
+    if (globalState?.currentAnalysis) renderResults(globalState.currentAnalysis);
+  });
+
+  const top3Label = document.createElement('label');
+  top3Label.htmlFor = 'top3-only-checkbox';
+  top3Label.style.cssText = 'font-size:12px; cursor:pointer;';
+  top3Label.textContent = 'Only show top 3';
+  filtersDiv.append(top3Checkbox, top3Label);
+
   // Mutation protection toggle button
   const isProtected = config.mutationProtection !== 'none';
   const mutBtn = document.createElement('button');
@@ -458,72 +581,69 @@ function renderResults(analysis: OptimizerAnalysis): void {
     console.log('[Pet Optimizer] Rendering results...');
 
     const config = getOptimizerConfig();
-  let comparisons = [...analysis.comparisons];
+    let comparisons = [...analysis.comparisons];
 
-  // Filter by strategy
-  if (config.selectedStrategy !== 'all') {
-    const strategyPets = analysis.strategyPets.get(config.selectedStrategy);
-    comparisons = strategyPets || [];
-  }
-
-  // Filter by obsolete only
-  if (config.showObsoleteOnly) {
-    comparisons = comparisons.filter(c => c.status === 'obsolete');
-  }
-
-  // Sort
-  comparisons.sort((a, b) => {
-    switch (config.sortBy) {
-      case 'strength':
-        return config.sortDirection === 'desc'
-          ? b.pet.strength - a.pet.strength
-          : a.pet.strength - b.pet.strength;
-      case 'maxStrength': {
-        const aMax = a.pet.maxStrength || a.pet.strength;
-        const bMax = b.pet.maxStrength || b.pet.strength;
-        return config.sortDirection === 'desc' ? bMax - aMax : aMax - bMax;
-      }
-      case 'score':
-        return config.sortDirection === 'desc'
-          ? b.score.total - a.score.total
-          : a.score.total - b.score.total;
-      default:
-        return 0;
+    // Filter by strategy
+    if (config.selectedStrategy !== 'all') {
+      const strategyPets = analysis.strategyPets.get(config.selectedStrategy);
+      comparisons = strategyPets || [];
     }
-  });
 
-  // Render
-  globalState.resultsContainer.innerHTML = '';
+    // Filter by obsolete only
+    if (config.showObsoleteOnly) {
+      comparisons = comparisons.filter(c => c.status === 'obsolete');
+    }
 
-  if (comparisons.length === 0) {
-    globalState.resultsContainer.innerHTML = `
-      <div style="
-        text-align: center;
-        padding: 40px;
-        color: #aaa;
-        font-size: 14px;
-      ">
-        No pets match the current filters
-      </div>
-    `;
-    return;
-  }
+    // Sort
+    comparisons.sort((a, b) => {
+      switch (config.sortBy) {
+        case 'strength':
+          return config.sortDirection === 'desc'
+            ? b.pet.strength - a.pet.strength
+            : a.pet.strength - b.pet.strength;
+        case 'maxStrength': {
+          const aMax = a.pet.maxStrength || a.pet.strength;
+          const bMax = b.pet.maxStrength || b.pet.strength;
+          return config.sortDirection === 'desc' ? bMax - aMax : aMax - bMax;
+        }
+        case 'score':
+          return config.sortDirection === 'desc'
+            ? b.score.total - a.score.total
+            : a.score.total - b.score.total;
+        default:
+          return 0;
+      }
+    });
 
-  const topCandidatesByAbility = buildTopCandidatesByAbility(comparisons);
+    // Render
+    globalState.resultsContainer.innerHTML = '';
 
-  // Group by status
-  const byStatus = {
-    review: comparisons.filter(c => c.status === 'review'),
-    obsolete: comparisons.filter(c => c.status === 'obsolete'),
-    upgrade: comparisons.filter(c => c.status === 'upgrade'),
-    consider: comparisons.filter(c => c.status === 'consider'),
-    keep: comparisons.filter(c => c.status === 'keep'),
-  };
+    if (comparisons.length === 0) {
+      globalState.resultsContainer.innerHTML = `
+        <div style="
+          text-align: center;
+          padding: 40px;
+          color: #aaa;
+          font-size: 14px;
+        ">
+          No pets match the current filters
+        </div>
+      `;
+      return;
+    }
 
-  for (const [status, pets] of Object.entries(byStatus)) {
-    if (pets.length === 0) continue;
+    // Group by status
+    const byStatus = {
+      review: comparisons.filter(c => c.status === 'review'),
+      obsolete: comparisons.filter(c => c.status === 'obsolete'),
+      upgrade: comparisons.filter(c => c.status === 'upgrade'),
+      consider: comparisons.filter(c => c.status === 'consider'),
+      keep: comparisons.filter(c => c.status === 'keep'),
+    };
 
-      const section = createStatusSection(status as any, pets, topCandidatesByAbility);
+    for (const [status, pets] of Object.entries(byStatus)) {
+      if (pets.length === 0) continue;
+      const section = createStatusSection(status as any, pets, config.showTop3Only);
       globalState.resultsContainer.appendChild(section);
     }
 
@@ -538,7 +658,7 @@ function renderResults(analysis: OptimizerAnalysis): void {
 function createStatusSection(
   status: 'review' | 'obsolete' | 'upgrade' | 'consider' | 'keep',
   comparisons: PetComparison[],
-  topCandidatesByAbility: Map<string, PetComparison[]>,
+  showTop3Only: boolean,
 ): HTMLElement {
   const statusConfig = {
     review: { icon: '📝', title: 'Review Needed', color: '#FFC107', bgColor: 'rgba(255, 193, 7, 0.1)', desc: 'Contains unknown or unmapped abilities' },
@@ -603,112 +723,93 @@ function createStatusSection(
   const petsContainer = document.createElement('div');
   petsContainer.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px;';
 
-  // Group by ability (and tier)
-    const byAbility = new Map<string, PetComparison[]>();
-    const seenPets = new Set<string>(); // Track pets to avoid duplicates
+  const familyGroups = sortFamilyGroups(buildFamilyGroups(comparisons));
 
-    for (const comparison of comparisons) {
-      // Each pet appears in groups for each of its abilities
-      for (const ability of comparison.pet.abilities) {
-        if (!byAbility.has(ability)) {
-          byAbility.set(ability, []);
-        }
-        const petKey = `${ability}:${comparison.pet.id}`;
-        if (!seenPets.has(petKey)) {
-          byAbility.get(ability)!.push(comparison);
-          seenPets.add(petKey);
-        }
-      }
+  for (const family of familyGroups) {
+    // Ability-family header
+    const abilityHeader = document.createElement('div');
+    abilityHeader.style.cssText = `
+      margin-top: 8px;
+      margin-bottom: 4px;
+      padding: 6px 10px;
+      background: rgba(66, 165, 245, 0.1);
+      border-radius: 4px;
+      border-left: 3px solid #42A5F5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    `;
+    const color = getAbilityColor(family.representativeAbilityName || family.familyLabel);
+    abilityHeader.style.borderLeftColor = color.base;
+
+    const headerMeta = document.createElement('div');
+    headerMeta.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+    const headerTitle = document.createElement('span');
+    headerTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #aaa;';
+    headerTitle.textContent = `${family.familyLabel} (${family.pets.length} pet${family.pets.length > 1 ? 's' : ''})`;
+    headerMeta.appendChild(headerTitle);
+
+    if (family.highestTierLabel) {
+      const tierBadge = document.createElement('span');
+      tierBadge.style.cssText = [
+        'font-size:10px',
+        'font-weight:700',
+        'padding:2px 6px',
+        'border-radius:999px',
+        'border:1px solid rgba(66,165,245,0.45)',
+        'background:rgba(66,165,245,0.15)',
+        'color:#9fd0ff',
+      ].join(';');
+      tierBadge.textContent = `Best tier: ${family.highestTierLabel}`;
+      headerMeta.appendChild(tierBadge);
     }
 
-    // Sort abilities by tier (highest first), then alphabetically
-    const sortedAbilities = Array.from(byAbility.entries()).sort((a, b) => {
-      const aTier = a[0].match(/(I{1,3}|IV)$/)?.[1];
-      const bTier = b[0].match(/(I{1,3}|IV)$/)?.[1];
+    abilityHeader.appendChild(headerMeta);
 
-      if (aTier && bTier) {
-        const tierOrder: Record<string, number> = { 'IV': 4, 'III': 3, 'II': 2, 'I': 1 };
-        const aBase = a[0].replace(/(I{1,3}|IV)$/, '');
-        const bBase = b[0].replace(/(I{1,3}|IV)$/, '');
-
-        if (aBase === bBase) {
-          // Same base ability, sort by tier (highest first)
-          const bValue = tierOrder[bTier];
-          const aValue = tierOrder[aTier];
-          if (bValue !== undefined && aValue !== undefined) {
-            return bValue - aValue;
-          }
-        }
-      }
-
-      // Different abilities, sort alphabetically
-      return a[0].localeCompare(b[0]);
-    });
-
-    for (const [ability, pets] of sortedAbilities) {
-      // Ability header
-      const abilityHeader = document.createElement('div');
-      abilityHeader.style.cssText = `
-        margin-top: 8px;
-        margin-bottom: 4px;
-        padding: 6px 10px;
-        background: rgba(66, 165, 245, 0.1);
-        border-radius: 4px;
-        border-left: 3px solid #42A5F5;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      `;
-      const color = getAbilityColor(ability);
-      abilityHeader.style.borderLeftColor = color.base;
-
-      const headerTitle = document.createElement('span');
-      headerTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #aaa;';
-      headerTitle.textContent = `${normalizeAbilityName(ability)} (${pets.length} pet${pets.length > 1 ? 's' : ''})`;
-      abilityHeader.appendChild(headerTitle);
-
-      const topCandidates = topCandidatesByAbility.get(ability) ?? getTopTeamCandidatesForAbility(pets);
-      if (topCandidates.length > 0) {
-        const createBtn = document.createElement('button');
-        createBtn.type = 'button';
-        createBtn.textContent = 'Create Team';
-        createBtn.style.cssText = [
-          'padding:4px 9px',
-          'font-size:11px',
-          'font-weight:600',
-          'border-radius:6px',
-          'border:1px solid rgba(143,130,255,0.45)',
-          'background:linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))',
-          'color:#e7e2ff',
-          'cursor:pointer',
-          'white-space:nowrap',
-          'transition:all 0.15s ease',
-        ].join(';');
-        createBtn.title = `Create "${normalizeAbilityName(ability)}" team from top ${topCandidates.length} pet${topCandidates.length > 1 ? 's' : ''}`;
-        createBtn.addEventListener('mouseenter', () => {
-          createBtn.style.borderColor = 'rgba(143,130,255,0.75)';
-          createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.35), rgba(143,130,255,0.20))';
-        });
-        createBtn.addEventListener('mouseleave', () => {
-          createBtn.style.borderColor = 'rgba(143,130,255,0.45)';
-          createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))';
-        });
-        createBtn.addEventListener('click', (event) => {
-          event.stopPropagation();
-          createAbilityTeam(ability, topCandidates);
-        });
-        abilityHeader.appendChild(createBtn);
-      }
-
-      petsContainer.appendChild(abilityHeader);
-
-      // Add pet cards
-      for (const comparison of pets) {
-        const petCard = createPetCard(comparison);
-        petsContainer.appendChild(petCard);
-      }
+    const topCandidates = getTopTeamCandidatesForFamily(family);
+    if (topCandidates.length > 0) {
+      const createBtn = document.createElement('button');
+      createBtn.type = 'button';
+      createBtn.textContent = 'Create Team';
+      createBtn.style.cssText = [
+        'padding:4px 9px',
+        'font-size:11px',
+        'font-weight:600',
+        'border-radius:6px',
+        'border:1px solid rgba(143,130,255,0.45)',
+        'background:linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))',
+        'color:#e7e2ff',
+        'cursor:pointer',
+        'white-space:nowrap',
+        'transition:all 0.15s ease',
+      ].join(';');
+      createBtn.title = `Create "${family.familyLabel}" team from top ${topCandidates.length} pet${topCandidates.length > 1 ? 's' : ''}`;
+      createBtn.addEventListener('mouseenter', () => {
+        createBtn.style.borderColor = 'rgba(143,130,255,0.75)';
+        createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.35), rgba(143,130,255,0.20))';
+      });
+      createBtn.addEventListener('mouseleave', () => {
+        createBtn.style.borderColor = 'rgba(143,130,255,0.45)';
+        createBtn.style.background = 'linear-gradient(180deg, rgba(143,130,255,0.24), rgba(143,130,255,0.12))';
+      });
+      createBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        createFamilyTeam(family.familyLabel, topCandidates);
+      });
+      abilityHeader.appendChild(createBtn);
     }
+
+    petsContainer.appendChild(abilityHeader);
+
+    // Add pet cards
+    const visiblePets = showTop3Only ? family.pets.slice(0, 3) : family.pets;
+    for (const entry of visiblePets) {
+      const petCard = createPetCard(entry.comparison);
+      petsContainer.appendChild(petCard);
+    }
+  }
 
   section.appendChild(petsContainer);
 

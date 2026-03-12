@@ -1,10 +1,10 @@
 import { createCard } from '../panelHelpers';
-import { isBulkFavoriteActive } from '../../features/bulkFavorite';
+import { isBulkFavoriteEnabled, setBulkFavoriteEnabled } from '../../features/bulkFavorite';
 
 export function createBulkFavoriteSection(): HTMLElement {
   const statusChip = document.createElement('span');
   statusChip.className = 'qpm-chip';
-  statusChip.textContent = isBulkFavoriteActive() ? 'Active' : 'Inactive';
+  statusChip.textContent = isBulkFavoriteEnabled() ? 'Enabled' : 'Disabled';
 
   const { root, body } = createCard('❤️ Bulk Favorite', {
     collapsible: true,
@@ -16,18 +16,109 @@ export function createBulkFavoriteSection(): HTMLElement {
   const status = document.createElement('div');
   status.className = 'qpm-section-muted';
   status.style.marginBottom = '8px';
-  status.textContent = 'Quickly favorite or unfavorite all produce of a species at once.';
+  status.textContent = 'Quickly lock or unlock all produce of a species at once.';
   body.appendChild(status);
 
+  const toggleRow = document.createElement('div');
+  toggleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;';
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.textContent = 'Bulk Favorite';
+  toggleLabel.style.cssText = 'font-size:12px;color:#e0e0e0;font-weight:600;';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.setAttribute('role', 'switch');
+  toggle.setAttribute('aria-label', 'Enable bulk favorite');
+  toggle.style.cssText = [
+    'width:36px',
+    'height:22px',
+    'border-radius:999px',
+    'border:1px solid rgba(255,255,255,0.24)',
+    'background:rgba(255,255,255,0.12)',
+    'cursor:pointer',
+    'position:relative',
+    'outline:none',
+    'padding:0',
+    'display:inline-flex',
+    'align-items:center',
+    'justify-content:flex-start',
+    'transition:background 0.15s,border-color 0.15s',
+  ].join(';');
+
+  const toggleKnob = document.createElement('span');
+  toggleKnob.style.cssText = [
+    'position:absolute',
+    'top:1px',
+    'left:1px',
+    'width:18px',
+    'height:18px',
+    'border-radius:999px',
+    'background:#ffffff',
+    'box-shadow:0 1px 3px rgba(0,0,0,0.35)',
+    'transition:transform 0.15s',
+    'pointer-events:none',
+  ].join(';');
+  toggle.appendChild(toggleKnob);
+
+  const syncToggleVisual = () => {
+    const enabled = isBulkFavoriteEnabled();
+    toggle.setAttribute('aria-checked', String(enabled));
+    if (enabled) {
+      toggle.style.background = 'rgba(143,130,255,0.45)';
+      toggle.style.borderColor = 'rgba(143,130,255,0.7)';
+      toggleKnob.style.transform = 'translateX(14px)';
+    } else {
+      toggle.style.background = 'rgba(255,255,255,0.12)';
+      toggle.style.borderColor = 'rgba(255,255,255,0.24)';
+      toggleKnob.style.transform = 'translateX(0)';
+    }
+  };
+
+  const applyToggleState = (nextEnabled: boolean) => {
+    setBulkFavoriteEnabled(nextEnabled);
+    statusChip.textContent = nextEnabled ? 'Enabled' : 'Disabled';
+    status.textContent = nextEnabled
+      ? 'Quickly lock or unlock all produce of a species at once.'
+      : 'Bulk Favorite is disabled.';
+    syncToggleVisual();
+  };
+
+  toggle.addEventListener('click', () => {
+    applyToggleState(!isBulkFavoriteEnabled());
+  });
+  toggle.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      applyToggleState(!isBulkFavoriteEnabled());
+    }
+  });
+  syncToggleVisual();
+
+  toggleRow.append(toggleLabel, toggle);
+  body.appendChild(toggleRow);
+
   const infoBox = document.createElement('div');
-  infoBox.innerHTML = '💡 <strong>How it works:</strong><br>• Open your inventory<br>• Buttons appear next to the inventory for each produce type<br>• Click a button to favorite/unfavorite ALL items of that species<br>• Heart indicator shows if all items are favorited';
+  infoBox.innerHTML = '💡 <strong>How it works:</strong><br>• Open your inventory<br>• Buttons appear next to the inventory for each produce type<br>• Click a button to lock/unlock ALL items of that species<br>• The corner lock icon shows state';
   infoBox.style.cssText = 'background:#333;padding:8px;border-radius:4px;margin-bottom:8px;font-size:10px;line-height:1.5;border-left:3px solid #FFCA28';
   body.appendChild(infoBox);
 
+  const getHelperText = () => isBulkFavoriteEnabled()
+    ? 'Tip: Open inventory to see the bulk favorite buttons on the right side of the modal.'
+    : 'Enable Bulk Favorite above, then open inventory to show buttons.';
+
   const helper = document.createElement('div');
-  helper.textContent = 'Tip: Open inventory to see the bulk favorite buttons on the right side of the modal.';
+  helper.textContent = getHelperText();
   helper.style.cssText = 'font-size:10px;color:#A5D6A7;line-height:1.4;margin-top:8px;';
   body.appendChild(helper);
+
+  toggle.addEventListener('click', () => {
+    helper.textContent = getHelperText();
+  });
+  toggle.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    helper.textContent = getHelperText();
+  });
 
   return root;
 }

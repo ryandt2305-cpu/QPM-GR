@@ -1,64 +1,151 @@
 // src/features/bulkFavorite.ts
-// Bulk Favorite Feature - Clean rewrite of Inventory Locker
-// Allows users to favorite/unfavorite all produce items of a species with one click
+// Bulk Favorite Feature
+// Shows per-species buttons near inventory and toggles favorites in bulk.
 
 import { log } from '../utils/logger';
-import { getInventoryItems, getFavoritedItemIds, InventoryItem } from '../store/inventory';
-import { getCropSpriteDataUrl } from '../sprite-v2/compat';
+import { getInventoryItems, getFavoritedItemIds, onInventoryChange, type InventoryItem } from '../store/inventory';
+import { getCropSpriteDataUrl, getAnySpriteDataUrl, onSpritesReady, Sprites } from '../sprite-v2/compat';
 import { addStyle } from '../utils/dom';
 import { getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 import { sendRoomAction } from '../websocket/api';
+import { storage } from '../utils/storage';
 
-// ============================================================================
-// TYPES
-// ============================================================================
+declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
 interface ProduceGroup {
   species: string;
   itemIds: string[];
-  allFavorited: boolean;
+  allLocked: boolean;
 }
 
 export interface BulkFavoriteConfig {
   enabled: boolean;
 }
 
-// ============================================================================
-// STATE
-// ============================================================================
+type SidebarPlacement = 'right' | 'top';
+
+interface Rect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface PixiBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface InventoryAnchor {
+  rect: Rect;
+  source: 'InventoryItems' | 'InventoryContent';
+}
+
+interface SidebarLayout {
+  placement: SidebarPlacement;
+  left: number;
+  top: number;
+  maxHeight: number;
+  maxWidth?: number;
+}
+
+interface PixiDisplayObject {
+  label?: unknown;
+  children?: PixiDisplayObject[];
+  getBounds?: () => unknown;
+  visible?: unknown;
+  renderable?: unknown;
+  worldVisible?: unknown;
+  alpha?: unknown;
+  worldAlpha?: unknown;
+}
+
+interface PixiRendererLike {
+  screen?: { width?: number; height?: number };
+  view?: unknown;
+  canvas?: unknown;
+}
+
+interface PixiAppLike {
+  stage?: PixiDisplayObject;
+  renderer?: PixiRendererLike;
+}
+
+interface PixiCaptureLike {
+  app?: PixiAppLike;
+  renderer?: PixiRendererLike;
+}
+
+interface PixiNodeMatch {
+  node: PixiDisplayObject;
+  bounds: PixiBounds;
+  area: number;
+}
 
 let observer: MutationObserver | null = null;
 let sidebar: HTMLElement | null = null;
-let inventoryContainer: Element | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let closeProbeTimer: ReturnType<typeof setTimeout> | null = null;
+let immediateMutationRaf: number | null = null;
+let inventoryUnsubscribe: (() => void) | null = null;
+let resizeListener: (() => void) | null = null;
+let spritesReadyUnsubscribe: (() => void) | null = null;
 let stylesInjected = false;
+let lastRenderSignature = '';
+let lastLayoutSignature = '';
+let anchorMissCount = 0;
+let lockUiSpriteCache: { locked: string; unlocked: string } | null = null;
 
 const STYLE_ID = 'qpm-bulk-favorite-styles';
 const SIDEBAR_ID = 'qpm-bulk-favorite-sidebar';
-const DEBOUNCE_MS = 100;
+const CONFIG_KEY = 'qpm.bulkFavorite.v1';
+const DEBOUNCE_MS = 180;
+const RESIZE_DEBOUNCE_MS = 140;
+const CLOSE_PROBE_MS = 150;
 
-// Selector for inventory items - this attribute only exists when inventory is open
-const INVENTORY_ITEM_SELECTOR = '[data-tm-inventory-base-index]';
-const FIRST_INVENTORY_ITEM_SELECTOR = '[data-tm-inventory-base-index="0"]';
-
-// ============================================================================
-// STYLES
-// ============================================================================
+const VIEWPORT_MARGIN = 8;
+const SIDEBAR_GAP = 8;
+const TOP_STRIP_HEIGHT = 78;
+const RIGHT_MIN_SPACE = 80;
+const MIN_INVENTORY_WIDTH = 220;
+const MIN_INVENTORY_HEIGHT = 160;
+const MIN_VISIBLE_AREA = 12000;
+const MIN_OPEN_ITEM_VIEW_COUNT = 12;
+const MAX_ANCHOR_MISSES = 3;
+const DEFAULT_CONFIG: BulkFavoriteConfig = { enabled: true };
 
 const CSS = `
   #${SIDEBAR_ID} {
     display: flex;
-    flex-direction: column;
     gap: 6px;
     pointer-events: auto;
-    padding: 4px;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 8px;
-    backdrop-filter: blur(4px);
+    padding: 8px;
+    background: transparent;
+    border-radius: 0;
+    backdrop-filter: none;
+  }
+
+  #${SIDEBAR_ID}.qpm-bulk-fav--right {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #${SIDEBAR_ID}.qpm-bulk-fav--top {
+    flex-direction: row;
+    align-items: flex-start;
+    white-space: nowrap;
+  }
+
+  #${SIDEBAR_ID}.qpm-bulk-fav--top .qpm-bulk-fav-btn {
+    flex: 0 0 auto;
   }
 
   #${SIDEBAR_ID}::-webkit-scrollbar {
     width: 4px;
+    height: 4px;
   }
 
   #${SIDEBAR_ID}::-webkit-scrollbar-track {
@@ -83,18 +170,24 @@ const CSS = `
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: box-shadow 0.15s ease, background 0.15s ease;
     padding: 4px;
     gap: 2px;
+    overflow: visible;
+    z-index: 1;
+    transform-origin: center center;
   }
 
   .qpm-bulk-fav-btn:hover {
-    transform: scale(1.08);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    transform: scale(1.05);
+    background: rgba(0, 0, 0, 0.92);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
+    z-index: 2;
   }
 
   .qpm-bulk-fav-btn:active {
-    transform: scale(0.96);
+    transform: scale(0.98);
+    background: rgba(0, 0, 0, 0.96);
   }
 
   .qpm-bulk-fav-sprite {
@@ -104,26 +197,26 @@ const CSS = `
     image-rendering: pixelated;
   }
 
-  .qpm-bulk-fav-heart {
+  .qpm-bulk-fav-status {
     position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 14px;
-    height: 14px;
+    top: -6px;
+    right: -6px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
-    line-height: 1;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    z-index: 3;
+    pointer-events: none;
   }
 
-  .qpm-bulk-fav-heart.filled {
-    color: #ff4d4d;
-  }
-
-  .qpm-bulk-fav-heart.outline {
-    color: #ffffff;
-    opacity: 0.85;
+  .qpm-bulk-fav-status-icon {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    image-rendering: pixelated;
+    flex: 0 0 auto;
   }
 
   .qpm-bulk-fav-label {
@@ -140,12 +233,27 @@ const CSS = `
   }
 `;
 
-// ============================================================================
-// UTILITIES
-// ============================================================================
+function loadConfig(): BulkFavoriteConfig {
+  const saved = storage.get<Partial<BulkFavoriteConfig> | null>(CONFIG_KEY, null);
+  return {
+    ...DEFAULT_CONFIG,
+    ...(saved ?? {}),
+  };
+}
+
+function saveConfig(): void {
+  storage.set(CONFIG_KEY, config);
+}
+
+let config: BulkFavoriteConfig = loadConfig();
 
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
 }
 
 function ensureStyles(): void {
@@ -154,39 +262,245 @@ function ensureStyles(): void {
     stylesInjected = true;
     return;
   }
+
   const style = addStyle(CSS);
   style.id = STYLE_ID;
   stylesInjected = true;
 }
 
-// ============================================================================
-// INVENTORY HELPERS
-// ============================================================================
+function getPageWindow(): Window & typeof globalThis {
+  return typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+}
 
-/**
- * Extract the actual UUID from an inventory item.
- * The raw data contains the true 'id' field which is the UUID.
- * This is what we need for the WebSocket ToggleFavoriteItem command.
- */
-function getItemUUID(item: InventoryItem): string | null {
-  const raw = item.raw as Record<string, unknown> | undefined;
-  
-  // Priority: raw.id (the actual UUID) > itemId > item.id (which might be species)
-  const uuid = raw?.id ?? item.itemId ?? null;
-  
-  if (typeof uuid === 'string' && uuid.length > 0) {
-    return uuid;
+function getDisplayLabel(node: PixiDisplayObject): string {
+  return typeof node.label === 'string' ? node.label : '';
+}
+
+function isNodeVisiblyRenderable(node: PixiDisplayObject): boolean {
+  if (node.visible === false) return false;
+  if (node.renderable === false) return false;
+  if (node.worldVisible === false) return false;
+
+  const alpha = typeof node.alpha === 'number' ? node.alpha : null;
+  if (alpha !== null && alpha <= 0.001) return false;
+
+  const worldAlpha = typeof node.worldAlpha === 'number' ? node.worldAlpha : null;
+  if (worldAlpha !== null && worldAlpha <= 0.001) return false;
+
+  return true;
+}
+
+function parsePixiBounds(value: unknown): PixiBounds | null {
+  if (!value || typeof value !== 'object') return null;
+  const rec = value as Record<string, unknown>;
+  const x = Number(rec.x);
+  const y = Number(rec.y);
+  const width = Number(rec.width);
+  const height = Number(rec.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function getNodeBounds(node: PixiDisplayObject): PixiBounds | null {
+  if (typeof node.getBounds !== 'function') return null;
+  try {
+    return parsePixiBounds(node.getBounds());
+  } catch {
+    return null;
   }
-  
+}
+
+function findLargestNodeByLabel(
+  root: PixiDisplayObject,
+  matcher: (label: string) => boolean,
+): PixiNodeMatch | null {
+  const stack: PixiDisplayObject[] = [root];
+  const seen = new WeakSet<object>();
+  let best: PixiNodeMatch | null = null;
+  let bestArea = 0;
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (seen.has(node as object)) continue;
+    seen.add(node as object);
+    if (!isNodeVisiblyRenderable(node)) continue;
+
+    const label = getDisplayLabel(node);
+    if (label && matcher(label)) {
+      const bounds = getNodeBounds(node);
+      if (bounds) {
+        const area = bounds.width * bounds.height;
+        if (area > bestArea) {
+          bestArea = area;
+          best = { node, bounds, area };
+        }
+      }
+    }
+
+    if (Array.isArray(node.children)) {
+      for (let i = node.children.length - 1; i >= 0; i -= 1) {
+        const child = node.children[i];
+        if (child) stack.push(child);
+      }
+    }
+  }
+
+  return best;
+}
+
+function boundsIntersect(a: PixiBounds, b: PixiBounds): boolean {
+  const ax2 = a.x + a.width;
+  const ay2 = a.y + a.height;
+  const bx2 = b.x + b.width;
+  const by2 = b.y + b.height;
+  return a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y;
+}
+
+function countVisibleInventoryItemViews(
+  root: PixiDisplayObject,
+  withinBounds: PixiBounds,
+  limit: number,
+): number {
+  if (limit <= 0) return 0;
+
+  const stack: PixiDisplayObject[] = [root];
+  const seen = new WeakSet<object>();
+  let count = 0;
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (seen.has(node as object)) continue;
+    seen.add(node as object);
+    if (!isNodeVisiblyRenderable(node)) continue;
+
+    const label = getDisplayLabel(node);
+    if (label.startsWith('InventoryItemView(')) {
+      const bounds = getNodeBounds(node);
+      if (bounds && boundsIntersect(bounds, withinBounds)) {
+        count += 1;
+        if (count >= limit) {
+          return count;
+        }
+      }
+    }
+
+    if (Array.isArray(node.children)) {
+      for (let i = node.children.length - 1; i >= 0; i -= 1) {
+        const child = node.children[i];
+        if (child) stack.push(child);
+      }
+    }
+  }
+
+  return count;
+}
+
+function resolveRendererCanvas(renderer: PixiRendererLike): HTMLCanvasElement | null {
+  const classCanvas = document.querySelector('.QuinoaCanvas canvas');
+  if (classCanvas instanceof HTMLCanvasElement) return classCanvas;
+
+  if (renderer.view instanceof HTMLCanvasElement) return renderer.view;
+  if (renderer.canvas instanceof HTMLCanvasElement) return renderer.canvas;
+
+  const anyCanvas = document.querySelector('canvas');
+  return anyCanvas instanceof HTMLCanvasElement ? anyCanvas : null;
+}
+
+function toCssRect(bounds: PixiBounds, renderer: PixiRendererLike, canvas: HTMLCanvasElement): Rect | null {
+  const canvasRect = canvas.getBoundingClientRect();
+  if (canvasRect.width <= 0 || canvasRect.height <= 0) return null;
+
+  const screenWidth = Number(renderer.screen?.width) || canvas.width;
+  const screenHeight = Number(renderer.screen?.height) || canvas.height;
+  if (screenWidth <= 0 || screenHeight <= 0) return null;
+
+  const scaleX = canvasRect.width / screenWidth;
+  const scaleY = canvasRect.height / screenHeight;
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) return null;
+
+  return {
+    left: canvasRect.left + bounds.x * scaleX,
+    top: canvasRect.top + bounds.y * scaleY,
+    width: bounds.width * scaleX,
+    height: bounds.height * scaleY,
+  };
+}
+
+function isRectOpenAndVisible(rect: Rect): boolean {
+  if (rect.width < MIN_INVENTORY_WIDTH || rect.height < MIN_INVENTORY_HEIGHT) {
+    return false;
+  }
+
+  const right = rect.left + rect.width;
+  const bottom = rect.top + rect.height;
+  const interWidth = Math.min(right, window.innerWidth) - Math.max(rect.left, 0);
+  const interHeight = Math.min(bottom, window.innerHeight) - Math.max(rect.top, 0);
+
+  if (interWidth <= 0 || interHeight <= 0) return false;
+  if (interWidth * interHeight < MIN_VISIBLE_AREA) return false;
+
+  return true;
+}
+
+function resolveInventoryAnchor(): InventoryAnchor | null {
+  const root = getPageWindow() as Window & typeof globalThis & { __QPM_PIXI_CAPTURED__?: PixiCaptureLike };
+  const captured = root.__QPM_PIXI_CAPTURED__;
+  if (!captured) return null;
+
+  const app = captured.app;
+  const renderer = captured.renderer ?? app?.renderer;
+  const stage = app?.stage;
+  if (!renderer || !stage) return null;
+
+  const canvas = resolveRendererCanvas(renderer);
+  if (!canvas) return null;
+
+  // Guard against HUD/hotbar containers that may reuse inventory-like labels.
+  // The actual full inventory view is wrapped by InventoryModal when open.
+  const modalMatch = findLargestNodeByLabel(stage, (label) => label === 'InventoryModal');
+  if (!modalMatch) return null;
+
+  const modalRect = toCssRect(modalMatch.bounds, renderer, canvas);
+  if (!modalRect) return null;
+  if (modalRect.width < window.innerWidth * 0.45 || modalRect.height < window.innerHeight * 0.35) {
+    return null;
+  }
+
+  const itemsMatch = findLargestNodeByLabel(modalMatch.node, (label) => label === 'InventoryItems');
+  const contentMatch = findLargestNodeByLabel(modalMatch.node, (label) => label === 'InventoryContent');
+
+  const candidates: Array<{ match: PixiNodeMatch; source: InventoryAnchor['source'] }> = [];
+  if (itemsMatch) candidates.push({ match: itemsMatch, source: 'InventoryItems' });
+  if (contentMatch) candidates.push({ match: contentMatch, source: 'InventoryContent' });
+
+  for (const candidate of candidates) {
+    const rect = toCssRect(candidate.match.bounds, renderer, canvas);
+    if (!rect || !isRectOpenAndVisible(rect)) continue;
+
+    const viewCount = countVisibleInventoryItemViews(
+      candidate.match.node,
+      candidate.match.bounds,
+      MIN_OPEN_ITEM_VIEW_COUNT,
+    );
+    if (viewCount >= MIN_OPEN_ITEM_VIEW_COUNT) {
+      return { rect, source: candidate.source };
+    }
+  }
+
   return null;
 }
 
-/**
- * Validate if a species exists in catalog (FUTUREPROOF!)
- */
-function isValidSpecies(species: string): boolean {
-  if (!areCatalogsReady()) return true; // Allow all if catalog not ready (permissive)
+function getItemUUID(item: InventoryItem): string | null {
+  const raw = item.raw as Record<string, unknown> | undefined;
+  const uuid = raw?.id ?? item.itemId ?? null;
+  return typeof uuid === 'string' && uuid.length > 0 ? uuid : null;
+}
 
+function isValidSpecies(species: string): boolean {
+  if (!areCatalogsReady()) return true;
   const knownSpecies = getAllPlantSpecies();
   return knownSpecies.includes(species);
 }
@@ -194,25 +508,20 @@ function isValidSpecies(species: string): boolean {
 function getProduceGroups(): ProduceGroup[] {
   const items = getInventoryItems();
   const favoritedIds = getFavoritedItemIds();
-
-  // Group by species, storing actual UUIDs
   const groupMap = new Map<string, string[]>();
 
   for (const item of items) {
     const raw = item.raw as Record<string, unknown> | undefined;
     const itemType = raw?.itemType ?? item.itemType;
     const species = (raw?.species ?? item.species) as string | undefined;
-
-    // Get the actual UUID for this item
     const uuid = getItemUUID(item);
 
     if (itemType !== 'Produce' || !species || !uuid) continue;
 
-    // Validate species exists in catalog
     if (!isValidSpecies(species)) {
-      log(`⚠️ Unknown species in bulk favorite: ${species}`);
+      log(`[BulkFavorite] Unknown species in bulk favorite: ${species}`);
     }
-    
+
     const existing = groupMap.get(species);
     if (existing) {
       existing.push(uuid);
@@ -220,429 +529,543 @@ function getProduceGroups(): ProduceGroup[] {
       groupMap.set(species, [uuid]);
     }
   }
-  
-  // Convert to ProduceGroup array
+
   const groups: ProduceGroup[] = [];
   for (const [species, itemIds] of groupMap) {
-    // Check favorite state for each individual item UUID
-    const allFavorited = itemIds.length > 0 && itemIds.every(uuid => favoritedIds.has(uuid));
-    groups.push({ species, itemIds, allFavorited });
+    const allLocked = itemIds.length > 0 && itemIds.every((uuid) => favoritedIds.has(uuid));
+    groups.push({ species, itemIds, allLocked });
   }
-  
-  // Sort alphabetically
   groups.sort((a, b) => a.species.localeCompare(b.species));
-  
   return groups;
 }
 
-// ============================================================================
-// WEBSOCKET
-// ============================================================================
-
 function sendFavoriteToggle(itemId: string): boolean {
-  const sent = sendRoomAction('ToggleFavoriteItem', { itemId }, { throttleMs: 50 });
+  const sent = sendRoomAction('ToggleLockItem', { itemId }, { throttleMs: 50 });
   if (!sent.ok && sent.reason !== 'throttled') {
-    log(`⚠️ [BulkFavorite] Failed to send favorite toggle (${sent.reason ?? 'unknown'})`);
+    log(`[BulkFavorite] Failed to send lock toggle (${sent.reason ?? 'unknown'})`);
   }
   return sent.ok;
 }
 
-// ============================================================================
-// UI RENDERING
-// ============================================================================
+function tryGetAnySpriteUrl(keys: string[]): string {
+  for (const key of keys) {
+    const url = getAnySpriteDataUrl(key);
+    if (url && url.startsWith('data:image')) {
+      return url;
+    }
+  }
+  return '';
+}
+
+function scoreSpriteKeyForLock(key: string, target: 'locked' | 'unlocked'): number {
+  const normalized = key.toLowerCase();
+  let score = 0;
+
+  if (normalized.includes('/ui/')) score += 3;
+  if (normalized.includes('sprite/ui/')) score += 3;
+
+  if (target === 'locked') {
+    if (normalized.includes('unlocked') || normalized.includes('unlock')) return -100;
+    if (normalized.includes('locked')) score += 8;
+    else if (normalized.includes('lock')) score += 5;
+  } else {
+    if (normalized.includes('unlocked')) score += 8;
+    else if (normalized.includes('unlock')) score += 6;
+    if (normalized.includes('locked') && !normalized.includes('unlocked')) score -= 5;
+  }
+
+  return score;
+}
+
+function findBestLockSprite(target: 'locked' | 'unlocked'): string {
+  const directCandidates =
+    target === 'locked'
+      ? ['sprite/ui/Locked', 'ui/Locked', 'sprite/ui/Lock', 'ui/Lock']
+      : ['sprite/ui/Unlocked', 'ui/Unlocked', 'sprite/ui/Unlock', 'ui/Unlock'];
+
+  const direct = tryGetAnySpriteUrl(directCandidates);
+  if (direct) return direct;
+
+  const allKeys = Sprites.lists().all;
+  if (!Array.isArray(allKeys) || allKeys.length === 0) return '';
+
+  const scored = allKeys
+    .map((key) => ({ key, score: scoreSpriteKeyForLock(String(key), target) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  for (const candidate of scored) {
+    const url = getAnySpriteDataUrl(candidate.key);
+    if (url && url.startsWith('data:image')) {
+      return url;
+    }
+  }
+
+  return '';
+}
+
+function getLockUiSprites(): { locked: string; unlocked: string } {
+  if (lockUiSpriteCache) return lockUiSpriteCache;
+
+  lockUiSpriteCache = {
+    locked: findBestLockSprite('locked'),
+    unlocked: findBestLockSprite('unlocked'),
+  };
+
+  return lockUiSpriteCache;
+}
 
 function createButton(group: ProduceGroup): HTMLButtonElement {
-  const { species, itemIds, allFavorited } = group;
-  
+  const { species, itemIds, allLocked } = group;
+
   const btn = document.createElement('button');
   btn.className = 'qpm-bulk-fav-btn';
-  btn.title = `Click to ${allFavorited ? 'Unfavorite' : 'Favorite'} all ${itemIds.length} ${species}`;
+  btn.title = `Click to ${allLocked ? 'Unlock' : 'Lock'} all ${itemIds.length} ${species}`;
   btn.dataset.species = species;
-  
-  // Sprite
+
   const sprite = document.createElement('img');
   sprite.className = 'qpm-bulk-fav-sprite';
   sprite.alt = species;
-  
+
   const spriteUrl = getCropSpriteDataUrl(species);
   if (spriteUrl && spriteUrl.startsWith('data:image')) {
     sprite.src = spriteUrl;
   } else {
-    // Fallback: show first letter in a styled container
     const fallback = document.createElement('div');
     fallback.className = 'qpm-bulk-fav-sprite';
     fallback.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;background:rgba(255,255,255,0.15);border-radius:4px;';
     fallback.textContent = species.charAt(0).toUpperCase();
     btn.appendChild(fallback);
   }
-  
-  // Heart indicator (matching game's native style)
-  // Filled red heart = all favorited, outline white heart = not all favorited
-  const heart = document.createElement('span');
-  heart.className = `qpm-bulk-fav-heart ${allFavorited ? 'filled' : 'outline'}`;
-  heart.innerHTML = allFavorited
-    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
-    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
-  
-  // Label (species name)
+
+  const status = document.createElement('span');
+  status.className = 'qpm-bulk-fav-status';
+
+  const statusIcon = document.createElement('img');
+  statusIcon.className = 'qpm-bulk-fav-status-icon';
+  statusIcon.alt = allLocked ? 'Locked' : 'Unlocked';
+  const lockUiSprites = getLockUiSprites();
+  const statusIconUrl = allLocked ? lockUiSprites.locked : lockUiSprites.unlocked;
+  if (statusIconUrl) {
+    statusIcon.src = statusIconUrl;
+  } else {
+    statusIcon.style.display = 'none';
+    status.style.display = 'none';
+  }
+
+  status.appendChild(statusIcon);
+
   const label = document.createElement('span');
   label.className = 'qpm-bulk-fav-label';
   label.textContent = species;
-  
-  // Only add sprite if we have one (fallback already added above if no sprite)
+
   if (spriteUrl && spriteUrl.startsWith('data:image')) {
     btn.appendChild(sprite);
   }
-  btn.appendChild(heart);
+  btn.appendChild(status);
   btn.appendChild(label);
-  
-  // Click handler
+
   btn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    handleToggle(species);
+    void handleToggle(species);
   });
-  
+
   return btn;
 }
 
-function createSidebar(container: Element): HTMLElement {
+function createSidebar(): HTMLElement {
   const sidebarEl = document.createElement('div');
   sidebarEl.id = SIDEBAR_ID;
-  
-  // Use container bounds for stable positioning (not individual items which change with filters)
-  const containerRect = container.getBoundingClientRect();
-  const rightmostEdge = containerRect.right;
-  const topEdge = containerRect.top;
-  const bottomEdge = containerRect.bottom;
-  
-  // Position directly to the right of the inventory container
-  const gap = 8;
-  const leftPosition = rightmostEdge + gap;
-  
-  // Top aligns with where inventory items start
-  const topPosition = topEdge;
-  
-  // Max height based on inventory grid height
-  const maxHeight = Math.min(
-    bottomEdge - topEdge,
-    window.innerHeight - topPosition - 20
-  );
-  
-  sidebarEl.style.cssText = `
-    position: fixed;
-    top: ${topPosition}px;
-    left: ${leftPosition}px;
-    max-height: ${Math.max(maxHeight, 200)}px;
-    overflow-y: auto;
-    z-index: 2147483646;
-    pointer-events: auto;
-  `;
-  
+  sidebarEl.classList.add('qpm-bulk-fav--right');
   return sidebarEl;
 }
 
-function renderSidebar(): void {
-  if (!sidebar || !inventoryContainer) return;
-  
-  // Clear existing buttons
-  sidebar.innerHTML = '';
-  
+function getGroupsSignature(groups: ProduceGroup[]): string {
+  return groups
+    .map((group) => `${group.species}:${group.itemIds.length}:${group.allLocked ? 1 : 0}`)
+    .join('|');
+}
+
+function renderSidebar(force = false): void {
+  if (!sidebar) return;
+
   const groups = getProduceGroups();
-  
+  const signature = getGroupsSignature(groups);
+  if (!force && signature === lastRenderSignature) {
+    return;
+  }
+  lastRenderSignature = signature;
+
   if (groups.length === 0) {
-    // No produce items - hide sidebar
+    sidebar.replaceChildren();
     sidebar.style.display = 'none';
     return;
   }
-  
-  sidebar.style.display = 'flex';
-  
+
+  const fragment = document.createDocumentFragment();
   for (const group of groups) {
-    const btn = createButton(group);
-    sidebar.appendChild(btn);
+    fragment.appendChild(createButton(group));
   }
-  
-  log(`🎯 [BulkFavorite] Rendered ${groups.length} produce types`);
+
+  sidebar.replaceChildren(fragment);
+  sidebar.style.display = 'flex';
 }
 
-// ============================================================================
-// TOGGLE LOGIC
-// ============================================================================
+function getLayoutSignature(layout: SidebarLayout): string {
+  return [
+    layout.placement,
+    Math.round(layout.left),
+    Math.round(layout.top),
+    Math.round(layout.maxHeight),
+    Math.round(layout.maxWidth ?? 0),
+  ].join('|');
+}
 
-/**
- * Handle bulk favorite toggle for a species.
- * 
- * Logic:
- * - If ALL items are favorited → unfavorite all (toggle only favorited items)
- * - If ANY items are NOT favorited → favorite all (toggle only unfavorited items)
- * 
- * This ensures:
- * - Clicking when heart is filled (all favorited) → all become unfavorited
- * - Clicking when heart is outline (some/none favorited) → all become favorited
- */
+function computeSidebarLayout(anchor: Rect): SidebarLayout {
+  const rightLeft = anchor.left + anchor.width + SIDEBAR_GAP;
+  const rightTop = clamp(anchor.top, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, window.innerHeight - 120));
+  const rightSpace = window.innerWidth - rightLeft - VIEWPORT_MARGIN;
+
+  if (rightSpace >= RIGHT_MIN_SPACE) {
+    return {
+      placement: 'right',
+      left: rightLeft,
+      top: rightTop,
+      maxHeight: Math.max(200, Math.min(anchor.height, window.innerHeight - rightTop - VIEWPORT_MARGIN)),
+    };
+  }
+
+  const topY = Math.max(VIEWPORT_MARGIN, anchor.top - TOP_STRIP_HEIGHT - SIDEBAR_GAP);
+  const topLeft = clamp(anchor.left, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, window.innerWidth - 200));
+  const topMaxWidth = Math.max(180, Math.min(anchor.width, window.innerWidth - topLeft - VIEWPORT_MARGIN));
+
+  return {
+    placement: 'top',
+    left: topLeft,
+    top: topY,
+    maxHeight: TOP_STRIP_HEIGHT,
+    maxWidth: topMaxWidth,
+  };
+}
+
+function applySidebarLayout(layout: SidebarLayout, force = false): void {
+  if (!sidebar) return;
+
+  const signature = getLayoutSignature(layout);
+  if (!force && signature === lastLayoutSignature) {
+    return;
+  }
+  lastLayoutSignature = signature;
+
+  sidebar.classList.toggle('qpm-bulk-fav--right', layout.placement === 'right');
+  sidebar.classList.toggle('qpm-bulk-fav--top', layout.placement === 'top');
+
+  if (layout.placement === 'right') {
+    sidebar.style.cssText = [
+      'position: fixed',
+      `top: ${Math.round(layout.top)}px`,
+      `left: ${Math.round(layout.left)}px`,
+      `max-height: ${Math.round(layout.maxHeight)}px`,
+      'overflow-y: auto',
+      'overflow-x: visible',
+      'z-index: 2147483646',
+      'pointer-events: auto',
+    ].join(';');
+    return;
+  }
+
+  sidebar.style.cssText = [
+    'position: fixed',
+    `top: ${Math.round(layout.top)}px`,
+    `left: ${Math.round(layout.left)}px`,
+      `max-height: ${Math.round(layout.maxHeight)}px`,
+      `max-width: ${Math.round(layout.maxWidth ?? 240)}px`,
+      'overflow-x: auto',
+      'overflow-y: visible',
+      'z-index: 2147483646',
+      'pointer-events: auto',
+    ].join(';');
+}
+
+function showSidebar(anchor: InventoryAnchor): void {
+  ensureStyles();
+  if (!sidebar) {
+    sidebar = createSidebar();
+    document.body.appendChild(sidebar);
+    log(`[BulkFavorite] Sidebar shown (${anchor.source})`);
+  }
+
+  applySidebarLayout(computeSidebarLayout(anchor.rect), true);
+  renderSidebar(true);
+}
+
+function hideSidebar(): void {
+  if (!sidebar) return;
+  sidebar.remove();
+  sidebar = null;
+  if (closeProbeTimer) {
+    clearTimeout(closeProbeTimer);
+    closeProbeTimer = null;
+  }
+  if (immediateMutationRaf !== null) {
+    cancelAnimationFrame(immediateMutationRaf);
+    immediateMutationRaf = null;
+  }
+  lastLayoutSignature = '';
+  lastRenderSignature = '';
+  anchorMissCount = 0;
+  log('[BulkFavorite] Sidebar hidden');
+}
+
+function syncSidebar(refreshContent: boolean, forceHideOnMiss = false): void {
+  const anchor = resolveInventoryAnchor();
+  if (!anchor) {
+    if (forceHideOnMiss) {
+      hideSidebar();
+      return;
+    }
+
+    if (sidebar && !closeProbeTimer) {
+      closeProbeTimer = setTimeout(() => {
+        closeProbeTimer = null;
+        syncSidebar(false, true);
+      }, CLOSE_PROBE_MS);
+    }
+
+    anchorMissCount += 1;
+    if (anchorMissCount >= MAX_ANCHOR_MISSES) {
+      hideSidebar();
+    }
+    return;
+  }
+
+  if (closeProbeTimer) {
+    clearTimeout(closeProbeTimer);
+    closeProbeTimer = null;
+  }
+  anchorMissCount = 0;
+
+  if (!sidebar) {
+    showSidebar(anchor);
+    return;
+  }
+
+  applySidebarLayout(computeSidebarLayout(anchor.rect));
+  if (refreshContent) {
+    renderSidebar();
+  }
+}
+
 async function handleToggle(species: string): Promise<void> {
   const items = getInventoryItems();
   const favoritedIds = getFavoritedItemIds();
-  
-  // Get all item UUIDs for this species
   const itemUUIDs: string[] = [];
+
   for (const item of items) {
     const raw = item.raw as Record<string, unknown> | undefined;
     const itemType = raw?.itemType ?? item.itemType;
     const itemSpecies = (raw?.species ?? item.species) as string | undefined;
-    
-    if (itemType === 'Produce' && itemSpecies === species) {
-      const uuid = getItemUUID(item);
-      if (uuid) {
-        itemUUIDs.push(uuid);
-      }
-    }
+    if (itemType !== 'Produce' || itemSpecies !== species) continue;
+    const uuid = getItemUUID(item);
+    if (uuid) itemUUIDs.push(uuid);
   }
-  
+
   if (itemUUIDs.length === 0) {
-    log(`⚠️ [BulkFavorite] No items found for species: ${species}`);
+    log(`[BulkFavorite] No items found for species: ${species}`);
     return;
   }
-  
-  // Check current state of all items
-  const favoritedCount = itemUUIDs.filter(uuid => favoritedIds.has(uuid)).length;
-  const unfavoritedCount = itemUUIDs.length - favoritedCount;
-  const allFavorited = unfavoritedCount === 0;
-  
-  // Determine action and which items to toggle
-  // ToggleFavoriteItem is a TOGGLE - it flips the state
-  // So we only send it for items that need to change
-  let uuidsToToggle: string[];
-  let action: string;
-  
-  if (allFavorited) {
-    // All are favorited → user wants to unfavorite all
-    // Toggle only the favorited ones (to unfavorite them)
-    uuidsToToggle = itemUUIDs.filter(uuid => favoritedIds.has(uuid));
-    action = 'Unfavoriting';
-  } else {
-    // Some or none are favorited → user wants to favorite all
-    // Toggle only the unfavorited ones (to favorite them)
-    uuidsToToggle = itemUUIDs.filter(uuid => !favoritedIds.has(uuid));
-    action = 'Favoriting';
-  }
-  
-  log(`🔄 [BulkFavorite] ${action} ${uuidsToToggle.length}/${itemUUIDs.length} ${species} items (${favoritedCount} already favorited)`);
-  
+
+  const lockedCount = itemUUIDs.filter((uuid) => favoritedIds.has(uuid)).length;
+  const allLocked = lockedCount === itemUUIDs.length;
+
+  const uuidsToToggle = allLocked
+    ? itemUUIDs.filter((uuid) => favoritedIds.has(uuid))
+    : itemUUIDs.filter((uuid) => !favoritedIds.has(uuid));
+
+  const action = allLocked ? 'Unlocking' : 'Locking';
+  log(`[BulkFavorite] ${action} ${uuidsToToggle.length}/${itemUUIDs.length} ${species} items (${lockedCount} already locked)`);
+
   let successCount = 0;
   for (const uuid of uuidsToToggle) {
     if (sendFavoriteToggle(uuid)) {
-      successCount++;
-      await delay(40); // Small delay to avoid overwhelming the server
+      successCount += 1;
+      await delay(40);
     }
   }
-  
-  log(`✅ [BulkFavorite] Toggled ${successCount}/${uuidsToToggle.length} ${species} items`);
-  
-  // Re-render after a brief delay to let the game update state
-  setTimeout(() => renderSidebar(), 250);
-}
 
-// ============================================================================
-// INVENTORY DETECTION
-// ============================================================================
-
-/**
- * Find the inventory grid container by looking for inventory items.
- * The inventory items have data-tm-inventory-base-index attributes.
- * Returns the scrollable grid container that holds all items.
- */
-function findInventoryContainer(): Element | null {
-  // First, check if any inventory item exists
-  const firstItem = document.querySelector(FIRST_INVENTORY_ITEM_SELECTOR);
-  if (!firstItem) return null;
-  
-  // Navigate up to find the scrollable container (the McFlex with the grid)
-  // Structure: McFlex css-1cyjil4 > McFlex css-zo8r2v > individual items
-  let container: Element = firstItem;
-  
-  // Find the first McFlex parent that contains multiple inventory items
-  // This is the stable container (css-zo8r2v) that maintains consistent bounds regardless of filters
-  for (let i = 0; i < 5; i++) {
-    const parent = container.parentElement;
-    if (!parent) break;
-    
-    // Check if this is the inventory grid container
-    // It should contain the first item and have the McFlex class
-    if (
-      parent.classList.contains('McFlex') &&
-      parent.querySelectorAll(INVENTORY_ITEM_SELECTOR).length > 1
-    ) {
-      // Return this first McFlex - don't traverse further up
-      // The outer containers extend beyond the visible grid area
-      return parent;
-    }
-    
-    container = parent;
-  }
-  
-  return container;
-}
-
-/**
- * Check if this is the inventory (not the shop).
- */
-function isInventoryNotShop(): boolean {
-  // Check if any shop-specific text exists near the inventory items
-  const inventoryArea = document.querySelector(FIRST_INVENTORY_ITEM_SELECTOR)?.closest('[role="dialog"]');
-  if (!inventoryArea) return true; // No dialog, might still be valid inventory
-  
-  const text = inventoryArea.textContent?.toLowerCase() || '';
-  
-  // Exclude shop panels
-  if (
-    text.includes('seeds in stock') ||
-    text.includes('buy for') ||
-    (text.includes('shop') && !text.includes('workshop'))
-  ) {
-    return false;
-  }
-  
-  return true;
-}
-
-function showSidebar(container: Element): void {
-  if (sidebar) {
-    hideSidebar();
-  }
-  
-  ensureStyles();
-  
-  inventoryContainer = container;
-  sidebar = createSidebar(container);
-  document.body.appendChild(sidebar);
-  
-  renderSidebar();
-  
-  log('🎒 [BulkFavorite] Sidebar shown');
-}
-
-function hideSidebar(): void {
-  if (sidebar) {
-    sidebar.remove();
-    sidebar = null;
-  }
-  inventoryContainer = null;
-  log('🗑️ [BulkFavorite] Sidebar hidden');
+  log(`[BulkFavorite] Toggled ${successCount}/${uuidsToToggle.length} ${species} items`);
+  setTimeout(() => renderSidebar(true), 250);
 }
 
 function handleMutations(): void {
-  // Check if inventory items exist
-  const hasInventoryItems = document.querySelector(FIRST_INVENTORY_ITEM_SELECTOR) !== null;
-  
-  if (hasInventoryItems && !sidebar) {
-    // Inventory just opened
-    if (!isInventoryNotShop()) {
-      // This is a shop, not the inventory
-      return;
-    }
-    
-    const container = findInventoryContainer();
-    if (container) {
-      showSidebar(container);
-    }
-  } else if (!hasInventoryItems && sidebar) {
-    // Inventory just closed
-    hideSidebar();
-  } else if (hasInventoryItems && sidebar) {
-    // Inventory is open, update position if container changed
-    const newContainer = findInventoryContainer();
-    if (newContainer && newContainer !== inventoryContainer) {
-      hideSidebar();
-      showSidebar(newContainer);
-    }
-  }
+  // Mutation observer should only manage visibility/position.
+  // Content refresh is driven by inventory-store updates and explicit refresh calls.
+  syncSidebar(false);
 }
 
 function debouncedMutationHandler(): void {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
+  if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(handleMutations, DEBOUNCE_MS);
 }
 
-// ============================================================================
-// PUBLIC API
-// ============================================================================
+function shouldIgnoreMutations(records: MutationRecord[]): boolean {
+  if (!sidebar) return false;
 
-/**
- * Start the bulk favorite feature.
- * Sets up MutationObserver to detect inventory open/close.
- */
+  return records.every((record) => {
+    const target = record.target;
+    const targetInsideSidebar = target instanceof Node && sidebar.contains(target);
+    if (!targetInsideSidebar) return false;
+
+    const addedInsideSidebar = Array.from(record.addedNodes).every((node) => sidebar.contains(node));
+    const removedInsideSidebar = Array.from(record.removedNodes).every((node) => {
+      // Removed nodes might no longer be connected, so fallback to previous-parent target check.
+      return sidebar.contains(node) || targetInsideSidebar;
+    });
+
+    return addedInsideSidebar && removedInsideSidebar;
+  });
+}
+
+function handleResize(): void {
+  if (!sidebar) return;
+
+  if (resizeDebounceTimer) {
+    clearTimeout(resizeDebounceTimer);
+  }
+
+  resizeDebounceTimer = setTimeout(() => {
+    resizeDebounceTimer = null;
+    syncSidebar(false, true);
+  }, RESIZE_DEBOUNCE_MS);
+}
+
 export function startBulkFavorite(): void {
-  if (observer) {
-    log('⚠️ [BulkFavorite] Already started');
+  if (!config.enabled) {
+    hideSidebar();
     return;
   }
-  
+
+  if (observer) {
+    log('[BulkFavorite] Already started');
+    return;
+  }
+
   ensureStyles();
-  
-  // Create observer with minimal configuration for performance
-  // Only watch childList changes - we detect inventory by presence of 
-  // elements with data-tm-inventory-base-index attribute
-  observer = new MutationObserver(debouncedMutationHandler);
-  
+
+  observer = new MutationObserver((records) => {
+    if (shouldIgnoreMutations(records)) return;
+
+    // When the sidebar is already visible, prioritize close detection speed.
+    // This keeps hide behavior near-instant when inventory closes.
+    if (sidebar) {
+      if (immediateMutationRaf !== null) return;
+      immediateMutationRaf = requestAnimationFrame(() => {
+        immediateMutationRaf = null;
+        syncSidebar(false, true);
+      });
+      return;
+    }
+
+    debouncedMutationHandler();
+  });
   observer.observe(document.body, {
     childList: true,
-    subtree: true, // Need subtree to catch inventory items in nested containers
+    subtree: true,
     attributes: false,
     characterData: false,
   });
-  
-  // Check if inventory is already open
-  const hasInventoryItems = document.querySelector(FIRST_INVENTORY_ITEM_SELECTOR) !== null;
-  if (hasInventoryItems && isInventoryNotShop()) {
-    const container = findInventoryContainer();
-    if (container) {
-      showSidebar(container);
+
+  inventoryUnsubscribe = onInventoryChange(() => {
+    if (sidebar) {
+      renderSidebar();
     }
-  }
-  
-  log('✅ [BulkFavorite] Started');
+  });
+
+  spritesReadyUnsubscribe = onSpritesReady(() => {
+    lockUiSpriteCache = null;
+    renderSidebar(true);
+  });
+
+  resizeListener = handleResize;
+  window.addEventListener('resize', resizeListener);
+
+  syncSidebar(true);
+  log('[BulkFavorite] Started');
 }
 
-/**
- * Stop the bulk favorite feature.
- * Cleans up MutationObserver and removes sidebar.
- */
 export function stopBulkFavorite(): void {
   if (observer) {
     observer.disconnect();
     observer = null;
   }
-  
+
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
-  
-  hideSidebar();
-  
-  log('🛑 [BulkFavorite] Stopped');
-}
 
-/**
- * Refresh the sidebar UI.
- * Call this if inventory data changed externally.
- */
-export function refreshBulkFavorite(): void {
-  if (sidebar && inventoryContainer) {
-    renderSidebar();
+  if (resizeDebounceTimer) {
+    clearTimeout(resizeDebounceTimer);
+    resizeDebounceTimer = null;
   }
+
+  if (closeProbeTimer) {
+    clearTimeout(closeProbeTimer);
+    closeProbeTimer = null;
+  }
+
+  if (immediateMutationRaf !== null) {
+    cancelAnimationFrame(immediateMutationRaf);
+    immediateMutationRaf = null;
+  }
+
+  if (inventoryUnsubscribe) {
+    inventoryUnsubscribe();
+    inventoryUnsubscribe = null;
+  }
+
+  if (resizeListener) {
+    window.removeEventListener('resize', resizeListener);
+    resizeListener = null;
+  }
+
+  if (spritesReadyUnsubscribe) {
+    spritesReadyUnsubscribe();
+    spritesReadyUnsubscribe = null;
+  }
+
+  lastLayoutSignature = '';
+  lastRenderSignature = '';
+  anchorMissCount = 0;
+  lockUiSpriteCache = null;
+
+  hideSidebar();
+  log('[BulkFavorite] Stopped');
 }
 
-/**
- * Check if bulk favorite is currently active.
- */
+export function refreshBulkFavorite(): void {
+  syncSidebar(true);
+}
+
 export function isBulkFavoriteActive(): boolean {
   return observer !== null;
 }
 
+export function isBulkFavoriteEnabled(): boolean {
+  return config.enabled;
+}
 
+export function setBulkFavoriteEnabled(enabled: boolean): void {
+  const next = Boolean(enabled);
+  if (config.enabled === next) return;
 
+  config = { ...config, enabled: next };
+  saveConfig();
+
+  if (next) {
+    startBulkFavorite();
+  } else {
+    stopBulkFavorite();
+  }
+}

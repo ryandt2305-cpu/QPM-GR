@@ -5,7 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.11] - Current
+## [3.1.12] - Current
+
+### Changed
+- fixed Bulk Favorite, added toggle in Utility
+
+---
+
+## [3.1.11]
 
 ### Changed
 - removed default pets keybind

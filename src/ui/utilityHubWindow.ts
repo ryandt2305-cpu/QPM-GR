@@ -26,7 +26,7 @@ const FEATURE_DEFS = [
     key: 'bulk-fav',
     label: 'Bulk Favorite',
     icon: '❤️',
-    desc: 'Favorite or unfavorite all matching items in your inventory at once',
+    desc: 'Lock or unlock all matching items in your inventory at once',
     windowTitle: '❤️ Bulk Favorite',
   },
   {

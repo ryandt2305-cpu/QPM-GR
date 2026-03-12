@@ -4,6 +4,7 @@
 import { pageWindow } from '../core/pageContext';
 
 export type RoomActionType =
+  | 'ToggleLockItem'
   | 'ToggleFavoriteItem'
   | 'FeedPet'
   | 'StorePet'
@@ -75,6 +76,7 @@ function isFiniteNumber(value: unknown): value is number {
 
 function validatePayload(type: RoomActionType, payload: Record<string, unknown>): boolean {
   switch (type) {
+    case 'ToggleLockItem':
     case 'ToggleFavoriteItem':
       return isNonEmptyString(payload.itemId);
     case 'FeedPet':
@@ -112,6 +114,7 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
 
 function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>): string {
   switch (type) {
+    case 'ToggleLockItem':
     case 'ToggleFavoriteItem':
     case 'StorePet':
     case 'SellPet':

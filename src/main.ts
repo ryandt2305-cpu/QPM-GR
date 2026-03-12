@@ -62,6 +62,7 @@ import {
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 const DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
+const ACTIVITY_LOG_ENHANCER_ENABLED = false;
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -1266,9 +1267,13 @@ async function initialize(): Promise<void> {
   await startAbilityTriggerStore().catch((error) => {
     log('Ability trigger store pre-init failed', error);
   });
-  await startActivityLogEnhancer().catch((error) => {
-    log('Activity Log enhancer initialization failed', error);
-  });
+  if (ACTIVITY_LOG_ENHANCER_ENABLED) {
+    await startActivityLogEnhancer().catch((error) => {
+      log('Activity Log enhancer initialization failed', error);
+    });
+  } else {
+    log('[Main] Activity Log enhancer disabled');
+  }
   // OPTIMIZATION: Initialize core stores in batches with yields to prevent main thread blocking
   // Phase 1: Critical stores that other features depend on
   initializeStatsStore();

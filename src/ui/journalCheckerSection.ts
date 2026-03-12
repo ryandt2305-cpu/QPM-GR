@@ -179,6 +179,13 @@ export function createJournalCheckerSection(): HTMLElement {
   const root = document.createElement('div');
   root.dataset.qpmSection = 'journal-checker';
   root.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    box-sizing: border-box;
     background: rgba(0, 0, 0, 0.85);
     border-radius: 8px;
     padding: 16px;
@@ -204,9 +211,9 @@ export function createJournalCheckerSection(): HTMLElement {
   // Header
   const header = document.createElement('div');
   header.style.cssText = `
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     border-bottom: 2px solid #333;
-    padding-bottom: 12px;
+    padding-bottom: 8px;
   `;
   header.innerHTML = `
     <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -226,38 +233,39 @@ export function createJournalCheckerSection(): HTMLElement {
   const statsContainer = document.createElement('div');
   statsContainer.style.cssText = `
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    margin-bottom: 24px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
   `;
 
   const createStatBox = (icon: string, label: string, value: string, color: string, bgGradient: string) => {
     const box = document.createElement('div');
     box.style.cssText = `
       background: linear-gradient(135deg, ${bgGradient});
-      border-radius: 12px;
-      padding: 18px;
+      border-radius: 10px;
+      padding: 10px 8px;
       text-align: center;
       border: 2px solid ${color}22;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       cursor: pointer;
       position: relative;
       overflow: hidden;
+      min-width: 0;
     `;
 
     const content = document.createElement('div');
     content.style.cssText = 'position: relative; z-index: 1;';
     content.innerHTML = `
-      <div style="font-size: 32px; margin-bottom: 8px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${icon}</div>
-      <div class="stat-value" style="color: ${color}; font-size: 26px; font-weight: bold; margin-bottom: 6px; font-family: 'Segoe UI', Arial, sans-serif; text-shadow: 0 2px 8px rgba(0,0,0,0.4);">${value}</div>
-      <div style="color: #bbb; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">${label}</div>
+      <div style="font-size: 22px; margin-bottom: 4px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); line-height: 1;">${icon}</div>
+      <div class="stat-value" style="color: ${color}; font-size: 19px; font-weight: bold; margin-bottom: 3px; font-family: 'Segoe UI', Arial, sans-serif; text-shadow: 0 2px 8px rgba(0,0,0,0.4); line-height: 1.1;">${value}</div>
+      <div style="color: #bbb; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${label}</div>
     `;
     box.appendChild(content);
 
     box.addEventListener('mouseenter', () => {
-      box.style.transform = 'translateY(-4px)';
+      box.style.transform = 'translateY(-2px)';
       box.style.borderColor = `${color}55`;
-      box.style.boxShadow = `0 8px 16px ${color}22`;
+      box.style.boxShadow = `0 6px 12px ${color}22`;
     });
     box.addEventListener('mouseleave', () => {
       box.style.transform = 'translateY(0)';
@@ -282,8 +290,8 @@ export function createJournalCheckerSection(): HTMLElement {
   const categoryContainer = document.createElement('div');
   categoryContainer.style.cssText = `
     display: flex;
-    gap: 10px;
-    margin-bottom: 20px;
+    gap: 8px;
+    margin-bottom: 12px;
     flex-wrap: wrap;
   `;
 
@@ -1101,8 +1109,8 @@ export function createJournalCheckerSection(): HTMLElement {
   // Tooltip Helper toggle (controls crop tooltip indicators)
   const helperToggleCard = document.createElement('div');
   helperToggleCard.style.cssText = `
-    margin: -6px 0 16px;
-    padding: 12px 14px;
+    margin: 0 0 10px;
+    padding: 10px 12px;
     border-radius: 10px;
     border: 1px solid #2a2a2a;
     background: rgba(255, 255, 255, 0.03);
@@ -1160,7 +1168,9 @@ export function createJournalCheckerSection(): HTMLElement {
   // Results container with custom scrollbar
   const resultsContainer = document.createElement('div');
   resultsContainer.style.cssText = `
-    max-height: 550px;
+    flex: 1;
+    min-height: 0;
+    max-height: none;
     overflow-y: auto;
     padding-right: 4px;
   `;
@@ -1234,8 +1244,9 @@ export function createJournalCheckerSection(): HTMLElement {
   refreshButton.textContent = '🔄 Refresh Journal Data';
   refreshButton.style.cssText = `
     width: 100%;
+    flex-shrink: 0;
     padding: 12px;
-    margin-top: 16px;
+    margin-top: 10px;
     border-radius: 8px;
     border: 2px solid #333;
     background: linear-gradient(135deg, #2a2a2a, #222);

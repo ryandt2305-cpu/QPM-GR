@@ -1237,6 +1237,10 @@ function renderShopRestockWindow(root: HTMLElement): void {
       ref.el.textContent = formatETA(ref.ts);
       ref.el.style.color  = etaColor(ref.ts);
     }
+    for (const ref of histEtaRefs) {
+      ref.el.textContent = formatETA(ref.ts);
+      ref.el.style.color  = etaColor(ref.ts);
+    }
     updateRefreshBudgetUi();
     updateLastUpdated();
   }, 30_000);

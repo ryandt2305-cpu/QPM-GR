@@ -4,7 +4,12 @@ import { btn } from '../panelHelpers';
 import { log } from '../../utils/logger';
 import { storage } from '../../utils/storage';
 import { getCropSpriteDataUrl } from '../../sprite-v2/compat';
-import { fetchRestockData, getRestockDataSync, type RestockItem } from '../../utils/restockDataService';
+import {
+  fetchRestockData,
+  getRestockDataSync,
+  onRestockDataUpdated,
+  type RestockItem,
+} from '../../utils/restockDataService';
 import { calculateMaxStrength } from '../../store/xpTracker';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../../store/pets';
 import { onTurtleTimerState, setTurtleTimerEnabled, type TurtleTimerChannel, type GardenSlotEstimate } from '../../features/turtleTimer.ts';
@@ -16,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.15', date: '2026-03', notes: [
+    'Journal Scroll and window fixes (smaller counter buttons, scroll handling fixed) ***if issues persist, tell me if making the journal window bigger works***',
+    'fixed dashboard celestials not updating (was only grabbing from cache once on init)',
+  ]},
 { version: '3.1.14', date: '2026-03', notes: [
     'added sprite decoder for MG v114+ compressed sprites..... eeeeeee',
     'if youre reading this hello, i hope you have a good day',
@@ -349,9 +358,17 @@ function buildShopRestockSection(): HTMLElement {
     }
   }, 30_000);
 
+  const stopRestockSync = onRestockDataUpdated(() => {
+    updateCards(getRestockDataSync() ?? []);
+  });
+
   // Cleanup on container detach
   const obs = new MutationObserver(() => {
-    if (!section.isConnected) { obs.disconnect(); stopTicker(); }
+    if (!section.isConnected) {
+      obs.disconnect();
+      stopTicker();
+      stopRestockSync();
+    }
   });
   obs.observe(document.body, { childList: true, subtree: true });
 

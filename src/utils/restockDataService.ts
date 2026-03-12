@@ -30,6 +30,7 @@ const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor']);
 
 export const RESTOCK_REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const RESTOCK_REFRESH_MAX = 5;
+export const RESTOCK_DATA_UPDATED_EVENT = 'qpm:restock-data-updated';
 
 // Keys to search when unwrapping the API response envelope.
 const ENVELOPE_KEYS = ['items', 'data', 'rows', 'results'] as const;
@@ -55,6 +56,11 @@ export interface RestockRefreshBudgetState {
   resetAt: number;
   blocked: boolean;
   windowMs: number;
+}
+
+export interface RestockDataUpdatedDetail {
+  fetchedAt: number;
+  count: number;
 }
 
 export type FetchStatus = 'idle' | 'fetching' | 'ok' | 'error';
@@ -154,6 +160,11 @@ let fetchingPromise: Promise<RestockItem[]> | null = null;
 let weatherDisabledLogged = false;
 let invalidConfigLogged = false;
 
+function emitRestockDataUpdated(detail: RestockDataUpdatedDetail): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new CustomEvent<RestockDataUpdatedDetail>(RESTOCK_DATA_UPDATED_EVENT, { detail }));
+}
+
 function sanitizeItems(items: RestockItem[]): RestockItem[] {
   return items.filter((item) => !!item.item_id && ALLOWED_SHOP_TYPES.has(item.shop_type));
 }
@@ -231,6 +242,21 @@ export function tryConsumeRestockRefresh(now = Date.now()): RestockRefreshBudget
   }
   writeRefreshBudget(entry);
   return toRefreshBudgetState(entry);
+}
+
+export function onRestockDataUpdated(listener: (detail: RestockDataUpdatedDetail) => void): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
+
+  const handler = (event: Event): void => {
+    const detail = (event as CustomEvent<RestockDataUpdatedDetail>).detail;
+    if (!detail || typeof detail.fetchedAt !== 'number' || typeof detail.count !== 'number') return;
+    listener(detail);
+  };
+
+  window.addEventListener(RESTOCK_DATA_UPDATED_EVENT, handler as EventListener);
+  return () => {
+    window.removeEventListener(RESTOCK_DATA_UPDATED_EVENT, handler as EventListener);
+  };
 }
 
 /** Return effective probability from either field. */
@@ -429,6 +455,7 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
 
     const entry: CacheEntry = { data: normalized, fetchedAt: Date.now() };
     storage.set(CACHE_KEY, entry);
+    emitRestockDataUpdated({ fetchedAt: entry.fetchedAt, count: normalized.length });
     log(`[RestockData] Fetched ${normalized.length} items`);
     return normalized;
   })();

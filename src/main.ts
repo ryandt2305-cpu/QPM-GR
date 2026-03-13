@@ -14,6 +14,7 @@ import { initializeXpTracker } from './store/xpTracker';
 import { initializeMutationValueTracking } from './features/mutationValueTracking';
 import { initializeAutoFavorite } from './features/autoFavorite';
 import { startBulkFavorite } from './features/bulkFavorite';
+import { initializeAutoReconnect, stopAutoReconnect } from './features/autoReconnect';
 import { initializeGardenFilters } from './features/gardenFilters';
 import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
@@ -1246,6 +1247,7 @@ const _errorHandler = (event: ErrorEvent): boolean => {
 window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
+  stopAutoReconnect();
   stopAntiAfk();
   stopActivityLogEnhancer();
   stopAbilityTriggerStore();
@@ -1297,6 +1299,12 @@ async function initialize(): Promise<void> {
   // MUST be called early, before game code runs
   initCatalogLoader();
   log('[Main] Catalog loader initialized');
+  try {
+    initializeAutoReconnect();
+    log('[Main] Auto reconnect initialized');
+  } catch (error) {
+    log('[Main] Auto reconnect initialization failed', error);
+  }
 
   // Log when catalogs become ready (for timing analysis)
   onCatalogsReady(() => {

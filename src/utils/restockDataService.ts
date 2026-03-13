@@ -61,6 +61,7 @@ export interface RestockRefreshBudgetState {
 export interface RestockDataUpdatedDetail {
   fetchedAt: number;
   count: number;
+  items?: RestockItem[];
 }
 
 export type FetchStatus = 'idle' | 'fetching' | 'ok' | 'error';
@@ -455,7 +456,11 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
 
     const entry: CacheEntry = { data: normalized, fetchedAt: Date.now() };
     storage.set(CACHE_KEY, entry);
-    emitRestockDataUpdated({ fetchedAt: entry.fetchedAt, count: normalized.length });
+    emitRestockDataUpdated({
+      fetchedAt: entry.fetchedAt,
+      count: normalized.length,
+      items: normalized,
+    });
     log(`[RestockData] Fetched ${normalized.length} items`);
     return normalized;
   })();

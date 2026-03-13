@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.16', date: '2026-03', notes: [
+    'added anti-afk in utility hub',
+    'fixed and sped up pet hutch swapping with pet teams',
+  ]},
 { version: '3.1.15', date: '2026-03', notes: [
     'Journal Scroll and window fixes (smaller counter buttons, scroll handling fixed) ***if issues persist, tell me if making the journal window bigger works***',
     'fixed dashboard celestials not updating (was only grabbing from cache once on init)',
@@ -310,15 +314,37 @@ function buildShopRestockSection(): HTMLElement {
     cardEls.push({ nextEl, subEl, ts: 0 });
   }
 
-  // Find an item in the dataset by trying multiple known item_id aliases
+  // Find best matching item across aliases.
+  // Preference: earliest future ETA, then newest last_seen, then first alias order.
   const findItem = (allItems: RestockItem[], aliases: readonly string[]): RestockItem | null => {
-    for (const alias of aliases) {
-      const found = allItems.find(it =>
-        (it.item_id ?? '').toLowerCase() === alias.toLowerCase()
-      );
-      if (found) return found;
-    }
-    return null;
+    const aliasOrder = new Map<string, number>();
+    aliases.forEach((alias, index) => {
+      aliasOrder.set(alias.toLowerCase(), index);
+    });
+
+    const candidates = allItems.filter((item) => aliasOrder.has((item.item_id ?? '').toLowerCase()));
+    if (!candidates.length) return null;
+
+    const now = Date.now();
+    candidates.sort((a, b) => {
+      const aTs = a.estimated_next_timestamp ?? 0;
+      const bTs = b.estimated_next_timestamp ?? 0;
+      const aHasFuture = aTs > now;
+      const bHasFuture = bTs > now;
+
+      if (aHasFuture !== bHasFuture) return aHasFuture ? -1 : 1;
+      if (aHasFuture && bHasFuture && aTs !== bTs) return aTs - bTs;
+
+      const aLast = a.last_seen ?? 0;
+      const bLast = b.last_seen ?? 0;
+      if (aLast !== bLast) return bLast - aLast;
+
+      const aOrder = aliasOrder.get((a.item_id ?? '').toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = aliasOrder.get((b.item_id ?? '').toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder;
+    });
+
+    return candidates[0] ?? null;
   };
 
   // Update card contents from dataset
@@ -358,8 +384,8 @@ function buildShopRestockSection(): HTMLElement {
     }
   }, 30_000);
 
-  const stopRestockSync = onRestockDataUpdated(() => {
-    updateCards(getRestockDataSync() ?? []);
+  const stopRestockSync = onRestockDataUpdated((detail) => {
+    updateCards(detail.items ?? getRestockDataSync() ?? []);
   });
 
   // Cleanup on container detach

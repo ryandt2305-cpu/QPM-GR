@@ -8,10 +8,12 @@ export type RoomActionType =
   | 'ToggleFavoriteItem'
   | 'FeedPet'
   | 'StorePet'
+  | 'PickupPet'
   | 'PlacePet'
   | 'SellPet'
   | 'PlayerPosition'
   | 'RetrieveItemFromStorage'
+  | 'PutItemInStorage'
   | 'SwapPet';
 
 export type WebSocketSendFailureReason =
@@ -45,7 +47,9 @@ type PlayerPositionPayload = {
   position: { x: number; y: number };
 };
 
-type RetrievePayload = { itemId: string; storageId: string };
+type RetrievePayload = { itemId: string; storageId: string; toInventoryIndex?: number };
+type PutInStoragePayload = { itemId: string; storageId: string; toStorageIndex?: number };
+type PickupPetPayload = { petId: string };
 type SwapPayload = { petSlotId: string; petInventoryId: string };
 
 const DEFAULT_SCOPE_PATH = ['Room', 'Quinoa'] as const;
@@ -81,6 +85,10 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
       return isNonEmptyString(payload.itemId);
     case 'FeedPet':
       return isNonEmptyString(payload.petItemId) && isNonEmptyString(payload.cropItemId);
+    case 'PickupPet': {
+      const p = payload as PickupPetPayload;
+      return isNonEmptyString(p.petId);
+    }
     case 'StorePet':
     case 'SellPet':
       return isNonEmptyString(payload.itemId);
@@ -101,7 +109,13 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
     }
     case 'RetrieveItemFromStorage': {
       const p = payload as RetrievePayload;
-      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId);
+      const hasIndex = p.toInventoryIndex == null || isFiniteNumber(p.toInventoryIndex);
+      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex;
+    }
+    case 'PutItemInStorage': {
+      const p = payload as PutInStoragePayload;
+      const hasIndex = p.toStorageIndex == null || isFiniteNumber(p.toStorageIndex);
+      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex;
     }
     case 'SwapPet': {
       const p = payload as SwapPayload;
@@ -119,7 +133,10 @@ function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>):
     case 'StorePet':
     case 'SellPet':
     case 'RetrieveItemFromStorage':
+    case 'PutItemInStorage':
       return `${type}:${String(payload.itemId ?? '')}`;
+    case 'PickupPet':
+      return `${type}:${String(payload.petId ?? '')}`;
     case 'FeedPet':
       return `${type}:${String(payload.petItemId ?? '')}:${String(payload.cropItemId ?? '')}`;
     case 'PlacePet':

@@ -3447,6 +3447,7 @@ export function initPetsWindow(): void {
 
   keybindHandler = (e: KeyboardEvent) => {
     if (isEditableTarget(e.target)) return;
+    if (e.repeat) return;
 
     // Window open/close keybind
     if (currentKeybind && e.key.toLowerCase() === currentKeybind && !e.ctrlKey && !e.metaKey && !e.altKey) {

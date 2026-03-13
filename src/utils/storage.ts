@@ -28,6 +28,8 @@ const QPM_STORAGE_KEYS = [
   // Auto Favorite
   'qpm.autoFavorite.v1',
   'qpm.bulkFavorite.v1',
+  'qpm.autoReconnect.enabled.v1',
+  'qpm.autoReconnect.delayMs.v1',
 
   // Pet Hatching Tracker
   'qpm.petHatchingTracker.knownPetIds.v1',

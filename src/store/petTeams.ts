@@ -4,10 +4,7 @@
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos } from './pets';
-import { getFavoritedItemIds } from './inventory';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
-import { swapPetIntoActiveSlot, type SwapPetFailureReason } from '../features/petSwap';
-import { sendStorePet, sendPlacePet, PLACE_PET_DEFAULTS } from '../features/petTeamActions';
 import { logTeamEvent } from './petTeamsLogs';
 import { delay } from '../utils/scheduling';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from './xpTracker';
@@ -48,9 +45,24 @@ export function initPetTeamsStore(): void {
   if (config.activeTeamId === undefined) config.activeTeamId = null;
   if (typeof config.lastAppliedAt !== 'number') config.lastAppliedAt = 0;
   // Ensure each team has a valid slots array (guards against corrupt / pre-schema storage)
+  let teamsNormalized = false;
   for (const team of config.teams) {
-    if (!Array.isArray(team.slots)) team.slots = [null, null, null];
-    while (team.slots.length < 3) team.slots.push(null);
+    const rawSlots = Array.isArray(team.slots) ? team.slots : [];
+    const normalizedSlots: [string | null, string | null, string | null] = [
+      typeof rawSlots[0] === 'string' ? rawSlots[0] : null,
+      typeof rawSlots[1] === 'string' ? rawSlots[1] : null,
+      typeof rawSlots[2] === 'string' ? rawSlots[2] : null,
+    ];
+    if (
+      !Array.isArray(team.slots) ||
+      team.slots.length !== 3 ||
+      team.slots[0] !== normalizedSlots[0] ||
+      team.slots[1] !== normalizedSlots[1] ||
+      team.slots[2] !== normalizedSlots[2]
+    ) {
+      team.slots = normalizedSlots;
+      teamsNormalized = true;
+    }
   }
 
   // Keybind migration: combo -> teamIndex (legacy) to combo -> teamId (current).
@@ -79,6 +91,8 @@ export function initPetTeamsStore(): void {
   }
   if (keybindsChanged || Object.keys(migratedKeybinds).length !== Object.keys(config.keybinds).length) {
     config.keybinds = migratedKeybinds;
+    storage.set(CONFIG_KEY, config);
+  } else if (teamsNormalized) {
     storage.set(CONFIG_KEY, config);
   }
 
@@ -409,12 +423,17 @@ export async function getAllPooledPets(): Promise<PooledPet[]> {
 // ---------------------------------------------------------------------------
 
 const INVENTORY_ATOM_LABEL = 'myInventoryAtom';
+const HUTCH_ATOM_LABEL = 'myPetHutchPetItemsAtom';
 const PET_HUTCH_STORAGE_ID = 'PetHutch';
+const HUTCH_MAX_ITEMS = 25;
 const HUTCH_RETRIEVE_TIMEOUT_MS = 3500;
 const STORE_TIMEOUT_MS = 3000;
 const PLACE_TIMEOUT_MS = 3000;
 const POLL_INTERVAL_MS = 100;
 const APPLY_STEP_DELAY_MS = 120;
+const FAST_PATH_SETTLE_TIMEOUT_MS = 1200;
+const FAST_SETTLE_POLL_INTERVAL_MS = 50;
+const REPAIR_SETTLE_TIMEOUT_MS = 1200;
 
 export type ApplyErrorReason =
   | 'missing_connection'
@@ -475,26 +494,160 @@ function extractCandidateIds(entry: Record<string, unknown>): string[] {
   return candidates.filter((value): value is string => Boolean(value));
 }
 
-async function readInventoryIdSet(): Promise<Set<string>> {
-  const result = new Set<string>();
+function extractPrimaryItemId(entry: Record<string, unknown>): string | null {
+  return (
+    normalizeId(entry.id) ??
+    normalizeId(entry.itemId) ??
+    extractCandidateIds(entry)[0] ??
+    null
+  );
+}
+
+function isLikelyPetInventoryEntry(entry: Record<string, unknown>): boolean {
+  const itemType = String(entry.itemType ?? '').trim().toLowerCase();
+  if (itemType === 'pet') {
+    return true;
+  }
+  if (normalizeId(entry.petId)) {
+    return true;
+  }
+  const nestedPet = entry.pet && typeof entry.pet === 'object'
+    ? (entry.pet as Record<string, unknown>)
+    : null;
+  if (normalizeId(nestedPet?.id) || normalizeId(nestedPet?.petId)) {
+    return true;
+  }
+  return Array.isArray(entry.abilities);
+}
+
+interface InventorySnapshot {
+  ids: Set<string>;
+  petIds: string[];
+  freeIndex: number | null;
+}
+
+interface HutchSnapshot {
+  ids: Set<string>;
+  count: number;
+  freeIndex: number | null;
+}
+
+function getActiveSlotIds(): string[] {
+  return getActivePetInfos()
+    .map((pet) => normalizeId(pet.slotId))
+    .filter((id): id is string => Boolean(id));
+}
+
+async function readInventorySnapshot(): Promise<InventorySnapshot> {
+  const ids = new Set<string>();
+  const petIds: string[] = [];
   const atom = getAtomByLabel(INVENTORY_ATOM_LABEL);
   if (!atom) {
-    return result;
+    return { ids, petIds, freeIndex: null };
   }
 
   try {
     const raw = await readAtomValue(atom);
     const items = extractInventoryItems(raw);
-    for (const item of items) {
-      if (!item || typeof item !== 'object') {
+    let firstFreeIndex: number | null = null;
+
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      if (!item) {
+        if (firstFreeIndex == null) {
+          firstFreeIndex = idx;
+        }
         continue;
       }
-      extractCandidateIds(item as Record<string, unknown>).forEach((id) => result.add(id));
+      if (typeof item !== 'object') {
+        continue;
+      }
+
+      const record = item as Record<string, unknown>;
+      extractCandidateIds(record).forEach((id) => ids.add(id));
+
+      if (isLikelyPetInventoryEntry(record)) {
+        const petItemId = extractPrimaryItemId(record);
+        if (petItemId) {
+          petIds.push(petItemId);
+        }
+      }
     }
+
+    const freeIndex = firstFreeIndex ?? items.length;
+    return { ids, petIds, freeIndex };
   } catch (error) {
-    log('[petTeams] inventory read failed while applying team', error);
+    log('[petTeams] inventory snapshot read failed', error);
+    return { ids, petIds, freeIndex: null };
+  }
+}
+
+async function readHutchSnapshot(): Promise<HutchSnapshot> {
+  const ids = new Set<string>();
+  const atom = getAtomByLabel(HUTCH_ATOM_LABEL);
+  if (!atom) {
+    return { ids, count: 0, freeIndex: 0 };
   }
 
+  try {
+    const raw = await readAtomValue(atom);
+    const items = Array.isArray(raw) ? raw : [];
+    const usedStorageIndexes = new Set<number>();
+    let hasStorageIndexes = false;
+    let occupied = 0;
+    let firstArrayHole: number | null = null;
+
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      if (!item) {
+        if (firstArrayHole == null) {
+          firstArrayHole = idx;
+        }
+        continue;
+      }
+      occupied++;
+      if (typeof item !== 'object') {
+        continue;
+      }
+
+      const record = item as Record<string, unknown>;
+      const id = extractPrimaryItemId(record);
+      if (id) {
+        ids.add(id);
+      }
+
+      const storageIndex = Number(record.storageIndex);
+      if (Number.isFinite(storageIndex) && storageIndex >= 0) {
+        hasStorageIndexes = true;
+        usedStorageIndexes.add(Math.floor(storageIndex));
+      }
+    }
+
+    let freeIndex: number | null = null;
+    if (hasStorageIndexes) {
+      for (let idx = 0; idx < HUTCH_MAX_ITEMS; idx++) {
+        if (!usedStorageIndexes.has(idx)) {
+          freeIndex = idx;
+          break;
+        }
+      }
+    } else if (firstArrayHole != null) {
+      freeIndex = firstArrayHole < HUTCH_MAX_ITEMS ? firstArrayHole : null;
+    } else if (occupied < HUTCH_MAX_ITEMS) {
+      freeIndex = occupied;
+    }
+
+    return { ids, count: occupied, freeIndex };
+  } catch (error) {
+    log('[petTeams] hutch snapshot read failed', error);
+    return { ids, count: 0, freeIndex: null };
+  }
+}
+
+async function readInventoryIdSet(): Promise<Set<string>> {
+  const result = new Set<string>();
+  const snapshot = await readInventorySnapshot();
+  snapshot.ids.forEach((id) => result.add(id));
   return result;
 }
 
@@ -508,6 +661,23 @@ async function waitForInventoryContains(itemId: string, timeoutMs: number): Prom
   while (Date.now() <= deadline) {
     const inventoryIds = await readInventoryIdSet();
     if (inventoryIds.has(expected)) {
+      return true;
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function waitForHutchContains(itemId: string, timeoutMs: number): Promise<boolean> {
+  const expected = normalizeId(itemId);
+  if (!expected) {
+    return false;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const hutch = await readHutchSnapshot();
+    if (hutch.ids.has(expected)) {
       return true;
     }
     await delay(POLL_INTERVAL_MS);
@@ -559,19 +729,31 @@ async function waitForPetNotActive(itemId: string, timeoutMs: number): Promise<b
   return false;
 }
 
-function mapSwapFailureReason(reason: SwapPetFailureReason | undefined): ApplyErrorReason {
-  switch (reason) {
-    case 'missing_connection':
-      return 'missing_connection';
-    case 'missing_ids':
-      return 'missing_source_pet';
-    case 'retrieve_failed_or_inventory_full':
-      return 'retrieve_failed_or_inventory_full';
-    case 'swap_failed_or_timeout':
-      return 'swap_failed_or_timeout';
-    default:
-      return 'unknown';
+function isActiveTeamMatch(targetIds: string[]): boolean {
+  if (!targetIds.length) {
+    return false;
   }
+  const active = getActiveSlotIds();
+  const activeSet = new Set(active);
+  if (!targetIds.every((id) => activeSet.has(id))) {
+    return false;
+  }
+  return active.length <= targetIds.length;
+}
+
+async function waitForActiveTeamMatch(
+  targetIds: string[],
+  timeoutMs: number,
+  pollIntervalMs = POLL_INTERVAL_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (isActiveTeamMatch(targetIds)) {
+      return true;
+    }
+    await delay(pollIntervalMs);
+  }
+  return false;
 }
 
 function mapSendReason(
@@ -629,46 +811,33 @@ export interface ApplyTeamResult {
   errorSummary?: string;
 }
 
-export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
+let applyQueue: Promise<void> = Promise.resolve();
+
+function enqueueApply<T>(task: () => Promise<T>): Promise<T> {
+  const run = applyQueue.then(task, task);
+  applyQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   const team = config.teams.find(t => t.id === teamId);
   if (!team) return { applied: 0, errors: ['Team not found'] };
 
-  const targetIds = team.slots.filter((s): s is string => s !== null);
+  const targetIds: string[] = [];
+  for (const slot of team.slots.slice(0, 3)) {
+    if (slot && !targetIds.includes(slot)) {
+      targetIds.push(slot);
+    }
+  }
   if (targetIds.length === 0) return { applied: 0, errors: ['Team has no pets configured'] };
 
-  const activePets = getActivePetInfos();
-  const currentSet = new Set(activePets.map(p => p.slotId).filter((id): id is string => id !== null));
+  const currentSet = new Set(getActiveSlotIds());
   const targetSet = new Set(targetIds);
-
-  const extras = activePets.filter(p => p.slotId && !targetSet.has(p.slotId));
-  const toActivate = targetIds.filter(id => !currentSet.has(id));
-
-  if (extras.length === 0 && toActivate.length === 0) {
+  if (targetIds.every((id) => currentSet.has(id)) && currentSet.size <= targetIds.length) {
     return { applied: 0, errors: [] };
-  }
-
-  const pool = await getAllPooledPets();
-  const sourceMap = new Map<string, 'hutch' | 'inventory'>();
-  for (const pet of pool) {
-    if (pet.location !== 'active') sourceMap.set(pet.id, pet.location);
-  }
-
-  const lockedIds = getFavoritedItemIds();
-  const extrasQueue = [...extras].sort((a, b) => {
-    const aLocked = Boolean(a.slotId && lockedIds.has(a.slotId));
-    const bLocked = Boolean(b.slotId && lockedIds.has(b.slotId));
-    if (aLocked !== bLocked) return aLocked ? -1 : 1;
-    return a.slotIndex - b.slotIndex;
-  });
-
-  const hutchTargets: string[] = [];
-  const inventoryTargets: string[] = [];
-  for (const targetId of toActivate) {
-    if (sourceMap.get(targetId) === 'hutch') {
-      hutchTargets.push(targetId);
-    } else {
-      inventoryTargets.push(targetId);
-    }
   }
 
   const errors: string[] = [];
@@ -680,22 +849,79 @@ export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
     incrementReasonCount(reasonCounts, reason);
   };
 
-  const nextExtra = (): NonNullable<(typeof extrasQueue)[number]> | null => {
-    while (extrasQueue.length > 0) {
-      const next = extrasQueue.shift()!;
-      if (next.slotId) return next;
-      pushError('missing_source_pet', 'Missing extra pet slot ID while applying team');
+  const sendRetrieveFromHutch = (itemId: string, toInventoryIndex: number | null, skipThrottle = false) => {
+    const payload: Record<string, unknown> = {
+      itemId,
+      storageId: PET_HUTCH_STORAGE_ID,
+    };
+    if (typeof toInventoryIndex === 'number' && Number.isFinite(toInventoryIndex) && toInventoryIndex >= 0) {
+      payload.toInventoryIndex = toInventoryIndex;
     }
-    return null;
+    return sendRoomAction(
+      'RetrieveItemFromStorage',
+      payload,
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
+    );
   };
 
-  const placeFromInventory = async (petId: string): Promise<boolean> => {
-    const place = sendPlacePet(
-      petId,
-      PLACE_PET_DEFAULTS.position,
-      PLACE_PET_DEFAULTS.tileType,
-      PLACE_PET_DEFAULTS.localTileIndex,
+  const sendSwapPet = (petSlotId: string, petInventoryId: string, skipThrottle = false) =>
+    sendRoomAction(
+      'SwapPet',
+      { petSlotId, petInventoryId },
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
     );
+
+  const sendPlaceFromInventory = (itemId: string, skipThrottle = false) =>
+    sendRoomAction(
+      'PlacePet',
+      {
+        itemId,
+        position: { x: 0, y: 0 },
+        tileType: 'Boardwalk',
+        localTileIndex: 64,
+      },
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
+    );
+
+  const sendPickupPet = (petId: string, skipThrottle = false) =>
+    sendRoomAction(
+      'PickupPet',
+      { petId },
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
+    );
+
+  const sendPutItemInStorage = (itemId: string, toStorageIndex: number | null, skipThrottle = false) => {
+    const payload: Record<string, unknown> = {
+      itemId,
+      storageId: PET_HUTCH_STORAGE_ID,
+    };
+    if (typeof toStorageIndex === 'number' && Number.isFinite(toStorageIndex) && toStorageIndex >= 0) {
+      payload.toStorageIndex = toStorageIndex;
+    }
+    return sendRoomAction(
+      'PutItemInStorage',
+      payload,
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
+    );
+  };
+
+  const finishApply = (): ApplyTeamResult => {
+    const errorSummary = buildErrorSummary(reasonCounts);
+    const hasReasonCounts = Object.keys(reasonCounts).length > 0;
+    config.activeTeamId = teamId;
+    config.lastAppliedAt = Date.now();
+    saveConfig();
+    logTeamEvent(teamId, team.name, applied, errors);
+    return {
+      applied,
+      errors,
+      ...(hasReasonCounts ? { reasonCounts } : {}),
+      ...(errorSummary ? { errorSummary } : {}),
+    };
+  };
+
+  const placeFromInventoryWithConfirm = async (petId: string): Promise<boolean> => {
+    const place = sendPlaceFromInventory(petId, false);
     if (!place.ok) {
       pushError(
         mapSendReason(place.reason, 'place_failed_or_timeout'),
@@ -709,187 +935,268 @@ export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
       pushError('place_failed_or_timeout', 'PlacePet timed out: ' + petId);
       return false;
     }
-    applied++;
     return true;
   };
 
-  // 1) Hutch-balanced replacements (prefer locked outgoing active pets)
-  while (hutchTargets.length > 0) {
-    const extra = nextExtra();
-    if (!extra) break;
-
-    const targetId = hutchTargets.shift()!;
-    const extraId = extra.slotId!;
-
-    const retrieve = sendRoomAction(
-      'RetrieveItemFromStorage',
-      { itemId: targetId, storageId: PET_HUTCH_STORAGE_ID },
-      { throttleMs: 100 },
-    );
-    if (!retrieve.ok) {
-      pushError(
-        mapSendReason(retrieve.reason, 'retrieve_failed_or_inventory_full'),
-        'RetrieveItemFromStorage failed: ' + targetId + ' (' + String(retrieve.reason ?? 'unknown') + ')',
-      );
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
+  const putInventoryPetInHutchWithConfirm = async (
+    petId: string,
+    reportErrors: boolean,
+  ): Promise<boolean> => {
+    const hutch = await readHutchSnapshot();
+    if (hutch.count >= HUTCH_MAX_ITEMS && hutch.freeIndex == null) {
+      if (reportErrors) {
+        pushError('hutch_store_failed_or_full', 'Pet Hutch is full while storing ' + petId);
+      }
+      return false;
     }
 
-    const retrieved = await waitForInventoryContains(targetId, HUTCH_RETRIEVE_TIMEOUT_MS);
-    if (!retrieved) {
-      pushError('retrieve_failed_or_inventory_full', 'RetrieveItemFromStorage timed out: ' + targetId + ' (inventory may be full)');
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
-    }
-
-    const store = sendStorePet(extraId);
+    const store = sendPutItemInStorage(petId, hutch.freeIndex, false);
     if (!store.ok) {
-      pushError(
-        mapSendReason(store.reason, 'hutch_store_failed_or_full'),
-        'StorePet failed: ' + extraId + ' (' + String(store.reason ?? 'unknown') + '; hutch may be full)',
-      );
-
-      // Best-effort fallback: still try activating the target pet.
-      const fallbackSwap = await swapPetIntoActiveSlot({
-        source: 'inventory',
-        itemId: targetId,
-        targetSlotId: extraId,
-      });
-      if (!fallbackSwap.ok) {
+      if (reportErrors) {
         pushError(
-          mapSwapFailureReason(fallbackSwap.reason),
-          'Fallback swap failed: ' + extraId + ' -> ' + targetId + ' (' + String(fallbackSwap.reason ?? 'unknown') + ')',
+          mapSendReason(store.reason, 'hutch_store_failed_or_full'),
+          'PutItemInStorage failed: ' + petId + ' (' + String(store.reason ?? 'unknown') + ')',
         );
-      } else {
-        applied++;
       }
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
+      return false;
     }
 
-    const stored = await waitForPetNotActive(extraId, STORE_TIMEOUT_MS);
+    const stored = await waitForHutchContains(petId, STORE_TIMEOUT_MS);
     if (!stored) {
-      pushError('store_failed_or_timeout', 'StorePet timed out: ' + extraId);
-      const fallbackSwap = await swapPetIntoActiveSlot({
-        source: 'inventory',
-        itemId: targetId,
-        targetSlotId: extraId,
-      });
-      if (!fallbackSwap.ok) {
-        pushError(
-          mapSwapFailureReason(fallbackSwap.reason),
-          'Fallback swap failed after store timeout: ' + extraId + ' -> ' + targetId + ' (' + String(fallbackSwap.reason ?? 'unknown') + ')',
-        );
-      } else {
-        applied++;
+      if (reportErrors) {
+        pushError('store_failed_or_timeout', 'PutItemInStorage timed out: ' + petId);
       }
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
+      return false;
+    }
+    return true;
+  };
+
+  const retrieveFromHutchWithConfirm = async (petId: string): Promise<boolean> => {
+    const tryRetrieveOnce = async (): Promise<{ ok: boolean; reason?: WebSocketSendFailureReason }> => {
+      const inventory = await readInventorySnapshot();
+      const retrieve = sendRetrieveFromHutch(petId, inventory.freeIndex, false);
+      if (!retrieve.ok) {
+        return retrieve.reason ? { ok: false, reason: retrieve.reason } : { ok: false };
+      }
+      const retrieved = await waitForInventoryContains(petId, HUTCH_RETRIEVE_TIMEOUT_MS);
+      return { ok: retrieved };
+    };
+
+    const first = await tryRetrieveOnce();
+    if (first.ok) {
+      return true;
     }
 
-    await placeFromInventory(targetId);
-    await delay(APPLY_STEP_DELAY_MS);
-  }
+    const activeSet = new Set(getActiveSlotIds());
+    const inventory = await readInventorySnapshot();
+    const candidate = inventory.petIds.find((id) => !activeSet.has(id) && !targetSet.has(id));
+    if (candidate) {
+      await putInventoryPetInHutchWithConfirm(candidate, false);
+      await delay(APPLY_STEP_DELAY_MS);
+    }
 
-  // 2) Inventory replacements into active slots
-  while (inventoryTargets.length > 0) {
-    const extra = nextExtra();
-    if (!extra) break;
+    const second = await tryRetrieveOnce();
+    if (second.ok) {
+      return true;
+    }
 
-    const targetId = inventoryTargets.shift()!;
-    const extraId = extra.slotId!;
+    pushError(
+      mapSendReason(second.reason ?? first.reason, 'retrieve_failed_or_inventory_full'),
+      'RetrieveItemFromStorage failed: ' + petId + ' (inventory may be full)',
+    );
+    return false;
+  };
 
-    const swap = await swapPetIntoActiveSlot({
-      source: 'inventory',
-      itemId: targetId,
-      targetSlotId: extraId,
-    });
+  const swapIntoActiveWithConfirm = async (
+    targetId: string,
+    outgoingActiveId: string,
+  ): Promise<boolean> => {
+    const swap = sendSwapPet(outgoingActiveId, targetId, false);
     if (!swap.ok) {
       pushError(
-        mapSwapFailureReason(swap.reason),
-        'Swap failed: ' + extraId + ' -> ' + targetId + ' (' + String(swap.reason ?? 'unknown') + ')',
+        mapSendReason(swap.reason, 'swap_failed_or_timeout'),
+        'SwapPet failed: ' + outgoingActiveId + ' -> ' + targetId + ' (' + String(swap.reason ?? 'unknown') + ')',
       );
-    } else {
-      applied++;
+      return false;
     }
-    await delay(APPLY_STEP_DELAY_MS);
-  }
-
-  // 3) Remaining extras -> hutch
-  while (extrasQueue.length > 0) {
-    const extra = nextExtra();
-    if (!extra) break;
-
-    const extraId = extra.slotId!;
-    const store = sendStorePet(extraId);
-    if (!store.ok) {
-      pushError(
-        mapSendReason(store.reason, 'hutch_store_failed_or_full'),
-        'StorePet failed: ' + extraId + ' (' + String(store.reason ?? 'unknown') + '; hutch may be full)',
-      );
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
+    const swapped = await waitForPetInActiveList(targetId, PLACE_TIMEOUT_MS);
+    if (!swapped) {
+      pushError('swap_failed_or_timeout', 'SwapPet timed out: ' + outgoingActiveId + ' -> ' + targetId);
+      return false;
     }
-
-    const stored = await waitForPetNotActive(extraId, STORE_TIMEOUT_MS);
-    if (!stored) {
-      pushError('store_failed_or_timeout', 'StorePet timed out: ' + extraId);
-    } else {
-      applied++;
-    }
-    await delay(APPLY_STEP_DELAY_MS);
-  }
-
-  // 4) Remaining targets -> empty active slots
-  for (const targetId of hutchTargets) {
-    pushError(
-      'balance_unpaired_hutch_target',
-      'No outgoing active pet available to keep hutch balanced for ' + targetId,
-    );
-
-    const retrieve = sendRoomAction(
-      'RetrieveItemFromStorage',
-      { itemId: targetId, storageId: PET_HUTCH_STORAGE_ID },
-      { throttleMs: 100 },
-    );
-    if (!retrieve.ok) {
-      pushError(
-        mapSendReason(retrieve.reason, 'retrieve_failed_or_inventory_full'),
-        'RetrieveItemFromStorage failed: ' + targetId + ' (' + String(retrieve.reason ?? 'unknown') + ')',
-      );
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
-    }
-
-    const retrieved = await waitForInventoryContains(targetId, HUTCH_RETRIEVE_TIMEOUT_MS);
-    if (!retrieved) {
-      pushError('retrieve_failed_or_inventory_full', 'RetrieveItemFromStorage timed out: ' + targetId + ' (inventory may be full)');
-      await delay(APPLY_STEP_DELAY_MS);
-      continue;
-    }
-
-    await placeFromInventory(targetId);
-    await delay(APPLY_STEP_DELAY_MS);
-  }
-
-  for (const targetId of inventoryTargets) {
-    await placeFromInventory(targetId);
-    await delay(APPLY_STEP_DELAY_MS);
-  }
-
-  const errorSummary = buildErrorSummary(reasonCounts);
-  const hasReasonCounts = Object.keys(reasonCounts).length > 0;
-  config.activeTeamId = teamId;
-  config.lastAppliedAt = Date.now();
-  saveConfig();
-
-  logTeamEvent(teamId, team.name, applied, errors);
-  return {
-    applied,
-    errors,
-    ...(hasReasonCounts ? { reasonCounts } : {}),
-    ...(errorSummary ? { errorSummary } : {}),
+    return true;
   };
+
+  const applyTeamFastHutchPath = async (): Promise<boolean> => {
+    const modeledActive = getActiveSlotIds();
+    const modeledActiveSet = new Set(modeledActive);
+    const pendingTargets = targetIds.filter((id) => !modeledActiveSet.has(id));
+    if (pendingTargets.length === 0) {
+      return modeledActive.every((id) => targetSet.has(id));
+    }
+
+    const inventory = await readInventorySnapshot();
+    const hutch = await readHutchSnapshot();
+
+    const modeledHutchIds = new Set(hutch.ids);
+    const unavailableTargets = new Set<string>();
+    let modeledInventoryIndex = inventory.freeIndex;
+    let modeledHutchCount = hutch.count;
+    let modeledHutchIndex = hutch.freeIndex;
+    let fastOpsSent = 0;
+
+    const retrieveTargets = pendingTargets.filter((targetId) => modeledHutchIds.has(targetId));
+    for (const targetId of retrieveTargets) {
+      const retrieve = sendRetrieveFromHutch(targetId, modeledInventoryIndex, true);
+      if (!retrieve.ok) {
+        unavailableTargets.add(targetId);
+        continue;
+      }
+      fastOpsSent++;
+      modeledHutchIds.delete(targetId);
+      modeledHutchCount = Math.max(0, modeledHutchCount - 1);
+      if (modeledHutchCount < HUTCH_MAX_ITEMS && modeledHutchIndex == null) {
+        modeledHutchIndex = modeledHutchCount;
+      }
+      if (typeof modeledInventoryIndex === 'number') {
+        modeledInventoryIndex += 1;
+      }
+    }
+
+    const displacedPets: string[] = [];
+    for (const targetId of pendingTargets) {
+      if (modeledActiveSet.has(targetId) || unavailableTargets.has(targetId)) {
+        continue;
+      }
+
+      const outgoingIndex = modeledActive.findIndex((id) => !targetSet.has(id));
+      if (outgoingIndex >= 0) {
+        const outgoing = modeledActive[outgoingIndex];
+        if (!outgoing) {
+          continue;
+        }
+        const swap = sendSwapPet(outgoing, targetId, true);
+        if (!swap.ok) {
+          continue;
+        }
+        fastOpsSent++;
+        modeledActive[outgoingIndex] = targetId;
+        modeledActiveSet.delete(outgoing);
+        modeledActiveSet.add(targetId);
+        displacedPets.push(outgoing);
+        applied++;
+      } else {
+        const place = sendPlaceFromInventory(targetId, true);
+        if (!place.ok) {
+          continue;
+        }
+        fastOpsSent++;
+        modeledActive.push(targetId);
+        modeledActiveSet.add(targetId);
+        applied++;
+      }
+    }
+
+    for (const displacedId of displacedPets) {
+      if (modeledHutchCount >= HUTCH_MAX_ITEMS && modeledHutchIndex == null) {
+        continue;
+      }
+      const store = sendPutItemInStorage(displacedId, modeledHutchIndex, true);
+      if (!store.ok) {
+        continue;
+      }
+      fastOpsSent++;
+      modeledHutchCount = Math.min(HUTCH_MAX_ITEMS, modeledHutchCount + 1);
+      if (typeof modeledHutchIndex === 'number') {
+        const next = modeledHutchIndex + 1;
+        modeledHutchIndex = next < HUTCH_MAX_ITEMS ? next : null;
+      } else if (modeledHutchCount < HUTCH_MAX_ITEMS) {
+        modeledHutchIndex = modeledHutchCount;
+      }
+    }
+
+    if (fastOpsSent === 0) {
+      return false;
+    }
+
+    return waitForActiveTeamMatch(targetIds, FAST_PATH_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
+  };
+
+  const applyTeamRepairPass = async (): Promise<void> => {
+    let activeNow = getActiveSlotIds();
+    let pendingTargets = targetIds.filter((id) => !activeNow.includes(id));
+
+    for (const targetId of pendingTargets) {
+      activeNow = getActiveSlotIds();
+      if (activeNow.includes(targetId)) {
+        continue;
+      }
+
+      const hutch = await readHutchSnapshot();
+      if (hutch.ids.has(targetId)) {
+        const retrieved = await retrieveFromHutchWithConfirm(targetId);
+        if (!retrieved) {
+          await delay(APPLY_STEP_DELAY_MS);
+          continue;
+        }
+      }
+
+      const outgoing = getActiveSlotIds().find((id) => !targetSet.has(id)) ?? null;
+      if (outgoing) {
+        const swapped = await swapIntoActiveWithConfirm(targetId, outgoing);
+        if (swapped) {
+          applied++;
+          await putInventoryPetInHutchWithConfirm(outgoing, false);
+        } else {
+          const placed = await placeFromInventoryWithConfirm(targetId);
+          if (placed) {
+            applied++;
+          }
+        }
+      } else {
+        const placed = await placeFromInventoryWithConfirm(targetId);
+        if (placed) {
+          applied++;
+        }
+      }
+      await delay(APPLY_STEP_DELAY_MS);
+    }
+
+    activeNow = getActiveSlotIds();
+    const leftovers = activeNow.filter((id) => !targetSet.has(id));
+    for (const extraId of leftovers) {
+      const pickup = sendPickupPet(extraId, false);
+      if (!pickup.ok) {
+        pushError(
+          mapSendReason(pickup.reason, 'hutch_store_failed_or_full'),
+          'PickupPet failed: ' + extraId + ' (' + String(pickup.reason ?? 'unknown') + ')',
+        );
+        continue;
+      }
+
+      const picked = await waitForPetNotActive(extraId, STORE_TIMEOUT_MS);
+      if (!picked) {
+        pushError('store_failed_or_timeout', 'PickupPet timed out: ' + extraId);
+        continue;
+      }
+
+      await putInventoryPetInHutchWithConfirm(extraId, true);
+      applied++;
+      await delay(APPLY_STEP_DELAY_MS);
+    }
+    await waitForActiveTeamMatch(targetIds, REPAIR_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
+  };
+
+  const fastSettled = await applyTeamFastHutchPath();
+  if (!fastSettled) {
+    await applyTeamRepairPass();
+  }
+
+  return finishApply();
+}
+
+export async function applyTeam(teamId: string): Promise<ApplyTeamResult> {
+  return enqueueApply(() => applyTeamInternal(teamId));
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import { log } from '../utils/logger';
 
 const VISIBLE_CARDS_KEY = 'qpm.utilityHub.visibleCards';
 const ACTIVITY_LOG_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.activityLogDefault.v1';
+const AUTO_RECONNECT_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.autoReconnectDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -38,6 +39,13 @@ const FEATURE_DEFS = [
     windowTitle: '📜 Activity Log',
   },
   {
+    key: 'auto-reconnect',
+    label: 'Auto Reconnect',
+    icon: '↻',
+    desc: 'Reconnect automatically after a disconnect',
+    windowTitle: 'Auto Reconnect',
+  },
+  {
     key: 'reminders',
     label: 'Reminders',
     icon: '🔔',
@@ -58,7 +66,7 @@ function loadVisibleCards(): FeatureKey[] {
     return defaultVisible;
   }
 
-  const selected = saved.filter((key): key is FeatureKey => validKeys.has(key as FeatureKey));
+  let selected = saved.filter((key): key is FeatureKey => validKeys.has(key as FeatureKey));
   if (selected.length === 0) {
     return defaultVisible;
   }
@@ -73,6 +81,18 @@ function loadVisibleCards(): FeatureKey[] {
 
   if (!migrated) {
     storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
+  }
+
+  const autoReconnectMigrated = storage.get<boolean>(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, false);
+  if (!autoReconnectMigrated && !selected.includes('auto-reconnect')) {
+    const next: FeatureKey[] = [...selected, 'auto-reconnect'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!autoReconnectMigrated) {
+    storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
   }
 
   return selected;
@@ -104,6 +124,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'garden-filters') {
           const { createGardenFiltersSection } = await import('./sections/gardenFiltersSection');
           windowRoot.appendChild(await createGardenFiltersSection());
+        } else if (feat.key === 'auto-reconnect') {
+          const { createAutoReconnectSection } = await import('./sections/autoReconnectSection');
+          windowRoot.appendChild(createAutoReconnectSection());
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -406,6 +429,7 @@ function renderUtilityHub(root: HTMLElement): void {
     overlayEl = buildCustomizeOverlay(root, closeOverlay, (selected) => {
       storage.set(VISIBLE_CARDS_KEY, selected);
       storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
+      storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

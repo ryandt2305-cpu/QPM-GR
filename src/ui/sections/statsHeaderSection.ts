@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.17', date: '2026-03', notes: [
+    'hopefully fixed the activity log hydration (stutters for 5-10 seconds and then its smooth)',
+    'first 5 people to send a screenshot of this to the QPM channel gets 5k bread lol',
+  ]},
 { version: '3.1.16', date: '2026-03', notes: [
     'added anti-afk in utility hub',
     'fixed and sped up pet hutch swapping with pet teams',

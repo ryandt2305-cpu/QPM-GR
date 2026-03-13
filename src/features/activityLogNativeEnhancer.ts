@@ -88,8 +88,14 @@ interface ModalHandles extends ModalRef {
   plantDropdown: SpeciesDropdownHandle;
   summary: HTMLElement;
   ariesFilterPresent: boolean;
+  scrollHost: HTMLElement;
+  scrollTargets: HTMLElement[];
   listObserver: MutationObserver;
+  listScrollListener: EventListener;
+  listClickCaptureListener: EventListener;
   refreshQueued: boolean;
+  refreshTimer: number | null;
+  speciesOptionsReady: boolean;
 }
 
 interface SpeciesDropdownHandle {
@@ -136,10 +142,20 @@ const LEGACY_STORAGE_KEYS = [
 ] as const;
 
 const HISTORY_LIMIT = 5000;
-const FAST_REPLAY_INITIAL_BATCH = 450;
 const FAST_REPLAY_DELAY_MS = 24;
-const FULL_REPLAY_DELAY_MS = 220;
-const HYDRATION_STEPS = [1200, 2500, 4000, 5000] as const;
+const VIRTUAL_WINDOW_SIZE = 60;
+const VIRTUAL_SCROLL_THROTTLE_MS = 96;
+const VIRTUAL_DEFAULT_ROW_HEIGHT = 46;
+const VIRTUAL_SPACER_ATTR = 'data-qpm-activity-virtual-spacer';
+const VIRTUAL_SPACER_TOP = 'top';
+const VIRTUAL_SPACER_BOTTOM = 'bottom';
+const VIRTUAL_HIDDEN_LOAD_ATTR = 'data-qpm-activity-virtual-hidden-load';
+const VIRTUAL_CUSTOM_LOAD_ATTR = 'data-qpm-activity-virtual-load-button';
+const VIRTUAL_HYDRATE_CHUNK_MIN = 8;
+const VIRTUAL_HYDRATE_CHUNK_MAX = 40;
+const VIRTUAL_HYDRATE_NEAR_BOTTOM_PX = 260;
+const LARGE_LIST_REFRESH_THRESHOLD = 450;
+const LARGE_LIST_REFRESH_DELAY_MS = 72;
 const STYLE_ID = 'qpm-activity-log-native-style';
 const TOOLBAR_ATTR = 'data-qpm-activity-toolbar';
 const TITLE_SELECTOR = 'p.chakra-text';
@@ -327,7 +343,35 @@ let replayInFlight = false;
 let suppressIngestUntil = 0;
 let writeSupported: boolean | null = null;
 let replayMode: 'unknown' | 'write' | 'read_patch' | 'none' = 'unknown';
-let fullReplayTimer: number | null = null;
+let replayHydrationTimer: number | null = null;
+let replayHydratedCount = 0;
+let readPatchMaxEntries: number | null = null;
+let readPatchStartIndex = 0;
+let readPatchOrder: OrderFilter = 'newest';
+let virtualMode: 'collapsed' | 'virtual-expanded' = 'collapsed';
+let virtualWindowStart = 0;
+let virtualWindowEnd = 0;
+let virtualTotalFiltered = 0;
+let virtualTopSpacerPx = 0;
+let virtualBottomSpacerPx = 0;
+let virtualAvgRowHeight = VIRTUAL_DEFAULT_ROW_HEIGHT;
+let virtualLastScrollUpdateAt = 0;
+let virtualIgnoreScrollUntil = 0;
+let virtualFilteredCacheKey = '';
+let virtualFilteredCache: ActivityLogEntry[] = [];
+let virtualSpacerTopEl: HTMLDivElement | null = null;
+let virtualSpacerBottomEl: HTMLDivElement | null = null;
+let virtualListLayoutApplied = false;
+let virtualListPrevJustifyContent = '';
+let virtualListPrevAlignContent = '';
+let virtualListPrevAlignItems = '';
+let virtualPendingWindowStart: number | null = null;
+let virtualPendingReason = '';
+let virtualPendingPreserveScroll = false;
+let virtualHydratedCount = 0;
+let virtualReplayDurationMs = 0;
+let virtualLoadMoreButton: HTMLButtonElement | null = null;
+let virtualLoadButtonClassName = '';
 
 let patchedMyDataAtom: any | null = null;
 let patchedMyDataReadKey: string | null = null;
@@ -336,6 +380,56 @@ let patchedMyDataReadOriginal: ((...args: any[]) => unknown) | null = null;
 const petIconCache = new Map<string, string | null>();
 const plantIconCache = new Map<string, string | null>();
 const eggIconCache = new Map<string, string | null>();
+let petLookupEntriesCache: SpeciesLookupEntry[] | null = null;
+let plantLookupEntriesCache: SpeciesLookupEntry[] | null = null;
+let petSpeciesOptionsCache: SpeciesDropdownOption[] | null = null;
+let plantSpeciesOptionsCache: SpeciesDropdownOption[] | null = null;
+let orderedHistoryCacheKey = '';
+let orderedHistoryNewestCache: ActivityLogEntry[] | null = null;
+let orderedHistoryOldestCache: ActivityLogEntry[] | null = null;
+let historyRevision = 0;
+let historyFilterMetaCacheRevision = -1;
+const historyFilterMetaCache = new Map<string, {
+  action: ActionKey;
+  type: TypeFilter;
+  petFilterKey: string | null;
+  plantFilterKey: string | null;
+}>();
+
+function invalidateVirtualCaches(): void {
+  virtualFilteredCacheKey = '';
+  virtualFilteredCache = [];
+  historyFilterMetaCacheRevision = -1;
+  historyFilterMetaCache.clear();
+}
+
+function resetVirtualMode(): void {
+  virtualMode = 'collapsed';
+  virtualWindowStart = 0;
+  virtualWindowEnd = 0;
+  virtualTotalFiltered = 0;
+  virtualTopSpacerPx = 0;
+  virtualBottomSpacerPx = 0;
+  virtualAvgRowHeight = VIRTUAL_DEFAULT_ROW_HEIGHT;
+  virtualLastScrollUpdateAt = 0;
+  virtualIgnoreScrollUntil = 0;
+  readPatchStartIndex = 0;
+  readPatchMaxEntries = null;
+  virtualSpacerTopEl = null;
+  virtualSpacerBottomEl = null;
+  virtualListLayoutApplied = false;
+  virtualListPrevJustifyContent = '';
+  virtualListPrevAlignContent = '';
+  virtualListPrevAlignItems = '';
+  virtualPendingWindowStart = null;
+  virtualPendingReason = '';
+  virtualPendingPreserveScroll = false;
+  virtualHydratedCount = 0;
+  virtualReplayDurationMs = 0;
+  virtualLoadMoreButton = null;
+  virtualLoadButtonClassName = '';
+  invalidateVirtualCaches();
+}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return !!value && typeof value === 'object';
@@ -649,6 +743,8 @@ function persistHistoryEnvelope(envelope: HistoryEnvelope): void {
 function writeHistoryWithBackup(entries: ActivityLogEntry[]): void {
   const envelope = buildHistoryEnvelope(entries);
   history = envelope.entries;
+  historyRevision += 1;
+  invalidateVirtualCaches();
   persistHistoryEnvelope(envelope);
 }
 
@@ -839,6 +935,9 @@ function getEntryElements(list: HTMLElement): HTMLElement[] {
 }
 
 function classifyEntry(row: HTMLElement): ActionKey {
+  const cachedAction = readString(row.dataset.qpmAction);
+  if (cachedAction) return cachedAction;
+
   const preset =
     row.dataset.action
     || row.getAttribute('data-action')
@@ -858,6 +957,9 @@ function classifyEntry(row: HTMLElement): ActionKey {
 }
 
 function classifyType(row: HTMLElement): TypeFilter {
+  const cachedType = readString(row.dataset.qpmType) as TypeFilter | null;
+  if (cachedType) return cachedType;
+
   const action = classifyEntry(row);
   const text = normalizeWhitespace(row.textContent || '');
   const type = actionToType(action, text);
@@ -899,7 +1001,7 @@ function getActionLabel(action: ActionKey): string {
   if (!spaced) return String(action || '');
   return spaced
     .split(' ')
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word))
     .join(' ');
 }
 
@@ -1161,6 +1263,18 @@ function buildPlantLookupEntries(): SpeciesLookupEntry[] {
     });
   }
   return Array.from(map.values()).sort(compareSpeciesLookupEntry);
+}
+
+function getPetLookupEntriesCached(): SpeciesLookupEntry[] {
+  if (petLookupEntriesCache && petLookupEntriesCache.length > 0) return petLookupEntriesCache;
+  petLookupEntriesCache = buildPetLookupEntries();
+  return petLookupEntriesCache;
+}
+
+function getPlantLookupEntriesCached(): SpeciesLookupEntry[] {
+  if (plantLookupEntriesCache && plantLookupEntriesCache.length > 0) return plantLookupEntriesCache;
+  plantLookupEntriesCache = buildPlantLookupEntries();
+  return plantLookupEntriesCache;
 }
 
 function detectSpeciesKeyFromText(
@@ -1504,10 +1618,21 @@ function createSpeciesDropdown(params: {
 }
 
 function buildRowMetadata(list: HTMLElement): RowMetadata[] {
-  const pets = buildPetLookupEntries();
-  const plants = buildPlantLookupEntries();
-  const context = buildHistorySpeciesContext(pets, plants);
   const rows = getEntryElements(list);
+  const needsSpeciesFilters = Boolean(filters.petSpecies || filters.plantSpecies);
+  if (!needsSpeciesFilters) {
+    return rows.map((row) => ({
+      row,
+      action: classifyEntry(row),
+      type: classifyType(row),
+      petFilterKey: null,
+      plantFilterKey: null,
+    }));
+  }
+
+  const pets = getPetLookupEntriesCached();
+  const plants = getPlantLookupEntriesCached();
+  const context = buildHistorySpeciesContext(pets, plants);
   return rows.map((row) => {
     const rowMessage = getRowMessageText(row);
     const fullText = normalizeWhitespace(row.textContent || '');
@@ -1546,9 +1671,12 @@ function buildRowMetadata(list: HTMLElement): RowMetadata[] {
 }
 
 function buildSpeciesOptions(kind: 'pet' | 'plant'): SpeciesDropdownOption[] {
+  if (kind === 'pet' && petSpeciesOptionsCache && petSpeciesOptionsCache.length > 1) return petSpeciesOptionsCache;
+  if (kind === 'plant' && plantSpeciesOptionsCache && plantSpeciesOptionsCache.length > 1) return plantSpeciesOptionsCache;
+
   const source = kind === 'pet'
-    ? buildPetLookupEntries()
-    : buildPlantLookupEntries();
+    ? getPetLookupEntriesCached()
+    : getPlantLookupEntriesCached();
 
   const options: SpeciesDropdownOption[] = [];
   options.push({
@@ -1563,6 +1691,12 @@ function buildSpeciesOptions(kind: 'pet' | 'plant'): SpeciesDropdownOption[] {
       label: entry.label,
       iconUrl: entry.iconUrl,
     });
+  }
+
+  if (kind === 'pet') {
+    petSpeciesOptionsCache = options.length > 1 ? options : null;
+  } else {
+    plantSpeciesOptionsCache = options.length > 1 ? options : null;
   }
 
   return options;
@@ -1611,6 +1745,14 @@ function saveEnabledPreference(): void {
 function saveAndRenderFilters(): void {
   persistFilters();
   if (modalHandles) {
+    if (virtualMode === 'virtual-expanded') {
+      virtualWindowStart = 0;
+      virtualHydratedCount = VIRTUAL_WINDOW_SIZE;
+      virtualWindowEnd = virtualHydratedCount;
+      invalidateVirtualCaches();
+      queueReplay('filter-change');
+      return;
+    }
     refreshModalUI(modalHandles);
   }
 }
@@ -1763,14 +1905,50 @@ function mergeSnapshots(prevSnapshot: ActivityLogEntry[], nextSnapshot: Activity
   return true;
 }
 
-function getOrderedHistory(order: OrderFilter): ActivityLogEntry[] {
-  const sorted = history
-    .slice()
-    .sort((a, b) => (order === 'oldest' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp));
-  return sorted.map((entry) => deepClone(entry));
+function getHistoryOrderCacheKey(): string {
+  return `${historyRevision}|${history.length}|${history[0]?.timestamp ?? 0}|${history[history.length - 1]?.timestamp ?? 0}`;
 }
 
-function buildDisplayLogsWithHistory(realLogs: ActivityLogEntry[]): ActivityLogEntry[] {
+function getOrderedHistoryRefs(order: OrderFilter): ActivityLogEntry[] {
+  const key = getHistoryOrderCacheKey();
+  if (orderedHistoryCacheKey !== key) {
+    orderedHistoryCacheKey = key;
+    orderedHistoryNewestCache = null;
+    orderedHistoryOldestCache = null;
+  }
+
+  if (order === 'oldest') {
+    if (!orderedHistoryOldestCache) {
+      orderedHistoryOldestCache = history.slice().sort((a, b) => a.timestamp - b.timestamp);
+    }
+    return orderedHistoryOldestCache;
+  }
+
+  if (!orderedHistoryNewestCache) {
+    orderedHistoryNewestCache = history.slice().sort((a, b) => b.timestamp - a.timestamp);
+  }
+  return orderedHistoryNewestCache;
+}
+
+function getOrderedHistory(order: OrderFilter, maxEntries?: number, startIndex = 0): ActivityLogEntry[] {
+  const refs = getOrderedHistoryRefs(order);
+  const start = Math.max(0, Math.min(refs.length, Math.floor(startIndex)));
+  const limit = Number.isFinite(maxEntries)
+    ? Math.max(0, Math.min(refs.length - start, Math.floor(maxEntries as number)))
+    : (refs.length - start);
+  const out: ActivityLogEntry[] = [];
+  for (let index = start; index < start + limit; index += 1) {
+    out.push(deepClone(refs[index]!));
+  }
+  return out;
+}
+
+function buildDisplayLogsWithHistory(
+  realLogs: ActivityLogEntry[],
+  order: OrderFilter,
+  maxEntries?: number | null,
+  startIndex = 0,
+): ActivityLogEntry[] {
   const map = new Map<string, ActivityLogEntry>();
   for (const entry of history) {
     if (!isReplaySafeEntry(entry)) continue;
@@ -1785,8 +1963,127 @@ function buildDisplayLogsWithHistory(realLogs: ActivityLogEntry[]): ActivityLogE
     }
   }
   const merged = trimAndSortHistory(Array.from(map.values()));
-  merged.sort((a, b) => (filters.order === 'oldest' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp));
-  return merged.map((entry) => deepClone(entry));
+  merged.sort((a, b) => (order === 'oldest' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp));
+  const start = Math.max(0, Math.min(merged.length, Math.floor(startIndex)));
+  const limit = Number.isFinite(maxEntries)
+    ? Math.max(0, Math.min(merged.length - start, Math.floor(maxEntries as number)))
+    : (merged.length - start);
+  return merged.slice(start, start + limit).map((entry) => deepClone(entry));
+}
+
+function entryMatchesFilters(meta: {
+  action: ActionKey;
+  type: TypeFilter;
+  petFilterKey: string | null;
+  plantFilterKey: string | null;
+}): boolean {
+  const matchAction = filters.action === 'all' || meta.action === filters.action;
+  const matchType = filters.type === 'all' || meta.type === filters.type;
+  const petFilterKey = filters.petSpecies;
+  const plantFilterKey = filters.plantSpecies;
+  const matchPet = !petFilterKey || meta.petFilterKey === petFilterKey;
+  const matchPlant = !plantFilterKey || meta.plantFilterKey === plantFilterKey;
+  const matchSpecies = petFilterKey && plantFilterKey
+    ? (matchPet || matchPlant)
+    : (matchPet && matchPlant);
+  return matchAction && matchType && matchSpecies;
+}
+
+function getHistoryEntryFilterMetadata(
+  entry: ActivityLogEntry,
+  context: HistorySpeciesContext | null,
+  pets: SpeciesLookupEntry[] | null,
+  plants: SpeciesLookupEntry[] | null,
+): {
+  action: ActionKey;
+  type: TypeFilter;
+  petFilterKey: string | null;
+  plantFilterKey: string | null;
+} {
+  if (historyFilterMetaCacheRevision !== historyRevision) {
+    historyFilterMetaCacheRevision = historyRevision;
+    historyFilterMetaCache.clear();
+  }
+
+  const key = entryKey(entry);
+  const cached = historyFilterMetaCache.get(key);
+  if (cached) return cached;
+
+  const message = normalizeWhitespace(readEntryMessage(entry));
+  const actionValue = readString(entry.action);
+  const action = actionValue ? normalizeAction(actionValue) : inferActionFromMessage(message);
+  const type = actionToType(action, message);
+  const messageKey = normalizeToken(message);
+
+  let petFilterKey = pets ? detectSpeciesKeyFromText(message, pets) : null;
+  let plantFilterKey = plants ? detectSpeciesKeyFromText(message, plants) : null;
+
+  if (context && messageKey) {
+    if (!petFilterKey) {
+      petFilterKey = context.messageToPet.get(messageKey) ?? null;
+    }
+    if (!plantFilterKey) {
+      plantFilterKey = context.messageToPlant.get(messageKey) ?? null;
+    }
+    if (!petFilterKey) {
+      const normalizedNameText = normalizePetNameKey(message);
+      for (const alias of context.petNameAliases) {
+        if (!alias.aliasKey) continue;
+        if (!normalizedNameText.includes(alias.aliasKey)) continue;
+        petFilterKey = alias.speciesKey;
+        break;
+      }
+    }
+  }
+
+  const meta = {
+    action,
+    type,
+    petFilterKey,
+    plantFilterKey,
+  };
+  historyFilterMetaCache.set(key, meta);
+  return meta;
+}
+
+function getFilteredHistoryEntries(order: OrderFilter): ActivityLogEntry[] {
+  const cacheKey = `${historyRevision}|${order}|${filters.action}|${filters.type}|${filters.petSpecies}|${filters.plantSpecies}`;
+  if (virtualFilteredCacheKey === cacheKey) {
+    return virtualFilteredCache;
+  }
+
+  const ordered = getOrderedHistoryRefs(order);
+  const needsFiltering = filters.action !== 'all'
+    || filters.type !== 'all'
+    || Boolean(filters.petSpecies)
+    || Boolean(filters.plantSpecies);
+
+  const out: ActivityLogEntry[] = [];
+  if (!needsFiltering) {
+    for (const entry of ordered) {
+      if (!isReplaySafeEntry(entry)) continue;
+      out.push(entry);
+    }
+  } else {
+    const hasSpeciesFilter = Boolean(filters.petSpecies || filters.plantSpecies);
+    const pets = hasSpeciesFilter ? getPetLookupEntriesCached() : null;
+    const plants = hasSpeciesFilter ? getPlantLookupEntriesCached() : null;
+    const context = hasSpeciesFilter
+      ? buildHistorySpeciesContext(pets ?? [], plants ?? [])
+      : null;
+
+    for (const entry of ordered) {
+      if (!isReplaySafeEntry(entry)) continue;
+      const meta = getHistoryEntryFilterMetadata(entry, context, pets, plants);
+      if (!entryMatchesFilters(meta)) continue;
+      out.push(entry);
+    }
+  }
+
+  virtualFilteredCacheKey = cacheKey;
+  virtualFilteredCache = out;
+  virtualTotalFiltered = out.length;
+  return out;
 }
 
 function uninstallMyDataReadPatch(): void {
@@ -1797,6 +2094,8 @@ function uninstallMyDataReadPatch(): void {
   patchedMyDataAtom = null;
   patchedMyDataReadKey = null;
   patchedMyDataReadOriginal = null;
+  readPatchStartIndex = 0;
+  readPatchMaxEntries = null;
 }
 
 function installMyDataReadPatch(): boolean {
@@ -1816,7 +2115,22 @@ function installMyDataReadPatch(): boolean {
     const real = original(get);
     if (!isRecord(real)) return real;
     const realLogs = normalizeList(extractActivityArray(real));
-    const mergedLogs = buildDisplayLogsWithHistory(realLogs);
+    const mergedLogs = virtualMode === 'virtual-expanded'
+      ? (() => {
+          const filtered = getFilteredHistoryEntries(readPatchOrder);
+          const total = filtered.length;
+          const start = Math.max(0, Math.min(total, Math.floor(readPatchStartIndex)));
+          const end = Math.max(
+            start,
+            Math.min(
+              total,
+              start + Math.max(0, Math.floor(readPatchMaxEntries ?? (total - start))),
+            ),
+          );
+          return filtered.slice(start, end).map((entry) => deepClone(entry));
+        })()
+      : buildDisplayLogsWithHistory(realLogs, readPatchOrder, readPatchMaxEntries, readPatchStartIndex);
+    replayHydratedCount = mergedLogs.length;
     const currentLogs = Array.isArray((real as any).activityLogs) ? (real as any).activityLogs : null;
     if (currentLogs && currentLogs.length === mergedLogs.length) {
       let same = true;
@@ -2028,6 +2342,59 @@ function hasAriesActivityFilter(modal: ModalRef): boolean {
   return false;
 }
 
+function resolveScrollHost(modal: ModalRef): HTMLElement {
+  const scrollableNodes: HTMLElement[] = [];
+  const isScrollable = (node: HTMLElement): boolean => {
+    try {
+      const style = window.getComputedStyle(node);
+      const overflowY = String(style.overflowY || '').toLowerCase();
+      if (!(overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay')) return false;
+      return (node.scrollHeight - node.clientHeight) > 8;
+    } catch {
+      return false;
+    }
+  };
+
+  let cursor: HTMLElement | null = modal.list.parentElement;
+  while (cursor) {
+    if (cursor.contains(modal.list) && isScrollable(cursor)) {
+      scrollableNodes.push(cursor);
+    }
+    if (cursor === document.body) break;
+    cursor = cursor.parentElement;
+  }
+
+  if (isScrollable(modal.list)) return modal.list;
+  if (scrollableNodes.length > 0) return scrollableNodes[0]!;
+
+  if (isScrollable(modal.content)) return modal.content;
+  return modal.list;
+}
+
+function collectScrollTargets(scrollHost: HTMLElement, list: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  const push = (node: HTMLElement | null): void => {
+    if (!node) return;
+    if (seen.has(node)) return;
+    seen.add(node);
+    out.push(node);
+  };
+
+  push(list);
+  push(scrollHost);
+  let cursor: HTMLElement | null = scrollHost.parentElement;
+  while (cursor) {
+    if (cursor.contains(list)) {
+      push(cursor);
+    }
+    if (cursor === document.body) break;
+    cursor = cursor.parentElement;
+  }
+
+  return out;
+}
+
 function buildSelect<T extends string>(
   options: Array<{ value: T; label: string }>,
   currentValue: T,
@@ -2059,7 +2426,10 @@ function applyFiltersToRows(rows: RowMetadata[]): number {
       ? (matchPet || matchPlant)
       : (matchPet && matchPlant);
     const visible = matchAction && matchType && matchSpecies;
-    meta.row.style.display = visible ? '' : 'none';
+    const nextDisplay = visible ? '' : 'none';
+    if (meta.row.style.display !== nextDisplay) {
+      meta.row.style.display = nextDisplay;
+    }
     if (visible) visibleCount += 1;
   }
   return visibleCount;
@@ -2080,13 +2450,19 @@ function updateSummary(handles: ModalHandles, visibleCount: number, totalCount: 
   handles.summary.textContent = `History: ${history.length} saved, ${visibleCount}/${totalCount} visible`;
 }
 
-function refreshModalUI(handles: ModalHandles): void {
-  const metadata = buildRowMetadata(handles.list);
-
+function ensureSpeciesDropdownOptions(handles: ModalHandles): void {
+  if (handles.speciesOptionsReady) return;
   const petOptions = buildSpeciesOptions('pet');
   const plantOptions = buildSpeciesOptions('plant');
   const nextPetFilter = normalizeSpeciesFilterValue(petOptions, filters.petSpecies);
   const nextPlantFilter = normalizeSpeciesFilterValue(plantOptions, filters.plantSpecies);
+
+  handles.petDropdown.setOptions(petOptions);
+  handles.plantDropdown.setOptions(plantOptions);
+  handles.petDropdown.setValue(nextPetFilter);
+  handles.plantDropdown.setValue(nextPlantFilter);
+  handles.speciesOptionsReady = petOptions.length > 1 && plantOptions.length > 1;
+
   let shouldPersist = false;
   if (nextPetFilter !== filters.petSpecies) {
     filters.petSpecies = nextPetFilter;
@@ -2103,11 +2479,26 @@ function refreshModalUI(handles: ModalHandles): void {
   if (shouldPersist) {
     persistFilters();
   }
+}
 
-  handles.petDropdown.setOptions(petOptions);
-  handles.plantDropdown.setOptions(plantOptions);
-  handles.petDropdown.setValue(filters.petSpecies);
-  handles.plantDropdown.setValue(filters.plantSpecies);
+function refreshModalUI(handles: ModalHandles): void {
+  ensureSpeciesDropdownOptions(handles);
+  if (virtualMode === 'virtual-expanded') {
+    applyVirtualListLayout(handles.list);
+    hideNativeLoadMoreButtons(handles.list);
+    removeVirtualSpacers(handles.list);
+    updateVirtualAverageRowHeight(handles.list);
+    ensureVirtualLoadMoreButton(handles);
+    const rows = getEntryElements(handles.list);
+    updateSummary(handles, rows.length, virtualTotalFiltered);
+    return;
+  }
+
+  restoreVirtualListLayout(handles.list);
+  restoreNativeLoadMoreButtons(handles.list);
+  removeVirtualSpacers(handles.list);
+  removeVirtualLoadMoreButton(handles.list);
+  const metadata = buildRowMetadata(handles.list);
 
   const totalRows = metadata.length;
   const visibleRows = applyFiltersToRows(metadata);
@@ -2117,50 +2508,388 @@ function refreshModalUI(handles: ModalHandles): void {
 function scheduleModalRefresh(handles: ModalHandles): void {
   if (handles.refreshQueued) return;
   handles.refreshQueued = true;
-  requestAnimationFrame(() => {
-    handles.refreshQueued = false;
-    if (!modalHandles) return;
-    refreshModalUI(modalHandles);
+  const schedule = (): void => {
+    requestAnimationFrame(() => {
+      handles.refreshQueued = false;
+      handles.refreshTimer = null;
+      if (!modalHandles) return;
+      refreshModalUI(modalHandles);
+    });
+  };
+  if (handles.list.childElementCount >= LARGE_LIST_REFRESH_THRESHOLD) {
+    handles.refreshTimer = window.setTimeout(schedule, LARGE_LIST_REFRESH_DELAY_MS);
+    return;
+  }
+  schedule();
+}
+
+function clearReplayHydrationTimer(): void {
+  if (replayHydrationTimer == null) return;
+  clearTimeout(replayHydrationTimer);
+  replayHydrationTimer = null;
+}
+
+function resolveReplayStartIndex(totalEntries: number, candidate: number): number {
+  const total = Math.max(0, Math.floor(totalEntries));
+  if (!Number.isFinite(candidate) || candidate < 0) return 0;
+  return Math.max(0, Math.min(total, Math.floor(candidate)));
+}
+
+function resolveReplayMaxEntries(totalEntries: number, candidate: number): number | null {
+  const total = Math.max(0, Math.floor(totalEntries));
+  if (!Number.isFinite(candidate)) return null;
+  return Math.max(0, Math.min(total, Math.floor(candidate)));
+}
+
+function getLoadMoreButtonFromTarget(target: EventTarget | null): HTMLButtonElement | null {
+  if (!(target instanceof Element)) return null;
+  const button = target.closest('button');
+  if (!(button instanceof HTMLButtonElement)) return null;
+  if (!modalHandles?.list.contains(button)) return null;
+  if (button.getAttribute(VIRTUAL_CUSTOM_LOAD_ATTR) === '1') return button;
+  const text = normalizeWhitespace(button.textContent || '');
+  if (!text) return null;
+  return /\bload\b/i.test(text) && /\bmore\b/i.test(text)
+    ? button
+    : null;
+}
+
+function hideNativeLoadMoreButtons(list: HTMLElement): void {
+  const buttons = Array.from(list.querySelectorAll('button'));
+  for (const node of buttons) {
+    if (!(node instanceof HTMLButtonElement)) continue;
+    if (node.getAttribute(VIRTUAL_CUSTOM_LOAD_ATTR) === '1') continue;
+    const text = normalizeWhitespace(node.textContent || '');
+    if (!/\bload\b/i.test(text) || !/\bmore\b/i.test(text)) continue;
+    if (node.getAttribute(VIRTUAL_HIDDEN_LOAD_ATTR) !== '1') {
+      node.setAttribute(VIRTUAL_HIDDEN_LOAD_ATTR, '1');
+      node.style.display = 'none';
+      node.style.pointerEvents = 'none';
+    }
+  }
+}
+
+function restoreNativeLoadMoreButtons(list: HTMLElement): void {
+  const buttons = Array.from(list.querySelectorAll(`button[${VIRTUAL_HIDDEN_LOAD_ATTR}="1"]`));
+  for (const node of buttons) {
+    if (!(node instanceof HTMLButtonElement)) continue;
+    node.removeAttribute(VIRTUAL_HIDDEN_LOAD_ATTR);
+    node.style.removeProperty('display');
+    node.style.removeProperty('pointer-events');
+  }
+}
+
+function removeVirtualLoadMoreButton(list: HTMLElement): void {
+  if (virtualLoadMoreButton && virtualLoadMoreButton.isConnected) {
+    try {
+      virtualLoadMoreButton.remove();
+    } catch {}
+  }
+  const existing = list.querySelector(`button[${VIRTUAL_CUSTOM_LOAD_ATTR}="1"]`);
+  if (existing instanceof HTMLButtonElement) {
+    try {
+      existing.remove();
+    } catch {}
+  }
+  virtualLoadMoreButton = null;
+}
+
+function getAdaptiveHydrationChunkSize(): number {
+  if (!Number.isFinite(virtualReplayDurationMs) || virtualReplayDurationMs <= 0) {
+    return 20;
+  }
+  if (virtualReplayDurationMs > 42) return VIRTUAL_HYDRATE_CHUNK_MIN;
+  if (virtualReplayDurationMs > 28) return 12;
+  if (virtualReplayDurationMs > 20) return 16;
+  if (virtualReplayDurationMs > 12) return 22;
+  return VIRTUAL_HYDRATE_CHUNK_MAX;
+}
+
+function ensureVirtualLoadMoreButton(handles: ModalHandles): void {
+  if (virtualMode !== 'virtual-expanded') {
+    removeVirtualLoadMoreButton(handles.list);
+    return;
+  }
+
+  const remaining = Math.max(0, virtualTotalFiltered - virtualHydratedCount);
+  if (remaining <= 0) {
+    removeVirtualLoadMoreButton(handles.list);
+    return;
+  }
+
+  if (!(virtualLoadMoreButton instanceof HTMLButtonElement) || !virtualLoadMoreButton.isConnected) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute(VIRTUAL_CUSTOM_LOAD_ATTR, '1');
+    if (virtualLoadButtonClassName) {
+      button.className = virtualLoadButtonClassName;
+    } else {
+      button.className = 'qpm-activity-load-more';
+      button.style.marginTop = '8px';
+      button.style.minHeight = '30px';
+      button.style.alignSelf = 'stretch';
+    }
+    virtualLoadMoreButton = button;
+  }
+
+  virtualLoadMoreButton.textContent = `Load ${remaining} more`;
+  if (!handles.list.contains(virtualLoadMoreButton)) {
+    handles.list.appendChild(virtualLoadMoreButton);
+  }
+}
+
+function applyVirtualListLayout(list: HTMLElement): void {
+  if (!virtualListLayoutApplied) {
+    virtualListPrevJustifyContent = list.style.justifyContent;
+    virtualListPrevAlignContent = list.style.alignContent;
+    virtualListPrevAlignItems = list.style.alignItems;
+    virtualListLayoutApplied = true;
+  }
+  list.style.justifyContent = 'flex-start';
+  list.style.alignContent = 'stretch';
+  list.style.alignItems = 'stretch';
+}
+
+function restoreVirtualListLayout(list: HTMLElement): void {
+  if (!virtualListLayoutApplied) return;
+  list.style.justifyContent = virtualListPrevJustifyContent;
+  list.style.alignContent = virtualListPrevAlignContent;
+  list.style.alignItems = virtualListPrevAlignItems;
+  virtualListLayoutApplied = false;
+  virtualListPrevJustifyContent = '';
+  virtualListPrevAlignContent = '';
+  virtualListPrevAlignItems = '';
+}
+
+function removeVirtualSpacers(list: HTMLElement): void {
+  const spacers = list.querySelectorAll(`[${VIRTUAL_SPACER_ATTR}]`);
+  for (const node of spacers) {
+    try {
+      node.remove();
+    } catch {}
+  }
+  virtualSpacerTopEl = null;
+  virtualSpacerBottomEl = null;
+}
+
+function ensureVirtualSpacers(list: HTMLElement): { top: HTMLDivElement; bottom: HTMLDivElement } {
+  if (!(virtualSpacerTopEl instanceof HTMLDivElement) || !virtualSpacerTopEl.isConnected) {
+    virtualSpacerTopEl = document.createElement('div');
+    virtualSpacerTopEl.setAttribute(VIRTUAL_SPACER_ATTR, VIRTUAL_SPACER_TOP);
+    virtualSpacerTopEl.style.pointerEvents = 'none';
+    virtualSpacerTopEl.style.flex = '0 0 auto';
+    virtualSpacerTopEl.style.width = '100%';
+  }
+  if (!(virtualSpacerBottomEl instanceof HTMLDivElement) || !virtualSpacerBottomEl.isConnected) {
+    virtualSpacerBottomEl = document.createElement('div');
+    virtualSpacerBottomEl.setAttribute(VIRTUAL_SPACER_ATTR, VIRTUAL_SPACER_BOTTOM);
+    virtualSpacerBottomEl.style.pointerEvents = 'none';
+    virtualSpacerBottomEl.style.flex = '0 0 auto';
+    virtualSpacerBottomEl.style.width = '100%';
+  }
+
+  if (!list.contains(virtualSpacerTopEl)) {
+    list.insertBefore(virtualSpacerTopEl, list.firstChild);
+  }
+  if (!list.contains(virtualSpacerBottomEl)) {
+    list.appendChild(virtualSpacerBottomEl);
+  }
+
+  return {
+    top: virtualSpacerTopEl,
+    bottom: virtualSpacerBottomEl,
+  };
+}
+
+function updateVirtualSpacers(list: HTMLElement): void {
+  if (virtualMode !== 'virtual-expanded') {
+    removeVirtualSpacers(list);
+    return;
+  }
+  const { top, bottom } = ensureVirtualSpacers(list);
+  top.style.height = `${Math.max(0, Math.floor(virtualTopSpacerPx))}px`;
+  bottom.style.height = `${Math.max(0, Math.floor(virtualBottomSpacerPx))}px`;
+}
+
+function updateVirtualAverageRowHeight(list: HTMLElement): void {
+  const rows = getEntryElements(list);
+  if (!rows.length) return;
+  let totalHeight = 0;
+  for (const row of rows) {
+    totalHeight += Math.max(1, Math.round(row.getBoundingClientRect().height || 0));
+  }
+  if (totalHeight <= 0) return;
+  const avg = totalHeight / rows.length;
+  if (!Number.isFinite(avg) || avg <= 0) return;
+  virtualAvgRowHeight = Math.max(24, Math.min(120, avg));
+}
+
+function getScrollOffsetWithinList(handles: ModalHandles): number {
+  const host = handles.scrollHost;
+  const list = handles.list;
+  if (!host || !list) return 0;
+  if (host === list) return Math.max(0, list.scrollTop);
+  const hostRect = host.getBoundingClientRect();
+  const listRect = list.getBoundingClientRect();
+  if (!Number.isFinite(hostRect.top) || !Number.isFinite(listRect.top)) {
+    return Math.max(0, host.scrollTop);
+  }
+  return Math.max(0, Math.round(hostRect.top - listRect.top));
+}
+
+function resetVirtualScrollToStart(handles: ModalHandles): void {
+  const host = handles.scrollHost;
+  const list = handles.list;
+  if (host === list) {
+    list.scrollTop = 0;
+    return;
+  }
+  const offset = getScrollOffsetWithinList(handles);
+  if (offset <= 0) return;
+  host.scrollTop = Math.max(0, host.scrollTop - offset);
+}
+
+async function applyVirtualWindow(
+  reason: string,
+  preserveScroll: boolean,
+): Promise<void> {
+  if (!modalHandles) return;
+  if (replayInFlight) {
+    virtualPendingWindowStart = virtualHydratedCount;
+    virtualPendingReason = reason;
+    virtualPendingPreserveScroll = virtualPendingPreserveScroll || preserveScroll;
+    return;
+  }
+
+  const filteredEntries = getFilteredHistoryEntries(filters.order);
+  const total = filteredEntries.length;
+  virtualTotalFiltered = total;
+  if (virtualHydratedCount <= 0) {
+    virtualHydratedCount = Math.min(total, VIRTUAL_WINDOW_SIZE);
+  } else {
+    virtualHydratedCount = Math.max(0, Math.min(total, virtualHydratedCount));
+  }
+  virtualWindowStart = 0;
+  virtualWindowEnd = virtualHydratedCount;
+  virtualTopSpacerPx = 0;
+  virtualBottomSpacerPx = 0;
+
+  await replayHistoryToModal({
+    preserveScroll,
+    reason,
+    startIndex: 0,
+    maxEntries: virtualHydratedCount,
   });
 }
 
-function nextHydrationTarget(currentCount: number, totalCount: number): number {
-  const total = Math.max(0, Math.floor(totalCount));
-  if (total <= 0) return 0;
-  const current = Math.max(0, Math.floor(currentCount));
-  for (const step of HYDRATION_STEPS) {
-    if (current < step) {
-      return Math.min(total, step);
-    }
-  }
-  return total;
+function enterVirtualExpandedMode(handles: ModalHandles, sourceButton?: HTMLButtonElement | null): void {
+  if (virtualMode === 'virtual-expanded') return;
+  virtualMode = 'virtual-expanded';
+  virtualWindowStart = 0;
+  virtualWindowEnd = VIRTUAL_WINDOW_SIZE;
+  virtualTopSpacerPx = 0;
+  virtualBottomSpacerPx = 0;
+  virtualAvgRowHeight = VIRTUAL_DEFAULT_ROW_HEIGHT;
+  virtualLastScrollUpdateAt = 0;
+  virtualIgnoreScrollUntil = Date.now() + 220;
+  invalidateVirtualCaches();
+  const currentRows = getEntryElements(handles.list).length;
+  const initialHydrated = Math.max(VIRTUAL_WINDOW_SIZE, currentRows + getAdaptiveHydrationChunkSize());
+  virtualHydratedCount = Math.max(0, initialHydrated);
+  readPatchOrder = filters.order;
+  readPatchStartIndex = 0;
+  readPatchMaxEntries = virtualHydratedCount;
+  virtualLoadButtonClassName = sourceButton?.className ?? virtualLoadButtonClassName;
+  applyVirtualListLayout(handles.list);
+  removeVirtualLoadMoreButton(handles.list);
+  resetVirtualScrollToStart(handles);
+  void applyVirtualWindow('virtual-enter', false);
+  scheduleModalRefresh(handles);
 }
 
-function scheduleDeferredFullReplay(baseReason: string, maxEntries: number): void {
-  if (fullReplayTimer != null) {
-    clearTimeout(fullReplayTimer);
-    fullReplayTimer = null;
+function hydrateMoreVirtualEntries(): void {
+  if (virtualMode !== 'virtual-expanded') return;
+  const chunk = getAdaptiveHydrationChunkSize();
+  const nextCount = Math.min(virtualTotalFiltered, virtualHydratedCount + chunk);
+  if (nextCount <= virtualHydratedCount) return;
+  virtualHydratedCount = nextCount;
+  virtualWindowStart = 0;
+  virtualWindowEnd = virtualHydratedCount;
+  virtualIgnoreScrollUntil = Date.now() + 180;
+  void applyVirtualWindow('virtual-load-more', false);
+}
+
+function maybeUpdateVirtualWindowFromScroll(handles: ModalHandles): void {
+  if (virtualMode !== 'virtual-expanded') return;
+  const now = Date.now();
+  if (now < virtualIgnoreScrollUntil) return;
+  if ((now - virtualLastScrollUpdateAt) < VIRTUAL_SCROLL_THROTTLE_MS) return;
+  virtualLastScrollUpdateAt = now;
+
+  const remaining = Math.max(0, virtualTotalFiltered - virtualHydratedCount);
+  if (remaining <= 0) return;
+  const host = handles.scrollHost;
+  const distanceToBottom = Math.max(0, host.scrollHeight - (host.scrollTop + host.clientHeight));
+  if (distanceToBottom > VIRTUAL_HYDRATE_NEAR_BOTTOM_PX) return;
+  virtualIgnoreScrollUntil = Date.now() + 180;
+  hydrateMoreVirtualEntries();
+}
+
+function queueReplay(reason: string): void {
+  clearReplayHydrationTimer();
+  if (virtualMode === 'virtual-expanded') {
+    void applyVirtualWindow(reason, reason === 'manual' || reason === 'snapshot-change');
+    return;
   }
-  const limit = Math.max(1, Math.floor(maxEntries));
-  fullReplayTimer = window.setTimeout(() => {
-    fullReplayTimer = null;
-    if (!started || !modalHandles) return;
+  if (reason !== 'manual' && reason !== 'clear-history') return;
+  if (replayQueued) return;
+  replayQueued = true;
+  window.setTimeout(() => {
+    replayQueued = false;
     void replayHistoryToModal({
-      preserveScroll: false,
-      reason: `${baseReason}-full`,
-      maxEntries: limit,
+      preserveScroll: true,
+      reason,
+      startIndex: 0,
+      maxEntries: 10,
     });
-  }, FULL_REPLAY_DELAY_MS);
+  }, FAST_REPLAY_DELAY_MS);
+}
+
+function getReplaySourceEntries(order: OrderFilter): ActivityLogEntry[] {
+  if (virtualMode === 'virtual-expanded') {
+    return getFilteredHistoryEntries(order);
+  }
+  return getOrderedHistoryRefs(order);
 }
 
 async function replayHistoryToModal(opts?: {
   preserveScroll?: boolean;
   reason?: string;
+  startIndex?: number;
   maxEntries?: number;
 }): Promise<void> {
   if (!started) return;
   if (replayInFlight) return;
+
+  const sourceEntries = getReplaySourceEntries(filters.order);
+  const sourceTotal = sourceEntries.length;
+  const requestedStartIndex = resolveReplayStartIndex(sourceTotal, Number(opts?.startIndex));
+  const requestedMaxEntries = resolveReplayMaxEntries(sourceTotal, Number(opts?.maxEntries));
+  const requestedCount = requestedMaxEntries == null
+    ? Math.max(0, sourceTotal - requestedStartIndex)
+    : requestedMaxEntries;
+
+  if (virtualMode === 'virtual-expanded') {
+    readPatchOrder = filters.order;
+    readPatchStartIndex = requestedStartIndex;
+    readPatchMaxEntries = requestedCount;
+  }
+
   if (writeSupported === false) {
+    readPatchOrder = filters.order;
+    readPatchStartIndex = requestedStartIndex;
+    readPatchMaxEntries = requestedCount;
+    replayHydratedCount = requestedCount;
     const patched = installMyDataReadPatch();
     if (!patched) {
       replayMode = 'none';
@@ -2183,14 +2912,17 @@ async function replayHistoryToModal(opts?: {
   }
 
   replayInFlight = true;
-  const list = modalHandles?.list ?? null;
+  const startedAt = performance.now();
+  const scrollElement = (modalHandles?.scrollHost ?? modalHandles?.list) ?? null;
   const preserveScroll = opts?.preserveScroll !== false;
-  const beforeScroll = preserveScroll && list ? list.scrollTop : 0;
-  const ordered = getOrderedHistory(filters.order);
-  const orderedTotal = ordered.length;
-  const maxEntries = Number(opts?.maxEntries);
-  const useLimitedPayload = Number.isFinite(maxEntries) && maxEntries > 0 && orderedTotal > maxEntries;
-  const payload = useLimitedPayload ? ordered.slice(0, Math.max(1, Math.floor(maxEntries))) : ordered;
+  const beforeScroll = preserveScroll && scrollElement ? scrollElement.scrollTop : 0;
+  const payloadEnd = Math.max(
+    requestedStartIndex,
+    Math.min(sourceTotal, requestedStartIndex + requestedCount),
+  );
+  const payload = sourceEntries
+    .slice(requestedStartIndex, payloadEnd)
+    .map((entry) => deepClone(entry));
 
   suppressIngestUntil = Date.now() + 1200;
 
@@ -2209,19 +2941,22 @@ async function replayHistoryToModal(opts?: {
     await writeAtomValue(myDataAtom, next);
     writeSupported = true;
     replayMode = 'write';
+    replayHydratedCount = payload.length;
+    readPatchStartIndex = 0;
+    readPatchMaxEntries = null;
     uninstallMyDataReadPatch();
     if (modalHandles) {
       modalHandles.orderSelect.disabled = false;
       modalHandles.orderSelect.title = 'Sort order';
     }
-    if (useLimitedPayload) {
-      const nextTarget = nextHydrationTarget(payload.length, orderedTotal);
-      if (nextTarget > payload.length) {
-        scheduleDeferredFullReplay(opts?.reason ?? 'replay', nextTarget);
-      }
-    }
+    clearReplayHydrationTimer();
   } catch (error) {
+    clearReplayHydrationTimer();
     writeSupported = false;
+    readPatchOrder = filters.order;
+    readPatchStartIndex = requestedStartIndex;
+    readPatchMaxEntries = requestedCount;
+    replayHydratedCount = requestedCount;
     const patched = installMyDataReadPatch();
     if (modalHandles) {
       if (patched) {
@@ -2238,37 +2973,38 @@ async function replayHistoryToModal(opts?: {
     log(`[ActivityLogNative] Replay disabled (${opts?.reason ?? 'unknown'})`, error);
   } finally {
     replayInFlight = false;
-    if (preserveScroll && list) {
+    if (virtualMode === 'virtual-expanded') {
+      virtualReplayDurationMs = Math.max(0, performance.now() - startedAt);
+    }
+    if (preserveScroll && scrollElement) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          const maxScrollable = Math.max(0, list.scrollHeight - list.clientHeight);
-          list.scrollTop = Math.min(Math.max(0, beforeScroll), maxScrollable);
+          const maxScrollable = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+          scrollElement.scrollTop = Math.min(Math.max(0, beforeScroll), maxScrollable);
         });
       });
     }
     if (modalHandles) {
       scheduleModalRefresh(modalHandles);
     }
-  }
-}
 
-function queueReplay(reason: string): void {
-  if (fullReplayTimer != null) {
-    clearTimeout(fullReplayTimer);
-    fullReplayTimer = null;
+    if (
+      virtualMode === 'virtual-expanded'
+      && virtualPendingWindowStart != null
+      && modalHandles
+    ) {
+      const pendingStart = virtualPendingWindowStart;
+      const pendingReason = virtualPendingReason || 'virtual-pending';
+      const pendingPreserve = virtualPendingPreserveScroll;
+      virtualPendingWindowStart = null;
+      virtualPendingReason = '';
+      virtualPendingPreserveScroll = false;
+      if (pendingStart !== virtualHydratedCount) {
+        virtualHydratedCount = pendingStart;
+      }
+      void applyVirtualWindow(pendingReason, pendingPreserve);
+    }
   }
-  if (replayQueued) return;
-  replayQueued = true;
-  const fastInitial = reason === 'modal-open' && history.length > FAST_REPLAY_INITIAL_BATCH;
-  const delay = fastInitial ? FAST_REPLAY_DELAY_MS : 90;
-  window.setTimeout(() => {
-    replayQueued = false;
-    void replayHistoryToModal({
-      preserveScroll: true,
-      reason,
-      maxEntries: fastInitial ? FAST_REPLAY_INITIAL_BATCH : undefined,
-    });
-  }, delay);
 }
 
 function attachModal(modal: ModalRef): void {
@@ -2284,6 +3020,7 @@ function attachModal(modal: ModalRef): void {
   detachModal();
   ensureStyles();
   const ariesFilterPresent = hasAriesActivityFilter(modal);
+  const scrollHost = resolveScrollHost(modal);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'qpm-activity-toolbar';
@@ -2306,13 +3043,23 @@ function attachModal(modal: ModalRef): void {
   orderSelect.addEventListener('change', () => {
     filters.order = orderSelect.value as OrderFilter;
     persistFilters();
-    if (writeSupported === false) {
+    if (virtualMode === 'virtual-expanded') {
+      virtualWindowStart = 0;
+      virtualHydratedCount = VIRTUAL_WINDOW_SIZE;
+      virtualWindowEnd = virtualHydratedCount;
+      invalidateVirtualCaches();
+      queueReplay('order-change');
+      return;
+    }
+    if (writeSupported === false && !(patchedMyDataAtom && patchedMyDataReadKey && patchedMyDataReadOriginal)) {
       if (modalHandles) {
         scheduleModalRefresh(modalHandles);
       }
       return;
     }
-    queueReplay('order-change');
+    if (modalHandles) {
+      scheduleModalRefresh(modalHandles);
+    }
   });
 
   const petDropdown = createSpeciesDropdown({
@@ -2342,6 +3089,31 @@ function attachModal(modal: ModalRef): void {
   toolbar.append(typeSelect, orderSelect, petDropdown.root, plantDropdown.root, summary);
   modal.content.insertBefore(toolbar, modal.content.firstChild);
 
+  const listScrollListener: EventListener = () => {
+    if (!modalHandles) return;
+    maybeUpdateVirtualWindowFromScroll(modalHandles);
+  };
+
+  const listClickCaptureListener: EventListener = (event) => {
+    if (!modalHandles) return;
+    const loadMoreButton = getLoadMoreButtonFromTarget(event.target);
+    if (!loadMoreButton) return;
+    if (virtualMode === 'collapsed') {
+      window.setTimeout(() => {
+        if (!modalHandles) return;
+        if (virtualMode !== 'collapsed') return;
+        enterVirtualExpandedMode(modalHandles, loadMoreButton);
+      }, 0);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    hydrateMoreVirtualEntries();
+  };
+
+  const scrollTargets = collectScrollTargets(scrollHost, modal.list);
+
   const handles: ModalHandles = {
     ...modal,
     toolbar,
@@ -2351,32 +3123,62 @@ function attachModal(modal: ModalRef): void {
     plantDropdown,
     summary,
     ariesFilterPresent,
+    scrollHost,
+    scrollTargets,
     listObserver: new MutationObserver(() => {
       if (!modalHandles) return;
       scheduleModalRefresh(modalHandles);
     }),
+    listScrollListener,
+    listClickCaptureListener,
     refreshQueued: false,
+    refreshTimer: null,
+    speciesOptionsReady: false,
   };
 
   handles.listObserver.observe(modal.list, {
     childList: true,
     subtree: true,
-    characterData: true,
   });
+  for (const target of scrollTargets) {
+    target.addEventListener('scroll', listScrollListener, { passive: true });
+  }
+  modal.list.addEventListener('click', listClickCaptureListener, true);
 
   modalHandles = handles;
+  ensureSpeciesDropdownOptions(handles);
   scheduleModalRefresh(handles);
-  queueReplay('modal-open');
 }
 
 function detachModal(): void {
   if (!modalHandles) return;
-  if (fullReplayTimer != null) {
-    clearTimeout(fullReplayTimer);
-    fullReplayTimer = null;
+  clearReplayHydrationTimer();
+  if (modalHandles.refreshTimer != null) {
+    clearTimeout(modalHandles.refreshTimer);
+    modalHandles.refreshTimer = null;
   }
   try {
     modalHandles.listObserver.disconnect();
+  } catch {}
+  try {
+    for (const target of modalHandles.scrollTargets) {
+      target.removeEventListener('scroll', modalHandles.listScrollListener);
+    }
+  } catch {}
+  try {
+    modalHandles.list.removeEventListener('click', modalHandles.listClickCaptureListener, true);
+  } catch {}
+  try {
+    restoreNativeLoadMoreButtons(modalHandles.list);
+  } catch {}
+  try {
+    removeVirtualLoadMoreButton(modalHandles.list);
+  } catch {}
+  try {
+    restoreVirtualListLayout(modalHandles.list);
+  } catch {}
+  try {
+    removeVirtualSpacers(modalHandles.list);
   } catch {}
   try {
     modalHandles.petDropdown.destroy();
@@ -2385,6 +3187,8 @@ function detachModal(): void {
   try {
     modalHandles.toolbar.remove();
   } catch {}
+  uninstallMyDataReadPatch();
+  resetVirtualMode();
   modalHandles = null;
 }
 
@@ -2444,7 +3248,12 @@ function ingestActivityLogs(value: unknown): void {
   }
 
   if (modalHandles) {
-    queueReplay('snapshot-change');
+    if (virtualMode === 'virtual-expanded') {
+      invalidateVirtualCaches();
+      queueReplay('snapshot-change');
+    } else {
+      scheduleModalRefresh(modalHandles);
+    }
   }
 }
 
@@ -2529,6 +3338,13 @@ export function getActivityLogEnhancerStatus(): {
   replaySupported: boolean | null;
   replayMode: 'unknown' | 'write' | 'read_patch' | 'none';
   ariesFilterPresent: boolean;
+  mode: 'collapsed' | 'virtual-expanded';
+  virtualizationActive: boolean;
+  windowStart: number;
+  windowEnd: number;
+  totalFiltered: number;
+  topSpacerPx: number;
+  bottomSpacerPx: number;
 } {
   const supported = replayMode === 'write' || replayMode === 'read_patch'
     ? true
@@ -2546,6 +3362,13 @@ export function getActivityLogEnhancerStatus(): {
     replaySupported: supported,
     replayMode,
     ariesFilterPresent: Boolean(modalHandles?.ariesFilterPresent),
+    mode: virtualMode,
+    virtualizationActive: virtualMode === 'virtual-expanded',
+    windowStart: virtualWindowStart,
+    windowEnd: virtualWindowEnd,
+    totalFiltered: virtualTotalFiltered,
+    topSpacerPx: virtualTopSpacerPx,
+    bottomSpacerPx: virtualBottomSpacerPx,
   };
 }
 
@@ -2607,6 +3430,12 @@ export function clearActivityLogEnhancerEntries(): number {
   const removed = history.length;
   history = [];
   lastSnapshot = [];
+  replayHydratedCount = 0;
+  readPatchStartIndex = 0;
+  readPatchOrder = filters.order;
+  readPatchMaxEntries = null;
+  resetVirtualMode();
+  clearReplayHydrationTimer();
   saveHistory(history);
   if (modalHandles) {
     queueReplay('clear-history');
@@ -2659,12 +3488,27 @@ export async function startActivityLogEnhancer(): Promise<void> {
 
   try {
     replayMode = 'unknown';
+    replayHydratedCount = 0;
+    readPatchStartIndex = 0;
+    readPatchOrder = 'newest';
+    readPatchMaxEntries = null;
+    resetVirtualMode();
+    petLookupEntriesCache = null;
+    plantLookupEntriesCache = null;
+    petSpeciesOptionsCache = null;
+    plantSpeciesOptionsCache = null;
     history = loadHistory();
+    historyRevision += 1;
+    orderedHistoryCacheKey = '';
+    orderedHistoryNewestCache = null;
+    orderedHistoryOldestCache = null;
     filters = loadFilters();
+    readPatchOrder = filters.order;
     showSummaryInDebug = loadSummaryDebugPreference();
     runLegacyMigrationOnce();
     const ariesMerged = importAriesHistory();
     history = loadHistory();
+    historyRevision += 1;
 
     startModalObserver();
     await startMyDataActivitySubscription();
@@ -2691,10 +3535,19 @@ export function stopActivityLogEnhancer(): void {
   suppressIngestUntil = 0;
   writeSupported = null;
   replayMode = 'unknown';
-  if (fullReplayTimer != null) {
-    clearTimeout(fullReplayTimer);
-    fullReplayTimer = null;
-  }
+  replayHydratedCount = 0;
+  readPatchStartIndex = 0;
+  readPatchOrder = filters.order;
+  readPatchMaxEntries = null;
+  resetVirtualMode();
+  petLookupEntriesCache = null;
+  plantLookupEntriesCache = null;
+  petSpeciesOptionsCache = null;
+  plantSpeciesOptionsCache = null;
+  orderedHistoryCacheKey = '';
+  orderedHistoryNewestCache = null;
+  orderedHistoryOldestCache = null;
+  clearReplayHydrationTimer();
   uninstallMyDataReadPatch();
 
   saveHistory(history);

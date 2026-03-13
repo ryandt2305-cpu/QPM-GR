@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.1.14] - Current
+## [3.1.17] - Current
+
+### Changed
+- hopefully fixed the activity log hydration (stutters for 5-10 seconds and then its smooth)
+- first 5 people to send a screenshot of this to the QPM channel gets 5k bread lol
+
+---
+
+## [3.1.14]
 
 ### Added
 - Sprite-v2: added a native decoder path for Magic Garden v114+ compressed (`.ktx2`) atlases so sprites load from the current runtime version instead of relying on cross-version compatibility fallbacks.

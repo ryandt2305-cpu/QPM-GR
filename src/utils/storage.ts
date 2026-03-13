@@ -19,6 +19,7 @@ const QPM_STORAGE_KEYS = [
   'qpm.shopRestocks.v1',
   'qpm.shopRestockConfig.v1',
   'qpm.shopRestocks.migration',
+  'qpm.shopQuadModalSpike.v1',
 
   // XP Tracker
   'qpm.xpTrackerProcs.v1',

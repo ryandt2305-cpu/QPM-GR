@@ -219,29 +219,53 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore | null>
   };
 
   let alreadyPatched = false;
+  const candidates = new Set<PatchedAtom>();
+  const pushCandidate = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return;
+    const candidate = value as PatchedAtom;
+    if (typeof candidate.write === 'function') {
+      candidates.add(candidate);
+    }
+  };
 
-  for (const atom of cache.values()) {
-    if (!atom || typeof (atom as PatchedAtom).write !== 'function') continue;
-    const candidate = atom as PatchedAtom;
-    
+  // Jotai cache is typically Map<atom, atomState>.
+  // Patch atom KEYS first; some runtimes do not expose atom objects in cache.values().
+  if (typeof cache.entries === 'function') {
+    for (const [atomKey, atomState] of cache.entries()) {
+      pushCandidate(atomKey);
+      pushCandidate(atomState);
+    }
+  }
+
+  // Keep legacy values() scan for compatibility with runtimes storing atoms as values.
+  for (const atomValue of cache.values()) {
+    pushCandidate(atomValue);
+  }
+
+  for (const candidate of candidates) {
     // Check if already patched by another mod (Aries Mod uses __origWrite too)
     if (candidate.__origWrite || candidate.__qpmPatched) {
       alreadyPatched = true;
       continue;
     }
 
-    const original = candidate.write!.bind(candidate);
-    candidate.__origWrite = candidate.write!;
-    candidate.__qpmPatched = true;
-    candidate.write = function patchedWrite(get: any, set: any, ...args: any[]) {
-      if (!capturedSet) {
-        capturedGet = get;
-        capturedSet = set;
-        restorePatchedAtoms();
-      }
-      return original(get, set, ...args);
-    };
-    patchedAtoms.push(candidate);
+    try {
+      const original = candidate.write!.bind(candidate);
+      candidate.__origWrite = candidate.write!;
+      candidate.__qpmPatched = true;
+      candidate.write = function patchedWrite(get: any, set: any, ...args: any[]) {
+        if (!capturedSet) {
+          capturedGet = get;
+          capturedSet = set;
+          restorePatchedAtoms();
+        }
+        return original(get, set, ...args);
+      };
+      patchedAtoms.push(candidate);
+    } catch {
+      // Some atom objects can be frozen/non-configurable in certain builds.
+      // Ignore and continue patching other candidates.
+    }
   }
 
   // If another mod already patched writes, wait to see if they expose the store

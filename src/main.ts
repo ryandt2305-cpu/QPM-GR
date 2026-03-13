@@ -32,6 +32,20 @@ import { setSpriteService, spriteExtractor, inspectPetSprites, renderSpriteGridO
 import { isSpriteLogsEnabled, printSpriteLogDump, setSpriteLogsEnabled } from './sprite-v2/diagnostics';
 import { initCropSizeIndicator } from './features/cropSizeIndicator';
 import { startNativeFeedIntercept, stopNativeFeedIntercept } from './features/nativeFeedIntercept';
+import {
+  initializeShopQuadModalSpike,
+  stopShopQuadModalSpike,
+  openShopQuadModalSpikeLab,
+  armShopQuadModalWritableCapture,
+  runShopQuadModalSpike,
+  startInteractiveShopQuadView,
+  stopInteractiveShopQuadView,
+  getShopQuadModalSpikeStatus,
+  getInteractiveShopQuadViewStatus,
+  getShopQuadModalRuntimeDiagnostics,
+  getShopQuadModalSpikeConfig,
+  updateShopQuadModalSpikeConfig,
+} from './features/shopQuadModalSpike';
 import { initializeAntiAfk, stopAntiAfk } from './features/antiAfk';
 import {
   startActivityLogEnhancer,
@@ -76,6 +90,134 @@ import {
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 const DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
+const SHOP_QUAD_SPIKE_ENABLED = false;
+const SHOP_QUAD_SPIKE_DISABLED_REASON = 'Shop Quad Spike is temporarily disabled (not ready).';
+
+function logShopQuadSpikeDisabled(action: string): void {
+  log(`[Main] Shop Quad Spike disabled; ignored ${action}`);
+}
+
+function getDisabledShopQuadStatus() {
+  const next = getShopQuadModalSpikeStatus();
+  next.outcome = 'blocked';
+  next.summary = SHOP_QUAD_SPIKE_DISABLED_REASON;
+  next.shippingGate = 'paused';
+  next.interactiveQuad.enabled = false;
+  next.interactiveQuad.hostMounted = false;
+  next.interactiveQuad.activePane = null;
+  next.interactiveQuad.liveModalDetected = false;
+  next.interactiveQuad.lastActivationAt = null;
+  return next;
+}
+
+function getDisabledShopQuadConfig() {
+  const current = getShopQuadModalSpikeConfig();
+  return {
+    ...current,
+    enabled: false,
+    autoOpenLab: false,
+    interactiveQuadEnabled: false,
+  };
+}
+
+function openShopQuadSpikeLabSafe(): boolean {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    logShopQuadSpikeDisabled('openLab');
+    return false;
+  }
+  return openShopQuadModalSpikeLab();
+}
+
+function armShopQuadSpikeWritableSafe(options?: { timeoutMs?: number }): {
+  armed: boolean;
+  ready: boolean;
+  message: string;
+} {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    logShopQuadSpikeDisabled('armWritable');
+    return { armed: false, ready: false, message: SHOP_QUAD_SPIKE_DISABLED_REASON };
+  }
+  return armShopQuadModalWritableCapture(options);
+}
+
+async function runShopQuadSpikeSafe(options?: { waitForWritableMs?: number; pollMs?: number }) {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    logShopQuadSpikeDisabled('runSpike');
+    return getDisabledShopQuadStatus();
+  }
+  return runShopQuadModalSpike(options);
+}
+
+async function startShopQuadInteractiveSafe(options?: {
+  waitForWritableMs?: number;
+  pollMs?: number;
+  clickActivationDebounceMs?: number;
+  snapshotCaptureDebounceMs?: number;
+}) {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    logShopQuadSpikeDisabled('startInteractive');
+    return getDisabledShopQuadStatus();
+  }
+  return startInteractiveShopQuadView(options);
+}
+
+async function stopShopQuadInteractiveSafe(): Promise<void> {
+  if (!SHOP_QUAD_SPIKE_ENABLED) return;
+  await stopInteractiveShopQuadView();
+}
+
+function getShopQuadInteractiveStatusSafe() {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    return getDisabledShopQuadStatus().interactiveQuad;
+  }
+  return getInteractiveShopQuadViewStatus();
+}
+
+function getShopQuadSpikeStatusSafe() {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    return getDisabledShopQuadStatus();
+  }
+  return getShopQuadModalSpikeStatus();
+}
+
+function getShopQuadSpikeRuntimeSafe() {
+  if (SHOP_QUAD_SPIKE_ENABLED) {
+    return getShopQuadModalRuntimeDiagnostics();
+  }
+  const runtime = getShopQuadModalRuntimeDiagnostics();
+  return {
+    ...runtime,
+    interactive: {
+      ...runtime.interactive,
+      running: false,
+      hostMounted: false,
+      activePane: null,
+      liveRootConnected: false,
+      lastPlacementFailure: SHOP_QUAD_SPIKE_DISABLED_REASON,
+    },
+  };
+}
+
+function getShopQuadSpikeConfigSafe() {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    return getDisabledShopQuadConfig();
+  }
+  return getShopQuadModalSpikeConfig();
+}
+
+function setShopQuadSpikeConfigSafe(patch: Partial<{
+  enabled: boolean;
+  autoOpenLab: boolean;
+  interactiveQuadEnabled: boolean;
+  clickActivationDebounceMs: number;
+  snapshotCaptureDebounceMs: number;
+}>) {
+  if (!SHOP_QUAD_SPIKE_ENABLED) {
+    logShopQuadSpikeDisabled('updateConfig');
+    return getDisabledShopQuadConfig();
+  }
+  return updateShopQuadModalSpikeConfig(patch);
+}
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -1045,6 +1187,27 @@ const QPM_DEBUG_API = {
       return false;
     }
   },
+  openShopQuadSpikeLab: () => openShopQuadSpikeLabSafe(),
+  armShopQuadSpikeWritable: (options?: { timeoutMs?: number }) => armShopQuadSpikeWritableSafe(options),
+  runShopQuadSpike: async (options?: { waitForWritableMs?: number; pollMs?: number }) => runShopQuadSpikeSafe(options),
+  startShopQuadInteractive: async (options?: {
+    waitForWritableMs?: number;
+    pollMs?: number;
+    clickActivationDebounceMs?: number;
+    snapshotCaptureDebounceMs?: number;
+  }) => startShopQuadInteractiveSafe(options),
+  stopShopQuadInteractive: async () => stopShopQuadInteractiveSafe(),
+  getShopQuadInteractiveStatus: () => getShopQuadInteractiveStatusSafe(),
+  getShopQuadSpikeStatus: () => getShopQuadSpikeStatusSafe(),
+  getShopQuadSpikeRuntime: () => getShopQuadSpikeRuntimeSafe(),
+  getShopQuadSpikeConfig: () => getShopQuadSpikeConfigSafe(),
+  setShopQuadSpikeConfig: (patch: Partial<{
+    enabled: boolean;
+    autoOpenLab: boolean;
+    interactiveQuadEnabled: boolean;
+    clickActivationDebounceMs: number;
+    snapshotCaptureDebounceMs: number;
+  }>) => setShopQuadSpikeConfigSafe(patch),
 
   resetTutorial: async () => {
     const { resetTutorial } = await import('./ui/tutorialPopup');
@@ -1089,11 +1252,52 @@ const QPM_ACTIVITY_LOG_API = {
   },
 };
 
+const QPM_SHOP_QUAD_SPIKE_API = {
+  openLab: () => openShopQuadSpikeLabSafe(),
+  arm: (options?: { timeoutMs?: number }) => armShopQuadSpikeWritableSafe(options),
+  run: async (options?: { waitForWritableMs?: number; pollMs?: number }) => runShopQuadSpikeSafe(options),
+  startInteractiveQuad: async (options?: {
+    waitForWritableMs?: number;
+    pollMs?: number;
+    clickActivationDebounceMs?: number;
+    snapshotCaptureDebounceMs?: number;
+  }) => startShopQuadInteractiveSafe(options),
+  stopInteractiveQuad: async () => stopShopQuadInteractiveSafe(),
+  getInteractiveQuadStatus: () => getShopQuadInteractiveStatusSafe(),
+  status: () => getShopQuadSpikeStatusSafe(),
+  runtime: () => getShopQuadSpikeRuntimeSafe(),
+  config: (
+    patch?: Partial<{
+      enabled: boolean;
+      autoOpenLab: boolean;
+      interactiveQuadEnabled: boolean;
+      clickActivationDebounceMs: number;
+      snapshotCaptureDebounceMs: number;
+    }>,
+  ) => {
+    if (patch) {
+      return setShopQuadSpikeConfigSafe(patch);
+    }
+    return getShopQuadSpikeConfigSafe();
+  },
+};
+
+(QPM_DEBUG_API as any).startInteractiveQuad = QPM_SHOP_QUAD_SPIKE_API.startInteractiveQuad;
+(QPM_DEBUG_API as any).stopInteractiveQuad = QPM_SHOP_QUAD_SPIKE_API.stopInteractiveQuad;
+(QPM_DEBUG_API as any).getInteractiveQuadStatus = QPM_SHOP_QUAD_SPIKE_API.getInteractiveQuadStatus;
+
 try {
   shareGlobal('QPM_ACTIVITY_LOG', QPM_ACTIVITY_LOG_API);
   (window as any).QPM_ACTIVITY_LOG = QPM_ACTIVITY_LOG_API;
 } catch (error) {
   log('[Main] Failed to expose QPM_ACTIVITY_LOG API', error);
+}
+
+try {
+  shareGlobal('QPM_SHOP_QUAD_SPIKE', QPM_SHOP_QUAD_SPIKE_API);
+  (window as any).QPM_SHOP_QUAD_SPIKE = QPM_SHOP_QUAD_SPIKE_API;
+} catch (error) {
+  log('[Main] Failed to expose QPM_SHOP_QUAD_SPIKE API', error);
 }
 
 if (DEBUG_GLOBALS_ENABLED) {
@@ -1253,6 +1457,7 @@ window.addEventListener('beforeunload', () => {
   stopAbilityTriggerStore();
   timerManager.destroy();
   stopNativeFeedIntercept();
+  stopShopQuadModalSpike();
   stopPetTeamsStore();
   stopPetTeamsLogs();
   stopPetsWindow();
@@ -1419,6 +1624,16 @@ async function initialize(): Promise<void> {
   startCropBoostTracker();
   initCropSizeIndicator();
   startNativeFeedIntercept();
+  if (SHOP_QUAD_SPIKE_ENABLED) {
+    initializeShopQuadModalSpike();
+  } else {
+    stopShopQuadModalSpike();
+    updateShopQuadModalSpikeConfig({
+      enabled: false,
+      autoOpenLab: false,
+      interactiveQuadEnabled: false,
+    });
+  }
   await yieldToBrowser();
 
   // Phase 9: Expose Aries bridge

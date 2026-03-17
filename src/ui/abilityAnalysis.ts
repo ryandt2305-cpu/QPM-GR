@@ -349,6 +349,12 @@ export function analyzeActivePetAbilities(infos: ActivePetInfo[]): AbilityAnalys
         case 'coins':
           totals.coinsPerHour += group.effectPerHour;
           break;
+        default:
+          // misc abilities with effectUnit 'coins' (granters, scale boosts, etc.)
+          if (group.definition.effectUnit === 'coins' && group.effectPerHour > 0) {
+            totals.coinsPerHour += group.effectPerHour;
+          }
+          break;
       }
 
       return group;

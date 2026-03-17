@@ -450,6 +450,85 @@ export function getPetSpriteDataUrlWithMutations(species: string, mutations: str
  */
 const PRODUCE_CATEGORIES = ['plant', 'tallplant', 'crop', 'item', 'decor'] as const;
 
+/**
+ * Multi-harvest category order — crop/item FIRST, then plant fallback.
+ * Matches the game's own icon logic (addMutationIcons.ts: "Multiple harvest → use crop sprite").
+ * For plants like Lychee this returns the fruit/produce sprite instead of the bush.
+ */
+const MULTIHARVEST_CATEGORIES = ['crop', 'item', 'plant', 'tallplant', 'decor'] as const;
+
+export function getMultiHarvestSpriteDataUrlWithMutations(
+  species: string | number,
+  mutations: string[]
+): string {
+  const id = normalizeSpeciesName(species);
+  const normalizedMuts = normalizeMutations(mutations);
+  const key = makeCacheKey('multiharvest', String(species), normalizedMuts);
+  if (dataUrlCache.has(key)) return dataUrlCache.get(key)!;
+  return cacheDataUrl(key, canvasToDataUrl(renderAcrossCategories(MULTIHARVEST_CATEGORIES, id, normalizedMuts, true)));
+}
+
+/**
+ * Composite sprite: plant base (bush/tree) + N fruit canvases at slotOffsets.
+ * Used to replicate in-game tile appearance for multi-harvest plants.
+ * Returns null if sprites aren't ready or species is unknown.
+ * Offsets are normalized (multiply × 256 for pixels, matching TILE_SIZE_WORLD).
+ */
+export function stitchMultiHarvestCanvas(
+  species: string,
+  mutations: string[],
+  slotOffsets: ReadonlyArray<{ x: number; y: number; rotation?: number }>,
+  activeSlotCount: number,
+): HTMLCanvasElement | null {
+  const id = normalizeSpeciesName(species);
+  const normalizedMuts = normalizeMutations(mutations);
+
+  // Base (bush/tree): plant-first order
+  const baseCanvas = renderAcrossCategories(PRODUCE_CATEGORIES, id, normalizedMuts, true);
+  if (!baseCanvas) return null;
+
+  // Fruit: crop-first order (matches in-game multi-harvest icon logic)
+  const fruitCanvas = renderAcrossCategories(MULTIHARVEST_CATEGORIES, id, normalizedMuts, true);
+
+  const SIZE = 256;
+  const out = document.createElement('canvas');
+  out.width = SIZE;
+  out.height = SIZE;
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+
+  // Draw base centered
+  ctx.drawImage(
+    baseCanvas,
+    SIZE / 2 - baseCanvas.width / 2,
+    SIZE / 2 - baseCanvas.height / 2,
+  );
+
+  if (!fruitCanvas) return out; // Base only if no fruit sprite
+
+  // Draw active fruit slots at their normalized offsets (× TILE_SIZE_WORLD = 256)
+  const count = Math.min(activeSlotCount, slotOffsets.length);
+  for (let i = 0; i < count; i++) {
+    const off = slotOffsets[i];
+    if (!off) continue;
+    const rot = (off.rotation ?? 0) * (Math.PI / 180);
+    const dx = SIZE / 2 + off.x * SIZE - fruitCanvas.width / 2;
+    const dy = SIZE / 2 + off.y * SIZE - fruitCanvas.height / 2;
+
+    if (rot !== 0) {
+      ctx.save();
+      ctx.translate(dx + fruitCanvas.width / 2, dy + fruitCanvas.height / 2);
+      ctx.rotate(rot);
+      ctx.drawImage(fruitCanvas, -fruitCanvas.width / 2, -fruitCanvas.height / 2);
+      ctx.restore();
+    } else {
+      ctx.drawImage(fruitCanvas, dx, dy);
+    }
+  }
+
+  return out;
+}
+
 export function getProduceSpriteCanvas(
   speciesOrTile: string | number | null | undefined
 ): HTMLCanvasElement | null {

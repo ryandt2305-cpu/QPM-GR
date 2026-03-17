@@ -34,6 +34,7 @@ const QPM_STORAGE_KEYS = [
 
   // Pet Hatching Tracker
   'qpm.petHatchingTracker.knownPetIds.v1',
+  'qpm.hatchStats.v1',
 
   // Stats
   'quinoa:stats:v1',

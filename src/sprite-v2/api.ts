@@ -46,6 +46,16 @@ function findItem(state: SpriteState, category: SpriteCategory, id: string): Spr
     if (base === normId) return it;
   }
 
+  // Prefix-match fallback: "ChrysanthemumBush" matches species "Chrysanthemum"
+  for (const it of state.items) {
+    const keyCat = keyCategoryOf(it.key);
+    if (!matchesCategory(keyCat, category)) continue;
+    const base = normalizeKey(baseNameOf(it.key));
+    if (base.length > normId.length && base.length - normId.length <= 6 && base.startsWith(normId)) {
+      return it;
+    }
+  }
+
   return null;
 }
 

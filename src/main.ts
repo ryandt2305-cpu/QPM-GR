@@ -1571,6 +1571,13 @@ async function initialize(): Promise<void> {
   // Phase 2: XP tracking and inventory
   initializeXpTracker();
   initializeMutationValueTracking();
+  const { initHatchStatsStore } = await import('./store/hatchStatsStore');
+  initHatchStatsStore();
+  await yieldToBrowser();
+  const { startPetHatchingTracker } = await import('./store/petHatchingTracker');
+  await startPetHatchingTracker().catch((error) => {
+    log('Pet hatching tracker start failed', error);
+  });
   await startInventoryStore();
   await yieldToBrowser();
 

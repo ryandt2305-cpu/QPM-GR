@@ -1,11 +1,18 @@
 // src/utils/cropMultipliers.ts
 // Shared helpers for resolving mutation multipliers and keeping alias handling consistent.
+//
+// Game formula (from sell.ts / mutationsDex.ts):
+//   mutationMultiplier = growthMult × (1 + SUM(envCoinMultipliers) - count(envMutations))
+// where "growth" = Gold/Rainbow and "environment" = everything else.
+
+import { getMutationCatalog } from '../catalogs/gameCatalogs';
 
 export type MutationCategory = 'color' | 'weather' | 'time';
 
 export interface MutationDefinition {
   readonly name: string;
   readonly category: MutationCategory;
+  /** Raw coinMultiplier value from mutationsDex (NOT the effective contribution). */
   readonly multiplier: number;
   readonly aliases?: readonly string[];
 }
@@ -19,6 +26,7 @@ export interface MutationMultiplierBreakdown {
   readonly color: MutationEntry | null;
   readonly weather: MutationEntry | null;
   readonly time: MutationEntry | null;
+  /** @deprecated Combo table removed — game uses additive formula, not pre-computed combos. */
   readonly combo: WeatherTimeCombination | null;
   readonly totalMultiplier: number;
 }
@@ -29,6 +37,10 @@ export interface WeatherTimeCombination {
   readonly multiplier: number;
 }
 
+// ---------------------------------------------------------------------------
+// Mutation definitions — values from game's mutationsDex.ts
+// ---------------------------------------------------------------------------
+
 const COLOR_MUTATIONS: readonly MutationDefinition[] = [
   { name: 'Gold', category: 'color', multiplier: 25, aliases: ['Golden'] },
   { name: 'Rainbow', category: 'color', multiplier: 50 },
@@ -37,59 +49,24 @@ const COLOR_MUTATIONS: readonly MutationDefinition[] = [
 const WEATHER_MUTATIONS: readonly MutationDefinition[] = [
   { name: 'Wet', category: 'weather', multiplier: 2, aliases: ['Rainy'] },
   { name: 'Chilled', category: 'weather', multiplier: 2 },
-  { name: 'Frozen', category: 'weather', multiplier: 10 },
+  { name: 'Frozen', category: 'weather', multiplier: 6 },
+  { name: 'Thunderstruck', category: 'weather', multiplier: 5 },
 ];
 
+// Internal key → display name mapping:
+//   Dawncharged → "Dawnbound"
+//   Ambershine  → "Amberlit"
+//   Ambercharged → "Amberbound"
 const TIME_MUTATIONS: readonly MutationDefinition[] = [
-  { name: 'Dawnlit', category: 'time', multiplier: 2, aliases: ['Dawn-lit'] },
-  { name: 'Dawnbound', category: 'time', multiplier: 3, aliases: ['Dawn bound'] },
-  { name: 'Dawncharged', category: 'time', multiplier: 3, aliases: ['Dawn charged'] },
-  { name: 'Amberlit', category: 'time', multiplier: 5, aliases: ['Amber lit'] },
-  { name: 'Ambershine', category: 'time', multiplier: 5, aliases: ['Amber shine'] },
-  {
-    name: 'Amberbound',
-    category: 'time',
-    multiplier: 6,
-    aliases: ['Amber Radiant', 'Amberradiant', 'Amber-radiant', 'Amber radiant'],
-  },
-  { name: 'Ambercharged', category: 'time', multiplier: 6, aliases: ['Amber charged'] },
+  { name: 'Dawnlit', category: 'time', multiplier: 4, aliases: ['Dawn-lit'] },
+  { name: 'Dawncharged', category: 'time', multiplier: 7, aliases: ['Dawnbound', 'Dawn bound', 'Dawn charged'] },
+  { name: 'Ambershine', category: 'time', multiplier: 6, aliases: ['Amberlit', 'Amber lit', 'Amber shine'] },
+  { name: 'Ambercharged', category: 'time', multiplier: 10, aliases: ['Amberbound', 'Amber Radiant', 'Amberradiant', 'Amber-radiant', 'Amber radiant', 'Amber charged'] },
 ];
 
 const ALL_MUTATIONS: readonly MutationDefinition[] = [...COLOR_MUTATIONS, ...WEATHER_MUTATIONS, ...TIME_MUTATIONS];
 
-const WEATHER_TIME_COMBINATIONS: readonly WeatherTimeCombination[] = [
-  makeCombo('Wet', 'Dawnlit', 3),
-  makeCombo('Chilled', 'Dawnlit', 3),
-  makeCombo('Wet', 'Amberlit', 6),
-  makeCombo('Chilled', 'Amberlit', 6),
-  makeCombo('Wet', 'Ambershine', 6),
-  makeCombo('Chilled', 'Ambershine', 6),
-  makeCombo('Frozen', 'Dawnlit', 11),
-  makeCombo('Frozen', 'Dawnbound', 12),
-  makeCombo('Frozen', 'Dawncharged', 12),
-  makeCombo('Frozen', 'Amberlit', 14),
-  makeCombo('Frozen', 'Ambershine', 14),
-  makeCombo('Frozen', 'Amberbound', 15),
-  makeCombo('Frozen', 'Ambercharged', 15),
-];
-
 const NORMALIZED_LOOKUP: ReadonlyMap<string, MutationDefinition> = buildLookupTable(ALL_MUTATIONS);
-
-function makeCombo(weatherName: string, timeName: string, multiplier: number): WeatherTimeCombination {
-  return {
-    weather: findDefinition(WEATHER_MUTATIONS, weatherName),
-    time: findDefinition(TIME_MUTATIONS, timeName),
-    multiplier,
-  };
-}
-
-function findDefinition(collection: readonly MutationDefinition[], name: string): MutationDefinition {
-  const match = collection.find((item) => item.name === name);
-  if (!match) {
-    throw new Error(`Missing canonical mutation definition for ${name}`);
-  }
-  return match;
-}
 
 function buildLookupTable(definitions: readonly MutationDefinition[]): ReadonlyMap<string, MutationDefinition> {
   const table = new Map<string, MutationDefinition>();
@@ -125,7 +102,48 @@ export function resolveMutation(input: string | null | undefined): MutationDefin
     return null;
   }
 
-  return NORMALIZED_LOOKUP.get(normalized) ?? null;
+  // Primary: hardcoded lookup covers all known mutations + aliases (fast, always available)
+  const known = NORMALIZED_LOOKUP.get(normalized);
+  if (known) return known;
+
+  // Fallback: check mutation catalog for mutations added by game updates
+  return resolveMutationFromCatalog(input.trim());
+}
+
+/**
+ * Attempts to resolve an unknown mutation from the runtime catalog.
+ * Used for mutations added to the game after this mod was built.
+ * Heuristic for category: coinMultiplier >= 25 → 'color' (growth), else 'weather' (environment).
+ * This matches the game's GROWTH_MUTATIONS list (Gold=25, Rainbow=50) vs env mutations (max 10).
+ */
+function resolveMutationFromCatalog(mutationId: string): MutationDefinition | null {
+  const catalog = getMutationCatalog();
+  if (!catalog) return null;
+
+  // Try exact key match (e.g., 'Frozen', 'Dawncharged')
+  let entry = catalog[mutationId];
+
+  // If not found, try matching by the entry's display name (e.g., 'Dawnbound' → key 'Dawncharged')
+  if (!entry) {
+    const inputLower = mutationId.toLowerCase();
+    for (const candidateEntry of Object.values(catalog)) {
+      if (typeof candidateEntry.name === 'string' && candidateEntry.name.toLowerCase() === inputLower) {
+        entry = candidateEntry;
+        break;
+      }
+    }
+  }
+
+  if (!entry) return null;
+
+  const displayName = typeof entry.name === 'string' && entry.name ? entry.name : mutationId;
+  const category: MutationCategory = entry.coinMultiplier >= 25 ? 'color' : 'weather';
+
+  return {
+    name: displayName,
+    category,
+    multiplier: entry.coinMultiplier,
+  };
 }
 
 export function classifyMutations(inputs: readonly string[] | null | undefined): {
@@ -163,6 +181,13 @@ export function classifyMutations(inputs: readonly string[] | null | undefined):
   return { colors, weathers, times, unknown };
 }
 
+/**
+ * Compute the mutation multiplier using the game's actual formula:
+ *   growthMult × (1 + SUM(envCoinMultipliers) - count(envMutations))
+ *
+ * "Growth" = Gold or Rainbow (only one can exist; pick highest if multiple).
+ * "Environment" = all other mutations (weather + time); they stack additively.
+ */
 export function computeMutationMultiplier(inputs: readonly string[] | null | undefined): MutationMultiplierBreakdown {
   if (!inputs || inputs.length === 0) {
     return {
@@ -176,30 +201,29 @@ export function computeMutationMultiplier(inputs: readonly string[] | null | und
 
   const { colors, weathers, times } = classifyMutations(inputs);
 
+  // Growth mutation: Gold or Rainbow (only one allowed; pick highest)
   const color = pickHighest(colors);
+
+  // For breakdown display purposes, track the highest individual weather and time
   const weather = pickHighest(weathers);
   const time = pickHighest(times);
-  const combo = weather && time ? pickCombo(weather.definition, time.definition) : null;
 
-  const colorValue = color?.definition.multiplier ?? 1;
+  // Game formula: growthMult × (1 + SUM(envCoinMultipliers) - count(envMutations))
+  const growthMult = color?.definition.multiplier ?? 1;
 
-  let weatherTimeValue = 1;
-  if (combo) {
-    weatherTimeValue = combo.multiplier;
-  } else if (weather && time) {
-    weatherTimeValue = Math.max(weather.definition.multiplier, time.definition.multiplier);
-  } else if (weather) {
-    weatherTimeValue = weather.definition.multiplier;
-  } else if (time) {
-    weatherTimeValue = time.definition.multiplier;
-  }
+  // All non-growth mutations are "environment" mutations — they stack additively
+  const envEntries = [...weathers, ...times];
+  const envSum = envEntries.reduce((acc, entry) => acc + entry.definition.multiplier, 0);
+  const envCount = envEntries.length;
+
+  const totalMultiplier = growthMult * (1 + envSum - envCount);
 
   return {
     color,
     weather,
     time,
-    combo,
-    totalMultiplier: colorValue * weatherTimeValue,
+    combo: null, // Game uses additive formula, not pre-computed combos
+    totalMultiplier,
   };
 }
 
@@ -215,19 +239,11 @@ function pickHighest(entries: readonly MutationEntry[]): MutationEntry | null {
   }, null as MutationEntry | null);
 }
 
-function pickCombo(weather: MutationDefinition, time: MutationDefinition): WeatherTimeCombination | null {
-  for (const combo of WEATHER_TIME_COMBINATIONS) {
-    if (combo.weather === weather && combo.time === time) {
-      return combo;
-    }
-  }
-  return null;
-}
-
 export function getAllMutationDefinitions(): readonly MutationDefinition[] {
   return ALL_MUTATIONS;
 }
 
+/** @deprecated Combo table removed — game uses additive formula. Returns empty array. */
 export function getWeatherTimeCombinations(): readonly WeatherTimeCombination[] {
-  return WEATHER_TIME_COMBINATIONS;
+  return [];
 }

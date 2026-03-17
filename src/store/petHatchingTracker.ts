@@ -4,6 +4,7 @@
 
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { recordPetHatch } from './stats';
+import { recordDetailedHatch } from './hatchStatsStore';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 
@@ -20,6 +21,7 @@ interface PetInfo {
   rarity?: string;
   isGold?: boolean;
   isRainbow?: boolean;
+  abilities?: unknown;
   [key: string]: unknown;
 }
 
@@ -118,8 +120,13 @@ function detectNewPets(pets: PetInfo[]): void {
       const rarity = determinePetRarity(pet);
       recordPetHatch(rarity, now);
 
-      const speciesName = pet.name || pet.species || 'Unknown';
-      log(`🥚 Detected new ${rarity} pet hatched: ${speciesName}`);
+      const species = pet.species ?? pet.name ?? 'Unknown';
+      const abilities = Array.isArray(pet.abilities)
+        ? (pet.abilities as unknown[]).filter((a): a is string => typeof a === 'string')
+        : [];
+      recordDetailedHatch(species, rarity, abilities, now);
+
+      log(`🥚 Detected new ${rarity} pet hatched: ${species}`);
       newPetsDetected = true;
     }
   }

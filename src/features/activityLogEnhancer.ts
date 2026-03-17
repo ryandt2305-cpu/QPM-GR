@@ -3300,10 +3300,11 @@ function ensureConnectionPatched(): void {
 
   const original = room.sendMessage.bind(room);
   const wrapped = (payload: unknown) => {
-    try {
-      registerPendingAction(payload);
-    } catch {}
-    return original(payload);
+    const result = original(payload);
+    queueMicrotask(() => {
+      try { registerPendingAction(payload); } catch {}
+    });
+    return result;
   };
 
   try {

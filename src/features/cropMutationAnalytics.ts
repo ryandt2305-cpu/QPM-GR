@@ -6,6 +6,7 @@ import { calculatePlantValue } from './valueCalculator';
 import { computeMutationMultiplier } from '../utils/cropMultipliers';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { log } from '../utils/logger';
+import { getWeatherCatalog } from '../catalogs/gameCatalogs';
 
 const FRIEND_BONUS = 1.5;
 
@@ -20,11 +21,52 @@ interface EligibleCrop {
 
 interface MutationPotential {
   weather: 'rain' | 'snow' | 'dawn' | 'amber' | null;
+  /** Display name from the weather catalog (e.g. 'Rain', 'Snow', 'Dawn', 'Amber Moon'). */
+  weatherDisplayName: string | null;
+  /** The mutation ID this weather grants, from catalog (e.g. 'Wet', 'Chilled', 'Dawnlit'). */
+  grantedMutation: string | null;
   eligibleCrops: EligibleCrop[];
   eligibleFruits: number;
   averageValueGain: number;
   projectedMutationsPerEvent: number; // Expected mutations during current event
   baseMutationChance: number; // Base % chance per crop per event
+}
+
+/**
+ * Looks up the current weather type in the runtime catalog to get its granted mutation
+ * and display name. Falls back to the hardcoded classification if catalog isn't ready.
+ */
+function resolveWeatherMutationEntry(weatherType: string): {
+  mutation: string | null;
+  displayName: string | null;
+} {
+  const catalog = getWeatherCatalog();
+  if (catalog) {
+    const lc = weatherType.toLowerCase();
+    for (const [id, rawEntry] of Object.entries(catalog)) {
+      const entry = rawEntry as Record<string, unknown>;
+      const entryName = typeof entry.name === 'string' ? entry.name.toLowerCase() : '';
+      if (
+        id.toLowerCase() === lc ||
+        entryName === lc ||
+        id.toLowerCase().includes(lc) ||
+        lc.includes(id.toLowerCase())
+      ) {
+        const mutator = entry.mutator as Record<string, unknown> | undefined;
+        const mutation = typeof mutator?.mutation === 'string' ? mutator.mutation : null;
+        const displayName = typeof entry.name === 'string' && entry.name ? entry.name : id;
+        if (mutation) return { mutation, displayName };
+      }
+    }
+  }
+
+  // Catalog miss — fall back to hardcoded mapping
+  const classified = classifyWeatherForMutation(weatherType);
+  if (!classified) return { mutation: null, displayName: null };
+  return {
+    mutation: getMutationForWeather(classified),
+    displayName: classified === 'rain' ? 'Rain' : classified === 'snow' ? 'Snow' : classified === 'dawn' ? 'Dawn' : 'Amber Moon',
+  };
 }
 
 /**
@@ -37,6 +79,8 @@ export function analyzeCropMutationPotential(): MutationPotential {
   if (!snapshot || !weather) {
     return {
       weather: null,
+      weatherDisplayName: null,
+      grantedMutation: null,
       eligibleCrops: [],
       eligibleFruits: 0,
       averageValueGain: 0,
@@ -47,10 +91,17 @@ export function analyzeCropMutationPotential(): MutationPotential {
 
   // Extract current weather type from weather snapshot
   const weatherType = typeof weather === 'string' ? weather : (weather as any).type || (weather as any).name;
+
+  // Resolve mutation and display name — catalog-first, hardcoded fallback
+  const { mutation: grantedMutation, displayName: weatherDisplayName } = resolveWeatherMutationEntry(weatherType);
+
+  // Keep legacy category classification for callers that still need it
   const currentWeather = classifyWeatherForMutation(weatherType);
-  if (!currentWeather) {
+  if (!currentWeather || !grantedMutation) {
     return {
       weather: null,
+      weatherDisplayName: null,
+      grantedMutation: null,
       eligibleCrops: [],
       eligibleFruits: 0,
       averageValueGain: 0,
@@ -87,8 +138,8 @@ export function analyzeCropMutationPotential(): MutationPotential {
     const normalizedSpecies = normalizeSpeciesKey(species);
     const currentValue = calculatePlantValue(normalizedSpecies, scale, mutations, FRIEND_BONUS);
 
-    // Calculate value with new mutation
-    const newMutations = [...mutations, getMutationForWeather(currentWeather)];
+    // Calculate value with new mutation — use catalog-resolved mutation name
+    const newMutations = [...mutations, grantedMutation];
     const newValue = calculatePlantValue(normalizedSpecies, scale, newMutations, FRIEND_BONUS);
     const valueGain = newValue - currentValue;
 
@@ -121,6 +172,8 @@ export function analyzeCropMutationPotential(): MutationPotential {
 
   return {
     weather: currentWeather,
+    weatherDisplayName,
+    grantedMutation,
     eligibleCrops: eligible,
     eligibleFruits: totalFruits,
     averageValueGain,

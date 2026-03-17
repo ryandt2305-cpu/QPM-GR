@@ -9,6 +9,7 @@ import { normalizeSpeciesKey } from '../utils/helpers';
 import { lookupMaxScale } from '../utils/plantScales';
 import { analyzeCropMutationPotential } from './cropMutationAnalytics';
 import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
+import { getAbilityDef } from '../catalogs/gameCatalogs';
 
 const FRIEND_BONUS_MULTIPLIER = 1.5; // Assume max friend bonus (50%).
 const MIN_SCALE = 1;
@@ -33,10 +34,27 @@ const GRANTER_TO_MUTATION: Readonly<Record<string, string>> = {
 
 /**
  * Returns the mutation name granted by a *Granter ability.
- * Uses the lookup table above; falls back to stripping the "Granter" suffix.
+ * Resolution order:
+ *   1. Runtime catalog — baseParameters.grantedMutations[0] (handles new game additions)
+ *   2. Hardcoded lookup table — known mismatches or renamed abilities
+ *   3. Strip "Granter" suffix from the ability ID as a last resort
  */
 export function resolveGrantedMutationName(abilityId: string): string {
-  return GRANTER_TO_MUTATION[abilityId] ?? abilityId.replace(/Granter$/, '');
+  // 1. Check the ability catalog — the authoritative source
+  const catalogEntry = getAbilityDef(abilityId);
+  if (catalogEntry?.baseParameters) {
+    const granted = catalogEntry.baseParameters['grantedMutations'];
+    if (Array.isArray(granted) && granted.length > 0 && typeof granted[0] === 'string') {
+      return granted[0];
+    }
+  }
+
+  // 2. Hardcoded table (covers renamed / aliased abilities not in catalog yet)
+  const fromTable = GRANTER_TO_MUTATION[abilityId];
+  if (fromTable) return fromTable;
+
+  // 3. Strip suffix
+  return abilityId.replace(/Granter$/, '');
 }
 
 interface MatureCrop {
@@ -376,17 +394,50 @@ function resolveColorGranterEffect(
   };
 }
 
+// Mutation exclusivity sets (matching game's updateMutationList.ts)
+const GRANTER_DAWN_MUTS  = new Set(['dawnlit', 'dawncharged', 'dawnbound', 'dawncelestial']);
+const GRANTER_AMBER_MUTS = new Set(['ambershine', 'ambercharged', 'amberbound', 'amberlit', 'amberradiant']);
+const GRANTER_WATER_MUTS = new Set(['wet', 'chilled', 'frozen']);
+
+/**
+ * Returns true if `mutationName` can be applied to a crop that already has `existingMutations`.
+ * Enforces the same exclusivity rules as the game.
+ */
+function isMutationCompatibleWithExisting(mutationName: string, existingMutations: string[]): boolean {
+  const ml = mutationName.toLowerCase();
+  const ex = existingMutations.map((m) => m.toLowerCase());
+
+  if (GRANTER_DAWN_MUTS.has(ml)) {
+    // Dawn group: blocked by any existing Dawn OR Amber mutation
+    return !ex.some((m) => GRANTER_DAWN_MUTS.has(m) || GRANTER_AMBER_MUTS.has(m));
+  }
+  if (GRANTER_AMBER_MUTS.has(ml)) {
+    // Amber group: blocked by any existing Dawn OR Amber mutation
+    return !ex.some((m) => GRANTER_DAWN_MUTS.has(m) || GRANTER_AMBER_MUTS.has(m));
+  }
+  if (ml === 'thunderstruck') {
+    // Thunderstruck: blocked by any water mutation (Wet, Chilled, Frozen)
+    return !ex.some((m) => GRANTER_WATER_MUTS.has(m));
+  }
+  if (GRANTER_WATER_MUTS.has(ml)) {
+    // Water mutations: blocked by Thunderstruck
+    return !ex.includes('thunderstruck');
+  }
+  // Gold/Rainbow: handled by resolveColorGranterEffect which uses uncoloredCrops
+  return true;
+}
+
 /**
  * Generalized granter effect: calculates average value gain from granting
  * `mutationName` to one eligible mature crop.
- * Eligible = isMature AND does NOT already have `mutationName`.
+ * Eligible = isMature AND does NOT already have `mutationName` AND is mutation-compatible.
  */
 function resolveGranterEffect(
   context: AbilityValuationContext,
   mutationName: string,
 ): DynamicAbilityEffect | null {
   const eligible = context.crops.filter(
-    (crop) => crop.isMature && !crop.mutations.includes(mutationName),
+    (crop) => crop.isMature && !crop.mutations.some((m) => m.toLowerCase() === mutationName.toLowerCase()) && isMutationCompatibleWithExisting(mutationName, crop.mutations),
   );
   if (!eligible.length) return null;
 
@@ -486,23 +537,20 @@ function resolveCropMutationEffect(abilityId: string): DynamicAbilityEffect | nu
     };
   }
 
-  const weatherName =
-    potential.weather === 'rain'
-      ? 'Rain'
-      : potential.weather === 'snow'
-        ? 'Snow'
-        : potential.weather === 'dawn'
-          ? 'Dawn'
-          : 'Amber';
+  // Prefer catalog-derived names; fall back to the legacy category switch
+  const weatherName = potential.weatherDisplayName ?? (
+    potential.weather === 'rain' ? 'Rain' :
+    potential.weather === 'snow' ? 'Snow' :
+    potential.weather === 'dawn' ? 'Dawn' :
+    'Amber Moon'
+  );
 
-  const mutationName =
-    potential.weather === 'rain'
-      ? 'Wet'
-      : potential.weather === 'snow'
-        ? 'Frozen'
-        : potential.weather === 'dawn'
-          ? 'Dawnlit'
-          : 'Amberlit';
+  const mutationName = potential.grantedMutation ?? (
+    potential.weather === 'rain' ? 'Wet' :
+    potential.weather === 'snow' ? 'Chilled' :
+    potential.weather === 'dawn' ? 'Dawnlit' :
+    'Ambershine'
+  );
 
   // Calculate expected value from mutations during this event
   const expectedTotalValue = potential.projectedMutationsPerEvent * potential.averageValueGain;

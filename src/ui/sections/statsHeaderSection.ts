@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.18', date: '2026-03', notes: [
+    'added Garden & Hatch Stats to Trackers hub — mutation progress filter + hatch history with ability breakdown',
+    'pet hatching tracker now wired up and records species + abilities per hatch',
+  ]},
 { version: '3.1.17', date: '2026-03', notes: [
     'hopefully fixed the activity log hydration (stutters for 5-10 seconds and then its smooth)',
     'first 5 people to send a screenshot of this to the QPM channel gets 5k bread lol',

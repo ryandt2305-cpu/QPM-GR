@@ -44,6 +44,15 @@ const TRACKER_DEFS = [
     windowId: 'trackers-detached-crops',
     width: '800px',
   },
+  {
+    key: 'stats',
+    label: 'Garden & Hatch Stats',
+    icon: '🌿',
+    desc: 'Visual stats for garden mutation progress and hatching history with ability breakdown',
+    windowTitle: '🌿 Garden & Hatch Stats',
+    windowId: 'trackers-detached-stats',
+    width: '920px',
+  },
 ] as const;
 
 type TrackerKey = (typeof TRACKER_DEFS)[number]['key'];
@@ -111,6 +120,9 @@ async function loadTrackerIntoRoot(key: TrackerKey, root: HTMLElement): Promise<
     const { renderCropBoostContent } = await import('./cropBoostTrackerWindow');
     root.style.cssText += ';overflow-y:auto;';
     renderCropBoostContent(root);
+  } else if (key === 'stats') {
+    const { renderStatsHub } = await import('./statsHubWindow');
+    renderStatsHub(root);
   }
 }
 

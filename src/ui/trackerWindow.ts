@@ -255,12 +255,12 @@ function resolvePetAbilities(pet: ActivePetInfo, gardenCtx?: AbilityValuationCon
     if (!def || def.trigger !== 'continuous' || (def.baseProbability ?? 0) <= 0) continue;
     const stats = computeAbilityStats(def, pet.strength);
     let coinsPerHour: number | null = null;
-    if (def.effectUnit === 'coins' && stats.procsPerHour > 0) {
-      if (def.effectValuePerProc != null) {
+    if (stats.procsPerHour > 0) {
+      if (def.effectUnit === 'coins' && def.effectValuePerProc != null) {
         // Static coins per proc (e.g. Coin Finder)
         coinsPerHour = stats.procsPerHour * def.effectValuePerProc * (stats.multiplier ?? 1);
-      } else if (gardenCtx) {
-        // Dynamic value — depends on current garden (e.g. Crop Size Boost)
+      } else if (gardenCtx && def.effectUnit !== 'xp' && def.effectUnit !== 'minutes') {
+        // Dynamic value — granters, scale boosts, and other garden-dependent abilities
         try {
           const dynamic = resolveDynamicAbilityEffect(def.id, gardenCtx, pet.strength);
           if (dynamic && dynamic.effectPerProc > 0) {

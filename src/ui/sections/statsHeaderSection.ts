@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.19', date: '2026-03', notes: [
+    'fixed pet optimiser crash (Analysis Failed) caused by undefined weather type in catalog lookup',
+  ]},
 { version: '3.1.18', date: '2026-03', notes: [
     'added Garden & Hatch Stats to Trackers hub — mutation progress filter + hatch history with ability breakdown',
     'pet hatching tracker now wired up and records species + abilities per hatch',

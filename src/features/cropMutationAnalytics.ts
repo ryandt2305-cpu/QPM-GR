@@ -36,10 +36,11 @@ interface MutationPotential {
  * Looks up the current weather type in the runtime catalog to get its granted mutation
  * and display name. Falls back to the hardcoded classification if catalog isn't ready.
  */
-function resolveWeatherMutationEntry(weatherType: string): {
+function resolveWeatherMutationEntry(weatherType: string | undefined | null): {
   mutation: string | null;
   displayName: string | null;
 } {
+  if (!weatherType) return { mutation: null, displayName: null };
   const catalog = getWeatherCatalog();
   if (catalog) {
     const lc = weatherType.toLowerCase();

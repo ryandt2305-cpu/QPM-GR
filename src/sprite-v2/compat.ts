@@ -280,8 +280,11 @@ function normalizeMutations(mutations: string[] = []): string[] {
 
 // Plant sprite atlas key aliases — some plant catalog names differ from their atlas keys.
 // E.g. "Rose" in the catalog resolves to "RoseRed" in the plant sprite atlas.
+// Atlas keys confirmed from plantCatalog sprite fields (sprite/plant/<key>).
 const PLANT_SPRITE_ALIASES: Record<string, string> = {
   Rose: 'RoseRed',
+  FourLeafClover: 'CloverFourLeaf',  // catalog: FourLeafClover → atlas: sprite/plant/CloverFourLeaf
+  Clover: 'CloverThreeLeaf',         // catalog: Clover → atlas: sprite/plant/CloverThreeLeaf
 };
 
 function getIdVariations(category: string, id: string): string[] {

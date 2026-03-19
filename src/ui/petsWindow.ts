@@ -2590,11 +2590,30 @@ function buildManagerTab(
 
     const deleteBtn = btn('Delete', 'danger');
     deleteBtn.addEventListener('click', () => {
-      if (!confirm(`Delete team "${team.name}"?`)) return;
-      deleteTeam(team.id);
-      state.selectedTeamId = null;
-      renderTeamList();
-      renderEditor();
+      // Replace delete button with an inline confirm row — window.confirm() is
+      // silently blocked in sandboxed iframes (Discord Activity) and some browsers.
+      deleteBtn.style.display = 'none';
+      const confirmRow = document.createElement('div');
+      confirmRow.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;';
+      const confirmLabel = document.createElement('span');
+      confirmLabel.style.cssText = 'font-size:12px;color:#f87171;white-space:nowrap;';
+      confirmLabel.textContent = `Delete "${team.name}"?`;
+      const yesBtn = btn('Yes, delete', 'danger');
+      const cancelConfirmBtn = btn('Cancel', 'default');
+      yesBtn.addEventListener('click', () => {
+        deleteTeam(team.id);
+        state.selectedTeamId = null;
+        renderTeamList();
+        renderEditor();
+      });
+      cancelConfirmBtn.addEventListener('click', () => {
+        confirmRow.remove();
+        deleteBtn.style.display = '';
+      });
+      confirmRow.appendChild(confirmLabel);
+      confirmRow.appendChild(yesBtn);
+      confirmRow.appendChild(cancelConfirmBtn);
+      controls.appendChild(confirmRow);
     });
     controls.appendChild(deleteBtn);
     editor.appendChild(controls);
@@ -2678,7 +2697,17 @@ function buildManagerTab(
     normalizeComparePair();
     comparePanel.refresh();
     renderTeamList();
-    if (!compareOpen) renderEditor();
+    if (!compareOpen) {
+      // Skip re-rendering the editor when the user is actively typing inside it
+      // (e.g. renaming a team). Rebuilding the DOM mid-type destroys the input
+      // and causes lost focus / lost cursor position.
+      const active = document.activeElement;
+      const typingInEditor =
+        active != null &&
+        editor.contains(active) &&
+        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement);
+      if (!typingInEditor) renderEditor();
+    }
   });
   state.cleanups.push(unsub);
 

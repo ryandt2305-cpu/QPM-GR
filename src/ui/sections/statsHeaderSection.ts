@@ -21,11 +21,17 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.20', date: '2026-03', notes: [
+    'pet team delete button now shows inline confirmation (fixes silent failure in Discord Activities)',
+    'pet team name input no longer loses focus while typing',
+    'garden filter now dynamically loads all crops from catalog, new plants appear automatically',
+    'four leaf clover sprite alias added',
+  ]},
 { version: '3.1.19', date: '2026-03', notes: [
     'fixed pet optimiser crash (Analysis Failed) caused by undefined weather type in catalog lookup',
   ]},
 { version: '3.1.18', date: '2026-03', notes: [
-    'added Garden & Hatch Stats to Trackers hub — mutation progress filter + hatch history with ability breakdown',
+    'added Garden & Hatch Stats to Trackers hub: mutation progress filter + hatch history with ability breakdown',
     'pet hatching tracker now wired up and records species + abilities per hatch',
   ]},
 { version: '3.1.17', date: '2026-03', notes: [

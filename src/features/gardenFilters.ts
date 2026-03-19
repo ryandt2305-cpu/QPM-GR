@@ -7,6 +7,7 @@ import { log } from '../utils/logger';
 import { visibleInterval } from '../utils/timerManager';
 import { getGardenSnapshot, getMapSnapshot } from './gardenBridge';
 import { normalizeMutationName } from '../utils/cropMultipliers';
+import { getAllPlantSpecies as getCatalogPlantSpecies, getEggCatalog } from '../catalogs/gameCatalogs';
 
 // Declare unsafeWindow for TypeScript
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
@@ -53,6 +54,8 @@ const SPECIES_TO_VIEW: Record<string, string> = {
   'MoonCelestial': 'Moonbinder View',
   'DawnCelestial': 'Dawnbinder View',
   'Starweaver': 'Starweaver Plant View',
+  'Clover': 'Clover Patch Plant View',
+  'FourLeafClover': 'Four-Leaf Clover Plant View',
 };
 
 function normalizeMutationFilterKey(raw: unknown): string | null {
@@ -245,6 +248,7 @@ function getGardenTileData(x: number, y: number): any {
 function applyFiltersToStage(
   node: any,
   speciesToShow: Set<string>,
+  unknownSpeciesToShow: Set<string>,
   mutationsToShow: Set<string>,
   eggTypesToShow: Set<string>,
   growthStatesToShow: Set<string>,
@@ -285,21 +289,38 @@ function applyFiltersToStage(
           }
         }
       } else {
-        // Plant/Decor filtering - use PIXI child label directly
-        if (speciesToShow.size > 0) {
-          speciesMatches = speciesToShow.has(childLabel);
+        // Plant/Decor filtering.
+        // Known species (in SPECIES_TO_VIEW): fast path via PIXI child label.
+        // Unknown species (new crops not yet in SPECIES_TO_VIEW): deferred to tile data.
+        if (speciesToShow.size > 0 || unknownSpeciesToShow.size > 0) {
+          if (speciesToShow.has(childLabel)) {
+            speciesMatches = true; // fast path — no tile data needed
+          } else if (unknownSpeciesToShow.size > 0) {
+            speciesMatches = false; // may be resolved after tile data fetch below
+          } else {
+            speciesMatches = false;
+          }
         }
       }
 
-      // Mutation and growth state filtering REQUIRE garden data
+      // Mutation and growth state filtering REQUIRE garden data.
+      // Unknown-species tiles that didn't match via PIXI label also need tile data.
       let mutationMatches = true;
       let growthStateMatches = true;
-      const needsGardenData = mutationsToShow.size > 0 || growthStatesToShow.size > 0;
+      const needsGardenData =
+        mutationsToShow.size > 0 ||
+        growthStatesToShow.size > 0 ||
+        (!isEgg && !speciesMatches && unknownSpeciesToShow.size > 0);
 
       if (needsGardenData) {
         const tileData = getGardenTileData(x, y);
         if (tileData) {
           stats.withData++;
+
+          // Resolve unknown-species match via tile data species field
+          if (!isEgg && !speciesMatches && unknownSpeciesToShow.size > 0) {
+            speciesMatches = unknownSpeciesToShow.has(tileData.species);
+          }
 
           // Check mutations (ANY slot has ANY selected mutation)
           if (mutationsToShow.size > 0) {
@@ -319,13 +340,13 @@ function applyFiltersToStage(
           }
         } else {
           stats.withoutData++;
-          // No garden data = can't verify mutations or growth state
-          // Don't show tiles when filtering by these if we can't verify
+          // No garden data — can't resolve unknown species, mutations, or growth state
+          if (!isEgg && unknownSpeciesToShow.size > 0) speciesMatches = false;
           mutationMatches = false;
           growthStateMatches = false;
         }
       } else {
-        // Not filtering by mutations or growth state, don't need garden data
+        // Not filtering by mutations, growth state, or unknown species — no tile data needed
         stats.withoutData++;
       }
 
@@ -344,7 +365,7 @@ function applyFiltersToStage(
   // Recursively traverse children
   if (node.children && Array.isArray(node.children)) {
     for (const child of node.children) {
-      applyFiltersToStage(child, speciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats, depth + 1, maxDepth);
+      applyFiltersToStage(child, speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats, depth + 1, maxDepth);
     }
   }
 }
@@ -387,14 +408,18 @@ function applyFilters(): void {
       return;
     }
 
-    // Convert selected species to view labels
-    const speciesToShow = new Set<string>();
+    // Convert selected species to view labels (known) or keep as names (unknown)
+    const speciesToShow = new Set<string>();     // PIXI view labels for known species
+    const unknownSpeciesToShow = new Set<string>(); // catalog names for new/unknown species
 
-    // Add selected crop species
     for (const species of config.cropSpecies) {
       const viewLabel = SPECIES_TO_VIEW[species];
       if (viewLabel) {
         speciesToShow.add(viewLabel);
+      } else {
+        // Species not in the static map — could be a newly added game crop.
+        // Matching falls back to tileData.species at filter time.
+        unknownSpeciesToShow.add(species);
       }
     }
 
@@ -412,11 +437,12 @@ function applyFilters(): void {
     const growthStatesToShow = new Set<string>(config.growthStates);
 
     const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
-    applyFiltersToStage(app.stage, speciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats);
+    applyFiltersToStage(app.stage, speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats);
 
     if (stats.visible + stats.dimmed > 0) {
       const filterInfo = [];
-      if (speciesToShow.size > 0) filterInfo.push(`${speciesToShow.size} species`);
+      const totalSpecies = speciesToShow.size + unknownSpeciesToShow.size;
+      if (totalSpecies > 0) filterInfo.push(`${totalSpecies} species`);
       if (mutationsToShow.size > 0) {
         filterInfo.push(`${mutationsToShow.size} mutations`);
         filterInfo.push(`${stats.withData} mapped, ${stats.withoutData} unmapped`);
@@ -589,22 +615,29 @@ export function resetGardenFiltersNow(): void {
 }
 
 /**
- * Get list of all plant species (for UI)
+ * Get list of all plant species (for UI).
+ * Merges the live plant catalog (auto-updated with the game) with the static
+ * SPECIES_TO_VIEW map so newly added crops appear automatically.
  */
 export function getAllPlantSpecies(): string[] {
-  return Object.keys(SPECIES_TO_VIEW);
+  const staticKeys = Object.keys(SPECIES_TO_VIEW);
+  try {
+    const catalogKeys = getCatalogPlantSpecies();
+    if (catalogKeys.length === 0) return staticKeys;
+    const merged = new Set([...staticKeys, ...catalogKeys]);
+    return Array.from(merged).sort();
+  } catch {
+    return staticKeys;
+  }
 }
 
 /**
- * Get list of all egg types from catalog (future-proof)
+ * Get list of all egg types from catalog (auto-updates with the game).
  */
 export function getAllEggTypes(): string[] {
   try {
-    const catalogs = (typeof window !== 'undefined' && (window as any).__QPM_CATALOGS) || {};
-    const eggCatalog = catalogs.eggCatalog || {};
-
-    // Return egg type keys from catalog
-    return Object.keys(eggCatalog);
+    const catalog = getEggCatalog();
+    return catalog ? Object.keys(catalog) : [];
   } catch (error) {
     log('⚠️ Failed to load egg types from catalog', error);
     return [];

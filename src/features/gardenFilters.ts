@@ -154,6 +154,13 @@ const listeners = new Set<(config: GardenFiltersConfig) => void>();
 let cleanupInterval: (() => void) | null = null;
 
 /**
+ * Stats hub species override — when non-null, bypasses main config entirely.
+ * Only a species-allow-list is applied; mutations/growthStates/eggTypes are ignored.
+ * Never touches config or storage.
+ */
+let statsHubOverride: string[] | null = null;
+
+/**
  * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
  */
 function getPageWindow(): any {
@@ -446,10 +453,55 @@ function resetFiltersOnStage(
 }
 
 /**
- * Apply current filters to all tiles in the garden
- * Uses child label matching for species and coordinate math for data lookup
+ * Build the two label sets used for PIXI matching from a list of species keys.
+ * speciesToShow — PIXI child labels to match (3 candidates per species).
+ * unknownSpeciesToShow — catalog keys that had no static or catalog name, fall back to tile data.
+ */
+function buildSpeciesLabelSets(
+  species: string[]
+): { speciesToShow: Set<string>; unknownSpeciesToShow: Set<string> } {
+  const speciesToShow = new Set<string>();
+  const unknownSpeciesToShow = new Set<string>();
+  for (const s of species) {
+    let mapped = false;
+    const staticLabel = SPECIES_TO_VIEW[s];
+    if (staticLabel) { speciesToShow.add(staticLabel); mapped = true; }
+    const catalogEntry = getPlantSpecies(s);
+    const plantDisplayName = (catalogEntry?.plant as any)?.name as string | undefined;
+    if (plantDisplayName) { speciesToShow.add(plantDisplayName + ' Plant View'); mapped = true; }
+    speciesToShow.add(s + ' Plant View');
+    if (!mapped) unknownSpeciesToShow.add(s);
+  }
+  return { speciesToShow, unknownSpeciesToShow };
+}
+
+/**
+ * Apply current filters to all tiles in the garden.
+ * When statsHubOverride is active, only species filtering is applied (no mutations/
+ * growthStates/eggTypes) using the override list — main config is untouched.
  */
 function applyFilters(): void {
+  // ── Stats hub override path ───────────────────────────────────────────────
+  // Takes full priority; main config (including enabled, mutations, etc.) is ignored.
+  if (statsHubOverride !== null) {
+    try {
+      const app = getPixiApp();
+      if (!app || !app.stage) return;
+      const { speciesToShow, unknownSpeciesToShow } = buildSpeciesLabelSets(statsHubOverride);
+      const emptySet = new Set<string>();
+      const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
+      const tileNodes = getOrBuildTileNodeCache(app.stage);
+      for (const { node } of tileNodes) {
+        applyFiltersToStage(node, speciesToShow, unknownSpeciesToShow, emptySet, emptySet, emptySet, stats, 0, 0);
+      }
+      log(`🔍 [GARDEN-FILTERS] Override: ${stats.visible} visible, ${stats.dimmed} dimmed`);
+    } catch (error) {
+      log('⚠️ [GARDEN-FILTERS] Error applying stats hub override', error);
+    }
+    return;
+  }
+
+  // ── Normal config path ────────────────────────────────────────────────────
   if (!config.enabled) {
     resetFilters();
     return;
@@ -462,36 +514,7 @@ function applyFilters(): void {
       return;
     }
 
-    // Convert selected species to view labels (known) or keep as names (unknown)
-    const speciesToShow = new Set<string>();     // PIXI view labels for known species
-    const unknownSpeciesToShow = new Set<string>(); // catalog names for new/unknown species
-
-    for (const species of config.cropSpecies) {
-      let mapped = false;
-
-      // 1. Static map — existing confirmed entries
-      const staticLabel = SPECIES_TO_VIEW[species];
-      if (staticLabel) {
-        speciesToShow.add(staticLabel);
-        mapped = true;
-      }
-
-      // 2. Dynamic from catalog plant.name — correct regardless of static map accuracy
-      const catalogEntry = getPlantSpecies(species);
-      const plantDisplayName = (catalogEntry?.plant as any)?.name as string | undefined;
-      if (plantDisplayName) {
-        speciesToShow.add(plantDisplayName + ' Plant View');
-        mapped = true;
-      }
-
-      // 3. Key-based fallback (e.g. "FourLeafClover Plant View")
-      speciesToShow.add(species + ' Plant View');
-
-      if (!mapped) {
-        // Completely unknown — fall back to tile data lookup
-        unknownSpeciesToShow.add(species);
-      }
-    }
+    const { speciesToShow, unknownSpeciesToShow } = buildSpeciesLabelSets(config.cropSpecies);
 
     // Add selected mutations (normalized keys for robust matching)
     const mutationsToShow = new Set<string>();
@@ -508,7 +531,7 @@ function applyFilters(): void {
 
     const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
     const tileNodes = getOrBuildTileNodeCache(app.stage);
-    for (const { node, x, y } of tileNodes) {
+    for (const { node } of tileNodes) {
       applyFiltersToStage(node, speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats, 0, 0);
     }
 
@@ -607,6 +630,8 @@ function startFilteringPolling(): void {
   cleanupInterval = visibleInterval(
     'garden-filters-poll',
     () => {
+      // Override always wins — keep it fresh as garden state changes
+      if (statsHubOverride !== null) { applyFilters(); return; }
       if (!config.enabled) return;
       applyFilters();
     },
@@ -623,6 +648,7 @@ function stopFilteringPolling(): void {
   if (cleanupInterval !== null) {
     cleanupInterval();
     cleanupInterval = null;
+    statsHubOverride = null;
     tileNodeCache = null;
     tileNodeCacheStageLength = -1;
     log('⏹️ [GARDEN-FILTERS] Polling stopped');
@@ -689,6 +715,29 @@ export function applyGardenFiltersNow(): void {
  */
 export function resetGardenFiltersNow(): void {
   resetFilters();
+}
+
+/**
+ * Stats hub species override — completely isolated from the Garden Filters feature.
+ *
+ * Pass a non-empty array to show ONLY those species (no mutations, no growth states, no
+ * egg type filters — purely a species allow-list). Pass null to release the override and
+ * restore the main Garden Filters config without touching it.
+ *
+ * Does NOT write to storage and does NOT modify config.
+ */
+export function setStatsHubSpeciesOverride(species: string[] | null): void {
+  statsHubOverride = species;
+  if (species !== null) {
+    applyFilters(); // Apply override immediately
+  } else {
+    // Release override — restore main config behaviour
+    if (config.enabled) {
+      applyFilters();
+    } else {
+      resetFilters();
+    }
+  }
 }
 
 /**

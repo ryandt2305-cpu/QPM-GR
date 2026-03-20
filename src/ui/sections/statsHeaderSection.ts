@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.22', date: '2026-03', notes: [
+    'fixed Garden Stats species filter conflicting with Garden Filters feature (isolated via dedicated override, no config/storage contamination)',
+  ]},
 { version: '3.1.21', date: '2026-03', notes: [
     'fixed garden filters (all-tiles-dimmed bug, FourLeafClover matching, crop sprites now visible)',
     'optimised timers and performance (tile node cache, remove GC alloc per frame)',

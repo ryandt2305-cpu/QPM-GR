@@ -29,7 +29,7 @@ import { visibleInterval } from '../utils/timerManager';
 import { findVariantBadge, getVariantChipColors } from '../data/variantBadges';
 import { log } from '../utils/logger';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
-import { updateGardenFiltersConfig } from '../features/gardenFilters';
+import { setStatsHubSpeciesOverride } from '../features/gardenFilters';
 
 let coinSpriteUrlCache: string | null | undefined;
 function getCoinSpriteUrl(): string | null {
@@ -1027,19 +1027,17 @@ function buildGardenTab(container: HTMLElement): () => void {
   // Active in-game garden filter species (null = no filter)
   let activeTileFilterSpecies: string | null = null;
 
-  // Always reset garden filter on open — clears any stuck state from storage
-  updateGardenFiltersConfig({ enabled: false, cropSpecies: [] });
+  // Clear any stale override from a previous session — never touches the main Garden Filters config
+  setStatsHubSpeciesOverride(null);
 
   function disableGardenFilter(): void {
-    // Always use updateGardenFiltersConfig (not resetGardenFiltersNow) so config.enabled
-    // is set to false and the 2s polling interval stops re-applying
-    updateGardenFiltersConfig({ enabled: false, cropSpecies: [] });
+    setStatsHubSpeciesOverride(null);
   }
 
   function setTileFilter(species: string): void {
     activeSectionFilterSource = null;
     activeTileFilterSpecies = species;
-    updateGardenFiltersConfig({ enabled: true, cropSpecies: [species] });
+    setStatsHubSpeciesOverride([species]);
   }
 
   function clearTileFilter(): void {
@@ -1050,11 +1048,7 @@ function buildGardenTab(container: HTMLElement): () => void {
   function applySectionFilter(source: SectionFilterSource, speciesInSection: string[]): void {
     activeSectionFilterSource = source;
     activeTileFilterSpecies = null;
-    if (source === null) {
-      disableGardenFilter();
-    } else {
-      updateGardenFiltersConfig({ enabled: true, cropSpecies: speciesInSection });
-    }
+    setStatsHubSpeciesOverride(source !== null ? speciesInSection : null);
   }
 
   // ---- Plants dropdown ----

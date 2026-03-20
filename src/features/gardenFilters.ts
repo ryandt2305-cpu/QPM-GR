@@ -7,7 +7,7 @@ import { log } from '../utils/logger';
 import { visibleInterval } from '../utils/timerManager';
 import { getGardenSnapshot, getMapSnapshot } from './gardenBridge';
 import { normalizeMutationName } from '../utils/cropMultipliers';
-import { getAllPlantSpecies as getCatalogPlantSpecies, getEggCatalog } from '../catalogs/gameCatalogs';
+import { getAllPlantSpecies as getCatalogPlantSpecies, getEggCatalog, getPlantSpecies } from '../catalogs/gameCatalogs';
 
 // Declare unsafeWindow for TypeScript
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
@@ -15,11 +15,24 @@ declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 const STORAGE_KEY = 'qpm.gardenFilters.v1';
 const DIM_ALPHA = 0.1; // Barely visible
 
+// Tile node cache — rebuilt only when stage children count changes
+interface TileNode {
+  node: any;
+  x: number;
+  y: number;
+}
+let tileNodeCache: TileNode[] | null = null;
+let tileNodeCacheStageLength = -1;
+
 // Species name to PIXI View label mapping
+// Derived from floraSpeciesDex: PIXI label = plant.name + ' View'
 const SPECIES_TO_VIEW: Record<string, string> = {
   'Carrot': 'Carrot Plant View',
+  'Cabbage': 'Cabbage Plant View',
   'Strawberry': 'Strawberry Plant View',
-  'Aloe': 'Aloe Vera Plant View',
+  'Aloe': 'Aloe Plant View',
+  'Beet': 'Beet Plant View',
+  'Rose': 'Rose Plant View',
   'FavaBean': 'Fava Bean Plant View',
   'Delphinium': 'Delphinium Plant View',
   'Blueberry': 'Blueberry Plant View',
@@ -27,33 +40,39 @@ const SPECIES_TO_VIEW: Record<string, string> = {
   'OrangeTulip': 'Tulip Plant View',
   'Tomato': 'Tomato Plant View',
   'Daffodil': 'Daffodil Plant View',
-  'Mushroom': 'Mushroom Plant View',
-  'Sunflower': 'Sunflower Plant View',
   'Corn': 'Corn Plant View',
-  'Pepper': 'Pepper Plant View',
   'Watermelon': 'Watermelon Plant View',
-  'Squash': 'Squash Plant View',
   'Pumpkin': 'Pumpkin Plant View',
-  'Lemon': 'Lemon Tree View',
-  'Grape': 'Grape Plant View',
+  'Echeveria': 'Echeveria Plant View',
+  'Pear': 'Pear Tree View',
+  'Gentian': 'Gentian Plant View',
   'Coconut': 'Coconut Tree View',
+  'PineTree': 'Pine Tree View',
   'Banana': 'Banana Plant View',
+  'Lily': 'Lily Plant View',
+  'Camellia': 'Camellia Hedge View',
+  'Squash': 'Squash Plant View',
+  'Peach': 'Peach Tree View',
+  'BurrosTail': "Burro's Tail Plant View",
+  'Mushroom': 'Mushroom Plant View',
+  'Cactus': 'Cactus Plant View',
+  'Bamboo': 'Bamboo Plant View',
+  'Poinsettia': 'Poinsettia Bush View',
+  'VioletCort': 'Violet Cort Plant View',
+  'Chrysanthemum': 'Chrysanthemum Bush View',
+  'Date': 'Date Palm View',
+  'Grape': 'Grape Plant View',
+  'Pepper': 'Pepper Plant View',
+  'Lemon': 'Lemon Tree View',
   'PassionFruit': 'Passion Fruit Plant View',
-  'Lychee': 'Lychee Plant View',
   'DragonFruit': 'Dragon Fruit Plant View',
   'Cacao': 'Cacao Plant View',
-  'Lily': 'Lily Plant View',
-  'Chrysanthemum': 'Chrysanthemum Bush View',
-  'PineTree': 'Pine Tree View',
-  'Poinsettia': 'Poinsettia Bush View',
-  'Cactus': 'Cactus Plant View',
-  'BurrosTail': "Burro's Tail Plant View",
-  'Echeveria': 'Echeveria Plant View',
-  'Bamboo': 'Bamboo Plant View',
-  'Camellia': 'Camellia Hedge View',
-  'MoonCelestial': 'Moonbinder View',
-  'DawnCelestial': 'Dawnbinder View',
+  'Lychee': 'Lychee Plant View',
+  'Sunflower': 'Sunflower Plant View',
   'Starweaver': 'Starweaver Plant View',
+  'DawnCelestial': 'Dawnbinder View',
+  'MoonCelestial': 'Moonbinder View',
+  // Clover species (separate dex, confirmed from catalog)
   'Clover': 'Clover Patch Plant View',
   'FourLeafClover': 'Four-Leaf Clover Plant View',
 };
@@ -236,6 +255,42 @@ function getGardenTileData(x: number, y: number): any {
 }
 
 /**
+ * Recursively collect all Tile nodes from the PIXI stage into a flat array.
+ * Called only when the stage children count changes.
+ */
+function buildTileNodeCache(node: any, out: TileNode[] = [], depth = 0, maxDepth = 10): TileNode[] {
+  if (!node || depth > maxDepth) return out;
+
+  if (node.label && /^Tile \((\d+), (\d+)\)$/.test(node.label)) {
+    const match = node.label.match(/^Tile \((\d+), (\d+)\)$/)!;
+    out.push({ node, x: parseInt(match[1]!), y: parseInt(match[2]!) });
+    // Tiles don't contain other tiles — skip recursing into them
+    return out;
+  }
+
+  if (node.children && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      buildTileNodeCache(child, out, depth + 1, maxDepth);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Return cached tile nodes, rebuilding only when stage children count changes.
+ */
+function getOrBuildTileNodeCache(stage: any): TileNode[] {
+  const currentLength: number = stage?.children?.length ?? -1;
+  if (tileNodeCache !== null && tileNodeCacheStageLength === currentLength) {
+    return tileNodeCache;
+  }
+  tileNodeCache = buildTileNodeCache(stage);
+  tileNodeCacheStageLength = currentLength;
+  return tileNodeCache;
+}
+
+/**
  * Traverse PIXI stage and apply filters based on child labels and mutations
  *
  * How it works:
@@ -340,10 +395,9 @@ function applyFiltersToStage(
           }
         } else {
           stats.withoutData++;
-          // No garden data — can't resolve unknown species, mutations, or growth state
+          // No garden data — can't verify mutations or growth state, so default to visible
           if (!isEgg && unknownSpeciesToShow.size > 0) speciesMatches = false;
-          mutationMatches = false;
-          growthStateMatches = false;
+          // mutationMatches and growthStateMatches stay true — can't verify, show by default
         }
       } else {
         // Not filtering by mutations, growth state, or unknown species — no tile data needed
@@ -413,12 +467,28 @@ function applyFilters(): void {
     const unknownSpeciesToShow = new Set<string>(); // catalog names for new/unknown species
 
     for (const species of config.cropSpecies) {
-      const viewLabel = SPECIES_TO_VIEW[species];
-      if (viewLabel) {
-        speciesToShow.add(viewLabel);
-      } else {
-        // Species not in the static map — could be a newly added game crop.
-        // Matching falls back to tileData.species at filter time.
+      let mapped = false;
+
+      // 1. Static map — existing confirmed entries
+      const staticLabel = SPECIES_TO_VIEW[species];
+      if (staticLabel) {
+        speciesToShow.add(staticLabel);
+        mapped = true;
+      }
+
+      // 2. Dynamic from catalog plant.name — correct regardless of static map accuracy
+      const catalogEntry = getPlantSpecies(species);
+      const plantDisplayName = (catalogEntry?.plant as any)?.name as string | undefined;
+      if (plantDisplayName) {
+        speciesToShow.add(plantDisplayName + ' Plant View');
+        mapped = true;
+      }
+
+      // 3. Key-based fallback (e.g. "FourLeafClover Plant View")
+      speciesToShow.add(species + ' Plant View');
+
+      if (!mapped) {
+        // Completely unknown — fall back to tile data lookup
         unknownSpeciesToShow.add(species);
       }
     }
@@ -437,7 +507,10 @@ function applyFilters(): void {
     const growthStatesToShow = new Set<string>(config.growthStates);
 
     const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
-    applyFiltersToStage(app.stage, speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats);
+    const tileNodes = getOrBuildTileNodeCache(app.stage);
+    for (const { node, x, y } of tileNodes) {
+      applyFiltersToStage(node, speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow, stats, 0, 0);
+    }
 
     if (stats.visible + stats.dimmed > 0) {
       const filterInfo = [];
@@ -470,6 +543,8 @@ function resetFilters(): void {
       return;
     }
 
+    tileNodeCache = null;
+    tileNodeCacheStageLength = -1;
     resetFiltersOnStage(app.stage);
     log('🔍 [GARDEN-FILTERS] All tiles visible');
   } catch (error) {
@@ -548,6 +623,8 @@ function stopFilteringPolling(): void {
   if (cleanupInterval !== null) {
     cleanupInterval();
     cleanupInterval = null;
+    tileNodeCache = null;
+    tileNodeCacheStageLength = -1;
     log('⏹️ [GARDEN-FILTERS] Polling stopped');
   }
 }

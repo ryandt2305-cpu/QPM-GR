@@ -1,6 +1,6 @@
 import { getGardenFiltersConfig, updateGardenFiltersConfig, getAllPlantSpecies, getAllEggTypes, applyGardenFiltersNow, resetGardenFiltersNow } from '../../features/gardenFilters';
 import { getMutationCatalog, getEggCatalog, waitForCatalogs } from '../../catalogs/gameCatalogs';
-import { getCropSpriteWithMutations } from '../../sprite-v2/compat';
+import { spriteExtractor, getCropSpriteWithMutations } from '../../sprite-v2/compat';
 import { canvasToDataUrl } from '../../utils/canvasHelpers';
 import { createCard } from '../panelHelpers';
 
@@ -197,8 +197,7 @@ export async function createGardenFiltersSection(): Promise<HTMLElement> {
       updateGardenFiltersConfig({ cropSpecies: updated });
     });
 
-    // Sprite (VERIFIED: QPM.spriteExtractor.getCropSprite works!)
-    const spriteCanvas = (window as any).QPM?.spriteExtractor?.getCropSprite(species);
+    const spriteCanvas = spriteExtractor.getCropSprite(species);
     const spriteEl = document.createElement('img');
     spriteEl.dataset.qpmSprite = `crop:${species}`;
     spriteEl.title = species;

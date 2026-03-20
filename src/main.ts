@@ -1578,7 +1578,6 @@ async function initialize(): Promise<void> {
   await startPetHatchingTracker().catch((error) => {
     log('Pet hatching tracker start failed', error);
   });
-  await startInventoryStore();
   await yieldToBrowser();
 
   // Phase 3: Auto-favorite and bulk operations

@@ -356,6 +356,25 @@ function isTileActionable(tile: TileEntry, selected: string[]): boolean {
   });
 }
 
+/**
+ * Sum of fruitCount across all slots that can still receive at least one selected mutation.
+ * For multi-harvest crops (e.g. Moonbinder with 3 pods), each actionable pod contributes its
+ * fruitCount rather than the whole tile counting as 1.
+ */
+function countActionableFruits(tiles: TileEntry[], selected: string[]): number {
+  if (selected.length === 0) return tiles.reduce((s, t) => s + tileFruitCount(t), 0);
+  let total = 0;
+  for (const tile of tiles) {
+    for (const slot of tile.slots) {
+      const slotMissing = selected.filter((sel) => !slot.mutations.some((m) => mutsMatch(m, sel)));
+      if (filterCompatibleMutations(slot.mutations, slotMissing).length > 0) {
+        total += slot.fruitCount;
+      }
+    }
+  }
+  return total;
+}
+
 // ---------------------------------------------------------------------------
 // Garden: tile grouping
 // ---------------------------------------------------------------------------
@@ -1308,8 +1327,13 @@ function buildGardenTab(container: HTMLElement): () => void {
     };
 
     if (selected.length > 0) {
+      const remainingFruits = countActionableFruits(remaining, selected);
+      const fruitWord = remainingFruits === 1 ? 'fruit' : 'fruits';
+      const remainingLabel = remainingFruits !== remaining.length
+        ? `Remaining — ${remainingFruits} ${fruitWord} · ${remaining.length} plants`
+        : `Remaining — ${remaining.length} plants`;
       content.appendChild(buildTileSection(
-        `Remaining — ${remaining.length} plants`, remaining, selected, false,
+        remainingLabel, remaining, selected, false,
         {
           active: activeSectionFilterSource === 'remaining',
           onToggle: (on) => {

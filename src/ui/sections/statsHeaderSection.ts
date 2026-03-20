@@ -21,6 +21,12 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.21', date: '2026-03', notes: [
+    'fixed garden filters (all-tiles-dimmed bug, FourLeafClover matching, crop sprites now visible)',
+    'optimised timers and performance (tile node cache, remove GC alloc per frame)',
+    'changed Remaining counter in Garden stats to show fruit count instead of crop',
+    'added all missing PIXI Plant Views for Garden Filters (Date, Aloe, Cabbage, Beet, Rose, Pear, Gentian, Peach, VioletCort)',
+  ]},
 { version: '3.1.20', date: '2026-03', notes: [
     'pet team delete button now shows inline confirmation (fixes silent failure in Discord Activities)',
     'pet team name input no longer loses focus while typing',

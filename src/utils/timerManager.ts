@@ -22,6 +22,7 @@ class TimerManager {
   private isRunning = false;
   private isPageVisible = true;
   private lastFrameTime = 0;
+  private hiddenTimerCount = 0;
 
   constructor() {
     // Listen for visibility changes
@@ -58,7 +59,11 @@ class TimerManager {
   ): () => void {
     const { priority = 'normal', runWhenHidden = false, immediate = false } = options;
 
-    // Remove existing timer with same ID
+    // Remove existing timer with same ID (decrement counter if it was hidden-capable)
+    const existing = this.timers.get(id);
+    if (existing && existing.runWhenHidden && !existing.paused) {
+      this.hiddenTimerCount--;
+    }
     this.timers.delete(id);
 
     const timer: Timer = {
@@ -72,6 +77,7 @@ class TimerManager {
     };
 
     this.timers.set(id, timer);
+    if (runWhenHidden) this.hiddenTimerCount++;
 
     // Start the loop if not running
     if (!this.isRunning) {
@@ -86,6 +92,10 @@ class TimerManager {
    * Unregister a timer
    */
   unregister(id: string): void {
+    const timer = this.timers.get(id);
+    if (timer && timer.runWhenHidden && !timer.paused) {
+      this.hiddenTimerCount--;
+    }
     this.timers.delete(id);
 
     // Stop loop if no timers left
@@ -99,7 +109,8 @@ class TimerManager {
    */
   pause(id: string): void {
     const timer = this.timers.get(id);
-    if (timer) {
+    if (timer && !timer.paused) {
+      if (timer.runWhenHidden) this.hiddenTimerCount--;
       timer.paused = true;
     }
   }
@@ -109,9 +120,10 @@ class TimerManager {
    */
   resume(id: string): void {
     const timer = this.timers.get(id);
-    if (timer) {
+    if (timer && timer.paused) {
       timer.paused = false;
       timer.lastRun = performance.now(); // Reset to avoid immediate trigger
+      if (timer.runWhenHidden) this.hiddenTimerCount++;
     }
   }
 
@@ -151,9 +163,8 @@ class TimerManager {
     const deltaTime = now - this.lastFrameTime;
     this.lastFrameTime = now;
 
-    // Skip if page is hidden and we don't have critical timers
-    const hasVisibleTimers = this.isPageVisible || 
-      Array.from(this.timers.values()).some(t => t.runWhenHidden && !t.paused);
+    // Skip if page is hidden and we don't have hidden-capable timers
+    const hasVisibleTimers = this.isPageVisible || this.hiddenTimerCount > 0;
     
     if (!hasVisibleTimers) {
       // Schedule next frame but don't process timers
@@ -192,6 +203,7 @@ class TimerManager {
   destroy(): void {
     this.stop();
     this.timers.clear();
+    this.hiddenTimerCount = 0;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     }

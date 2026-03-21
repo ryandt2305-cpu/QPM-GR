@@ -141,6 +141,7 @@ const state: HarvestReminderState = {
 
 let initialized = false;
 let latestSnapshot: GardenSnapshot | null = null;
+let lastHarvestFingerprint = '';
 let summary: HarvestSummary = {
   readyCount: 0,
   mutatedCount: 0,
@@ -169,9 +170,11 @@ export function initializeHarvestReminder(config?: HarvestReminderConfig): void 
 
   snapshotUnsubscribe = onGardenSnapshot((snapshot) => {
     latestSnapshot = snapshot;
-    if (state.enabled) {
-      evaluateSnapshot();
-    }
+    if (!state.enabled) return;
+    const fp = getHarvestFingerprint(snapshot);
+    if (fp === lastHarvestFingerprint) return;
+    lastHarvestFingerprint = fp;
+    evaluateSnapshot();
   }, false);
 
   ensureWeatherSubscription();
@@ -186,6 +189,7 @@ export function disposeHarvestReminder(): void {
   weatherUnsubscribe = null;
   initialized = false;
   latestSnapshot = null;
+  lastHarvestFingerprint = '';
   resetCycle();
   disposeGardenHighlightOverlay();
 }
@@ -233,6 +237,7 @@ export function setHarvestReminderEnabled(enabled: boolean): void {
   if (!enabled) {
     resetCycle();
   } else {
+    lastHarvestFingerprint = '';
     ensureWeatherSubscription();
     evaluateSnapshot();
   }
@@ -374,6 +379,28 @@ function matchesSelectedMutations(mutations: string[], required: HarvestMutation
   }
 
   return required.some((key) => MUTATION_RULES[key].canonicalNames.some((name) => canonicalMutations.has(name)));
+}
+
+// Cheap fingerprint: plant-tile count + number of mature slots (endTime <= now).
+// Changes when tiles are added/removed or when a plant ripens.
+function getHarvestFingerprint(snapshot: GardenSnapshot | null): string {
+  if (!snapshot?.tileObjects) return '';
+  let tileCount = 0;
+  let matureCount = 0;
+  const now = Date.now();
+  for (const rawTile of Object.values(snapshot.tileObjects)) {
+    if (!rawTile || typeof rawTile !== 'object') continue;
+    const tile = rawTile as Record<string, unknown>;
+    if (tile.objectType !== 'plant') continue;
+    tileCount++;
+    const slots = Array.isArray(tile.slots) ? (tile.slots as Record<string, unknown>[]) : [];
+    for (const slot of slots) {
+      const endTimeRaw = slot?.endTime ?? slot?.readyAt ?? slot?.harvestReadyAt;
+      const endTime = typeof endTimeRaw === 'number' ? endTimeRaw : Number(endTimeRaw);
+      if (Number.isFinite(endTime) && endTime <= now) matureCount++;
+    }
+  }
+  return `${tileCount}:${matureCount}`;
 }
 
 function collectMatches(snapshot: GardenSnapshot | null, required: HarvestMutationKey[], now: number): HarvestMatch[] {

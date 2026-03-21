@@ -302,7 +302,7 @@ function resolveCropScaleEffect(
     return null;
   }
 
-  const eligible = context.crops.filter((crop) => crop.isMature && crop.sizePercent < MAX_PERCENT - 0.01 && Math.max(1, crop.fruitCount) > 0);
+  const eligible = context.crops.filter((crop) => crop.sizePercent < MAX_PERCENT - 0.01 && Math.max(1, crop.fruitCount) > 0);
   if (!eligible.length) {
     return null;
   }
@@ -437,7 +437,7 @@ function resolveGranterEffect(
   mutationName: string,
 ): DynamicAbilityEffect | null {
   const eligible = context.crops.filter(
-    (crop) => crop.isMature && !crop.mutations.some((m) => m.toLowerCase() === mutationName.toLowerCase()) && isMutationCompatibleWithExisting(mutationName, crop.mutations),
+    (crop) => !crop.mutations.some((m) => m.toLowerCase() === mutationName.toLowerCase()) && isMutationCompatibleWithExisting(mutationName, crop.mutations),
   );
   if (!eligible.length) return null;
 

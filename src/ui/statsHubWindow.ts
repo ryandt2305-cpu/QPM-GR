@@ -2,7 +2,7 @@
 // Garden & Hatch Stats hub window — Garden mutation progress + Eggs hatching history.
 
 import { toggleWindow } from './modalWindow';
-import { onGardenSnapshot, type GardenSnapshot } from '../features/gardenBridge';
+import { onGardenSnapshot, getGardenSnapshot, type GardenSnapshot } from '../features/gardenBridge';
 import {
   subscribeHatchStats,
   seedLifetimeFromPets,
@@ -30,6 +30,8 @@ import { findVariantBadge, getVariantChipColors } from '../data/variantBadges';
 import { log } from '../utils/logger';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { setStatsHubSpeciesOverride } from '../features/gardenFilters';
+import { lookupMaxScale } from '../utils/plantScales';
+import { normalizeSpeciesKey } from '../utils/helpers';
 
 let coinSpriteUrlCache: string | null | undefined;
 function getCoinSpriteUrl(): string | null {
@@ -375,6 +377,14 @@ function countActionableFruits(tiles: TileEntry[], selected: string[]): number {
   return total;
 }
 
+/** Fruitcount of slots that haven't yet reached max size. */
+function countMaxSizeRemainingFruits(tiles: TileEntry[]): number {
+  return tiles.reduce(
+    (s, t) => s + t.slots.reduce((ss, sl) => ss + (sl.sizePercent < 100 ? sl.fruitCount : 0), 0),
+    0,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Garden: tile grouping
 // ---------------------------------------------------------------------------
@@ -386,6 +396,10 @@ interface SlotEntry {
   fruitCount: number;
   /** In-garden targetScale (becomes scale at harvest). Defaults to 1 if absent. */
   targetScale: number;
+  /** Species-specific maximum scale (from slot data, catalog lookup, or 2.0 fallback). */
+  maxScale: number;
+  /** Size percent 50–100, where 100 = max size (targetScale >= maxScale for this species). */
+  sizePercent: number;
 }
 
 interface TileEntry {
@@ -421,7 +435,7 @@ function extractTiles(snapshot: GardenSnapshot): TileEntry[] {
           const mutations = (mutationsRaw as unknown[]).filter((v): v is string => typeof v === 'string');
           const endTime = typeof tile.maturedAt === 'number' ? tile.maturedAt :
                          typeof tile.endTime === 'number' ? tile.endTime : null;
-          slots.push({ species, mutations, endTime, fruitCount: 1, targetScale: 1 });
+          slots.push({ species, mutations, endTime, fruitCount: 1, targetScale: 1, maxScale: 2.0, sizePercent: 50 });
         }
       } else {
         for (const rawSlot of rawSlots) {
@@ -445,7 +459,15 @@ function extractTiles(snapshot: GardenSnapshot): TileEntry[] {
           }
           const targetScaleRaw = typeof slot.targetScale === 'number' ? slot.targetScale : 1;
           const targetScale = targetScaleRaw > 0 ? targetScaleRaw : 1;
-          slots.push({ species, mutations, endTime, fruitCount, targetScale });
+          // Resolve maxScale: slot field → catalog lookup → hardcoded fallback
+          const slotMaxScaleRaw = slot.maxScale ?? slot.targetMaxScale ?? slot.maxTargetScale;
+          const slotMaxScale = typeof slotMaxScaleRaw === 'number' && slotMaxScaleRaw > 1 ? slotMaxScaleRaw : null;
+          const catalogMaxScale = slotMaxScale ?? lookupMaxScale(normalizeSpeciesKey(species));
+          const maxScale = catalogMaxScale !== null ? catalogMaxScale : 2.0;
+          const clamped = Math.min(Math.max(targetScale, 1), maxScale);
+          const ratio = maxScale > 1 ? (clamped - 1) / (maxScale - 1) : 1;
+          const sizePercent = 50 + ratio * 50;
+          slots.push({ species, mutations, endTime, fruitCount, targetScale, maxScale, sizePercent });
         }
       }
 
@@ -856,6 +878,7 @@ function buildTileCard(
 function computeGardenValue(
   tiles: TileEntry[],
   selectedMutations: string[],
+  maxSizeOnly = false,
 ): { current: number; potential: number } {
   let current = 0;
   let potential = 0;
@@ -866,23 +889,26 @@ function computeGardenValue(
     if (base <= 0) continue;
 
     // Tiles where no mutations can be applied contribute no gain.
-    const tileIsComplete = !isTileActionable(tile, selectedMutations);
+    const tileIsComplete = selectedMutations.length > 0 ? !isTileActionable(tile, selectedMutations) : true;
 
     for (const slot of tile.slots) {
-      const slotCurrent = Math.round(base * slot.targetScale * computeMutationMultiplier(slot.mutations).totalMultiplier);
+      const mutMult = computeMutationMultiplier(slot.mutations).totalMultiplier;
+      const slotCurrent = Math.round(base * slot.targetScale * mutMult);
       current += slotCurrent;
-      if (tileIsComplete) {
-        // Not actionable — potential equals current
-        potential += slotCurrent;
-      } else {
-        // Compute potential using the game's upgrade mechanics (e.g. Dawnlit→Dawnbound removes Dawnlit)
+
+      if (maxSizeOnly && slot.sizePercent < 100) {
+        // Potential: this slot grows to max scale (mutations unchanged)
+        potential += Math.round(base * slot.maxScale * mutMult);
+      } else if (selectedMutations.length > 0 && !tileIsComplete) {
+        // Potential: slot gains compatible selected mutations
         const slotMissing = selectedMutations.filter(
           (sel) => !slot.mutations.some((m) => mutsMatch(m, sel)),
         );
         const toAdd = filterCompatibleMutations(slot.mutations, slotMissing);
-        // Use game's upgrade mechanics: e.g. Dawnlit + Dawnbound → only Dawnbound in result
         const withSelected = simulateMutationsAfterApplying(slot.mutations, toAdd);
         potential += Math.round(base * slot.targetScale * computeMutationMultiplier(withSelected).totalMultiplier);
+      } else {
+        potential += slotCurrent;
       }
     }
   }
@@ -1029,6 +1055,10 @@ function buildGardenTab(container: HTMLElement): () => void {
 
   // Clear any stale override from a previous session — never touches the main Garden Filters config
   setStatsHubSpeciesOverride(null);
+
+  // Pre-built array of ready-badge entries — populated at the end of renderContent() so the
+  // 1s interval tick doesn't need to do a querySelectorAll DOM scan every second.
+  let readyBadgeEntries: Array<{ endTime: number; badge: HTMLElement }> = [];
 
   function disableGardenFilter(): void {
     setStatsHubSpeciesOverride(null);
@@ -1194,6 +1224,7 @@ function buildGardenTab(container: HTMLElement): () => void {
     for (const [id, btn] of pillButtons) {
       btn.style.cssText = pillBtnCss(activeFilters.has(id));
     }
+    maxSizePillBtn.style.cssText = pillBtnCss(maxSizeOnly);
   };
 
   for (const mutId of getFilterMutations()) {
@@ -1210,6 +1241,24 @@ function buildGardenTab(container: HTMLElement): () => void {
     pillButtons.set(mutId, btn);
     filterBar.appendChild(btn);
   }
+
+  // Separator between mutation pills and special filters
+  const filterSep = document.createElement('span');
+  filterSep.style.cssText = 'width:1px;height:16px;background:rgba(255,255,255,0.12);align-self:center;margin:0 2px;flex-shrink:0;';
+  filterBar.appendChild(filterSep);
+
+  let maxSizeOnly = false;
+  const maxSizePillBtn = document.createElement('button');
+  maxSizePillBtn.type = 'button';
+  maxSizePillBtn.style.cssText = pillBtnCss(false);
+  maxSizePillBtn.textContent = 'Max Size';
+  maxSizePillBtn.title = 'Show only plants where at least one slot has reached its maximum size';
+  maxSizePillBtn.addEventListener('click', () => {
+    maxSizeOnly = !maxSizeOnly;
+    updatePills();
+    renderContent();
+  });
+  filterBar.appendChild(maxSizePillBtn);
 
   container.appendChild(filterBar);
 
@@ -1231,10 +1280,13 @@ function buildGardenTab(container: HTMLElement): () => void {
   content.style.cssText = 'flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:16px;';
   container.appendChild(content);
 
-  let currentSnapshot: GardenSnapshot = null;
+  // Seeded immediately from the bridge cache; kept in sync by the subscription below.
+  // renderContent() is only triggered by explicit user actions, not by subscription updates,
+  // so this always holds the latest data for the next user-triggered render.
+  let currentSnapshot: GardenSnapshot = getGardenSnapshot();
 
-  function updateValueSummary(tiles: TileEntry[], selected: string[]): void {
-    const { current, potential } = computeGardenValue(tiles, selected);
+  function updateValueSummary(tiles: TileEntry[], selected: string[], maxSize = false): void {
+    const { current, potential } = computeGardenValue(tiles, selected, maxSize);
     if (current === 0) {
       valueSummaryBar.style.display = 'none';
       return;
@@ -1246,7 +1298,7 @@ function buildGardenTab(container: HTMLElement): () => void {
       makeCoinValueEl(current, 'Current:', 'font-size:13px;font-weight:700;color:#FFD700;')
     );
 
-    if (selected.length > 0 && potential > current) {
+    if ((selected.length > 0 || maxSize) && potential > current) {
       const gain = potential - current;
       const arrowSep = document.createElement('span');
       arrowSep.style.cssText = 'color:rgba(255,255,255,0.18);font-size:12px;';
@@ -1264,6 +1316,7 @@ function buildGardenTab(container: HTMLElement): () => void {
 
   function renderContent(): void {
     content.innerHTML = '';
+    readyBadgeEntries = []; // Clear stale refs whenever cards are rebuilt
     const allTiles = extractTiles(currentSnapshot);
     const selected = Array.from(activeFilters);
 
@@ -1272,16 +1325,16 @@ function buildGardenTab(container: HTMLElement): () => void {
       ? allTiles.filter((t) => activeSpeciesFilters.has(tileSpecies(t)))
       : allTiles;
 
-    if (tiles.length === 0 && allTiles.length === 0) {
+    if (tiles.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'color:rgba(224,224,224,0.3);font-size:13px;padding:32px 0;text-align:center;';
-      empty.textContent = 'No plants in garden yet.';
+      empty.textContent = allTiles.length === 0 ? 'No plants in garden yet.' : 'No plants match the current filter.';
       content.appendChild(empty);
       updateValueSummary([], selected);
       return;
     }
 
-    if (selected.length === 0) {
+    if (selected.length === 0 && !maxSizeOnly) {
       const hint = document.createElement('div');
       hint.style.cssText = 'color:rgba(224,224,224,0.32);font-size:12px;padding:8px 0 4px;';
       hint.textContent = 'Select mutations above to split plants into Remaining / Complete.';
@@ -1295,16 +1348,17 @@ function buildGardenTab(container: HTMLElement): () => void {
 
     const remaining: TileEntry[] = [];
     const complete: TileEntry[] = [];
+    const isAnyFilterActive = selected.length > 0 || maxSizeOnly;
 
     for (const tile of tiles) {
-      const muts = tileMutations(tile);
-      if (selected.length === 0) {
+      if (!isAnyFilterActive) {
         complete.push(tile);
       } else {
-        // A tile is "remaining" only if at least one slot can actually receive a selected mutation.
-        // Tiles where mutations are blocked by exclusivity (e.g. Amberbound plant + Amberlit filter,
-        // Frozen plant + Thunderstruck filter) go to complete — they're not actionable.
-        (isTileActionable(tile, selected) ? remaining : complete).push(tile);
+        // A tile is "remaining" if it can receive a selected mutation OR hasn't reached max size.
+        // Mutation-blocked tiles (e.g. Amberbound + Amberlit filter) are not actionable → complete.
+        const needsMutation = selected.length > 0 && isTileActionable(tile, selected);
+        const needsSize = maxSizeOnly && tile.slots.some((s) => s.sizePercent < 100);
+        (needsMutation || needsSize ? remaining : complete).push(tile);
       }
     }
 
@@ -1320,8 +1374,10 @@ function buildGardenTab(container: HTMLElement): () => void {
       },
     };
 
-    if (selected.length > 0) {
-      const remainingFruits = countActionableFruits(remaining, selected);
+    if (isAnyFilterActive) {
+      const remainingFruits = (maxSizeOnly && selected.length === 0)
+        ? countMaxSizeRemainingFruits(remaining)
+        : countActionableFruits(remaining, selected);
       const fruitWord = remainingFruits === 1 ? 'fruit' : 'fruits';
       const remainingLabel = remainingFruits !== remaining.length
         ? `Remaining — ${remainingFruits} ${fruitWord} · ${remaining.length} plants`
@@ -1344,7 +1400,7 @@ function buildGardenTab(container: HTMLElement): () => void {
       content.appendChild(divider);
     }
     content.appendChild(buildTileSection(
-      selected.length > 0 ? `Complete — ${complete.length} plants` : `All plants — ${complete.length}`,
+      isAnyFilterActive ? `Complete — ${complete.length} plants` : `All plants — ${complete.length}`,
       complete, selected, true,
       {
         active: activeSectionFilterSource === 'complete',
@@ -1356,21 +1412,30 @@ function buildGardenTab(container: HTMLElement): () => void {
       tileFilterProps,
     ));
 
-    updateValueSummary(tiles, selected);
-  }
+    updateValueSummary(tiles, selected, maxSizeOnly);
 
-  const unsubscribe = onGardenSnapshot((snap) => {
-    currentSnapshot = snap;
-    renderContent();
-  });
-
-  // Live readiness badges — update every second without re-rendering cards
-  const readyCleanup = visibleInterval('garden-ready-badges', () => {
-    const now = Date.now();
+    // Collect ready-badge elements from the freshly-built DOM (once per render, not every 1s)
     for (const el of content.querySelectorAll<HTMLElement>('[data-ready-at]')) {
       const t = parseInt(el.dataset.readyAt ?? '0', 10);
       const badge = el.querySelector<HTMLElement>('[data-ready-badge]');
-      if (badge) badge.style.display = t > 0 && t <= now ? 'flex' : 'none';
+      if (t > 0 && badge) readyBadgeEntries.push({ endTime: t, badge });
+    }
+  }
+
+  // Keep currentSnapshot in sync with the atom — but do NOT trigger renderContent() here.
+  // The atom fires on any game-tick change (plant timers, etc.), which would constantly
+  // destroy hover state and break multi-harvest popover interactions.
+  // User actions (filter pills, tile clicks, section toggles) call renderContent() directly.
+  // The "✓ Ready" badge visibility is handled by the separate 1s interval — no rebuild needed.
+  const unsubscribe = onGardenSnapshot((snap) => {
+    currentSnapshot = snap;
+  }, false); // fireImmediately=false: snapshot already seeded via getGardenSnapshot() above
+
+  // Live readiness badges — iterate the pre-built array instead of a DOM scan every second
+  const readyCleanup = visibleInterval('garden-ready-badges', () => {
+    const now = Date.now();
+    for (const { endTime, badge } of readyBadgeEntries) {
+      badge.style.display = endTime <= now ? 'flex' : 'none';
     }
   }, 1000);
 

@@ -156,6 +156,18 @@ let snapshot: MutationValueSnapshot = {
 let initialized = false;
 const listeners = new Set<(snapshot: MutationValueSnapshot) => void>();
 
+// Dirty flag: total ability event count at last recalculation.
+// recalculateStats() is expensive (scans all ability history, catalog lookups, etc.).
+// Only run it when new ability events have been logged since the last run.
+let lastAbilityEventCount = -1;
+
+function getTotalAbilityEventCount(): number {
+  const history = getAbilityHistorySnapshot();
+  let count = 0;
+  for (const h of history.values()) count += h.events.length;
+  return count;
+}
+
 function countAbilityProcs(abilityId: string, since: number): {count: number, lastProcAt: number | null} {
   const historySnapshot = getAbilityHistorySnapshot();
   let count = 0;
@@ -490,11 +502,16 @@ export function initializeMutationValueTracking(): void {
     console.error('[mutationValueTracking] Failed to restore:', error);
   }
 
-  // Recalculate on init
+  // Recalculate on init (prime the event count baseline)
+  lastAbilityEventCount = getTotalAbilityEventCount();
   recalculateStats();
 
-  // Recalculate periodically (every 10 seconds, pauses when tab hidden)
+  // Recalculate periodically — only when new ability events have been logged.
+  // Skips the full history scan, catalog lookups, and notifyListeners() on idle ticks.
   visibleInterval('mutation-value-recalc', () => {
+    const currentCount = getTotalAbilityEventCount();
+    if (currentCount === lastAbilityEventCount) return; // No new procs — skip
+    lastAbilityEventCount = currentCount;
     recalculateStats();
   }, 10000);
 }

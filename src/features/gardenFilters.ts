@@ -153,6 +153,34 @@ let config: GardenFiltersConfig = {
 const listeners = new Set<(config: GardenFiltersConfig) => void>();
 let cleanupInterval: (() => void) | null = null;
 
+// Cached filter label sets — rebuilt only when config changes, not on every 2s poll
+interface CachedFilterSets {
+  speciesToShow: Set<string>;
+  unknownSpeciesToShow: Set<string>;
+  mutationsToShow: Set<string>;
+  eggTypesToShow: Set<string>;
+  growthStatesToShow: Set<string>;
+}
+let cachedFilterSets: CachedFilterSets | null = null;
+
+function getOrBuildFilterSets(): CachedFilterSets {
+  if (cachedFilterSets !== null) return cachedFilterSets;
+  const { speciesToShow, unknownSpeciesToShow } = buildSpeciesLabelSets(config.cropSpecies);
+  const mutationsToShow = new Set<string>();
+  for (const mutation of config.mutations) {
+    const normalized = normalizeMutationFilterKey(mutation);
+    if (normalized) mutationsToShow.add(normalized);
+  }
+  cachedFilterSets = {
+    speciesToShow,
+    unknownSpeciesToShow,
+    mutationsToShow,
+    eggTypesToShow: new Set<string>(config.eggTypes),
+    growthStatesToShow: new Set<string>(config.growthStates),
+  };
+  return cachedFilterSets;
+}
+
 /**
  * Stats hub species override — when non-null, bypasses main config entirely.
  * Only a species-allow-list is applied; mutations/growthStates/eggTypes are ignored.
@@ -514,20 +542,7 @@ function applyFilters(): void {
       return;
     }
 
-    const { speciesToShow, unknownSpeciesToShow } = buildSpeciesLabelSets(config.cropSpecies);
-
-    // Add selected mutations (normalized keys for robust matching)
-    const mutationsToShow = new Set<string>();
-    for (const mutation of config.mutations) {
-      const normalized = normalizeMutationFilterKey(mutation);
-      if (normalized) mutationsToShow.add(normalized);
-    }
-
-    // Add selected egg types
-    const eggTypesToShow = new Set<string>(config.eggTypes);
-
-    // Add selected growth states
-    const growthStatesToShow = new Set<string>(config.growthStates);
+    const { speciesToShow, unknownSpeciesToShow, mutationsToShow, eggTypesToShow, growthStatesToShow } = getOrBuildFilterSets();
 
     const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
     const tileNodes = getOrBuildTileNodeCache(app.stage);
@@ -589,6 +604,7 @@ function loadConfig(): void {
         eggTypes: stored.eggTypes ?? config.eggTypes,
         growthStates: stored.growthStates ?? config.growthStates,
       };
+      cachedFilterSets = null; // Invalidate cached sets after loading new config
     }
   } catch (error) {
     log('⚠️ Failed to load garden filters config', error);
@@ -682,6 +698,7 @@ export function getGardenFiltersConfig(): GardenFiltersConfig {
  */
 export function updateGardenFiltersConfig(updates: Partial<GardenFiltersConfig>): void {
   config = { ...config, ...updates };
+  cachedFilterSets = null; // Invalidate cached sets whenever config changes
   saveConfig();
 
   if (config.enabled) {

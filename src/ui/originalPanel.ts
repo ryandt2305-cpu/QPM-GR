@@ -511,6 +511,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     shopSpriteCache.set(id, url);
     return url;
   };
+  let lastShopFingerprint = '';
   const updateShopTile = () => {
     const tracked = storage.get<string[] | null>('qpm.restock.tracked', null);
     if (!tracked?.length) { setShopStatus(''); return; }
@@ -527,6 +528,12 @@ export async function createOriginalUI(): Promise<HTMLElement> {
         return aTs - bTs;
       });
     if (!items.length) { setShopStatus(''); return; }
+    const shopFingerprint = items.slice(0, 10).map(item => {
+      const overdue = !item.estimated_next_timestamp || item.estimated_next_timestamp <= now;
+      return `${item.item_id}:${overdue ? 1 : 0}`;
+    }).join(',');
+    if (shopFingerprint === lastShopFingerprint) return;
+    lastShopFingerprint = shopFingerprint;
     setShopStatusDom(el => {
       el.style.cssText += ';display:flex;align-items:center;gap:2px;flex-wrap:nowrap;overflow:hidden;';
       for (const item of items.slice(0, 10)) {

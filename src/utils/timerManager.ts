@@ -15,6 +15,9 @@ interface Timer {
   paused: boolean;
 }
 
+// Hoisted so the tick loop doesn't allocate a new array every frame
+const TICK_PRIORITIES: readonly TimerPriority[] = ['critical', 'normal', 'low'];
+
 // Singleton timer manager
 class TimerManager {
   private timers = new Map<string, Timer>();
@@ -172,10 +175,8 @@ class TimerManager {
       return;
     }
 
-    // Process timers by priority
-    const priorities: TimerPriority[] = ['critical', 'normal', 'low'];
-    
-    for (const priority of priorities) {
+    // Process timers by priority (array is module-level to avoid per-frame allocation)
+    for (const priority of TICK_PRIORITIES) {
       for (const timer of this.timers.values()) {
         if (timer.priority !== priority) continue;
         if (timer.paused) continue;

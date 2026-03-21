@@ -64,6 +64,8 @@ export interface AbilityTrackerWindowState {
   scaleOuter: HTMLElement;
   updateScale: (() => void) | null;
   resizeObserver: ResizeObserver | null;
+  /** Pre-built list of timer-cell elements — populated after each render, iterated by the 1s tick. */
+  timerCells: HTMLElement[];
 }
 
 interface WindowLayout {
@@ -669,13 +671,16 @@ function renderAbilityTracker(state: AbilityTrackerWindowState): void {
     container.appendChild(empty);
   }
 
+  // Cache timer-cell element refs so the 1s tick doesn't need a querySelectorAll
+  state.timerCells = Array.from(container.querySelectorAll<HTMLElement>('[data-timer-cell]'));
+
   // Sync scaleOuter height after content changes so scrolling reflects visual size.
   state.updateScale?.();
 }
 
 function tickAllTimers(state: AbilityTrackerWindowState): void {
-  const timerEls = state.cardsContainer.querySelectorAll<HTMLElement>('[data-timer-cell]');
-  for (const el of timerEls) {
+  // Iterate the pre-built array instead of querying the DOM on every 1s tick
+  for (const el of state.timerCells) {
     updateTimerCell(el);
   }
 }
@@ -838,6 +843,7 @@ export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
     scaleOuter,
     updateScale: null,
     resizeObserver: null,
+    timerCells: [],
   };
 
   // Window behaviours

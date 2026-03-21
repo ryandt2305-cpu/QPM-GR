@@ -516,6 +516,7 @@ let gardenUnsubscribe: (() => void) | null = null;
 let petUnsubscribe: (() => void) | null = null;
 let latestGarden: GardenSnapshot = getGardenSnapshot();
 let latestPets: ActivePetInfo[] = getActivePetInfos();
+let lastTurtleGardenFingerprint = '';
 
 const listeners = new Set<(state: TurtleTimerState) => void>();
 
@@ -597,6 +598,25 @@ function parseTimestamp(value: unknown): number | null {
     }
   }
   return null;
+}
+
+// Cheap fingerprint: slot count + sum of endTimes from raw snapshot data.
+// Detects plant additions/removals and endTime changes without running full collectSlots+recompute.
+function getTurtleGardenFingerprint(snapshot: GardenSnapshot): string {
+  if (!snapshot?.tileObjects) return '';
+  let slotCount = 0;
+  let endTimeSum = 0;
+  for (const rawTile of Object.values(snapshot.tileObjects)) {
+    if (!rawTile || typeof rawTile !== 'object') continue;
+    const tile = rawTile as Record<string, unknown>;
+    const slots = Array.isArray(tile.slots) ? (tile.slots as Record<string, unknown>[]) : [];
+    for (const slot of slots) {
+      const endTime = typeof slot?.endTime === 'number' ? slot.endTime : 0;
+      slotCount++;
+      endTimeSum += endTime;
+    }
+  }
+  return `${slotCount}:${endTimeSum}`;
 }
 
 function collectSlots(snapshot: GardenSnapshot, includeBoardwalk: boolean): GardenSlotEstimate[] {
@@ -1467,6 +1487,9 @@ export function initializeTurtleTimer(initialConfig?: TurtleTimerConfig): void {
 
   gardenUnsubscribe = onGardenSnapshot((snapshot) => {
     latestGarden = snapshot;
+    const fp = getTurtleGardenFingerprint(snapshot);
+    if (fp === lastTurtleGardenFingerprint) return;
+    lastTurtleGardenFingerprint = fp;
     recompute();
   });
 
@@ -1485,6 +1508,7 @@ export function disposeTurtleTimer(): void {
   petUnsubscribe?.();
   petUnsubscribe = null;
   initialized = false;
+  lastTurtleGardenFingerprint = '';
   state = createInitialState();
 }
 

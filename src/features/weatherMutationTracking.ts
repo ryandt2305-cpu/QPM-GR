@@ -140,6 +140,32 @@ let initialized = false;
 const listeners = new Set<(snapshot: WeatherMutationSnapshot) => void>();
 let gardenUnsubscribe: (() => void) | null = null;
 
+// Cheap fingerprint: total mutation count across all slots.
+// processGardenUpdate only runs when this changes (new mutation appeared or plant harvested).
+let lastGardenMutationCount = -1;
+
+function getGardenMutationCount(gardenSnapshot: GardenSnapshot | null): number {
+  if (!gardenSnapshot) return 0;
+  let count = 0;
+  for (const area of [
+    gardenSnapshot.tileObjects as Record<string, unknown> | undefined,
+    gardenSnapshot.boardwalkTileObjects as Record<string, unknown> | undefined,
+  ]) {
+    if (!area || typeof area !== 'object') continue;
+    for (const rawTile of Object.values(area)) {
+      if (!rawTile || typeof rawTile !== 'object') continue;
+      const tile = rawTile as Record<string, unknown>;
+      if (!Array.isArray(tile.slots)) continue;
+      for (const slot of tile.slots as unknown[]) {
+        if (slot && typeof slot === 'object' && Array.isArray((slot as any).mutations)) {
+          count += (slot as any).mutations.length;
+        }
+      }
+    }
+  }
+  return count;
+}
+
 function extractCropSlots(gardenSnapshot: GardenSnapshot | null): CropSlot[] {
   const slots: CropSlot[] = [];
   if (!gardenSnapshot) return slots;
@@ -515,16 +541,36 @@ export function initializeWeatherMutationTracking(): void {
     }
   }
 
+  // Prime the fingerprint from the current snapshot so the subscription's first
+  // fire (fireImmediately=true below) passes the guard and does initial population.
+  lastGardenMutationCount = -1; // Force first fire to always process
+
   console.log(`[QPM] 🔄 Weather mutation tracking initialized - ${trackedSlots.size} existing slots marked, tracking NEW mutations only`);
 
-  // Subscribe to garden updates
+  // Subscribe to garden updates — only process when mutation count actually changes.
+  // The garden atom fires on every game tick; without the fingerprint guard this ran
+  // extractCropSlots() + calculateSlotValue() + recalculateRates() on every fire.
   gardenUnsubscribe = onGardenSnapshot((gardenSnapshot) => {
+    const count = getGardenMutationCount(gardenSnapshot);
+    if (count === lastGardenMutationCount) return; // Nothing changed — skip
+    lastGardenMutationCount = count;
     processGardenUpdate(gardenSnapshot);
   }, true);
 
-  // Recalculate periodically (every 10 seconds, pauses when tab hidden)
+  // Recalculate rates periodically so per-hour figures stay accurate as time passes.
+  // Does NOT notify listeners or schedule a save — purely an in-memory rate update.
+  // Listeners are notified by processGardenUpdate() only when new mutations appear.
   visibleInterval('weather-mutation-recalc', () => {
-    recalculateRates();
+    const now = Date.now();
+    const sessionStart = snapshot.stats.sessionStart;
+    const hours = Math.max(1, now - sessionStart) / HOUR_MS;
+    snapshot.stats.wetPerHour = snapshot.stats.wetCount / hours;
+    snapshot.stats.chilledPerHour = snapshot.stats.chilledCount / hours;
+    snapshot.stats.frozenPerHour = snapshot.stats.frozenCount / hours;
+    snapshot.stats.dawnlitPerHour = snapshot.stats.dawnlitCount / hours;
+    snapshot.stats.dawnboundPerHour = snapshot.stats.dawnboundCount / hours;
+    snapshot.stats.amberlitPerHour = snapshot.stats.amberlitCount / hours;
+    snapshot.stats.amberboundPerHour = snapshot.stats.amberboundCount / hours;
   }, 10000);
 }
 

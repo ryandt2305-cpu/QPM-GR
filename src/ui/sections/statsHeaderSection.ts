@@ -21,6 +21,11 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.23', date: '2026-03', notes: [
+    'added Max Size filter to Garden Stats — shows plants where at least one slot has reached its species max scale',
+    'fixed coins/hr display for AmberGranter and ProduceScaleBoost (no longer blank between harvests)',
+    'reduced unnecessary re-renders in weather tracking, harvest reminder, turtle timer, and shop tile',
+  ]},
 { version: '3.1.22', date: '2026-03', notes: [
     'fixed Garden Stats species filter conflicting with Garden Filters feature (isolated via dedicated override, no config/storage contamination)',
   ]},

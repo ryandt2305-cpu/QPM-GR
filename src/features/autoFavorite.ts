@@ -507,6 +507,14 @@ function startAutoFavoritePolling(): void {
 
     // Get items from inventory store (uses myInventoryAtom)
     const currentItems = getInventoryItems();
+
+    // Fast path: if item count is identical to last tick, nothing was added or removed.
+    // Avoids building the currentItemIds Set (O(N) allocation) on every 2s tick when
+    // inventory is stable — the common case while not actively harvesting.
+    if (currentItems.length === seenItemIds.size) {
+      return;
+    }
+
     const favoritedIds = getFavoritedItemIds();
 
     // Get all current item IDs

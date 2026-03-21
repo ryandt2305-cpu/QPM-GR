@@ -896,20 +896,22 @@ function computeGardenValue(
       const slotCurrent = Math.round(base * slot.targetScale * mutMult);
       current += slotCurrent;
 
-      if (maxSizeOnly && slot.sizePercent < 100) {
-        // Potential: this slot grows to max scale (mutations unchanged)
-        potential += Math.round(base * slot.maxScale * mutMult);
-      } else if (selectedMutations.length > 0 && !tileIsComplete) {
-        // Potential: slot gains compatible selected mutations
+      // Scale potential: use maxScale if filter active and slot hasn't reached it yet
+      const potentialScale = (maxSizeOnly && slot.sizePercent < 100) ? slot.maxScale : slot.targetScale;
+
+      // Mutation potential: add all compatible selected mutations the slot is still missing
+      let potentialMutMult = mutMult;
+      if (selectedMutations.length > 0 && !tileIsComplete) {
         const slotMissing = selectedMutations.filter(
           (sel) => !slot.mutations.some((m) => mutsMatch(m, sel)),
         );
         const toAdd = filterCompatibleMutations(slot.mutations, slotMissing);
         const withSelected = simulateMutationsAfterApplying(slot.mutations, toAdd);
-        potential += Math.round(base * slot.targetScale * computeMutationMultiplier(withSelected).totalMultiplier);
-      } else {
-        potential += slotCurrent;
+        potentialMutMult = computeMutationMultiplier(withSelected).totalMultiplier;
       }
+
+      // Combined: full potential is max scale × best reachable mutation set
+      potential += Math.round(base * potentialScale * potentialMutMult);
     }
   }
   return { current, potential };

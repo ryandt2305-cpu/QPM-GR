@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.25', date: '2026-03', notes: [
+    'fixed Garden Stats value calculations: combined mutation + Max Size potential now correct when multiple filters active',
+    'fixed max scale values for 13 species (Cabbage, Clover, Rose, Beet, Gentian, PineTree, Peach, VioletCort, Cacao, DragonFruit, and others) sourced directly from game floraSpeciesDex',
+  ]},
 { version: '3.1.24', date: '2026-03', notes: [
     'fixed garden filter Four-Leaf Clover and Clover (Patch) not matching — corrected PIXI view labels (plant.name + View, not Plant View)',
   ]},

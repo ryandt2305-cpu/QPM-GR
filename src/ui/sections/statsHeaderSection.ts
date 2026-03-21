@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.24', date: '2026-03', notes: [
+    'fixed garden filter Four-Leaf Clover and Clover (Patch) not matching — corrected PIXI view labels (plant.name + View, not Plant View)',
+  ]},
 { version: '3.1.23', date: '2026-03', notes: [
     'added Max Size filter to Garden Stats — shows plants where at least one slot has reached its species max scale',
     'fixed coins/hr display for AmberGranter and ProduceScaleBoost (no longer blank between harvests)',

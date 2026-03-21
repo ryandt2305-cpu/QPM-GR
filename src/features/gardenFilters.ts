@@ -72,9 +72,10 @@ const SPECIES_TO_VIEW: Record<string, string> = {
   'Starweaver': 'Starweaver Plant View',
   'DawnCelestial': 'Dawnbinder View',
   'MoonCelestial': 'Moonbinder View',
-  // Clover species (separate dex, confirmed from catalog)
-  'Clover': 'Clover Patch Plant View',
-  'FourLeafClover': 'Four-Leaf Clover Plant View',
+  // Clover species — plant.name is 'Clover Patch' / 'Four-Leaf Clover' (no 'Plant' suffix),
+  // so PIXI label is plant.name + ' View', NOT plant.name + ' Plant View'.
+  'Clover': 'Clover Patch View',
+  'FourLeafClover': 'Four-Leaf Clover View',
 };
 
 function normalizeMutationFilterKey(raw: unknown): string | null {
@@ -496,7 +497,13 @@ function buildSpeciesLabelSets(
     if (staticLabel) { speciesToShow.add(staticLabel); mapped = true; }
     const catalogEntry = getPlantSpecies(s);
     const plantDisplayName = (catalogEntry?.plant as any)?.name as string | undefined;
-    if (plantDisplayName) { speciesToShow.add(plantDisplayName + ' Plant View'); mapped = true; }
+    if (plantDisplayName) {
+      // PIXI label = plant.name + ' View' (e.g. 'Carrot Plant View', 'Clover Patch View')
+      speciesToShow.add(plantDisplayName + ' View');
+      // Also add the older 'Plant View' suffix form as a fallback for resilience
+      speciesToShow.add(plantDisplayName + ' Plant View');
+      mapped = true;
+    }
     speciesToShow.add(s + ' Plant View');
     if (!mapped) unknownSpeciesToShow.add(s);
   }

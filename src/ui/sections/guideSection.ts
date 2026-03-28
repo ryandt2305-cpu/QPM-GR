@@ -1,4 +1,5 @@
 import { createCard } from '../panelHelpers';
+import { fetchImageUrl } from '../../utils/imageFetcher';
 
 export function createGuideSection(): HTMLElement {
   const { root, body } = createCard('📖 Magic Garden Guide', {
@@ -33,8 +34,10 @@ export function createGuideSection(): HTMLElement {
   `;
 
   const img = document.createElement('img');
-  img.src = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/MGGuide.jpeg';
   img.alt = 'Magic Garden Guide';
+  // Use GM_xmlhttpRequest to bypass CSP img-src restrictions (e.g. Discord)
+  const guideUrl = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/MGGuide.jpeg';
+  fetchImageUrl(guideUrl).then((src) => { img.src = src; });
   img.style.cssText = `
     width: 100%;
     max-width: 100%;

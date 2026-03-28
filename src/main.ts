@@ -76,6 +76,7 @@ import { exposeValidationCommands } from './utils/validationCommands';
 import { storage } from './utils/storage';
 import { DEBUG_GLOBALS_OPT_IN_KEY, isDebugGlobalsEnabled } from './utils/debugGlobals';
 import { timerManager } from './utils/timerManager';
+import { startController, stopController } from './features/controller/index';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1451,6 +1452,7 @@ const _errorHandler = (event: ErrorEvent): boolean => {
 window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
+  stopController();
   stopAutoReconnect();
   stopAntiAfk();
   stopActivityLogEnhancer();
@@ -1630,6 +1632,7 @@ async function initialize(): Promise<void> {
   startCropBoostTracker();
   initCropSizeIndicator();
   startNativeFeedIntercept();
+  startController();
   if (SHOP_QUAD_SPIKE_ENABLED) {
     initializeShopQuadModalSpike();
   } else {

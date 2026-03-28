@@ -8,6 +8,7 @@ import { log } from '../utils/logger';
 const VISIBLE_CARDS_KEY = 'qpm.utilityHub.visibleCards';
 const ACTIVITY_LOG_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.activityLogDefault.v1';
 const AUTO_RECONNECT_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.autoReconnectDefault.v1';
+const CONTROLLER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.controllerDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -52,6 +53,13 @@ const FEATURE_DEFS = [
     desc: 'Timers and alerts for garden events, harvests, and shop restocks',
     windowTitle: '🔔 Reminders',
   },
+  {
+    key: 'controller',
+    label: 'Controller',
+    icon: '🎮',
+    desc: 'Gamepad support: analog cursor, D-pad snap, rebindable buttons, pet slot cycling',
+    windowTitle: '🎮 Controller Settings',
+  },
 ] as const;
 
 type FeatureKey = (typeof FEATURE_DEFS)[number]['key'];
@@ -95,6 +103,18 @@ function loadVisibleCards(): FeatureKey[] {
     storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
   }
 
+  const controllerMigrated = storage.get<boolean>(CONTROLLER_DEFAULT_MIGRATION_KEY, false);
+  if (!controllerMigrated && !selected.includes('controller')) {
+    const next: FeatureKey[] = [...selected, 'controller'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!controllerMigrated) {
+    storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
+  }
+
   return selected;
 }
 
@@ -127,6 +147,10 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'auto-reconnect') {
           const { createAutoReconnectSection } = await import('./sections/autoReconnectSection');
           windowRoot.appendChild(createAutoReconnectSection());
+        } else if (feat.key === 'controller') {
+          const { createControllerSection } = await import('./sections/controllerSection');
+          // poller/cursor are null when opened from hub (feature may not be running)
+          windowRoot.appendChild(createControllerSection(null, null));
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -430,6 +454,7 @@ function renderUtilityHub(root: HTMLElement): void {
       storage.set(VISIBLE_CARDS_KEY, selected);
       storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
       storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
+      storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

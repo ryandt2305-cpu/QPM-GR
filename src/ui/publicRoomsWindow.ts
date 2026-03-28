@@ -253,7 +253,7 @@ if (!(window as any).QPM_INSPECT_FRIEND) {
       return;
     }
     try {
-      localStorage.setItem('quinoa:selfPlayerId', pid);
+      storage.set('quinoa:selfPlayerId', pid);
     } catch (err) {
       console.warn('[QPM Inspector] Unable to persist self playerId', err);
     }
@@ -1235,15 +1235,7 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
 
     journalHtml = `
       <div class="pr-section pr-section-animated" data-expandable-section="journal">
-        <div class="pr-section-head" style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;" onclick="
-          const section = this.closest('[data-expandable-section]');
-          const content = section.querySelector('.pr-journal-container');
-          const arrow = this.querySelector('.pr-expand-arrow');
-          const isExpanded = content.style.display !== 'none';
-          content.style.display = isExpanded ? 'none' : 'block';
-          arrow.textContent = isExpanded ? '▶' : '▼';
-          try { localStorage.setItem('player-inspector:journal-expanded', JSON.stringify(!isExpanded)); } catch {}
-        ">
+        <div class="pr-section-head" data-qpm-journal-toggle style="cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;">
           <span>📖 Journal Progress</span>
           <span class="pr-expand-arrow" style="font-size: 12px; transition: transform 0.2s;">${isJournalExpanded ? '▼' : '▶'}</span>
         </div>
@@ -1295,6 +1287,21 @@ function renderGardenPane(view: PlayerView, isFriend: boolean, privacy: PlayerVi
     </div>` : ''}
   `);
 
+  // Attach journal toggle listener (replaces inline onclick to avoid raw localStorage)
+  const journalToggle = document.querySelector<HTMLElement>('[data-qpm-journal-toggle]');
+  if (journalToggle) {
+    journalToggle.addEventListener('click', () => {
+      const section = journalToggle.closest('[data-expandable-section]');
+      if (!section) return;
+      const content = section.querySelector<HTMLElement>('.pr-journal-container');
+      const arrow = journalToggle.querySelector<HTMLElement>('.pr-expand-arrow');
+      if (!content) return;
+      const expanded = content.style.display !== 'none';
+      content.style.display = expanded ? 'none' : 'block';
+      if (arrow) arrow.textContent = expanded ? '▶' : '▼';
+      storage.set('player-inspector:journal-expanded', !expanded);
+    });
+  }
 
 }
 

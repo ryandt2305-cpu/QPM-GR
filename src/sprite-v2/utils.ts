@@ -2,6 +2,7 @@
 // Simplified to match Aries Mod's approach for Chrome/Firefox compatibility
 
 import type { PixiConstructors } from './types';
+import { pageWindow } from '../core/pageContext';
 
 /**
  * Finds any node in a PIXI display tree matching a predicate
@@ -29,18 +30,11 @@ export function findAny(root: any, pred: (node: any) => boolean, lim = 25000): a
   return null;
 }
 
-// Declare unsafeWindow for TypeScript (provided by Tampermonkey in sandbox mode)
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
-
 /**
- * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
- * Matches Aries Mod's approach exactly for Chrome/Firefox compatibility.
+ * Get the page window context — delegates to pageContext for Firefox wrappedJSObject support.
  */
 function getRoot(): any {
-  // Match Aries Mod's exact pattern: check if variable exists first
-  return typeof unsafeWindow !== 'undefined' && unsafeWindow
-    ? unsafeWindow
-    : globalThis;
+  return pageWindow;
 }
 
 /**

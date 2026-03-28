@@ -3,6 +3,7 @@
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import { fetchImageUrl } from '../utils/imageFetcher';
 
 const TUTORIAL_SHOWN_KEY = 'qpm_tutorial_shown_v3.1.0';
 const TUTORIAL_IMAGE_PATH = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/QPM_user_guide.jpg';
@@ -130,8 +131,9 @@ export function showTutorialPopup(): void {
   `;
 
   const img = document.createElement('img');
-  img.src = TUTORIAL_IMAGE_PATH;
   img.alt = 'QPM User Guide';
+  // Use GM_xmlhttpRequest to bypass CSP img-src restrictions (e.g. Discord)
+  fetchImageUrl(TUTORIAL_IMAGE_PATH).then((src) => { img.src = src; });
   img.style.cssText = `
     max-width: 100%;
     max-height: 100%;

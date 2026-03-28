@@ -2068,6 +2068,7 @@ function buildManagerTab(
   let compareTeamAId: string | null = savedCompare.selectedTeamAId ?? null;
   let compareTeamBId: string | null = savedCompare.selectedTeamBId ?? null;
   let dragTeamId: string | null = null;
+  let editorRenderTimer: ReturnType<typeof setTimeout> | null = null;
 
   let currentCompareStage: CompareStage = 'early';
   const emitCompareState = (): void => {
@@ -2698,18 +2699,23 @@ function buildManagerTab(
     comparePanel.refresh();
     renderTeamList();
     if (!compareOpen) {
-      // Skip re-rendering the editor when the user is actively typing inside it
-      // (e.g. renaming a team). Rebuilding the DOM mid-type destroys the input
-      // and causes lost focus / lost cursor position.
-      const active = document.activeElement;
-      const typingInEditor =
-        active != null &&
-        editor.contains(active) &&
-        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement);
-      if (!typingInEditor) renderEditor();
+      // Defer editor re-render to the next task so that document.activeElement
+      // has settled after any in-progress click / focus transition.  This also
+      // batches rapid config notifications (e.g. clearKeybind → setKeybind)
+      // into a single rebuild.
+      if (editorRenderTimer) clearTimeout(editorRenderTimer);
+      editorRenderTimer = setTimeout(() => {
+        editorRenderTimer = null;
+        const active = document.activeElement;
+        const interactingWithEditor =
+          active != null &&
+          editor.contains(active);
+        if (!interactingWithEditor) renderEditor();
+      }, 0);
     }
   });
   state.cleanups.push(unsub);
+  state.cleanups.push(() => { if (editorRenderTimer) { clearTimeout(editorRenderTimer); editorRenderTimer = null; } });
 
   renderTeamList();
   renderEditor();

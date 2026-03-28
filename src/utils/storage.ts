@@ -114,6 +114,11 @@ const QPM_STORAGE_KEYS = [
 
   // Sell All Pets
   'qpm.petTeams.sellAllPets.v1',
+
+  // Controller
+  'qpm.controller.enabled.v1',
+  'qpm.controller.bindings.v1',
+  'qpm.controller.cursorSpeed.v1',
 ];
 
 export const storage: Storage = {

@@ -1,5 +1,7 @@
 // sprite-v2/detector.ts - Automatic game version detection
 
+import { pageWindow } from '../core/pageContext';
+
 /**
  * Detects the current Magic Garden game version from various sources.
  * This makes the sprite system future-proof by adapting to version changes automatically.
@@ -14,7 +16,7 @@
  */
 export function detectGameVersion(): string {
   // Try global variables first
-  const win = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window) as any;
+  const win = pageWindow as any;
   const gv = win.gameVersion || win.MG_gameVersion || win.__MG_GAME_VERSION__;
 
   if (gv) {
@@ -103,8 +105,5 @@ export function isUserscriptEnv(): boolean {
  * Gets the appropriate window object (handles userscript sandbox)
  */
 export function getRuntimeWindow(): Window & typeof globalThis {
-  if (typeof unsafeWindow !== 'undefined' && unsafeWindow) {
-    return unsafeWindow as Window & typeof globalThis;
-  }
-  return window;
+  return pageWindow as Window & typeof globalThis;
 }

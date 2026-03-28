@@ -2,24 +2,146 @@
 // Uses DOM script injection for Chrome compatibility
 
 import type { PixiHooks } from './types';
-
-// Declare unsafeWindow for TypeScript (provided by Tampermonkey in sandbox mode)
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+import { isDiscordSurface } from '../utils/environment';
+import { pageWindow, isIsolatedContext } from '../core/pageContext';
 
 /**
- * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
+ * Get the page window context.
+ * Uses pageWindow from pageContext which handles unsafeWindow, wrappedJSObject (Firefox),
+ * and globalThis fallback.
  */
 function getRoot(): any {
-  return typeof unsafeWindow !== 'undefined' && unsafeWindow
-    ? unsafeWindow
-    : globalThis;
+  return pageWindow;
+}
+
+// Firefox Xray helpers — needed to create objects/functions visible to page context
+const _cloneInto: ((obj: unknown, target: object, opts?: object) => unknown) | null =
+  typeof (globalThis as unknown as Record<string, unknown>).cloneInto === 'function'
+    ? (globalThis as unknown as Record<string, unknown>).cloneInto as (obj: unknown, target: object, opts?: object) => unknown
+    : null;
+
+const _exportFn: ((fn: Function, target: object) => Function) | null =
+  typeof (globalThis as unknown as Record<string, unknown>).exportFunction === 'function'
+    ? (globalThis as unknown as Record<string, unknown>).exportFunction as (fn: Function, target: object) => Function
+    : null;
+
+/** Clone an object into the page context so it's fully accessible from both sides. */
+function cloneToPage(obj: unknown, target: object): unknown {
+  if (!isIsolatedContext || !_cloneInto) return obj;
+  try { return _cloneInto(obj, target); } catch { return obj; }
+}
+
+/** Export a function to the page context so it's callable from both sides. */
+function exportToPage(fn: Function, target: object): Function {
+  if (!isIsolatedContext || !_exportFn) return fn;
+  try { return _exportFn(fn, target); } catch { return fn; }
+}
+
+/**
+ * Set up the sprite bridge objects directly on the given window reference.
+ * Used on Discord (where CSP blocks inline scripts) to initialise the same
+ * state that the injected script would normally create.
+ *
+ * On Firefox, objects must go through cloneInto and functions through
+ * exportFunction so the page context (PIXI hooks, game code) can interact
+ * with them across the Xray wrapper boundary.
+ */
+function setupBridgeOnRoot(root: any): void {
+  if (root.__QPM_PIXI_HOOKS_ACTIVE__) return;
+  root.__QPM_PIXI_HOOKS_ACTIVE__ = true;
+
+  root.__QPM_PIXI_CAPTURED__ = root.__QPM_PIXI_CAPTURED__ ||
+    cloneToPage({ app: null, renderer: null, version: null }, root);
+
+  root.__QPM_SPRITE_BRIDGE__ = root.__QPM_SPRITE_BRIDGE__ ||
+    cloneToPage({
+      atlas: {},
+      stats: { loads: 0, errors: 0, lastError: null, lastLoadedAt: 0 },
+    }, root);
+
+  // Passive bridge stubs — just enough for the sprite system to function
+  const bridge = root.__QPM_SPRITE_BRIDGE__;
+  if (!bridge.loadAtlas) {
+    bridge.loadAtlas = exportToPage(
+      (_a: string, _b: string, _i?: string, _d?: unknown) =>
+        Promise.resolve({ ok: false, count: 0, source: 'passive', error: 'passive-loader-disabled' }),
+      root,
+    );
+  }
+  if (!bridge.getAtlasTextures) {
+    bridge.getAtlasTextures = exportToPage(
+      (atlasPath: string) => {
+        const rec = bridge.atlas?.[atlasPath];
+        return rec?.textures ?? null;
+      },
+      root,
+    );
+  }
+  if (!bridge.snapshot) {
+    bridge.snapshot = exportToPage(
+      () => ({
+        atlas: Object.fromEntries(
+          Object.entries(bridge.atlas ?? {}).map(([name, rec]: [string, any]) => [
+            name,
+            {
+              loadedAt: rec?.loadedAt ?? 0,
+              source: rec?.source ?? null,
+              candidate: rec?.candidate ?? null,
+              count: rec?.textures ? Object.keys(rec.textures).length : 0,
+            },
+          ])
+        ),
+        stats: bridge.stats ?? {},
+      }),
+      root,
+    );
+  }
+}
+
+/**
+ * Hook HTMLCanvasElement.prototype.getContext on the page window.
+ * Intercepts WebGL context creation so we can capture the PIXI canvas before
+ * the Application is fully initialised. This runs before PIXI loads.
+ *
+ * After a WebGL context is created, we poll the canvas for PIXI back-references
+ * (e.g. canvas.__PIXI_APP__) that some builds or devtools extensions set.
+ * We also store the captured canvases for the canvas-based fallback scanner.
+ */
+function hookCanvasGetContext(root: any): void {
+  if (root.__QPM_CANVAS_HOOK__) return;
+  root.__QPM_CANVAS_HOOK__ = true;
+
+  try {
+    const proto = root.HTMLCanvasElement?.prototype;
+    if (!proto?.getContext) return;
+
+    const origGetContext = proto.getContext;
+    const capturedCanvases: HTMLCanvasElement[] = [];
+    root.__QPM_WEBGL_CANVASES__ = capturedCanvases;
+
+    const patchedGetContext = function (this: HTMLCanvasElement, type: string, ...args: unknown[]) {
+      const ctx = origGetContext.apply(this, [type, ...args]);
+      if (ctx && (type === 'webgl2' || type === 'webgl') && !capturedCanvases.includes(this)) {
+        capturedCanvases.push(this);
+        console.log('[QPM PIXI] WebGL context created on canvas', this.width, 'x', this.height);
+      }
+      return ctx;
+    };
+
+    // On Firefox, the patched function must be exported to the page context
+    proto.getContext = _exportFn
+      ? _exportFn(patchedGetContext, root) as typeof proto.getContext
+      : patchedGetContext as typeof proto.getContext;
+  } catch (err) {
+    console.warn('[QPM PIXI] Failed to hook getContext', err);
+  }
 }
 
 /**
  * Inject hooks directly into the page context via DOM script injection.
  * This is critical for Chrome where unsafeWindow doesn't give access to the same
  * window object that PIXI DevTools uses.
- * 
+ *
  * The injected script sets window.__QPM_PIXI_CAPTURED__ when PIXI is detected.
  */
 function injectPageContextHooks(): void {
@@ -27,6 +149,14 @@ function injectPageContextHooks(): void {
   const root = getRoot();
   if (root.__QPM_HOOKS_INJECTED__) return;
   root.__QPM_HOOKS_INJECTED__ = true;
+
+  // On Discord, CSP blocks inline scripts. The unsafeWindow hooks + polling
+  // provide equivalent PIXI capture without DOM injection.
+  if (isDiscordSurface) {
+    setupBridgeOnRoot(root);
+    hookCanvasGetContext(root);
+    return;
+  }
 
   // Create the script content that will run in the page context
   const scriptContent = `
@@ -490,14 +620,35 @@ export function createPixiHooks(): PixiHooks {
   let PIXI_VER: string | null = null;
 
   const root = getRoot();
-  
+  let contextLossAttached = false;
+
+  // Listen for WebGL context restoration to invalidate stale texture caches
+  const attachContextLossListener = (app: any) => {
+    if (contextLossAttached) return;
+    try {
+      const canvas = app?.canvas || app?.view;
+      if (canvas instanceof HTMLCanvasElement) {
+        contextLossAttached = true;
+        canvas.addEventListener('webglcontextrestored', () => {
+          const bridge = root.__QPM_SPRITE_BRIDGE__;
+          if (bridge) {
+            bridge.atlas = {};
+            bridge.stats.lastError = 'context-restored';
+          }
+        });
+      }
+    } catch { /* ignore */ }
+  };
+
   // Inject hooks into page context for Chrome compatibility
   injectPageContextHooks();
 
-  // Hook into a global function on unsafeWindow (works on Firefox)
+  // Hook into a global function on the page window.
+  // On Firefox, functions from the userscript sandbox are not callable from
+  // page context due to Xray wrappers. Use exportFunction to make them visible.
   const hook = (name: string, cb: (...args: any[]) => void) => {
     const prev = root[name];
-    root[name] = function () {
+    const wrapper = function (this: unknown) {
       try {
         cb.apply(this, arguments as any);
       } finally {
@@ -510,29 +661,115 @@ export function createPixiHooks(): PixiHooks {
         }
       }
     };
+    // exportFunction makes the wrapper callable from page context on Firefox
+    root[name] = _exportFn ? _exportFn(wrapper, root) : wrapper;
   };
 
   // Set up hooks on unsafeWindow (works on Firefox)
   hook('__PIXI_APP_INIT__', (a: any, v: any) => {
+    console.log('[QPM PIXI] __PIXI_APP_INIT__ fired!', { app: !!a, version: v });
     if (!APP) {
       APP = a;
       PIXI_VER = v;
       appResolver?.(a);
+      attachContextLossListener(a);
+      // Update the shared captured object so gardenFilters and other features
+      // can access the PIXI app via root.__QPM_PIXI_CAPTURED__.
+      // On non-Discord, the inline script handles this; on Discord we must do
+      // it here since the inline script is skipped due to CSP.
+      try {
+        const captured = root.__QPM_PIXI_CAPTURED__;
+        if (captured) {
+          captured.app = a;
+          captured.version = v;
+          if (a?.renderer) captured.renderer = a.renderer;
+        }
+      } catch { /* Xray wrapper edge case — ignore */ }
     }
   });
 
   hook('__PIXI_RENDERER_INIT__', (r: any, v: any) => {
+    console.log('[QPM PIXI] __PIXI_RENDERER_INIT__ fired!', { renderer: !!r, version: v });
     if (!RDR) {
       RDR = r;
       PIXI_VER = v;
       rdrResolver?.(r);
+      try {
+        const captured = root.__QPM_PIXI_CAPTURED__;
+        if (captured) {
+          captured.renderer = r;
+          captured.version = v;
+        }
+      } catch { /* ignore */ }
     }
   });
+
+  // Log hook setup diagnostics
+  console.log('[QPM PIXI] Hook setup:', {
+    isDiscord: isDiscordSurface,
+    isolated: isIsolatedContext,
+    hasExportFn: !!_exportFn,
+    hookTypeOnRoot: typeof root.__PIXI_APP_INIT__,
+    rootIsGlobalThis: root === globalThis,
+  });
+
+  // ── Canvas-based PIXI app fallback ────────────────────────────────────────
+  // When __PIXI_APP_INIT__ hooks fail (Firefox Xray, Discord CSP, stripped
+  // devtools), scan the DOM for canvas elements and find the PIXI app by
+  // intercepting the WebGL context and searching for PIXI-specific structures.
+  const tryCanvasFallback = () => {
+    if (APP) return;
+    try {
+      const canvases = document.querySelectorAll('canvas');
+      for (const canvas of canvases) {
+        // Skip tiny canvases (UI elements, not the game canvas)
+        if (canvas.width < 200 || canvas.height < 200) continue;
+
+        // Check if PIXI set __PIXI_APP__ on the canvas (some builds do)
+        const canvasAny = canvas as unknown as Record<string, unknown>;
+        if (canvasAny.__PIXI_APP__ && (canvasAny.__PIXI_APP__ as any)?.stage) {
+          console.log('[QPM PIXI] Found app via canvas.__PIXI_APP__');
+          APP = canvasAny.__PIXI_APP__;
+          PIXI_VER = (APP as any)?.renderer?.type === 2 ? '8.x' : '7.x';
+          appResolver?.(APP);
+          if ((APP as any)?.renderer) {
+            RDR = (APP as any).renderer;
+            rdrResolver?.(RDR);
+          }
+          attachContextLossListener(APP);
+          return;
+        }
+
+        // Scan root (pageWindow) for objects referencing this canvas
+        // PIXI Application stores its canvas as app.canvas or app.view
+        const searchKeys = [
+          '__PIXI_APP__', 'PIXI_APP', 'app', '__pixi_app__',
+          '__PIXI_STAGE__', '__PIXI_RENDERER__',
+        ];
+        for (const key of searchKeys) {
+          try {
+            const val = root[key];
+            if (val && typeof val === 'object') {
+              const appCanvas = val.canvas || val.view;
+              if (appCanvas === canvas && val.stage) {
+                console.log(`[QPM PIXI] Found app via root.${key}`);
+                APP = val;
+                appResolver?.(APP);
+                if (val.renderer) { RDR = val.renderer; rdrResolver?.(RDR); }
+                attachContextLossListener(APP);
+                return;
+              }
+            }
+          } catch { /* Xray wrapper issues — ignore */ }
+        }
+      }
+    } catch { /* ignore canvas scan errors */ }
+  };
 
   // Try to find PIXI from multiple sources
   const tryResolveExisting = () => {
     if (APP && RDR) return;
-    
+
     // Source 1: Check injected script's captured data (Chrome)
     const captured = root.__QPM_PIXI_CAPTURED__;
     if (captured) {
@@ -547,7 +784,7 @@ export function createPixiHooks(): PixiHooks {
         rdrResolver?.(RDR);
       }
     }
-    
+
     // Source 2: Check global variables on unsafeWindow
     if (!APP) {
       const maybeApp = root.__PIXI_APP__ || root.PIXI_APP || root.app;
@@ -563,10 +800,17 @@ export function createPixiHooks(): PixiHooks {
         rdrResolver?.(RDR);
       }
     }
-    
+
+    // Source 3: Canvas-based fallback (Discord + Firefox)
+    if (!APP) {
+      tryCanvasFallback();
+    }
+
     if (APP && !PIXI_VER) {
       PIXI_VER = root.__PIXI__?.VERSION || root.PIXI?.VERSION || '8.x';
     }
+
+    if (APP) attachContextLossListener(APP);
   };
 
   // Try immediately

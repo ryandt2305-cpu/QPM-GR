@@ -21,6 +21,14 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.26', date: '2026-03', notes: [
+    'fixed garden filters and sprite capture not working in Firefox / Discord Activities',
+    'fixed PIXI app not captured when inline script injection blocked by CSP',
+    'fixed tutorial and guide images not loading under strict CSP',
+    'fixed KTX2 decoder hanging when WebAssembly blocked by CSP — skips to legacy path',
+    'fixed localStorage calls failing in third-party iframe storage partitioning',
+    'fixed pet team keybind input not registering key presses',
+  ]},
 { version: '3.1.25', date: '2026-03', notes: [
     'fixed Garden Stats value calculations: combined mutation + Max Size potential now correct when multiple filters active',
     'fixed max scale values for 13 species (Cabbage, Clover, Rose, Beet, Gentian, PineTree, Peach, VioletCort, Cacao, DragonFruit, and others) sourced directly from game floraSpeciesDex',

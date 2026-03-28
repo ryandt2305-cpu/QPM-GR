@@ -4,15 +4,12 @@ export const DEBUG_GLOBALS_OPT_IN_KEY = 'qpm.debug.globals.v1';
 
 function readLocalDebugOptIn(): boolean | undefined {
   try {
-    const raw = localStorage.getItem(DEBUG_GLOBALS_OPT_IN_KEY);
+    const raw = storage.get<unknown>(DEBUG_GLOBALS_OPT_IN_KEY, undefined);
     if (raw == null) return undefined;
-
-    // Accept either JSON-encoded booleans or plain string booleans.
+    if (typeof raw === 'boolean') return raw;
     if (raw === 'true') return true;
     if (raw === 'false') return false;
-
-    const parsed = JSON.parse(raw);
-    return typeof parsed === 'boolean' ? parsed : undefined;
+    return undefined;
   } catch {
     return undefined;
   }

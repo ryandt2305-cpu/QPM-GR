@@ -18,6 +18,7 @@ import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 import { createKtx2DecoderPool, type Ktx2DecoderPool, type Ktx2DecoderTelemetry } from './ktx2';
 import { spriteLog } from './diagnostics';
+import { pageWindow } from '../core/pageContext';
 
 // Global state
 let ctx: {
@@ -215,12 +216,25 @@ function chooseKtx2DecoderConcurrency(): number {
   return lowEndByCores || lowEndByMemory ? 1 : 2;
 }
 
-function classifyKtx2Error(error: unknown): 'fetch-failed' | 'decode-timeout' | 'decode-failed' | 'canvas-build-failed' {
+function classifyKtx2Error(error: unknown): 'fetch-failed' | 'decode-timeout' | 'decode-failed' | 'canvas-build-failed' | 'wasm-blocked' {
   const msg = String((error as Error)?.message ?? error ?? '').toLowerCase();
+  if (msg.includes('wasm') || msg.includes('webassembly') || msg.includes('csp') || msg.includes('script-src')) return 'wasm-blocked';
   if (msg.includes('timeout')) return 'decode-timeout';
   if (msg.includes('http') || msg.includes('network') || msg.includes('fetch')) return 'fetch-failed';
   if (msg.includes('canvas') || msg.includes('2d context')) return 'canvas-build-failed';
   return 'decode-failed';
+}
+
+/** Probe whether WebAssembly compilation is available (not blocked by CSP). */
+function isWasmAvailable(): boolean {
+  try {
+    // Minimal valid WASM module header
+    const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+    new WebAssembly.Module(bytes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function shouldAllowLegacyFallbackOnKtx2(): boolean {
@@ -1726,12 +1740,19 @@ async function loadTextures(
   const totalAtlases = atlasEntries.length;
   const atlasReports: AtlasBootReport[] = [];
   const compressedEntries: CompressedAtlasEntry[] = [];
+  const wasmOk = isWasmAvailable();
   const decoderConcurrency = chooseKtx2DecoderConcurrency();
-  const decoder = createKtx2DecoderPool({
-    concurrency: decoderConcurrency,
-    decodeTimeoutMs: decoderConcurrency === 1 ? 12000 : 9000,
-  });
+  const decoder = wasmOk
+    ? createKtx2DecoderPool({
+        concurrency: decoderConcurrency,
+        decodeTimeoutMs: decoderConcurrency === 1 ? 12000 : 9000,
+      })
+    : null;
   let decoderSnapshot = createDecoderTelemetry();
+
+  if (!wasmOk) {
+    spriteLog('warn', 'wasm-unavailable', 'WebAssembly blocked (CSP?), skipping KTX2 decoder — using legacy image path');
+  }
   
   notifyWarmup({ phase: 'load-textures', total: totalAtlases, done: 0 });
 
@@ -1750,7 +1771,8 @@ async function loadTextures(
       const expected = frameKeys.length;
 
       // Capability-based branch: KTX2 uses native decoder path, all others keep legacy image decode.
-      if (COMPRESSED_ATLAS_RE.test(imgPath)) {
+      // When WASM is unavailable (CSP), skip decoder entirely → fall through to legacy image path.
+      if (decoder && COMPRESSED_ATLAS_RE.test(imgPath)) {
         let pass: HydratePassResult;
         try {
           pass = await loadCompressedAtlasViaDecoder(base, path, data, state, decoder);
@@ -1959,18 +1981,11 @@ async function loadTextures(
  */
 type PixiBundle = { app: any; renderer: any; version: string | null; runtimeHints?: any[] };
 
-// Declare unsafeWindow for TypeScript (provided by Tampermonkey in sandbox mode)
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
-
 /**
- * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
- * Matches Aries Mod's approach exactly for Chrome/Firefox compatibility.
+ * Get the page window context — delegates to pageContext for Firefox wrappedJSObject support.
  */
 function getRoot(): any {
-  // Match Aries Mod's exact pattern: check if variable exists first
-  return typeof unsafeWindow !== 'undefined' && unsafeWindow
-    ? unsafeWindow
-    : globalThis;
+  return pageWindow;
 }
 
 /**
@@ -2200,6 +2215,24 @@ async function start(): Promise<SpriteService> {
     ? resolved.runtimeHints.filter(Boolean)
     : [];
   ctx.state.sig = computeVariantSignature(ctx.state).sig;
+
+  // Listen for WebGL context restoration — clear stale texture caches so the
+  // next sprite render triggers re-extraction from the new context.
+  try {
+    const canvas = app?.canvas || app?.view;
+    if (canvas instanceof HTMLCanvasElement) {
+      canvas.addEventListener('webglcontextrestored', () => {
+        if (ctx) {
+          ctx.state.tex.clear();
+          ctx.state.srcCan.clear();
+          ctx.state.atlasBases.clear();
+          clearVariantCache();
+          clearSpriteDataUrlCache();
+          spriteLog('warn', 'webgl-context-restored', 'WebGL context restored — sprite caches cleared');
+        }
+      });
+    }
+  } catch { /* ignore */ }
 
   // Wait for prefetch to complete (should already be done or nearly done)
   const prefetched = await (prefetchPromise ?? Promise.resolve(null));

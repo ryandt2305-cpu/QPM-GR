@@ -9,8 +9,7 @@ import { addStyle } from '../utils/dom';
 import { getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 import { sendRoomAction } from '../websocket/api';
 import { storage } from '../utils/storage';
-
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+import { pageWindow } from '../core/pageContext';
 
 interface ProduceGroup {
   species: string;
@@ -269,7 +268,7 @@ function ensureStyles(): void {
 }
 
 function getPageWindow(): Window & typeof globalThis {
-  return typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+  return pageWindow as Window & typeof globalThis;
 }
 
 function getDisplayLabel(node: PixiDisplayObject): string {

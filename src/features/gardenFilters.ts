@@ -8,9 +8,7 @@ import { visibleInterval } from '../utils/timerManager';
 import { getGardenSnapshot, getMapSnapshot } from './gardenBridge';
 import { normalizeMutationName } from '../utils/cropMultipliers';
 import { getAllPlantSpecies as getCatalogPlantSpecies, getEggCatalog, getPlantSpecies } from '../catalogs/gameCatalogs';
-
-// Declare unsafeWindow for TypeScript
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+import { pageWindow, isIsolatedContext, shareGlobal } from '../core/pageContext';
 
 const STORAGE_KEY = 'qpm.gardenFilters.v1';
 const DIM_ALPHA = 0.1; // Barely visible
@@ -190,21 +188,12 @@ function getOrBuildFilterSets(): CachedFilterSets {
 let statsHubOverride: string[] | null = null;
 
 /**
- * Get the page window context (unsafeWindow for Tampermonkey, or globalThis fallback)
- */
-function getPageWindow(): any {
-  return typeof unsafeWindow !== 'undefined' && unsafeWindow
-    ? unsafeWindow
-    : globalThis;
-}
-
-/**
  * Access PIXI app via QPM's own capture system
  */
 function getPixiApp(): any {
   try {
-    const pageWin = getPageWindow();
-    const captured = pageWin.__QPM_PIXI_CAPTURED__;
+    const captured = (pageWindow as Record<string, unknown>).__QPM_PIXI_CAPTURED__ as
+      { app?: unknown } | undefined;
     if (captured && captured.app) {
       return captured.app;
     }
@@ -689,7 +678,9 @@ function stopFilteringPolling(): void {
 export function initializeGardenFilters(): void {
   loadConfig();
   startFilteringPolling();
-  log('✅ [GARDEN-FILTERS] System initialized', config);
+  // Expose diagnostic command — always available, not gated by debug globals
+  shareGlobal('QPM_GARDEN_DIAG', diagnoseGardenFilters);
+  log('✅ [GARDEN-FILTERS] System initialized (run QPM_GARDEN_DIAG() in console for diagnostics)', config);
 }
 
 /**
@@ -792,4 +783,148 @@ export function getAllEggTypes(): string[] {
     log('⚠️ Failed to load egg types from catalog', error);
     return [];
   }
+}
+
+// ============================================================================
+// DIAGNOSTICS — call QPM_GARDEN_DIAG() in the browser console
+// ============================================================================
+
+/**
+ * Full diagnostic dump of garden filters pipeline.
+ * Reports the state of every dependency so we can see exactly what's broken.
+ */
+export function diagnoseGardenFilters(): Record<string, unknown> {
+  const diag: Record<string, unknown> = {};
+
+  // 1. Environment
+  diag.isIsolatedContext = isIsolatedContext;
+  diag.pageWindowType = typeof pageWindow;
+  diag.pageWindowLocation = (() => {
+    try { return (pageWindow as any)?.location?.href ?? 'unknown'; } catch { return 'access-denied'; }
+  })();
+  diag.sandboxWindowLocation = (() => {
+    try { return window.location.href; } catch { return 'access-denied'; }
+  })();
+  diag.pageWindowSameAsSandbox = pageWindow === window;
+
+  // 2. PIXI capture state
+  const captured = (() => {
+    try { return (pageWindow as any).__QPM_PIXI_CAPTURED__; } catch { return 'access-error'; }
+  })();
+  diag.pixiCaptured = captured ? {
+    hasApp: !!captured.app,
+    hasRenderer: !!captured.renderer,
+    version: captured.version,
+    appType: captured.app ? typeof captured.app : 'null',
+    stageType: captured.app?.stage ? typeof captured.app.stage : 'null',
+    stageChildrenCount: captured.app?.stage?.children?.length ?? 'no-stage',
+  } : captured === null ? 'null' : captured === undefined ? 'undefined' : String(captured);
+
+  // 3. Sprite bridge
+  const bridge = (() => {
+    try { return (pageWindow as any).__QPM_SPRITE_BRIDGE__; } catch { return 'access-error'; }
+  })();
+  diag.spriteBridge = bridge ? {
+    exists: true,
+    atlasCount: bridge.atlas ? Object.keys(bridge.atlas).length : 0,
+    stats: bridge.stats ?? 'missing',
+  } : bridge === null ? 'null' : bridge === undefined ? 'undefined' : String(bridge);
+
+  // 4. Hooks injected?
+  diag.hooksInjected = (() => {
+    try { return !!(pageWindow as any).__QPM_HOOKS_INJECTED__; } catch { return 'access-error'; }
+  })();
+  diag.pixiHooksActive = (() => {
+    try { return !!(pageWindow as any).__QPM_PIXI_HOOKS_ACTIVE__; } catch { return 'access-error'; }
+  })();
+
+  // 5. PIXI app from getPixiApp()
+  const app = getPixiApp();
+  diag.getPixiApp = app ? {
+    hasStage: !!app.stage,
+    stageChildren: app.stage?.children?.length ?? 'no-stage',
+    hasRenderer: !!app.renderer,
+  } : 'null';
+
+  // 6. Stage tile traversal
+  if (app?.stage) {
+    const tileNodes = getOrBuildTileNodeCache(app.stage);
+    diag.tileNodes = {
+      count: tileNodes.length,
+      sample: tileNodes.slice(0, 3).map(t => ({
+        label: t.node?.label,
+        x: t.x,
+        y: t.y,
+        childCount: t.node?.children?.length ?? 0,
+        firstChildLabel: t.node?.children?.[0]?.label ?? 'none',
+        alpha: t.node?.alpha,
+      })),
+    };
+  } else {
+    diag.tileNodes = 'no-app-or-stage';
+  }
+
+  // 7. Garden data
+  const snapshot = getGardenSnapshot();
+  const map = getMapSnapshot();
+  diag.gardenSnapshot = snapshot ? {
+    tileObjectCount: snapshot.tileObjects ? Object.keys(snapshot.tileObjects).length : 0,
+    boardwalkCount: snapshot.boardwalkTileObjects ? Object.keys(snapshot.boardwalkTileObjects).length : 0,
+  } : 'null';
+  diag.mapSnapshot = map ? {
+    cols: map.cols,
+    rows: map.rows,
+    dirtMappingCount: map.globalTileIdxToDirtTile ? Object.keys(map.globalTileIdxToDirtTile).length : 0,
+    boardwalkMappingCount: map.globalTileIdxToBoardwalk ? Object.keys(map.globalTileIdxToBoardwalk).length : 0,
+  } : 'null';
+
+  // 8. Config and state
+  diag.config = { ...config };
+  diag.pollingActive = cleanupInterval !== null;
+  diag.statsHubOverride = statsHubOverride;
+  diag.cachedFilterSetsReady = cachedFilterSets !== null;
+
+  // 9. Check for PIXI globals on page window (alternative capture sources)
+  diag.pixiGlobals = (() => {
+    try {
+      const pw = pageWindow as any;
+      return {
+        __PIXI_APP__: pw.__PIXI_APP__ ? 'exists' : 'missing',
+        PIXI_APP: pw.PIXI_APP ? 'exists' : 'missing',
+        app: pw.app?.stage ? 'exists-with-stage' : pw.app ? 'exists-no-stage' : 'missing',
+        PIXI: pw.PIXI ? 'exists' : 'missing',
+        __PIXI__: pw.__PIXI__ ? 'exists' : 'missing',
+        __PIXI_RENDERER__: pw.__PIXI_RENDERER__ ? 'exists' : 'missing',
+      };
+    } catch { return 'access-error'; }
+  })();
+
+  // 10. Try a direct stage walk to see if we can find Tile nodes
+  if (app?.stage) {
+    const directTiles: string[] = [];
+    const walk = (node: any, depth: number) => {
+      if (!node || depth > 6 || directTiles.length >= 5) return;
+      if (node.label && /^Tile \(\d+, \d+\)$/.test(node.label)) {
+        directTiles.push(node.label);
+      }
+      if (node.children) {
+        for (const c of node.children) walk(c, depth + 1);
+      }
+    };
+    walk(app.stage, 0);
+    diag.directTileWalk = { found: directTiles.length, sample: directTiles };
+  }
+
+  // Pretty-print
+  console.group('[QPM] Garden Filters Diagnostics');
+  for (const [key, value] of Object.entries(diag)) {
+    if (typeof value === 'object' && value !== null) {
+      console.log(`${key}:`, value);
+    } else {
+      console.log(`${key}: ${value}`);
+    }
+  }
+  console.groupEnd();
+
+  return diag;
 }

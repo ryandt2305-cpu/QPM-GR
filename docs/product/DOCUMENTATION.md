@@ -1,525 +1,350 @@
 # QPM Documentation Hub
 
 > Consolidated reference for QPM-GR features, guides, and developer documentation.
+> **v3.1.25 — ALPHA** | Credits: TOKYO.#6464
 
 ---
 
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
-2. [Key Features](#key-features)
-3. [Installation & Setup](#installation--setup)
+2. [Installation & Setup](#installation--setup)
+3. [Key Features](#key-features)
 4. [Feature Guides](#feature-guides)
 5. [Developer Documentation](#developer-documentation)
-6. [Build & Deploy](#build--deploy)
+6. [Version History](#version-history)
 
 ---
 
 ## Project Overview
 
-# Quinoa Pet Manager: General Release (QPM-GR)
+**QPM-GR** (Quinoa Pet Manager — General Release) is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, tracking utilities, and UI improvements. The project is currently in **ALPHA** — expect frequent updates.
 
-**QPM-GR** is a TypeScript userscript that enhances **Magic Garden** with analytics, automation helpers, and tracking utilities. The project is currently in **ALPHA** - expect frequent updates and improvements as new features are integrated.
+**Current Version:** 3.1.25
 
-**Current Version:** 3.1.0
+**Compatible URLs:**
+- `https://magiccircle.gg/r/*`
+- `https://magicgarden.gg/r/*`
+- `https://starweaver.org/r/*`
+- `https://1227719606223765687.discordsays.com/*`
 
 ### Focus Areas
 
-- **Pet Hub Analytics**: Compare pets, highlight best stats, surface ability math, and integrate with Aries Mod presets
-- **Inventory Controls**: Auto-favorite, crop locking, journal completion helpers, and turtle timers
-- **Shop & Weather Tooling**: Restock tracking with predictions, mutation reminders, weather data, and XP tracking
+- **Pet Management**: Teams, hutch browser, optimizer, comparison, feeding automation
+- **Garden & Crops**: Mutation tracking, harvest reminders, crop boost tracker, filters
+- **Shop & Economy**: Restock predictions, mutation value analytics, XP tracking
+- **Automation**: Auto-favorite, bulk operations, controller/gamepad support, anti-AFK
+- **Analytics**: Ability logs, activity log, weather tracking, hatch statistics
+
+---
+
+## Installation & Setup
+
+### Requirements
+- Tampermonkey or Violetmonkey browser extension
+
+### Install
+1. Open your userscript manager dashboard
+2. Install `dist/QPM.user.js` (drag/drop or paste URL)
+3. Reload Magic Garden — QPM initializes automatically
+4. Verify the QPM panel appears (version shows **3.1.25**)
+
+### First Launch
+On first launch, a tutorial popup introduces the main features. Dismiss it and explore the panel buttons in the game's HUD.
 
 ---
 
 ## Key Features
 
 ### 🐾 Pet Hub & Analytics
+View, compare, and manage active pets with real-time ability tracking.
 
-**Pet Overview**
-- View all active pets with rarity, level, and abilities
-- Real-time ability uptime tracking (procs per minute/hour)
-- Compare pets in actual gameplay conditions
-- Integration with Aries Mod preset data when available
+### 🏠 Pet Hutch Browser
+Browse hutch pets, swap them into active slots, retrieve from storage.
 
-**Pet Comparison**
-- Side-by-side stat comparison
-- Ability effectiveness analysis
-- Best slot identification
-- Visual highlighting of superior stats
+### 👥 Pet Teams
+Named teams with one-click apply, keybind shortcuts, and Aries Mod preset import.
+
+### 🔬 Pet Comparison Hub
+Side-by-side stat comparison with ability effectiveness analysis.
+
+### 🎮 Controller / Gamepad Automation
+Gamepad and keyboard binding system for in-game navigation and actions.
 
 ### ⭐ Auto Favourite
+Smart auto-favoriting for pets and crops based on configurable rules.
 
-Smart auto-favoriting system for pets and produce based on configurable rules:
-- Automatically favorite pets by rarity, level, or ability
-- Protect valuable crops from accidental selling
-- Customizable filtering rules
-- Real-time updates as items are acquired
-
-### 🧺 Crop-Type Locking (Bulk Favoriting)
-
-Instantly favorite large groups of crops in your inventory:
-- Lock all crops of the same type (e.g., all Carrots or Strawberries)
-- Prevent accidental selling or discarding
-- Clean up messy inventories quickly
-- Saves massive amounts of manual clicking
+### 🧺 Bulk Favourite (Crop-Type Locking)
+Instantly favorite all crops of a given type to prevent accidental selling.
 
 ### 📘 Journal Checker
-
-Complete your Magic Garden journal efficiently:
-- Identifies missing seeds/crops for journal completion
-- Shows progress for produce (11 crop types) and pets
-- Smart Tips: recommends what to plant/hatch next
-- Visual progress indicators
-- Rainbow variant display when all 11 crop types are collected
-- Sprite-based display for crops and pets
+Track journal completion progress with smart planting/hatching recommendations.
 
 ### 🌈 Ability Tracker
+Real-time logging of pet ability triggers with proc rates and contribution stats.
 
-Comprehensive ability logging and analysis:
-- Logs every pet ability trigger in real-time
-- Shows total procs, timing between procs, and contribution by pet
-- Compare ability effectiveness across different pets
-- Identify most profitable pet setups
-- Historical ability data for optimization
+### 🌿 Garden Filters
+Filter the garden view by plant species and mutations.
 
-### 🛒 Shop Restock Tracker
-
-Advanced shop restock tracking with predictive analytics:
-- **Live Tracking**: Automatically detects shop restocks in real-time
-- **Discord Import**: Import historical restock data from Discord HTML exports
-- **Dual Prediction System**:
-  - **Time-based Predictions**: Based on average intervals between restocks
-  - **Window-based Predictions**: Statistical analysis of restock patterns
-- **Item Analytics**: Detailed statistics for each shop item (appearance rate, average quantity, last seen)
-- **Smart Alerts**: Countdown timers for upcoming restocks
-- **Tracked Items**: Mythical Eggs, Starweaver, Dawnbinder, Moonbinder, Sunflower, and more
-- **Data Management**: Export data as HTML or clear restock history
-
-**Dashboard Features**:
-- Quick-view cards for key items (Starweaver, Dawnbinder, Moonbinder, Mythical Eggs)
-- Last seen timestamps with relative time display
-- Clear Restock Data button for easy data management
+### 🔔 Mutation Reminder
+Notifications when valuable mutations are ready to harvest.
 
 ### 🐢 Turtle Timer
+Track and display time until turtle (size) thresholds are met.
 
-Specialized utility timer for Turtle pets:
-- Plant growth calculations
-- Egg growth timing
-- Food support tracking
-- Optimized for Turtle-specific mechanics
+### 🌦️ Weather Mutation Tracking
+Track which weather events have occurred and their associated mutations.
 
-### 🧠 XP Tracker
+### 📈 Crop Boost Tracker
+Monitor active crop boosts and their expiry times.
 
-Track your leveling efficiency during farming sessions:
-- **Real-time XP tracking**: XP per minute, XP per hour
-- **Total XP gained**: Cumulative session tracking
-- **Session runtime**: Track how long you've been farming
-- **Comparison tool**: Compare different pets, layouts, and farming strategies
+### 🌱 Crop Size Indicator
+Hover overlay showing crop size and growth progress.
 
-### 🔒 Crop Size Indicator
+### 🛒 Shop Restock Tracker
+Predicted restock times with appearance rate history.
 
-Accurate crop size display for garden management:
-- Shows exact crop size percentage (uses floor calculation to match game's internal rounding)
-- Visual tooltips on crops
-- Helps optimize harvest timing
-- Size-based crop sorting
+### 📊 XP Tracker
+Track experience gains over time per pet and session.
 
-### 🌦️ Weather Hub
+### 🔄 Auto-Reconnect
+Automatically reconnects when disconnected from the game server.
 
-Weather-related features and tracking:
-- Current weather display
-- Weather effect tracking for mutations
-- Weather-dependent ability monitoring
-- Mutation opportunity alerts
+### 🛡️ Anti-AFK
+Prevents automatic AFK disconnects.
 
-### 🔔 Notifications & Alerts
+### 📋 Activity Log Enhancer
+Enriches the native activity feed with additional context and statistics.
 
-Smart notification system:
-- Mutation opportunities
-- Shop restock alerts
-- Harvest reminders
-- Pet ability milestones
-- Customizable notification preferences
+### 🌍 Public Rooms Inspector
+Browse and inspect public game rooms.
 
----
+### 🥚 Pet Hatching Tracker
+Track pet hatch events and statistics by species.
 
-## Installation & Setup
+### 💰 Sell All Pets
+Batch-sell pets from the hutch based on configurable filters.
 
-### Prerequisites
-
-- **Node.js** (LTS version recommended)
-- **npm**, **pnpm**, or **yarn**
-- **Tampermonkey** browser extension (for userscript installation)
-- Active **Magic Garden** account
-
-### Installation Steps
-
-1. **Clone the Repository**
-
-```bash
-git clone https://github.com/ryandt2305-cpu/QPM-GR.git
-cd QPM-GR
-```
-
-2. **Install Dependencies**
-
-```bash
-npm install
-```
-
-3. **Build the Userscript**
-
-```bash
-# Development build (with watch mode)
-npm run dev
-
-# Production build (optimized)
-npm run build:dist
-```
-
-The Tampermonkey-ready userscript will be generated at `dist/QPM.user.js`.
-
-4. **Install in Tampermonkey**
-
-- Open Tampermonkey dashboard
-- Click "Utilities" → "Import from file"
-- Select `dist/QPM.user.js`
-- Or drag and drop the file into Tampermonkey
-
-5. **Verify Installation**
-
-- Navigate to Magic Garden
-- Look for the QPM panel in the game UI
-- Check version number shows "3.1.0"
+### 🧮 Mutation Value Analytics
+Track and analyze the coin value of mutations across your crops.
 
 ---
 
 ## Feature Guides
 
-### Using Pet Hub
+### Pet Hub
 
-**Opening Pet Hub**:
-1. Click the "Pet Hub" tab in the QPM dashboard
-2. The Pet Hub window displays all your active pets
+Open via the **Pet Hub** button in the QPM panel. Contains tabs:
 
-**Pet Overview Tab**:
-- View all pets with their stats (rarity, level, abilities)
-- Real-time proc rate calculations
-- Click on a pet to see detailed information
+- **Overview** — Active pet cards with species, level, hunger, and abilities
+- **Ability Tracker** — Real-time ability proc log with rates per pet
+- **Compare** — Select two pets for side-by-side stat comparison
+- **3v3 Compare** — Full 3-slot team comparison; imports presets from Aries Mod when available
+- **Optimizer** — Suggests optimal team composition based on ability synergy
 
-**Compare Tab**:
-- Select multiple pets for side-by-side comparison
-- Visual highlighting shows which pet has better stats
-- Ability effectiveness comparison
+### Pet Hutch Window
 
-**Abilities Tab**:
-- Detailed breakdown of all pet abilities
-- Historical proc data
-- Effectiveness metrics
+Open via **Pet Hutch** button. Browse all hutch pets with search/filter. Click a hutch pet to swap it into an active slot (or select the target slot first).
 
-### Using Shop Restock Tracker
+### Pet Teams
 
-**Importing Discord Data**:
-1. Export shop-restocks channel from Discord as HTML
-2. Click "Shop Restock" tab in QPM dashboard
-3. Click "Upload Discord HTML"
-4. Select your exported HTML file
-5. QPM will parse and import all restock events
+Open via **Pets** button. Features:
+- Create named teams (up to 3 pets per team)
+- One-click **Apply** swaps current active pets to match the team
+- **Keybind** shortcuts for each team (configurable)
+- **Import from Aries** — reads Aries Mod preset data from localStorage
+- Swap log shows recent team apply history
 
-**Viewing Predictions**:
-- Dashboard shows quick-view cards for key items
-- Full tracker window displays dual predictions (time-based and window-based)
-- Countdown timers show time until next predicted restock
-- Confidence indicators help you understand prediction reliability
+### Auto-Favourite
 
-**Managing Data**:
-- Use "Export HTML" to save your restock data
-- Use "Clear Restock Data" button in dashboard to reset all shop restock history
-- Data persists across sessions automatically
+Configurable rules in the **Auto-Favourite** panel section:
+- Favorite by rarity (Rainbow, Gold, etc.)
+- Favorite by ability type
+- Runs on inventory change events
 
-### Using Journal Checker
+### Bulk Favourite
 
-**Checking Progress**:
-1. Click "Journal Checker" tab in QPM dashboard
-2. View produce and pet completion percentages
-3. Check "Smart Tips" section for recommendations
+In the **Bulk Favourite** section: select a crop type from the dropdown and click **Favourite All** to toggle-favorite every matching item in inventory.
 
-**Smart Tips**:
-- Shows missing crops/pets you haven't collected
-- Suggests what to plant or hatch next
-- Displays actual sprites for each item
-- Prioritizes based on journal completion goals
+### Garden Filters
 
-**Rainbow Variant**:
-- Automatically displayed when all 11 crop types are completed
-- Animated rainbow gradient effect on produce icon
+In the **Garden Filters** section: enable/disable per-species and per-mutation filters. The garden view hides non-matching plants using PIXI label matching.
 
-### Using Crop-Type Locking
+### Mutation Reminder
 
-**Locking Crops**:
-1. Open your inventory in Magic Garden
-2. Click the crop type you want to lock in QPM panel
-3. All crops of that type will be favorited instantly
-4. Use "Unlock All" to remove favorites
+Configured in the **Mutation Reminder** section:
+- Select which mutations trigger reminders (Rainbow, Gold, Frozen, etc.)
+- Notifications appear as toasts when the mutation is detected on a ready-to-harvest crop
 
-**Sync Modes**:
-- **Manual**: Lock/unlock only when you click
-- **Auto**: Automatically keep crops of selected types locked
+### Turtle Timer
 
-### Using XP Tracker
+In the **Turtle Timer** section:
+- Shows time until each active pet's hunger drops to the configured threshold
+- Configurable: include/exclude Boardwalk, min hunger %, fallback target scale, focus mode (latest/earliest)
 
-**Tracking XP**:
-- XP Tracker runs automatically in the background
-- View real-time stats in the XP Tracker tab
-- Session stats persist until reset
+### Shop Restock Tracker
 
-**Comparing Setups**:
-1. Note your XP/hour with current setup
-2. Change pets, layout, or farming strategy
-3. Reset tracker to start new session
-4. Compare XP/hour to find optimal setup
+Open via **Shop Restock** button:
+- Predicted next restock time per item
+- Average interval and appearance rate from historical data
+- Data sourced from `restockDataService.ts`
+
+### Journal Checker
+
+In the **Journal** section:
+- Visual progress: which crops and pets have been collected
+- Smart Tip: recommends the next species to target
+- Sprite icons for all 11 crop types and pet species
+
+### Activity Log Enhancer
+
+Enriches the native feed with:
+- Feed/ability event timestamps
+- Aggregated summaries visible via toggle
+- Export entries: `QPM_ACTIVITY_LOG.export()`
+- API: `QPM_ACTIVITY_LOG.list()`, `.clear()`, `.verify()`, `.status()`
+
+### Controller / Gamepad
+
+Open the **Controller** section in the **Utility Hub**:
+- Bind gamepad buttons or keyboard keys to in-game actions
+- Configurable profiles stored in storage (`qpm.controller.*`)
+- `startController()` / `stopController()` called from `src/main.ts`
+
+### Public Rooms Inspector
+
+Open via **Public Rooms** button (debug globals required for full access):
+- Browse active public game rooms
+- Inspect individual player gardens
+- Uses `QPM_INSPECT_PLAYER(playerId)` console helper
 
 ---
 
 ## Developer Documentation
 
-### Repository Layout
+### Repo Layout
 
 ```
-QPM-GR/
-├── src/
-│   ├── main.ts              # Entry point — full initialization sequence
-│   ├── core/                # Jotai bridge, page context, atom registry
-│   ├── catalogs/            # Runtime game data capture (Object.* hook)
-│   ├── sprite-v2/           # Sprite rendering (PIXI hook + atlas extraction)
-│   ├── features/            # Feature modules — one file per feature
-│   ├── store/               # Derived state (pets, inventory, stats, XP, weather)
-│   ├── ui/                  # Windows, panels, section builders
-│   │   ├── sections/        # Individual panel section components
-│   │   ├── panelHelpers.ts  # Shared UI helpers and formatters
-│   │   ├── panelState.ts    # UIState interface and factory
-│   │   ├── panelStyles.ts   # CSS injection
-│   │   ├── abilityAnalysis.ts
-│   │   ├── turtleTimerLogic.ts
-│   │   ├── notificationSection.ts
-│   │   └── shopHistoryWindow.ts
-│   ├── data/                # Static reference tables (abilities, pet metadata)
-│   ├── utils/               # Shared helpers (storage, DOM, scheduling, logger)
-│   ├── types/               # Shared TypeScript types
-│   ├── debug/               # QPM_DEBUG_API global
-│   └── integrations/        # Aries Mod bridge
-├── scripts/
-│   └── build-userscript.js  # Wraps Vite IIFE output with Tampermonkey metadata
-├── docs/
-│   └── product/
-│       └── DOCUMENTATION.md # This file
-├── dist/
-│   ├── quinoa-pet-manager.iife.js  # Vite bundle
-│   └── QPM.user.js                 # Final userscript (install this)
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-└── LICENSE
+src/
+  main.ts            Entry point + initialization phases
+  websocket/api.ts   WS send layer (sendRoomAction)
+  core/              Jotai bridge, atom registry, page context
+  catalogs/          Runtime catalog capture + typed access
+  sprite-v2/         PIXI sprite hook + atlas extraction + KTX2 decoder
+  features/          Feature modules (single-file; controller/ is subfolder exception)
+  store/             Derived state modules
+  ui/                All panel and window rendering
+    sections/        Panel section builders
+  data/              Static data tables
+  services/          Aries API clients
+  integrations/      Aries bridge
+  utils/             Cross-cutting helpers
+  debug/             Debug API
+  types/             Shared TypeScript types
+scripts/
+  build-userscript.js    Wraps IIFE with Tampermonkey header
+docs/product/
+  DOCUMENTATION.md   This file
+dist/
+  QPM.user.js        Built userscript (tracked in git)
 ```
-
-### Key Conventions
-
-**State Management**:
-- Use `store/` modules for shared state (pets, weather, stats)
-- Subscribe to state changes using provided subscription functions
-- Always unsubscribe when components are destroyed
-
-**Feature Modules**:
-- Each feature has its own file in `src/features/`
-- Export initialization functions and public APIs
-- Keep internal implementation details private
-
-**UI Components**:
-- UI components live in `src/ui/`
-- Use consistent styling with QPM color scheme
-- Follow existing patterns for modals and windows
-
-**Storage**:
-- Use `utils/storage.ts` for persistent data
-- Prefix all storage keys with 'qpm.'
-- Handle storage errors gracefully
-
-### Development Workflow
-
-**Making Changes**:
-1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Make your changes in `src/`
-3. Test locally with `npm run dev`
-4. Build for production: `npm run build:dist`
-5. Test the generated userscript in Tampermonkey
-6. Commit and push changes
-
-**Testing**:
-- Test all features in a real Magic Garden session
-- Verify data persistence across page reloads
-- Check console for errors or warnings
-- Test edge cases (empty states, large datasets, etc.)
-
-**Adding New Features**:
-1. Create new file in `src/features/<feature>.ts`
-2. Export an explicit `init` / `start` function and a `stop` / `destroy` if it allocates resources
-3. Add UI components in `src/ui/` if needed
-4. Register the init call in `src/main.ts` (the canonical initialization sequence)
-5. Update types in `src/types/` if needed
-6. Document the feature in this file
-
-### Common Tasks
-
-**Updating Version**:
-```bash
-# Update version in three places:
-# 1. package.json
-# 2. src/utils/versionChecker.ts (CURRENT_VERSION)
-# 3. scripts/build-userscript.js (@version in header)
-npm run build:dist
-```
-
-**Adding New Data**:
-```bash
-# Scrape latest pet/crop data from game
-npm run scrape-game-data
-
-# Parse Discord exports for shop restock data
-npm run parse-discord-html
-```
-
-**Debugging**:
-- Use `log()` from `utils/logger.ts` for debugging output
-- Check browser console for QPM-prefixed logs
-- Use `storage.get()` to inspect persistent data
-- Verify store state with subscription callbacks
-
----
-
-## Build & Deploy
 
 ### Build Commands
 
 ```bash
-# Development build with watch mode
-npm run dev
-
-# Production build (Vite bundle only)
-npm run build
-
-# Production build + userscript wrapper
-npm run build:dist
-
-# Build just the userscript wrapper
-npm run build:userscript
+npm run build                # Full build (recommended)
+npm run build:bundle         # Vite IIFE output only
+npm run build:userscript     # Wrap bundle → dist/QPM.user.js
+npm run dev                  # Watch mode
+npm run typecheck            # (if available) Type-check without building
 ```
 
-### Build Output
+### Version Sync Procedure
 
-- `dist/quinoa-pet-manager.iife.js` - Vite IIFE bundle (~618 KB)
-- `dist/QPM.user.js` - Tampermonkey userscript (~602 KB)
-- `dist/*.d.ts` - TypeScript declaration files
+Every release must update **all three** of these files or the build will fail:
 
-### Deployment
+| File | What to update |
+|------|----------------|
+| `package.json` | `"version": "X.Y.Z"` |
+| `src/utils/versionChecker.ts` | `CURRENT_VERSION = 'X.Y.Z'` |
+| `src/ui/sections/statsHeaderSection.ts` | `CHANGELOG[0]` — version string + notes |
 
-**To GitHub**:
-```bash
-git add .
-git commit -m "feat: your feature description"
-git push origin your-branch
+Run `npm run build:userscript` to verify. The script checks all three and fails with a diff if they disagree.
+
+### Storage Keys
+
+- Prefix: `qpm.` (new keys) or `quinoa` (legacy keys)
+- Wrapper: `src/utils/storage.ts` — use `storage.get()` / `storage.set()` everywhere
+- Register new keys in the `QPM_STORAGE_KEYS` array
+
+### WebSocket Sends
+
+All WS sends go through `sendRoomAction()` in `src/websocket/api.ts`:
+
+```ts
+import { sendRoomAction } from '../websocket/api';
+
+function sendMyAction(itemId: string) {
+  return sendRoomAction('ToggleFavoriteItem', { itemId }, { throttleMs: 90 });
+}
 ```
 
-**For Users**:
-1. Users install from `dist/QPM.user.js`
-2. Tampermonkey handles updates via `@updateURL` directive
-3. Version checking is automatic (Tampermonkey native)
+**Never** call `MagicCircle_RoomConnection.sendMessage()` directly. Never send at module scope.
 
-### Data Files
+### Confirmed WS Message Types
 
-**Scraped Data** (`scraped-data/*.json`):
-- `pets.json` - Pet database with stats and abilities
-- `crops.json` - Crop/seed database with growth times
-- `abilities.json` - Ability definitions and effects
-- These files are bundled into the userscript at build time
+| Type | Key Fields |
+|------|-----------|
+| `ToggleLockItem` | `itemId` |
+| `ToggleFavoriteItem` | `itemId` |
+| `FeedPet` | `petItemId`, `cropItemId` |
+| `StorePet` | `itemId` |
+| `PickupPet` | `petId` |
+| `PlacePet` | `itemId`, `position`, `tileType`, `localTileIndex` |
+| `SellPet` | `itemId` |
+| `PlayerPosition` | *(position fields)* |
+| `RetrieveItemFromStorage` | `itemId`, `storageId` |
+| `PutItemInStorage` | `itemId`, `storageId` |
+| `SwapPet` | `petSlotId`, `petInventoryId` |
 
-**Do not remove these files** - they're required for the build and runtime.
+### Debug API
 
----
+Set `qpm.debug.globals.v1=true` in storage and reload to enable `QPM_DEBUG_API` on window.
 
-## Support & Contributing
+Key methods:
+```
+QPM_DEBUG_API.debugPets()        — active pet info + raw data
+QPM_DEBUG_API.feedAllPets(40)    — feed pets below 40% hunger
+QPM_DEBUG_API.getCatalogs()      — raw captured game catalogs
+QPM_DEBUG_API.diagnoseCatalogs() — catalog capture timing report
+QPM_DEBUG_API.spriteProbe([...]) — test sprite lookup
+QPM_DEBUG_API.activityLogList()  — activity log entries
+```
 
-### Getting Help
-
-- Check this documentation first
-- Review code comments for implementation details
-- Check browser console for error messages
-- Verify you're running the latest version (2.0.0)
-
-### Reporting Issues
-
-When reporting issues, include:
-- QPM version number
-- Browser and Tampermonkey version
-- Steps to reproduce
-- Console error messages (if any)
-- Expected vs. actual behavior
-
-### Contributing
-
-Contributions are welcome! Please:
-- Follow existing code style and patterns
-- Test your changes thoroughly
-- Update documentation as needed
-- Write clear commit messages
-- Submit pull requests for review
+Console shortcuts: `QPM_ACTIVITY_LOG.list()`, `QPM_ACTIVITY_LOG.export()`
 
 ---
 
 ## Version History
 
-### Version 2.0.0 (Current)
+### v3.1.x (current series)
+- Pet Teams system: named teams, apply, keybinds, Aries Mod import
+- Pet Hutch browser + swap into active slot
+- Pet Comparison Hub (side-by-side + 3v3)
+- Pet Optimizer (ability-based team suggestions)
+- Controller / gamepad automation system
+- Activity Log Enhancer (native hook)
+- Crop Boost Tracker
+- Weather Mutation Tracking
+- Crop Mutation Analytics
+- Pet Hatching Tracker + Hatch Statistics
+- Sell All Pets
+- Hub Windows: Stats, Trackers, Tools, Utility (tab aggregators)
+- Public Rooms Inspector
+- Anti-AFK + Auto-Reconnect
+- restockDataService with camelCase normalization
+- Version sync enforcement in build pipeline
+- PIXI.js sprite-v2 system with KTX2 decoder
 
-**Major Features**:
-- Complete Pet Hub with comparison and analytics
-- Dual-prediction Shop Restock Tracker with live monitoring
-- Journal Checker with sprite display and Smart Tips
-- Rainbow variant for 11/11 crop completion
-- Accurate crop size indicator (floor-based calculation)
-- Comprehensive XP tracking
-- Auto-favorite system with advanced filtering
-- Weather Hub integration
-- Turtle Timer utility
-
-**UI Improvements**:
-- Color-coded dashboard tabs
-- Deep Purple Pet Hub button
-- Improved notification system
-- Consistent styling across all components
-- Sprite-based displays (replacing emoji placeholders)
-
-**Technical**:
-- TypeScript codebase with Vite bundler
-- Persistent storage with localStorage
-- Real-time state management
-- Modular feature architecture
-- Optimized performance with caching
-
----
-
-## License & Credits
-
-**QPM-GR** is developed for the Magic Garden community.
-
-**Credits**:
-- Original Author: TOKYO.#6464
-- Contributors: Community members and testers
-- Magic Garden: Developed by the Magic Garden team
-
----
-
-*Last Updated: 2025-12-03*
-*Documentation Version: 2.0.0*
-
+### Earlier versions (v2.x — v3.0.x)
+Core features established: Auto-Favourite, Bulk Favourite, Mutation Reminder, Turtle Timer, Garden Filters, Journal Checker, Ability Tracker, Shop Restock, XP Tracker, Pet Hub (overview + compare), Aries Mod bridge.

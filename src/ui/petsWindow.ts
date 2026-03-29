@@ -195,40 +195,52 @@ function isOperaConflict(combo: string): boolean {
 }
 
 /**
- * Attach capture-phase keybind recording to an input element.
- * Handles focus/blur lifecycle, timeout warning, and Opera GX conflict detection.
+ * Create a keybind capture button.  Uses a `<button>` instead of `<input>`
+ * because Opera GX routes keyboard events through its text-input pipeline
+ * for `<input>` elements, which can silently swallow keydown events.
+ * A `<button>` is a plain focusable element with no text-input semantics,
+ * so keyboard events reach the DOM event system normally.
  */
-function attachKeybindCapture(
-  input: HTMLInputElement,
+function createKeybindButton(
   opts: {
     onSet: (combo: string) => void;
     onClear: () => void;
     readCurrent: () => string;
+    width?: string;
   },
-): void {
+): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'qpm-keybind-input';
+  if (opts.width) btn.style.width = opts.width;
+
+  let recording = false;
   let stopCapture: (() => void) | null = null;
   let noKeyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Prevent text entry without readOnly — keeps the input "editable" from
-  // the browser's perspective so Opera GX still routes keyboard events to it.
-  input.addEventListener('beforeinput', (e) => e.preventDefault());
+  function display(): void {
+    const fresh = opts.readCurrent();
+    btn.textContent = fresh ? formatKeybind(fresh) : '\u2014'; // em dash
+    btn.style.color = '';
+  }
 
-  let lastProcessedEvent: Event | null = null;
+  function stopRecording(): void {
+    recording = false;
+    stopCapture?.();
+    if (noKeyTimer) { clearTimeout(noKeyTimer); noKeyTimer = null; }
+    display();
+  }
 
   const onCapturedKey = (e: KeyboardEvent): void => {
-    // Guard: listener is on both window and document, so the same event
-    // would fire the handler twice.  Skip if we already handled it.
-    if (e === lastProcessedEvent) return;
-    lastProcessedEvent = e;
+    if (!recording) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     if (noKeyTimer) { clearTimeout(noKeyTimer); noKeyTimer = null; }
 
-    if (e.key === 'Escape') { input.blur(); return; }
+    if (e.key === 'Escape') { stopRecording(); return; }
     if (e.key === 'Backspace' || e.key === 'Delete') {
       opts.onClear();
-      input.value = '';
-      input.blur();
+      stopRecording();
       return;
     }
     const combo = normalizeKeybind(e);
@@ -236,56 +248,49 @@ function attachKeybindCapture(
 
     // Warn on Opera GX bare-key conflicts (only on Opera/Opera GX)
     if (IS_OPERA && isOperaConflict(combo)) {
-      input.value = `⚠ "${formatKeybind(combo)}" blocked by Opera GX`;
-      input.style.color = '#f87171';
+      btn.textContent = `\u26A0 "${formatKeybind(combo)}" blocked by Opera GX`;
+      btn.style.color = '#f87171';
       setTimeout(() => {
-        input.style.color = '';
-        input.value = '';
-        input.placeholder = 'Try Ctrl/Alt/Shift + key…';
+        if (!recording) return;
+        btn.textContent = 'Try Ctrl/Alt/Shift + key\u2026';
+        btn.style.color = '#fbbf24';
       }, 2000);
-      return; // don't persist — let user retry
+      return;
     }
 
     opts.onSet(combo);
-    input.value = formatKeybind(combo);
-    input.blur();
+    stopRecording();
   };
 
-  input.addEventListener('focus', () => {
-    input.placeholder = 'Press a key…';
-    input.value = '';
-    input.style.color = '';
+  btn.addEventListener('click', () => {
+    if (recording) { stopRecording(); return; }
+    recording = true;
+    btn.textContent = 'Press a key\u2026';
+    btn.style.color = '';
+
     stopCapture?.();
-    // Register on both document and window (capture phase) — in Opera GX
-    // with isolated-world fallback, one target may receive events the other misses.
-    document.addEventListener('keydown', onCapturedKey, true);
     window.addEventListener('keydown', onCapturedKey, true);
     stopCapture = () => {
-      document.removeEventListener('keydown', onCapturedKey, true);
       window.removeEventListener('keydown', onCapturedKey, true);
       stopCapture = null;
     };
 
     // Timeout: if no key arrives within 3 s, show guidance
-    if (noKeyTimer) clearTimeout(noKeyTimer);
     noKeyTimer = setTimeout(() => {
       noKeyTimer = null;
-      if (document.activeElement !== input) return;
-      input.placeholder = IS_OPERA
-        ? 'No key detected — try Ctrl/Alt + key'
-        : 'No key detected — try again';
-      input.style.color = '#fbbf24';
+      if (!recording) return;
+      btn.textContent = IS_OPERA
+        ? 'No key detected \u2014 try Ctrl/Alt + key'
+        : 'No key detected \u2014 try again';
+      btn.style.color = '#fbbf24';
     }, 3000);
   });
 
-  input.addEventListener('blur', () => {
-    stopCapture?.();
-    if (noKeyTimer) { clearTimeout(noKeyTimer); noKeyTimer = null; }
-    input.style.color = '';
-    input.placeholder = '—';
-    const fresh = opts.readCurrent();
-    input.value = fresh ? formatKeybind(fresh) : '';
-  });
+  // Stop recording if button loses focus (e.g. user clicks elsewhere)
+  btn.addEventListener('blur', () => { if (recording) stopRecording(); });
+
+  display();
+  return btn;
 }
 
 function formatKeybind(combo: string): string {
@@ -715,11 +720,14 @@ const STYLES = `
   border: 1px solid rgba(143,130,255,0.25);
   border-radius: 5px;
   color: #e0e0e0;
+  font-family: inherit;
   font-size: 11px;
   padding: 5px;
   outline: none;
   cursor: pointer;
-  caret-color: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .qpm-keybind-input:focus {
   border-color: rgba(143,130,255,0.6);
@@ -2730,15 +2738,8 @@ function buildManagerTab(
     keybindRow.className = 'qpm-editor__keybind-row';
     keybindRow.appendChild(Object.assign(document.createElement('span'), { textContent: 'Keybind:' }));
 
-    const kbInput = document.createElement('input');
-    kbInput.className = 'qpm-keybind-input';
-    kbInput.placeholder = '—';
-
     const teamId = team.id;
-    const currentCombo = Object.entries(getKeybinds()).find(([, id]) => id === teamId)?.[0] ?? '';
-    kbInput.value = currentCombo ? formatKeybind(currentCombo) : '';
-
-    attachKeybindCapture(kbInput, {
+    const kbBtn = createKeybindButton({
       onSet(combo) {
         Object.entries(getKeybinds()).forEach(([k, id]) => { if (id === teamId) clearKeybind(k); });
         setKeybind(combo, teamId);
@@ -2750,7 +2751,7 @@ function buildManagerTab(
       },
       readCurrent: () => Object.entries(getKeybinds()).find(([, id]) => id === teamId)?.[0] ?? '',
     });
-    keybindRow.appendChild(kbInput);
+    keybindRow.appendChild(kbBtn);
 
     const kbHint = document.createElement('span');
     kbHint.style.cssText = 'color:rgba(224,224,224,0.35);font-size:11px;';
@@ -3212,16 +3213,11 @@ function renderPetsWindow(root: HTMLElement): void {
     const keybindLabel = document.createElement('div');
     keybindLabel.innerHTML = 'Keybind<div class="qpm-pets__settings-subtle">Click input, press combo, Del clears</div>';
 
-    const keybindInput = document.createElement('input');
-    keybindInput.className = 'qpm-keybind-input';
-    keybindInput.placeholder = '—';
-    keybindInput.style.width = '120px';
-    keybindInput.value = settings.keybind ? formatKeybind(settings.keybind) : '';
-
-    attachKeybindCapture(keybindInput, {
+    const keybindInput = createKeybindButton({
       onSet(combo) { setSellAllPetsKeybind(combo); },
       onClear() { setSellAllPetsKeybind(''); },
       readCurrent: () => getSellAllPetsSettings().keybind ?? '',
+      width: '120px',
     });
 
     keybindRow.append(keybindLabel, keybindInput);

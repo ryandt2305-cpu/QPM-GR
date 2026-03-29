@@ -33,6 +33,7 @@ scraped-data/
 .kilocode.md
 CLAUDE.md
 .gitignore
+AGENTS.md
 
 # OS files
 .DS_Store

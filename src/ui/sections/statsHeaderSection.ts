@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.27', date: '2026-03', notes: [
+    'fixed keybind capture not detecting key presses on Opera GX',
+  ]},
 { version: '3.1.26', date: '2026-03', notes: [
     'fixed garden filters and sprite capture not working in Firefox / Discord Activities',
     'fixed PIXI app not captured when inline script injection blocked by CSP',

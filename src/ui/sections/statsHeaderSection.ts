@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.29', date: '2026-03', notes: [
+    'fixed Journal Checker Smart Tips Fastest Path cards showing raw variant color code as text and images not loading when sprites not yet ready',
+  ]},
 { version: '3.1.28', date: '2026-03', notes: [
     'fixed keybind capture not detecting key presses on Opera GX',
   ]},

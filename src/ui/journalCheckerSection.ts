@@ -883,7 +883,7 @@ export function createJournalCheckerSection(): HTMLElement {
 
           fruitCard.innerHTML = `
             <div style="display: flex; align-items: center; gap: 10px;">
-              <img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />
+              ${spriteUrl ? `<img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />` : `<span style="font-size: 20px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>`}
               <div>
                 <div style="font-size: 13px; font-weight: 600; color: #fff;">${rec.species}</div>
                 <div style="font-size: 10px; color: #999;">${rec.missingVariants.join(', ')}</div>
@@ -958,15 +958,14 @@ export function createJournalCheckerSection(): HTMLElement {
               height: 24px;
               border-radius: 50%;
               display: flex;
-              const variantColors = {
-                'Normal': { bg: v.collected ? '#FFFFFF' : '#333', text: v.collected ? '#111' : '#777' },
-                'Rainbow': { bg: v.collected ? 'linear-gradient(120deg, #ff8a80, #ffd180, #80d8ff, #b388ff)' : '#333', text: v.collected ? '#111' : '#777' },
+              align-items: center;
+              justify-content: center;
+              font-size: 11px;
               font-weight: bold;
               flex-shrink: 0;
             ">${index + 1}</div>
-            <img src="${spriteUrl}" style="width: 28px; height: 28px; image-rendering: pixelated; flex-shrink: 0;" alt="${rec.species}" />
-                  'Dawnlit': { bg: v.collected ? '#a463ff' : '#333', text: v.collected ? '#fff' : '#777' },
-                  'Dawncharged': { bg: v.collected ? '#7e00fc' : '#333', text: v.collected ? '#fff' : '#777' },
+            ${spriteUrl ? `<img src="${spriteUrl}" style="width: 28px; height: 28px; image-rendering: pixelated; flex-shrink: 0;" alt="${rec.species}" />` : `<span style="font-size: 18px; flex-shrink: 0;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>`}
+            <div style="flex: 1; min-width: 0;">
               <div style="font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px;">
                 ${rec.species} (${rec.missingVariants.join(', ')})
               </div>
@@ -1026,7 +1025,7 @@ export function createJournalCheckerSection(): HTMLElement {
           goalCard.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
               <div style="display: flex; align-items: center; gap: 8px;">
-                <img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />
+                ${spriteUrl ? `<img src="${spriteUrl}" style="width: 32px; height: 32px; image-rendering: pixelated;" alt="${rec.species}" />` : `<span style="font-size: 20px;">${rec.type === 'produce' ? '🌿' : '🐾'}</span>`}
                 <strong style="color: #fff; font-size: 13px;">${rec.species}</strong>
               </div>
               <span style="font-size: 20px;">${getDifficultyEmoji(rec.difficulty)}</span>

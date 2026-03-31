@@ -2,9 +2,9 @@
 // Location-aware sell pipeline for pets (active, hutch, or inventory).
 // Follows the same sell pattern as sellAllPets.ts (sendRoomAction → SellPet).
 
-import { getFavoritedItemIds } from '../store/inventory';
+import { readInventoryDirect } from '../store/inventory';
 import { getActivePetInfos } from '../store/pets';
-import { sendStorePet, sendToggleFavoriteItem } from './petTeamActions';
+import { sendStorePet, sendToggleLockItem } from './petTeamActions';
 import { waitForInventoryContains } from './petSwap';
 import { sendRoomAction } from '../websocket/api';
 import { delay } from '../utils/scheduling';
@@ -47,7 +47,7 @@ async function waitForPetLeavesActive(itemId: string, timeoutMs: number): Promis
  * in sellAllPets.ts.
  *
  * Steps:
- * 1. Unfavorite if needed
+ * 1. Fresh atom read → unfavorite/unlock via ToggleLockItem if in favoritedItemIds
  * 2. If active → StorePet → wait leave → RetrieveFromStorage → wait inventory
  * 3. If hutch → RetrieveFromStorage → wait inventory
  * 4. If inventory → ready
@@ -62,10 +62,11 @@ export async function executeSellPipeline(pet: CollectedPet): Promise<SellPipeli
   }
 
   try {
-    // Step 1: Unfavorite if needed
-    const favorites = getFavoritedItemIds();
-    if (favorites.has(itemId)) {
-      sendToggleFavoriteItem(itemId);
+    // Step 1: Fresh atom read to avoid stale cache — unfavorite/unlock if needed
+    const freshInventory = await readInventoryDirect();
+    const freshFavorites = new Set(freshInventory?.favoritedItemIds ?? []);
+    if (freshFavorites.has(itemId)) {
+      sendToggleLockItem(itemId);
       await delay(POST_UNFAVORITE_DELAY_MS);
     }
 

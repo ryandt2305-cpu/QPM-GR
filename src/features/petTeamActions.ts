@@ -5,7 +5,7 @@
 import { log } from '../utils/logger';
 import { sendRoomAction, type WebSocketSendResult } from '../websocket/api';
 
-function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem' | 'SellPet', payload: Record<string, unknown>): WebSocketSendResult {
+function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem' | 'ToggleLockItem' | 'SellPet', payload: Record<string, unknown>): WebSocketSendResult {
   const sent = sendRoomAction(type, payload, { throttleMs: 90 });
   if (!sent.ok && sent.reason !== 'throttled') {
     log(`[PetTeamActions] send failed (${type})`, sent.reason);
@@ -42,6 +42,14 @@ export function sendPlacePet(
  */
 export function sendToggleFavoriteItem(itemId: string): boolean {
   return sendAction('ToggleFavoriteItem', { itemId }).ok;
+}
+
+/**
+ * Unlock a locked item (ToggleLockItem).
+ * itemId = inventory item UUID.
+ */
+export function sendToggleLockItem(itemId: string): boolean {
+  return sendAction('ToggleLockItem', { itemId }).ok;
 }
 
 /**

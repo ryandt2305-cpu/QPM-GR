@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.31', date: '2026-03', notes: [
+    'fixed sell pipeline: fresh atom read before each sell prevents stale cache missing favorited/locked pets',
+  ]},
 { version: '3.1.30', date: '2026-03', notes: [
     'added sell buttons to Pet Optimizer: per-card (💰) and per-family bulk sell with confirmation modal',
     'added window state persistence: open panels are restored automatically after page reload',

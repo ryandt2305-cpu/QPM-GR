@@ -753,3 +753,28 @@ export function destroyWindow(id: string): void {
 export function destroyAllWindows(): void {
   windows.forEach((w) => destroyWindow(w.id));
 }
+
+// ─── Window persistence ───────────────────────────────────────────────────────
+
+const windowOpeners = new Map<string, () => void | Promise<void>>();
+
+/**
+ * Register an opener function for a window ID.
+ * Called at init time for each restorable window.
+ */
+export function registerWindowOpener(id: string, opener: () => void | Promise<void>): void {
+  windowOpeners.set(id, opener);
+}
+
+/**
+ * Re-open any windows that were open when the page was last closed.
+ * Reads saved state for each registered opener and calls it if isOpen is true.
+ */
+export function restoreOpenWindows(): void {
+  for (const [id, open] of windowOpeners) {
+    const saved = storage.get<{ isOpen: boolean; isMinimized: boolean }>(WINDOW_STATE_KEY + id);
+    if (saved?.isOpen) {
+      void open();
+    }
+  }
+}

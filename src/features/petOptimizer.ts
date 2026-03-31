@@ -131,6 +131,8 @@ export type PetStatus = 'keep' | 'consider' | 'obsolete' | 'upgrade' | 'review';
 export interface CollectedPet {
   // Identity
   id: string;
+  /** Item UUID used for WS actions (StorePet, SellPet, etc.). For active pets this is slotId, not petId. */
+  itemId: string;
   name: string | null;
   species: string | null;
   location: PetLocation;
@@ -359,6 +361,7 @@ function activePetToCollected(pet: ActivePetInfo): CollectedPet | null {
 
   return {
     id: pet.petId || `active-${pet.slotIndex}`,
+    itemId: pet.slotId || pet.petId || `active-${pet.slotIndex}`,
     name: pet.name,
     species: pet.species,
     location: 'active',
@@ -514,6 +517,7 @@ function inventoryItemToCollected(
 
   return {
     id,
+    itemId: id,
     name,
     species,
     location,

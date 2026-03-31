@@ -6,7 +6,7 @@ import { startMutationReminder } from './features/mutationReminder';
 import { startMutationTracker } from './features/mutationTracker';
 import { initializeHarvestReminder, configureHarvestReminder } from './features/harvestReminder';
 import { initializeTurtleTimer, configureTurtleTimer } from './features/turtleTimer';
-import { createOriginalUI, setCfg } from './ui/originalPanel';
+import { createOriginalUI, setCfg, openPublicRoomsWindow, openJournalCheckerWindow } from './ui/originalPanel';
 import { startGardenBridge } from './features/gardenBridge';
 import { initializeStatsStore } from './store/stats';
 import { initializePetXpTracker } from './store/petXpTracker';
@@ -67,7 +67,14 @@ import { initPetHutchWindow, togglePetHutchWindow, openPetHutchWindow, closePetH
 import { initPetTeamsStore, stopPetTeamsStore } from './store/petTeams';
 import { initPetTeamsLogs, stopPetTeamsLogs } from './store/petTeamsLogs';
 import { initPetsWindow, stopPetsWindow, togglePetsWindow } from './ui/petsWindow';
-import { toggleWindow } from './ui/modalWindow';
+import { toggleWindow, registerWindowOpener, restoreOpenWindows } from './ui/modalWindow';
+import { openShopRestockWindow } from './ui/shopRestockWindow';
+import { openPetOptimizerWindow } from './ui/petOptimizerWindow';
+import { openCropBoostTrackerWindow } from './ui/cropBoostTrackerWindow';
+import { openTrackersHubWindow } from './ui/trackersHubWindow';
+import { openStatsHubWindow } from './ui/statsHubWindow';
+import { openUtilityHubWindow } from './ui/utilityHubWindow';
+import { openToolsHubWindow } from './ui/toolsHubWindow';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
 import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
@@ -1710,6 +1717,19 @@ async function initialize(): Promise<void> {
   // Create UI (needs sprites to be ready)
   await createOriginalUI();
   initPetsWindow();
+
+  // Register window openers and restore previously open windows
+  registerWindowOpener('public-rooms', openPublicRoomsWindow);
+  registerWindowOpener('journal-checker-window', openJournalCheckerWindow);
+  registerWindowOpener('qpm-pets-window', togglePetsWindow);
+  registerWindowOpener('shop-restock', openShopRestockWindow);
+  registerWindowOpener('pet-optimizer', openPetOptimizerWindow);
+  registerWindowOpener('crop-boost-tracker', openCropBoostTrackerWindow);
+  registerWindowOpener('trackers-hub', openTrackersHubWindow);
+  registerWindowOpener('stats-hub', openStatsHubWindow);
+  registerWindowOpener('utility-hub', openUtilityHubWindow);
+  registerWindowOpener('tools-hub', openToolsHubWindow);
+  restoreOpenWindows();
 
   // Start version checker (checks for updates periodically)
   startVersionChecker();

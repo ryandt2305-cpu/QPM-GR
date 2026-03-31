@@ -107,7 +107,7 @@ async function readInventoryIdSet(): Promise<Set<string>> {
   return result;
 }
 
-async function waitForInventoryContains(itemId: string, timeoutMs: number): Promise<boolean> {
+export async function waitForInventoryContains(itemId: string, timeoutMs: number): Promise<boolean> {
   const expected = normalizeId(itemId);
   if (!expected) {
     return false;

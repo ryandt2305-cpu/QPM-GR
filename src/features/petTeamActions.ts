@@ -5,7 +5,7 @@
 import { log } from '../utils/logger';
 import { sendRoomAction, type WebSocketSendResult } from '../websocket/api';
 
-function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem', payload: Record<string, unknown>): WebSocketSendResult {
+function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem' | 'SellPet', payload: Record<string, unknown>): WebSocketSendResult {
   const sent = sendRoomAction(type, payload, { throttleMs: 90 });
   if (!sent.ok && sent.reason !== 'throttled') {
     log(`[PetTeamActions] send failed (${type})`, sent.reason);
@@ -42,6 +42,14 @@ export function sendPlacePet(
  */
 export function sendToggleFavoriteItem(itemId: string): boolean {
   return sendAction('ToggleFavoriteItem', { itemId }).ok;
+}
+
+/**
+ * Sell a pet directly.
+ * itemId = inventory item UUID (pet must be in inventory to sell).
+ */
+export function sendSellPet(itemId: string): WebSocketSendResult {
+  return sendAction('SellPet', { itemId });
 }
 
 /**

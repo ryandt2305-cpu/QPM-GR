@@ -943,6 +943,27 @@ export function setCfg(newCfg: PanelCfg): void {
   cfg = newCfg;
 }
 
+export function openPublicRoomsWindow(): void {
+  const renderFn = (root: HTMLElement) => {
+    import('./publicRoomsWindow')
+      .then(({ renderPublicRoomsWindow }) => renderPublicRoomsWindow(root))
+      .catch(e => log('⚠️ Failed to load Public Rooms', e));
+  };
+  toggleWindow('public-rooms', '🌐 Public Rooms', renderFn, '950px', '85vh');
+}
+
+export function openJournalCheckerWindow(): void {
+  toggleWindow('journal-checker-window', '📔 Journal Checker', (windowRoot) => {
+    windowRoot.style.padding = '0';
+    import('./journalCheckerSection').then(({ createJournalCheckerSection }) => {
+      windowRoot.appendChild(createJournalCheckerSection());
+    }).catch(e => {
+      log('⚠️ Failed to load Journal Checker', e);
+      windowRoot.textContent = '❌ Failed to load. Reload the page and try again.';
+    });
+  }, '900px', '90vh');
+}
+
 function saveCfg(): void {
   storage.set('quinoa-pet-manager', cfg);
 }

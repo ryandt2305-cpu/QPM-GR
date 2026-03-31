@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.30', date: '2026-03', notes: [
+    'added sell buttons to Pet Optimizer: per-card (💰) and per-family bulk sell with confirmation modal',
+    'added window state persistence: open panels are restored automatically after page reload',
+  ]},
 { version: '3.1.29', date: '2026-03', notes: [
     'fixed Journal Checker Smart Tips Fastest Path cards showing raw variant color code as text and images not loading when sprites not yet ready',
   ]},

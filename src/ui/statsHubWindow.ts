@@ -2,6 +2,7 @@
 // Garden & Hatch Stats hub window — Garden mutation progress + Eggs hatching history.
 
 import { toggleWindow } from './modalWindow';
+import { storage } from '../utils/storage';
 import { onGardenSnapshot, getGardenSnapshot, type GardenSnapshot } from '../features/gardenBridge';
 import {
   subscribeHatchStats,
@@ -1042,11 +1043,36 @@ function getFilterMutations(): string[] {
   return names.length > 0 ? names : [...FILTER_MUTATIONS_FALLBACK];
 }
 
+// ---------------------------------------------------------------------------
+// Stats Hub filter persistence (species + mutation pills + max-size + eggs view)
+// ---------------------------------------------------------------------------
+
+const STATS_HUB_FILTERS_KEY = 'qpm.statsHub.filters.v1';
+
+interface StatsHubFilters {
+  speciesFilters?: string[];
+  mutationFilters?: string[];
+  maxSizeOnly?: boolean;
+  eggsView?: 'session' | 'lifetime';
+}
+
+function loadStatsHubFilters(): StatsHubFilters {
+  return storage.get<StatsHubFilters>(STATS_HUB_FILTERS_KEY, {}) ?? {};
+}
+
+function saveStatsHubFilters(patch: Partial<StatsHubFilters>): void {
+  const current = loadStatsHubFilters();
+  storage.set(STATS_HUB_FILTERS_KEY, { ...current, ...patch });
+}
+
 function buildGardenTab(container: HTMLElement): () => void {
   container.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
 
+  // Restore persisted filter state
+  const savedFilters = loadStatsHubFilters();
+
   // Stats-window-only species filter (does NOT affect in-game garden filter)
-  const activeSpeciesFilters = new Set<string>();
+  const activeSpeciesFilters = new Set<string>(savedFilters.speciesFilters ?? []);
 
   // Section filter state: which section is driving the in-game garden filter
   type SectionFilterSource = 'remaining' | 'complete' | null;
@@ -1219,7 +1245,7 @@ function buildGardenTab(container: HTMLElement): () => void {
   filterLabel.textContent = 'Mutations:';
   filterBar.appendChild(filterLabel);
 
-  const activeFilters = new Set<string>();
+  const activeFilters = new Set<string>(savedFilters.mutationFilters ?? []);
   const pillButtons = new Map<string, HTMLButtonElement>();
 
   const updatePills = () => {
@@ -1232,7 +1258,7 @@ function buildGardenTab(container: HTMLElement): () => void {
   for (const mutId of getFilterMutations()) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.style.cssText = pillBtnCss(false);
+    btn.style.cssText = pillBtnCss(activeFilters.has(mutId));
     btn.textContent = mutId;
     btn.addEventListener('click', () => {
       if (activeFilters.has(mutId)) activeFilters.delete(mutId);
@@ -1249,10 +1275,10 @@ function buildGardenTab(container: HTMLElement): () => void {
   filterSep.style.cssText = 'width:1px;height:16px;background:rgba(255,255,255,0.12);align-self:center;margin:0 2px;flex-shrink:0;';
   filterBar.appendChild(filterSep);
 
-  let maxSizeOnly = false;
+  let maxSizeOnly = savedFilters.maxSizeOnly ?? false;
   const maxSizePillBtn = document.createElement('button');
   maxSizePillBtn.type = 'button';
-  maxSizePillBtn.style.cssText = pillBtnCss(false);
+  maxSizePillBtn.style.cssText = pillBtnCss(maxSizeOnly);
   maxSizePillBtn.textContent = 'Max Size';
   maxSizePillBtn.title = 'Show only plants where at least one slot has reached its maximum size';
   maxSizePillBtn.addEventListener('click', () => {
@@ -1317,6 +1343,12 @@ function buildGardenTab(container: HTMLElement): () => void {
   }
 
   function renderContent(): void {
+    // Persist filter state on every re-render (triggered by any filter change)
+    saveStatsHubFilters({
+      speciesFilters: activeSpeciesFilters.size > 0 ? Array.from(activeSpeciesFilters) : [],
+      mutationFilters: activeFilters.size > 0 ? Array.from(activeFilters) : [],
+      maxSizeOnly,
+    });
     content.innerHTML = '';
     readyBadgeEntries = []; // Clear stale refs whenever cards are rebuilt
     const allTiles = extractTiles(currentSnapshot);
@@ -1657,7 +1689,8 @@ function buildEggsTab(container: HTMLElement): () => void {
   toggleLabel.textContent = 'View:';
   toggleBar.appendChild(toggleLabel);
 
-  let activeView: 'session' | 'lifetime' = 'session';
+  const eggsViewSaved = loadStatsHubFilters().eggsView;
+  let activeView: 'session' | 'lifetime' = eggsViewSaved === 'lifetime' ? 'lifetime' : 'session';
   const sessionBtn = document.createElement('button');
   sessionBtn.type = 'button';
   sessionBtn.textContent = 'Session';
@@ -1671,8 +1704,8 @@ function buildEggsTab(container: HTMLElement): () => void {
   };
   updateToggle();
 
-  sessionBtn.addEventListener('click', () => { activeView = 'session'; updateToggle(); renderEggs(); });
-  lifetimeBtn.addEventListener('click', () => { activeView = 'lifetime'; updateToggle(); renderEggs(); });
+  sessionBtn.addEventListener('click', () => { activeView = 'session'; saveStatsHubFilters({ eggsView: 'session' }); updateToggle(); renderEggs(); });
+  lifetimeBtn.addEventListener('click', () => { activeView = 'lifetime'; saveStatsHubFilters({ eggsView: 'lifetime' }); updateToggle(); renderEggs(); });
   toggleBar.append(sessionBtn, lifetimeBtn);
 
   // Spacer

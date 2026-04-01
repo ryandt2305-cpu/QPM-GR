@@ -468,3 +468,14 @@ function renderUtilityHub(root: HTMLElement): void {
 export function openUtilityHubWindow(): void {
   toggleWindow('utility-hub', '🔧 Utility', renderUtilityHub, '520px', '90vh');
 }
+
+/** Open a specific detached feature window by key. Used by window persistence. */
+export function openDetachedFeature(key: string): void {
+  const feat = FEATURE_DEFS.find((f) => f.key === key);
+  if (feat) void openFeatureWindow(feat);
+}
+
+/** All feature window IDs for persistence registration. */
+export function getFeatureWindowDefs(): ReadonlyArray<{ key: string }> {
+  return FEATURE_DEFS;
+}

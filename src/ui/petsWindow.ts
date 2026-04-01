@@ -3175,7 +3175,10 @@ function renderPetsWindow(root: HTMLElement): void {
   ] as const;
 
   type TabId = typeof tabDefs[number]['id'];
-  let activeTab: TabId = 'manager';
+  const PETS_TAB_KEY = 'qpm.petsWindow.activeTab';
+  const validTabIds = new Set<string>(tabDefs.map((d) => d.id));
+  const savedTab = storage.get<string>(PETS_TAB_KEY, 'manager');
+  let activeTab: TabId = validTabIds.has(savedTab) ? (savedTab as TabId) : 'manager';
   let compareBadgeVisible = false;
   let compareBadgeStage: CompareStage | null = null;
 
@@ -3437,6 +3440,7 @@ function renderPetsWindow(root: HTMLElement): void {
 
   function switchTab(id: TabId): void {
     activeTab = id;
+    storage.set(PETS_TAB_KEY, id);
     for (const def of tabDefs) {
       tabBtns[def.id]?.classList.toggle('qpm-pets__tab--active', def.id === id);
       panels[def.id]?.classList.toggle('qpm-pets__panel--active', def.id === id);

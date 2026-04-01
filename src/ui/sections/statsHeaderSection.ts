@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.33', date: '2026-04', notes: [
+    'fixed window persistence: pet-hub now restores on reload; fixed toggle no-op during restore',
+  ]},
 { version: '3.1.32', date: '2026-04', notes: [
     'fixed window persistence: state now saved before render to survive render failures across reloads',
   ]},

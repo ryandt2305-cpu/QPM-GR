@@ -457,3 +457,14 @@ function renderTrackersHub(root: HTMLElement): void {
 export function openTrackersHubWindow(): void {
   toggleWindow('trackers-hub', '📈 Trackers', renderTrackersHub, '520px', '90vh');
 }
+
+/** Open a specific detached tracker window by key. Used by window persistence. */
+export function openDetachedTracker(key: string): void {
+  const tracker = TRACKER_DEFS.find((t) => t.key === key);
+  if (tracker) openTrackerWindow(tracker);
+}
+
+/** All tracker window IDs for persistence registration. */
+export function getTrackerWindowDefs(): ReadonlyArray<{ windowId: string; key: string }> {
+  return TRACKER_DEFS;
+}

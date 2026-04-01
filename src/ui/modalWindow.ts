@@ -321,8 +321,11 @@ export function closeWindow(id: string): void {
 }
 
 /**
- * Toggle window open/close
+ * Toggle window open/close.
+ * During restoreOpenWindows(), toggle is forced open-only (never closes).
  */
+let _restoring = false;
+
 export function toggleWindow(id: string, title: string, render: PanelRender, maxWidth?: string, maxHeight?: string): boolean {
   const existing = windows.get(id);
   if (!existing) {
@@ -330,10 +333,10 @@ export function toggleWindow(id: string, title: string, render: PanelRender, max
     return true;
   }
 
-  if (isWindowShown(existing.el)) {
+  if (isWindowShown(existing.el) && !_restoring) {
     closeWindow(id);
     return false;
-  } else {
+  } else if (!isWindowShown(existing.el)) {
     showWindowElement(existing.el, 'flex');
     if (existing.isMinimized) {
       existing.isMinimized = false;
@@ -342,6 +345,9 @@ export function toggleWindow(id: string, title: string, render: PanelRender, max
     bumpZ(existing.el);
     saveWindowState(id, true, false);
     emitWindowEvent('qpm:window-restored', id);
+    return true;
+  } else {
+    // _restoring && already shown — no-op, window is already open
     return true;
   }
 }
@@ -777,23 +783,28 @@ export function registerWindowOpener(id: string, opener: () => void | Promise<vo
  * Reads saved state for each registered opener and calls it if isOpen is true.
  */
 export function restoreOpenWindows(): void {
-  for (const [id, opener] of windowOpeners) {
-    try {
-      const saved = storage.get<{ isOpen: boolean; isMinimized: boolean }>(WINDOW_STATE_KEY + id);
-      if (!saved?.isOpen) continue;
+  _restoring = true;
+  try {
+    for (const [id, opener] of windowOpeners) {
+      try {
+        const saved = storage.get<{ isOpen: boolean; isMinimized: boolean }>(WINDOW_STATE_KEY + id);
+        if (!saved?.isOpen) continue;
 
-      // Skip if the window is somehow already open (avoids toggle-close)
-      if (isWindowOpen(id)) continue;
+        // Skip if the window is somehow already open
+        if (isWindowOpen(id)) continue;
 
-      const result = opener();
-      // If the opener is async, catch rejections
-      if (result && typeof (result as Promise<unknown>).catch === 'function') {
-        (result as Promise<unknown>).catch((err) => {
-          log(`[Window] Failed to restore window "${id}"`, err);
-        });
+        const result = opener();
+        // If the opener is async, catch rejections
+        if (result && typeof (result as Promise<unknown>).catch === 'function') {
+          (result as Promise<unknown>).catch((err) => {
+            log(`[Window] Failed to restore window "${id}"`, err);
+          });
+        }
+      } catch (error) {
+        log(`[Window] Failed to restore window "${id}"`, error);
       }
-    } catch (error) {
-      log(`[Window] Failed to restore window "${id}"`, error);
     }
+  } finally {
+    _restoring = false;
   }
 }

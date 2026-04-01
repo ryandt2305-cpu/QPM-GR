@@ -509,3 +509,6 @@ function renderToolsHub(root: HTMLElement): void {
 export function openToolsHubWindow(): void {
   toggleWindow('tools-hub', '\u{1F9F0} Tools', renderToolsHub, '520px', '90vh');
 }
+
+/** Open the guide window. Used by window persistence. */
+export { openGuideWindow };

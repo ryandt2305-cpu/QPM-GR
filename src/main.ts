@@ -71,10 +71,10 @@ import { toggleWindow, registerWindowOpener, restoreOpenWindows } from './ui/mod
 import { openShopRestockWindow } from './ui/shopRestockWindow';
 import { openPetOptimizerWindow } from './ui/petOptimizerWindow';
 import { openCropBoostTrackerWindow } from './ui/cropBoostTrackerWindow';
-import { openTrackersHubWindow } from './ui/trackersHubWindow';
+import { openTrackersHubWindow, openDetachedTracker, getTrackerWindowDefs } from './ui/trackersHubWindow';
 import { openStatsHubWindow } from './ui/statsHubWindow';
-import { openUtilityHubWindow } from './ui/utilityHubWindow';
-import { openToolsHubWindow } from './ui/toolsHubWindow';
+import { openUtilityHubWindow, openDetachedFeature, getFeatureWindowDefs } from './ui/utilityHubWindow';
+import { openToolsHubWindow, openGuideWindow } from './ui/toolsHubWindow';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
 import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
@@ -1729,6 +1729,22 @@ async function initialize(): Promise<void> {
   registerWindowOpener('stats-hub', openStatsHubWindow);
   registerWindowOpener('utility-hub', openUtilityHubWindow);
   registerWindowOpener('tools-hub', openToolsHubWindow);
+  registerWindowOpener('tools-guide', openGuideWindow);
+  registerWindowOpener('pet-hub', () => {
+    const render = (root: HTMLElement) => import('./ui/petHubWindow').then(({ renderPetHubWindow }) => renderPetHubWindow(root));
+    toggleWindow('pet-hub', '🐾 Pet Hub', render, '1600px', '92vh');
+  });
+
+  // Register dynamic tracker hub child windows
+  for (const def of getTrackerWindowDefs()) {
+    registerWindowOpener(def.windowId, () => openDetachedTracker(def.key));
+  }
+
+  // Register dynamic utility hub child windows
+  for (const def of getFeatureWindowDefs()) {
+    registerWindowOpener(`utility-feature-${def.key}`, () => openDetachedFeature(def.key));
+  }
+
   restoreOpenWindows();
 
   // Start version checker (checks for updates periodically)

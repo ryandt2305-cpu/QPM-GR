@@ -581,8 +581,11 @@ function renderActiveTab(state: TurtleTimerWindowState, timerState: TurtleTimerS
   state.updateScale?.();
 }
 
+const TURTLE_TAB_KEY = 'qpm.turtleTimer.activeTab';
+
 function setActiveTab(state: TurtleTimerWindowState, tab: 'plant' | 'egg'): void {
   state.activeTab = tab;
+  storage.set(TURTLE_TAB_KEY, tab);
   // Force focus zone rebuild on tab switch by invalidating the signature.
   state.lastFocusSignature = '';
 
@@ -690,14 +693,16 @@ export function createTurtleTimerWindow(): TurtleTimerWindowState {
   const activeTabStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:var(--qpm-surface-2,#1a1a1a);color:var(--qpm-text,#fff);border-bottom:2px solid var(--qpm-accent,#4CAF50);';
   const inactiveTabStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:transparent;color:var(--qpm-text-muted,#888);border-bottom:2px solid transparent;';
 
+  const savedTurtleTab = storage.get<string>(TURTLE_TAB_KEY, 'plant');
+
   const plantTabBtn = document.createElement('button');
   plantTabBtn.textContent = '🌱 Plants';
-  plantTabBtn.style.cssText = activeTabStyle;
+  plantTabBtn.style.cssText = savedTurtleTab === 'egg' ? inactiveTabStyle : activeTabStyle;
   tabBar.appendChild(plantTabBtn);
 
   const eggTabBtn = document.createElement('button');
   eggTabBtn.textContent = '🥚 Eggs';
-  eggTabBtn.style.cssText = inactiveTabStyle;
+  eggTabBtn.style.cssText = savedTurtleTab === 'egg' ? activeTabStyle : inactiveTabStyle;
   tabBar.appendChild(eggTabBtn);
 
   root.appendChild(tabBar);
@@ -758,7 +763,7 @@ export function createTurtleTimerWindow(): TurtleTimerWindowState {
     tabContent,
     focusZone,
     dynamicZone,
-    activeTab: 'plant',
+    activeTab: storage.get<string>(TURTLE_TAB_KEY, 'plant') === 'egg' ? 'egg' as const : 'plant' as const,
     lastFocusSignature: '',
     latestState: null,
     unsubscribeTimer: null,

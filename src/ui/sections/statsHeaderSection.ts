@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.32', date: '2026-04', notes: [
+    'fixed window persistence: state now saved before render to survive render failures across reloads',
+  ]},
 { version: '3.1.31', date: '2026-03', notes: [
     'fixed sell pipeline: fresh atom read before each sell prevents stale cache missing favorited/locked pets',
   ]},

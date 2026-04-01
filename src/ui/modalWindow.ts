@@ -242,8 +242,52 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
 
   document.body.appendChild(win);
 
-  // Render content directly in body
-  render(body);
+  // Button handlers
+  minimizeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMinimize(id);
+  });
+
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeWindow(id);
+  });
+
+  // Bump to front on click
+  win.addEventListener('mousedown', () => bumpZ(win));
+
+  // Prevent game zoom from interfering with window scrolling
+  win.addEventListener('wheel', (e) => {
+    e.stopPropagation();
+  }, { passive: false });
+
+  // Register window state BEFORE render — ensures the window is tracked
+  // and state is persisted even if the render function throws.
+  const state: WindowState = {
+    id,
+    el: win,
+    head,
+    body,
+    titleEl,
+    minimizeBtn,
+    closeBtn,
+    isMinimized: false,
+    maxHeight: windowMaxHeight,
+    restoreWidth: null,
+    restoreHeight: null,
+    restoreMinHeight: null,
+    restoreMaxHeight: null,
+  };
+
+  windows.set(id, state);
+  saveWindowState(id, true, false);
+
+  // Render content (after registration so toggleWindow won't create duplicates on failure)
+  try {
+    render(body);
+  } catch (error) {
+    log(`[Window] Render failed for "${id}"`, error);
+  }
 
   // Restore position or center
   restoreWindowPosition(id, win);
@@ -263,45 +307,6 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   // Make draggable and resizable
   makeDraggable(win, head, id);
   makeResizable(win, id);
-
-  // Prevent game zoom from interfering with window scrolling
-  win.addEventListener('wheel', (e) => {
-    e.stopPropagation();
-  }, { passive: false });
-
-  // Button handlers
-  minimizeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleMinimize(id);
-  });
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeWindow(id);
-  });
-
-  // Bump to front on click
-  win.addEventListener('mousedown', () => bumpZ(win));
-
-  // Store window state
-  const state: WindowState = {
-    id,
-    el: win,
-    head,
-    body,
-    titleEl,
-    minimizeBtn,
-    closeBtn,
-    isMinimized: false,
-    maxHeight: windowMaxHeight,
-    restoreWidth: null,
-    restoreHeight: null,
-    restoreMinHeight: null,
-    restoreMaxHeight: null,
-  };
-
-  windows.set(id, state);
-  saveWindowState(id, true, false);
 }
 
 /**
@@ -745,6 +750,7 @@ export function destroyWindow(id: string): void {
 
   w.el.remove();
   windows.delete(id);
+  saveWindowState(id, false, false);
 }
 
 /**
@@ -771,10 +777,23 @@ export function registerWindowOpener(id: string, opener: () => void | Promise<vo
  * Reads saved state for each registered opener and calls it if isOpen is true.
  */
 export function restoreOpenWindows(): void {
-  for (const [id, open] of windowOpeners) {
-    const saved = storage.get<{ isOpen: boolean; isMinimized: boolean }>(WINDOW_STATE_KEY + id);
-    if (saved?.isOpen) {
-      void open();
+  for (const [id, opener] of windowOpeners) {
+    try {
+      const saved = storage.get<{ isOpen: boolean; isMinimized: boolean }>(WINDOW_STATE_KEY + id);
+      if (!saved?.isOpen) continue;
+
+      // Skip if the window is somehow already open (avoids toggle-close)
+      if (isWindowOpen(id)) continue;
+
+      const result = opener();
+      // If the opener is async, catch rejections
+      if (result && typeof (result as Promise<unknown>).catch === 'function') {
+        (result as Promise<unknown>).catch((err) => {
+          log(`[Window] Failed to restore window "${id}"`, err);
+        });
+      }
+    } catch (error) {
+      log(`[Window] Failed to restore window "${id}"`, error);
     }
   }
 }

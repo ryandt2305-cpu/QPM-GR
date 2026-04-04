@@ -119,6 +119,13 @@ const QPM_STORAGE_KEYS = [
   'qpm.controller.enabled.v1',
   'qpm.controller.bindings.v1',
   'qpm.controller.cursorSpeed.v1',
+
+  // Storage Value
+  'qpm.storageValue.v1',
+  'qpm.trackers.storageValue.migrated.v1',
+
+  // Texture Manipulator
+  'qpm.textureSwaps.v1',
 ];
 
 export const storage: Storage = {

@@ -4,13 +4,14 @@
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 import { getAnySpriteDataUrl, onSpritesReady, Sprites } from '../sprite-v2/compat';
+import { TEXTURE_MANIPULATOR_ENABLED } from '../features/textureSwapper';
 import { toggleWindow } from './modalWindow';
 import { createGuideSection } from './sections/guideSection';
 
 const VISIBLE_TOOLS_KEY = 'qpm.toolsHub.visibleCards';
 const SPRITE_CUSTOMISER_ICON_URL = new URL('../../docs/product/favicon-big.png', import.meta.url).href;
 
-type ToolKey = 'guide' | 'decor-layout' | 'sprite-customizer' | 'celestial-layout';
+type ToolKey = 'guide' | 'decor-layout' | 'sprite-customizer' | 'celestial-layout' | 'texture-manipulator';
 
 type ToolIcon =
   | { kind: 'emoji'; value: string }
@@ -41,7 +42,13 @@ type ExternalToolDef = BaseToolDef & {
   url: string;
 };
 
-type ToolDef = GuideToolDef | ExternalToolDef;
+type InternalToolDef = BaseToolDef & {
+  key: 'texture-manipulator';
+  kind: 'internal';
+  action: () => void;
+};
+
+type ToolDef = GuideToolDef | ExternalToolDef | InternalToolDef;
 
 const TOOL_DEFS: ToolDef[] = [
   {
@@ -92,12 +99,29 @@ const TOOL_DEFS: ToolDef[] = [
       pixelated: true,
     },
   },
+  {
+    key: 'texture-manipulator',
+    label: 'Texture Manipulator',
+    desc: 'Cosmetic texture overrides for QPM UI and live garden sprites. Tint, swap, or replace any plant, crop, pet, or egg sprite.',
+    kind: 'internal',
+    action: () => import('./textureSwapperWindow').then(({ openTextureSwapperWindow }) => openTextureSwapperWindow()),
+    icon: { kind: 'emoji', value: '\u{1F58C}' },
+  },
 ];
+
+const ACTIVE_TOOL_DEFS: ToolDef[] = TOOL_DEFS.filter((tool) => (
+  TEXTURE_MANIPULATOR_ENABLED || tool.key !== 'texture-manipulator'
+));
+
+const ACTIVE_TOOL_KEYS = new Set<ToolKey>(ACTIVE_TOOL_DEFS.map((tool) => tool.key));
 
 function loadVisibleTools(): ToolKey[] {
   const saved = storage.get<ToolKey[] | null>(VISIBLE_TOOLS_KEY, null);
-  if (Array.isArray(saved) && saved.length > 0) return saved;
-  return TOOL_DEFS.map((tool) => tool.key);
+  if (Array.isArray(saved) && saved.length > 0) {
+    const filtered = saved.filter((key) => ACTIVE_TOOL_KEYS.has(key));
+    if (filtered.length > 0) return filtered;
+  }
+  return ACTIVE_TOOL_DEFS.map((tool) => tool.key);
 }
 
 function normalizeToken(value: string): string {
@@ -211,6 +235,10 @@ function openGuideWindow(): void {
 function openTool(tool: ToolDef): void {
   if (tool.kind === 'guide') {
     openGuideWindow();
+    return;
+  }
+  if (tool.kind === 'internal') {
+    tool.action();
     return;
   }
   openExternalUrl(tool.url);
@@ -328,7 +356,7 @@ function buildCustomizeOverlay(
   const current = loadVisibleTools();
   const checkboxes = new Map<ToolKey, HTMLInputElement>();
 
-  for (const tool of TOOL_DEFS) {
+  for (const tool of ACTIVE_TOOL_DEFS) {
     const row = document.createElement('label');
     row.style.cssText = [
       'display:flex',
@@ -389,7 +417,7 @@ function buildCustomizeOverlay(
     'color:#c8c0ff', 'font-size:13px', 'font-weight:600',
   ].join(';');
   saveBtn.addEventListener('click', () => {
-    const selected = TOOL_DEFS
+    const selected = ACTIVE_TOOL_DEFS
       .map((tool) => tool.key)
       .filter((key) => checkboxes.get(key)?.checked) as ToolKey[];
     if (onKey) document.removeEventListener('keydown', onKey);
@@ -460,7 +488,7 @@ function renderToolsHub(root: HTMLElement): void {
   const renderCards = () => {
     cardsArea.innerHTML = '';
     const visible = loadVisibleTools();
-    const visibleTools = TOOL_DEFS.filter((tool) => visible.includes(tool.key));
+    const visibleTools = ACTIVE_TOOL_DEFS.filter((tool) => visible.includes(tool.key));
 
     if (!visibleTools.length) {
       const empty = document.createElement('div');

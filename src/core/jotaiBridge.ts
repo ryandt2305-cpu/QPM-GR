@@ -642,6 +642,14 @@ function findAtomByStructure(matcher: (value: any) => boolean): any | null {
   return null;
 }
 
+// Known modal values for activeModalAtom structural fallback (matches game's activeModalAtom)
+const ACTIVE_MODAL_VALID_VALUES = new Set([
+  'seedShop', 'eggShop', 'toolShop', 'inventory', 'leaderboard',
+  'journal', 'decorShop', 'stats', 'petHutch', 'decorShed',
+  'activityLog', 'destroyCelestialConfirmation', 'seedSilo',
+  'newspaper', 'billboard', 'feedingTrough',
+]);
+
 export function getAtomByLabel(label: string): any | null {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`^${escaped}$`);
@@ -672,6 +680,12 @@ export function getAtomByLabel(label: string): any | null {
           'globalTileIdxToDirtTile' in value &&
           typeof value.globalTileIdxToDirtTile === 'object'
         );
+      });
+    } else if (label === 'activeModalAtom') {
+      // activeModalAtom has a distinctive string value (modal name) when a modal is open.
+      // Only detectable when a modal is currently active — retried by callers when closed.
+      return findAtomByStructure((value) => {
+        return typeof value === 'string' && ACTIVE_MODAL_VALID_VALUES.has(value);
       });
     }
   }

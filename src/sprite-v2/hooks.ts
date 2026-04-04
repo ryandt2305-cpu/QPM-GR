@@ -532,7 +532,7 @@ function injectPageContextHooks(): void {
   
   // Hook PIXI initialization
   hook('__PIXI_APP_INIT__', function(app, version) {
-    if (app && !window.__QPM_PIXI_CAPTURED__.app) {
+    if (app) {
       window.__QPM_PIXI_CAPTURED__.app = app;
       window.__QPM_PIXI_CAPTURED__.version = version;
       if (app.renderer) window.__QPM_PIXI_CAPTURED__.renderer = app.renderer;
@@ -540,7 +540,7 @@ function injectPageContextHooks(): void {
   });
   
   hook('__PIXI_RENDERER_INIT__', function(renderer, version) {
-    if (renderer && !window.__QPM_PIXI_CAPTURED__.renderer) {
+    if (renderer) {
       window.__QPM_PIXI_CAPTURED__.renderer = renderer;
       window.__QPM_PIXI_CAPTURED__.version = version;
     }
@@ -548,14 +548,13 @@ function injectPageContextHooks(): void {
   
   // Poll for already-existing PIXI globals
   function checkExisting() {
-    if (window.__QPM_PIXI_CAPTURED__.app && window.__QPM_PIXI_CAPTURED__.renderer) return;
     var maybeApp = window.__PIXI_APP__ || window.PIXI_APP || window.app;
-    if (maybeApp && maybeApp.renderer && !window.__QPM_PIXI_CAPTURED__.app) {
+    if (maybeApp && maybeApp.renderer) {
       window.__QPM_PIXI_CAPTURED__.app = maybeApp;
       window.__QPM_PIXI_CAPTURED__.renderer = maybeApp.renderer;
     }
     var maybeRdr = window.__PIXI_RENDERER__ || window.PIXI_RENDERER__;
-    if (maybeRdr && !window.__QPM_PIXI_CAPTURED__.renderer) {
+    if (maybeRdr) {
       window.__QPM_PIXI_CAPTURED__.renderer = maybeRdr;
     }
   }
@@ -668,40 +667,40 @@ export function createPixiHooks(): PixiHooks {
   // Set up hooks on unsafeWindow (works on Firefox)
   hook('__PIXI_APP_INIT__', (a: any, v: any) => {
     console.log('[QPM PIXI] __PIXI_APP_INIT__ fired!', { app: !!a, version: v });
-    if (!APP) {
-      APP = a;
-      PIXI_VER = v;
-      appResolver?.(a);
-      attachContextLossListener(a);
-      // Update the shared captured object so gardenFilters and other features
-      // can access the PIXI app via root.__QPM_PIXI_CAPTURED__.
-      // On non-Discord, the inline script handles this; on Discord we must do
-      // it here since the inline script is skipped due to CSP.
-      try {
-        const captured = root.__QPM_PIXI_CAPTURED__;
-        if (captured) {
-          captured.app = a;
-          captured.version = v;
-          if (a?.renderer) captured.renderer = a.renderer;
-        }
-      } catch { /* Xray wrapper edge case — ignore */ }
-    }
+    if (!a) return;
+    const wasUnset = !APP;
+    APP = a;
+    PIXI_VER = v;
+    if (wasUnset) appResolver?.(a);
+    attachContextLossListener(a);
+    // Update the shared captured object so gardenFilters and other features
+    // can access the PIXI app via root.__QPM_PIXI_CAPTURED__.
+    // On non-Discord, the inline script handles this; on Discord we must do
+    // it here since the inline script is skipped due to CSP.
+    try {
+      const captured = root.__QPM_PIXI_CAPTURED__;
+      if (captured) {
+        captured.app = a;
+        captured.version = v;
+        if (a?.renderer) captured.renderer = a.renderer;
+      }
+    } catch { /* Xray wrapper edge case - ignore */ }
   });
 
   hook('__PIXI_RENDERER_INIT__', (r: any, v: any) => {
     console.log('[QPM PIXI] __PIXI_RENDERER_INIT__ fired!', { renderer: !!r, version: v });
-    if (!RDR) {
-      RDR = r;
-      PIXI_VER = v;
-      rdrResolver?.(r);
-      try {
-        const captured = root.__QPM_PIXI_CAPTURED__;
-        if (captured) {
-          captured.renderer = r;
-          captured.version = v;
-        }
-      } catch { /* ignore */ }
-    }
+    if (!r) return;
+    const wasUnset = !RDR;
+    RDR = r;
+    PIXI_VER = v;
+    if (wasUnset) rdrResolver?.(r);
+    try {
+      const captured = root.__QPM_PIXI_CAPTURED__;
+      if (captured) {
+        captured.renderer = r;
+        captured.version = v;
+      }
+    } catch { /* ignore */ }
   });
 
   // Log hook setup diagnostics
@@ -773,15 +772,17 @@ export function createPixiHooks(): PixiHooks {
     // Source 1: Check injected script's captured data (Chrome)
     const captured = root.__QPM_PIXI_CAPTURED__;
     if (captured) {
-      if (!APP && captured.app) {
+      if (captured.app && APP !== captured.app) {
+        const wasUnset = !APP;
         APP = captured.app;
         PIXI_VER = captured.version;
-        appResolver?.(APP);
+        if (wasUnset) appResolver?.(APP);
       }
-      if (!RDR && captured.renderer) {
+      if (captured.renderer && RDR !== captured.renderer) {
+        const wasUnset = !RDR;
         RDR = captured.renderer;
         PIXI_VER = captured.version;
-        rdrResolver?.(RDR);
+        if (wasUnset) rdrResolver?.(RDR);
       }
     }
 

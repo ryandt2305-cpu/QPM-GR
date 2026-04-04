@@ -8,7 +8,7 @@ import { createPixiHooks, waitForPixi, ensureDocumentReady } from './hooks';
 import { getJSON, loadAtlasJsons, isAtlas, getBlob, blobToImage, joinPath, relPath } from './manifest';
 import { getCtors, rememberBaseTex } from './utils';
 import { buildAtlasTextures, buildItemsFromTextures } from './atlas';
-import { processVariantJobs, computeVariantSignature } from './renderer';
+import { processVariantJobs, computeVariantSignature, textureToCanvas } from './renderer';
 import { clearVariantCache, getCacheStats } from './cache';
 import { clearSpriteDataUrlCache } from './compat';
 import * as api from './api';
@@ -166,6 +166,17 @@ export type AtlasBootReport = {
   missingSample: string[];
 };
 
+export type SpriteRendererReport = {
+  rendererUid: string | number | null;
+  rendererType: string | number | null;
+  appRendererUid: string | number | null;
+  sameAsAppRenderer: boolean;
+  hasExtractCanvas: boolean;
+  appHasExtractCanvas: boolean;
+  lastRenderError: string | null;
+  lastRenderErrorAt: number | null;
+};
+
 export type SpriteBootReport = {
   version: string | null;
   base: string | null;
@@ -179,11 +190,16 @@ export type SpriteBootReport = {
   fallbackBase: string | null;
   atlasReports: AtlasBootReport[];
   bridgeSnapshot: any;
+  renderer: SpriteRendererReport;
   decoder: Ktx2DecoderTelemetry;
   generatedAt: number;
 };
 
 let spriteBootReport: SpriteBootReport | null = null;
+let lastSpriteRenderError: string | null = null;
+let lastSpriteRenderErrorAt: number | null = null;
+const spriteRenderFailureSignatures = new Set<string>();
+let contextRestoreReloadPromise: Promise<void> | null = null;
 
 type RuntimeTextureIndex = {
   exact: Map<string, any>;
@@ -248,6 +264,54 @@ type SpriteBridge = {
   atlas?: Record<string, { textures?: Record<string, any> }>;
   runtimePool?: Record<string, any>;
 };
+
+function hasExtractCanvas(renderer: any): boolean {
+  return typeof renderer?.extract?.canvas === 'function';
+}
+
+function getRendererUid(renderer: any): string | number | null {
+  const uid = renderer?.uid ?? renderer?._uid ?? renderer?.CONTEXT_UID ?? renderer?.context?.uid ?? null;
+  if (uid == null) return null;
+  return typeof uid === 'number' || typeof uid === 'string' ? uid : String(uid);
+}
+
+function getRendererType(renderer: any): string | number | null {
+  const type = renderer?.type ?? renderer?.context?.type ?? null;
+  if (type == null) return null;
+  return typeof type === 'number' || typeof type === 'string' ? type : String(type);
+}
+
+function buildRendererReport(state: SpriteState | null | undefined): SpriteRendererReport {
+  const renderer = state?.renderer ?? null;
+  const appRenderer = state?.app?.renderer ?? null;
+  return {
+    rendererUid: getRendererUid(renderer),
+    rendererType: getRendererType(renderer),
+    appRendererUid: getRendererUid(appRenderer),
+    sameAsAppRenderer: Boolean(renderer && appRenderer && renderer === appRenderer),
+    hasExtractCanvas: hasExtractCanvas(renderer),
+    appHasExtractCanvas: hasExtractCanvas(appRenderer),
+    lastRenderError: lastSpriteRenderError,
+    lastRenderErrorAt: lastSpriteRenderErrorAt,
+  };
+}
+
+function updateBootReportRenderer(state: SpriteState | null | undefined): void {
+  if (!spriteBootReport) return;
+  spriteBootReport = {
+    ...spriteBootReport,
+    renderer: buildRendererReport(state),
+  };
+}
+
+function rememberRenderFailure(sig: string, detail: Record<string, unknown>): void {
+  if (spriteRenderFailureSignatures.has(sig)) return;
+  spriteRenderFailureSignatures.add(sig);
+  if (spriteRenderFailureSignatures.size > 512) {
+    spriteRenderFailureSignatures.clear();
+  }
+  spriteLog('warn', 'render-to-canvas-failed', 'Sprite render to canvas failed', detail);
+}
 
 function cloneBootReport(report: SpriteBootReport | null): SpriteBootReport | null {
   if (!report) return null;
@@ -1414,6 +1478,7 @@ type CompressedAtlasEntry = {
 
 type LoadTexturesResult = {
   atlasReports: AtlasBootReport[];
+  compressedEntries: CompressedAtlasEntry[];
   expectedFrames: number;
   hydratedFrames: number;
   status: SpriteHydrationStatus;
@@ -1675,6 +1740,7 @@ async function runBackgroundCompressedRehydrate(
           finalMode: finalized.finalMode,
           atlasReports: atlasReports.map((r) => ({ ...r })),
           bridgeSnapshot: getBridgeSnapshot(),
+          renderer: buildRendererReport(state),
           generatedAt: Date.now(),
         };
       }
@@ -1858,8 +1924,10 @@ async function loadTextures(
       }
     }
   } finally {
-    decoderSnapshot = decoder.snapshot();
-    decoder.destroy();
+    if (decoder) {
+      decoderSnapshot = decoder.snapshot();
+      decoder.destroy();
+    }
   }
 
   notifyWarmup({ phase: 'build-catalog' });
@@ -1964,6 +2032,7 @@ async function loadTextures(
   state.loaded = true;
   return {
     atlasReports,
+    compressedEntries,
     expectedFrames: finalized.expectedFrames,
     hydratedFrames: finalized.hydratedFrames,
     status: finalized.status,
@@ -2153,6 +2222,27 @@ async function resolvePixiFast(): Promise<PixiBundle> {
   throw new Error('PIXI app timeout');
 }
 
+function resolveActiveRenderer(state: SpriteState, preferred?: any): any {
+  const candidates: any[] = [];
+  const push = (value: any) => {
+    if (!value) return;
+    if (!candidates.includes(value)) candidates.push(value);
+  };
+
+  push(state.app?.renderer);
+  push(preferred);
+  push(state.renderer);
+  push(state.app?.render);
+
+  const withExtract = candidates.find((renderer) => hasExtractCanvas(renderer));
+  const picked = withExtract ?? candidates[0] ?? null;
+  if (picked && picked !== state.renderer) {
+    state.renderer = picked;
+    updateBootReportRenderer(state);
+  }
+  return picked;
+}
+
 async function start(): Promise<SpriteService> {
   const runtimeOrigin = getRuntimeWindow().location?.origin || DEFAULT_CFG.origin;
 
@@ -2202,19 +2292,83 @@ async function start(): Promise<SpriteService> {
   await yieldToBrowser();
 
   // Get renderer (prefer explicit renderer, fallback to app.renderer)
-  const renderer = _renderer || app?.renderer || app?.render || null;
+  ctx.state.app = app; // May be null if we got renderer through canvasSpriteCache
+  ctx.state.renderer = _renderer || app?.renderer || app?.render || null;
+  const renderer = resolveActiveRenderer(ctx.state, _renderer || app?.renderer || app?.render || null);
   if (!renderer) {
     throw new Error('No PIXI renderer found');
   }
-  
+
   // Get PIXI constructors - try global PIXI first, then fall back to extraction
   ctx.state.ctors = getCtors(app, renderer);
-  ctx.state.app = app; // May be null if we got renderer through canvasSpriteCache
-  ctx.state.renderer = renderer;
   ctx.state.runtimeTextureHints = Array.isArray(resolved?.runtimeHints)
     ? resolved.runtimeHints.filter(Boolean)
     : [];
   ctx.state.sig = computeVariantSignature(ctx.state).sig;
+
+  const publishLoadResult = (loadResult: LoadTexturesResult, eventReason?: string): void => {
+    ctx!.state.loadMode = loadResult.loadMode;
+    ctx!.state.fallbackBase = loadResult.fallbackBase ?? null;
+    ctx!.state.decoder = { ...loadResult.decoder };
+
+    const coverage = loadResult.expectedFrames > 0
+      ? loadResult.hydratedFrames / loadResult.expectedFrames
+      : 1;
+
+    spriteBootReport = {
+      version: ctx!.state.version,
+      base: ctx!.state.base,
+      pixiVersion,
+      finalMode: loadResult.finalMode,
+      loadMode: loadResult.loadMode,
+      status: loadResult.status,
+      expectedFrames: loadResult.expectedFrames,
+      hydratedFrames: loadResult.hydratedFrames,
+      coverage,
+      fallbackBase: loadResult.fallbackBase ?? null,
+      atlasReports: loadResult.atlasReports.map((r) => ({ ...r })),
+      bridgeSnapshot: {
+        bridge: loadResult.bridgeSnapshot,
+        fallbackBase: loadResult.fallbackBase ?? null,
+      },
+      renderer: buildRendererReport(ctx!.state),
+      decoder: { ...loadResult.decoder },
+      generatedAt: Date.now(),
+    };
+
+    dispatchHydrationEvent(eventReason ?? (loadResult.status === 'ok' ? 'hydrated' : 'degraded/final'), {
+      mode: loadResult.finalMode,
+      loadMode: loadResult.loadMode,
+      status: loadResult.status,
+      degraded: loadResult.status !== 'ok',
+      expectedFrames: loadResult.expectedFrames,
+      hydratedFrames: loadResult.hydratedFrames,
+      coverage: Number(coverage.toFixed(3)),
+      renderer: spriteBootReport.renderer,
+    });
+  };
+
+  const scheduleContextRestoreReload = (): void => {
+    if (contextRestoreReloadPromise) return;
+    contextRestoreReloadPromise = (async () => {
+      try {
+        await delay(80);
+        if (!ctx?.state?.base) return;
+        resolveActiveRenderer(ctx.state);
+        const reloaded = await loadTextures(ctx.state.base, ctx.state);
+        publishLoadResult(reloaded, reloaded.status === 'ok' ? 'rehydrated' : 'degraded/final');
+        if (reloaded.compressedEntries.length > 0) {
+          await runBackgroundCompressedRehydrate(ctx.state.base, reloaded.compressedEntries, reloaded.atlasReports, ctx.state);
+        }
+      } catch (error) {
+        spriteLog('warn', 'context-restore-reload-failed', 'Sprite reload after context restore failed', {
+          error: String((error as Error)?.message ?? error),
+        });
+      } finally {
+        contextRestoreReloadPromise = null;
+      }
+    })();
+  };
 
   // Listen for WebGL context restoration — clear stale texture caches so the
   // next sprite render triggers re-extraction from the new context.
@@ -2226,9 +2380,11 @@ async function start(): Promise<SpriteService> {
           ctx.state.tex.clear();
           ctx.state.srcCan.clear();
           ctx.state.atlasBases.clear();
-          clearVariantCache();
+          clearVariantCache(ctx.state);
           clearSpriteDataUrlCache();
-          spriteLog('warn', 'webgl-context-restored', 'WebGL context restored — sprite caches cleared');
+          resolveActiveRenderer(ctx.state);
+          spriteLog('warn', 'webgl-context-restored', 'WebGL context restored - sprite caches cleared, scheduling reload');
+          scheduleContextRestoreReload();
         }
       });
     }
@@ -2240,40 +2396,7 @@ async function start(): Promise<SpriteService> {
   // Load all textures using prefetched data where available
   const loadResult = await loadTextures(ctx.state.base, ctx.state, prefetched);
   const hasCompressedAtlases = loadResult.atlasReports.some((report) => report.mode === 'compressed');
-  ctx.state.loadMode = loadResult.loadMode;
-  ctx.state.fallbackBase = loadResult.fallbackBase ?? null;
-  ctx.state.decoder = { ...loadResult.decoder };
-  const coverage = loadResult.expectedFrames > 0
-    ? loadResult.hydratedFrames / loadResult.expectedFrames
-    : 1;
-  spriteBootReport = {
-    version: ctx.state.version,
-    base: ctx.state.base,
-    pixiVersion,
-    finalMode: loadResult.finalMode,
-    loadMode: loadResult.loadMode,
-    status: loadResult.status,
-    expectedFrames: loadResult.expectedFrames,
-    hydratedFrames: loadResult.hydratedFrames,
-    coverage,
-    fallbackBase: loadResult.fallbackBase ?? null,
-    atlasReports: loadResult.atlasReports.map((r) => ({ ...r })),
-    bridgeSnapshot: {
-      bridge: loadResult.bridgeSnapshot,
-      fallbackBase: loadResult.fallbackBase ?? null,
-    },
-    decoder: { ...loadResult.decoder },
-    generatedAt: Date.now(),
-  };
-  dispatchHydrationEvent(loadResult.status === 'ok' ? 'hydrated' : 'degraded/final', {
-    mode: loadResult.finalMode,
-    loadMode: loadResult.loadMode,
-    status: loadResult.status,
-    degraded: loadResult.status !== 'ok',
-    expectedFrames: loadResult.expectedFrames,
-    hydratedFrames: loadResult.hydratedFrames,
-    coverage: Number(coverage.toFixed(3)),
-  });
+  publishLoadResult(loadResult);
 
   // Start job processor using ticker if available, otherwise use requestAnimationFrame
   ctx.state.open = true;
@@ -2294,14 +2417,99 @@ async function start(): Promise<SpriteService> {
 
   // Helper to render texture to canvas
   const renderTextureToCanvas = (tex: any): HTMLCanvasElement | null => {
+    const state = ctx!.state;
+    const tried: any[] = [];
+    const pushTried = (renderer: any): boolean => {
+      if (!renderer) return false;
+      if (tried.includes(renderer)) return false;
+      tried.push(renderer);
+      return true;
+    };
+    const textureKey =
+      tex?.label ||
+      tex?.textureCacheIds?.[0] ||
+      tex?.frame?.label ||
+      `${tex?.frame?.x ?? 'x'}:${tex?.frame?.y ?? 'y'}:${tex?.frame?.width ?? 'w'}:${tex?.frame?.height ?? 'h'}`;
+
+    const setRenderError = (message: string | null): void => {
+      lastSpriteRenderError = message;
+      lastSpriteRenderErrorAt = message ? Date.now() : null;
+      updateBootReportRenderer(state);
+    };
+
+    const tryExtract = (renderer: any, stage: string): HTMLCanvasElement | null => {
+      if (!pushTried(renderer)) return null;
+      if (!hasExtractCanvas(renderer)) return null;
+
+      let spr: any = null;
+      try {
+        spr = new state.ctors!.Sprite(tex);
+        const canvas = renderer.extract.canvas(spr, { resolution: 1 });
+        if (canvas) {
+          if (state.renderer !== renderer) {
+            state.renderer = renderer;
+            updateBootReportRenderer(state);
+          }
+          setRenderError(null);
+          return canvas;
+        }
+      } catch (error) {
+        const msg = String((error as Error)?.message ?? error);
+        const sig = `${stage}|${textureKey}|${getRendererUid(renderer) ?? 'no-uid'}|${msg}`;
+        rememberRenderFailure(sig, {
+          stage,
+          texture: textureKey,
+          rendererUid: getRendererUid(renderer),
+          rendererType: getRendererType(renderer),
+          hasExtractCanvas: hasExtractCanvas(renderer),
+          error: msg,
+        });
+        setRenderError(`${stage}:${msg}`);
+      } finally {
+        try {
+          spr?.destroy?.({ children: true, texture: false, baseTexture: false });
+        } catch {
+          // ignore sprite cleanup issues
+        }
+      }
+      return null;
+    };
+
+    const currentRenderer = state.renderer;
+    const appRenderer = state.app?.renderer ?? null;
+
+    const direct = tryExtract(currentRenderer, 'state.renderer');
+    if (direct) return direct;
+
+    const appHit = tryExtract(appRenderer, 'app.renderer');
+    if (appHit) return appHit;
+
+    const resolved = resolveActiveRenderer(state);
+    const resolvedHit = tryExtract(resolved, 'resolved.renderer');
+    if (resolvedHit) return resolvedHit;
+
     try {
-      const spr = new ctx!.state.ctors!.Sprite(tex);
-      const canvas = ctx!.state.renderer.extract.canvas(spr, { resolution: 1 });
-      spr.destroy?.({ children: true, texture: false, baseTexture: false });
-      return canvas;
-    } catch (e) {
+      const fallback = textureToCanvas(tex, state, ctx!.cfg);
+      if (fallback) {
+        setRenderError(null);
+        return fallback;
+      }
+    } catch (error) {
+      const msg = String((error as Error)?.message ?? error);
+      const sig = `manual-fallback|${textureKey}|${getRendererUid(state.renderer) ?? 'no-uid'}|${msg}`;
+      rememberRenderFailure(sig, {
+        stage: 'manual-fallback',
+        texture: textureKey,
+        rendererUid: getRendererUid(state.renderer),
+        rendererType: getRendererType(state.renderer),
+        hasExtractCanvas: hasExtractCanvas(state.renderer),
+        error: msg,
+      });
+      setRenderError(`manual-fallback:${msg}`);
       return null;
     }
+
+    return null;
   };
 
   // Build service
@@ -2479,18 +2687,24 @@ async function start(): Promise<SpriteService> {
     loadMode: ctx.state.loadMode ?? 'unknown',
   });
 
-  if (hasCompressedAtlases && loadResult.status === 'ok') {
+  if (hasCompressedAtlases) {
     void (async () => {
       await delay(0);
-      await runPostHydrationMutationPass(ctx!.state, ctx!.cfg);
-      dispatchHydrationEvent('hydrated', {
-        mode: spriteBootReport?.finalMode ?? 'unknown',
-        loadMode: ctx?.state?.loadMode ?? 'unknown',
-        expectedFrames: spriteBootReport?.expectedFrames ?? 0,
-        hydratedFrames: spriteBootReport?.hydratedFrames ?? 0,
-        coverage: Number((spriteBootReport?.coverage ?? 0).toFixed(3)),
-        degraded: (spriteBootReport?.status ?? 'ok') !== 'ok',
-      });
+      if (ctx?.state?.base && loadResult.compressedEntries.length > 0) {
+        await runBackgroundCompressedRehydrate(ctx.state.base, loadResult.compressedEntries, loadResult.atlasReports, ctx.state);
+      }
+      if (loadResult.status === 'ok') {
+        await runPostHydrationMutationPass(ctx!.state, ctx!.cfg);
+        dispatchHydrationEvent('hydrated', {
+          mode: spriteBootReport?.finalMode ?? 'unknown',
+          loadMode: ctx?.state?.loadMode ?? 'unknown',
+          expectedFrames: spriteBootReport?.expectedFrames ?? 0,
+          hydratedFrames: spriteBootReport?.hydratedFrames ?? 0,
+          coverage: Number((spriteBootReport?.coverage ?? 0).toFixed(3)),
+          degraded: (spriteBootReport?.status ?? 'ok') !== 'ok',
+          renderer: spriteBootReport?.renderer ?? null,
+        });
+      }
     })();
   }
 
@@ -2613,3 +2827,4 @@ export { start as initSpriteSystem };
 
 // Export types
 export type { SpriteService, GetSpriteParams, RenderOptions };
+

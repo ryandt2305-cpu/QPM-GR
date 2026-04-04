@@ -246,7 +246,10 @@ interface ActiveAbility {
   raw: string;
   procsPerHour: number;
   coinsPerHour: number | null;
+  suppressRateDisplay?: boolean;
 }
+
+const SUPPRESS_RATE_ABILITY_IDS = new Set(['ProduceMutationBoost', 'ProduceMutationBoostII']);
 
 function resolvePetAbilities(pet: ActivePetInfo, gardenCtx?: AbilityValuationContext): ActiveAbility[] {
   if (!pet.abilities?.length) return [];
@@ -271,7 +274,7 @@ function resolvePetAbilities(pet: ActivePetInfo, gardenCtx?: AbilityValuationCon
         } catch { /* ignore if garden not ready */ }
       }
     }
-    result.push({ def, raw, procsPerHour: stats.procsPerHour, coinsPerHour });
+    result.push({ def, raw, procsPerHour: stats.procsPerHour, coinsPerHour, suppressRateDisplay: SUPPRESS_RATE_ABILITY_IDS.has(def.id) });
   }
   return result;
 }
@@ -327,13 +330,22 @@ function buildAbilityRow(
 
   // Fixed-width stat columns — widths match the card column header for alignment.
   const procsChip = document.createElement('span');
-  procsChip.textContent = `${ability.procsPerHour.toFixed(1)}/hr`;
-  procsChip.title = 'Expected procs per hour (based on strength)';
-  procsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-accent,#4CAF50);flex-shrink:0;width:52px;text-align:right;';
+  if (ability.suppressRateDisplay) {
+    procsChip.textContent = '—';
+    procsChip.title = 'Rate cannot be accurately calculated for this ability';
+    procsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-text-muted,rgba(232,224,255,0.4));flex-shrink:0;width:52px;text-align:right;';
+  } else {
+    procsChip.textContent = `${ability.procsPerHour.toFixed(1)}/hr`;
+    procsChip.title = 'Expected procs per hour (based on strength)';
+    procsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-accent,#4CAF50);flex-shrink:0;width:52px;text-align:right;';
+  }
   row.appendChild(procsChip);
 
   const coinsChip = document.createElement('span');
-  if (ability.coinsPerHour != null && ability.coinsPerHour > 0) {
+  if (ability.suppressRateDisplay) {
+    // Empty placeholder keeps column alignment intact.
+    coinsChip.style.cssText = 'flex-shrink:0;width:62px;';
+  } else if (ability.coinsPerHour != null && ability.coinsPerHour > 0) {
     coinsChip.textContent = `${formatCoinsAbbreviated(ability.coinsPerHour)}/hr`;
     coinsChip.title = 'Estimated coins per hour';
     coinsChip.style.cssText = 'font-size:10px;font-family:monospace;color:var(--qpm-warning,#ffa500);flex-shrink:0;width:62px;text-align:right;';
@@ -352,11 +364,16 @@ function buildAbilityRow(
   const lastProcAt = history?.lastPerformedAt ?? null;
 
   const timerEl = document.createElement('span');
-  timerEl.dataset.timerCell = '1';
-  timerEl.dataset.lastProc = lastProcAt ? String(lastProcAt) : '';
-  timerEl.dataset.procsPerHour = String(ability.procsPerHour);
   timerEl.style.cssText = 'font-size:10px;white-space:nowrap;flex-shrink:0;width:76px;text-align:right;';
-  updateTimerCell(timerEl);
+  if (ability.suppressRateDisplay) {
+    timerEl.textContent = '—';
+    timerEl.style.color = 'rgba(232,224,255,0.3)';
+  } else {
+    timerEl.dataset.timerCell = '1';
+    timerEl.dataset.lastProc = lastProcAt ? String(lastProcAt) : '';
+    timerEl.dataset.procsPerHour = String(ability.procsPerHour);
+    updateTimerCell(timerEl);
+  }
   row.appendChild(timerEl);
 
   // Stats visibility toggle — click the row to show/hide procs/coins/timer columns.
@@ -618,8 +635,10 @@ function getTotals(pets: ActivePetInfo[], gardenCtx?: AbilityValuationContext): 
     if (!abilities.length) continue;
     petCount++;
     for (const a of abilities) {
-      procsPerHour += a.procsPerHour;
-      coinsPerHour += a.coinsPerHour ?? 0;
+      if (!a.suppressRateDisplay) {
+        procsPerHour += a.procsPerHour;
+        coinsPerHour += a.coinsPerHour ?? 0;
+      }
       abilityCount++;
     }
   }

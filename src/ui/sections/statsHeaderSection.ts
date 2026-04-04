@@ -21,6 +21,14 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.34', date: '2026-04', notes: [
+    'rewrote garden filter to use per-tile PIXI forward-map traversal; fixes tile click and section filter accuracy',
+    'added Stats Hub garden filter: filter remaining mutations, match-all toggle, per-tile click highlight',
+    'added storage value indicator: overlay and window showing estimated total value of stored items',
+    'fixed ability tracker: crop mutation boost no longer shows inaccurate procs/hr and coins/hr values',
+    'fixed intermittent sprite rendering where pet, plant, and seed canvases could return blank fallbacks on load',
+    'added renderer recovery for stale PIXI capture and WebGL context restore to keep sprite extraction stable',
+  ]},
 { version: '3.1.33', date: '2026-04', notes: [
     'fixed window persistence: pet-hub now restores on reload; fixed toggle no-op during restore',
   ]},

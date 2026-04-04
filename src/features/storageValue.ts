@@ -1,0 +1,475 @@
+// src/features/storageValue.ts
+// Storage Value feature — pure computation layer (no DOM)
+// Computes total sell/shop value of items in Seed Silo, Pet Hutch, Decor Shed, and Inventory
+
+import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
+import { getInventoryItems, onInventoryChange } from '../store/inventory';
+import {
+  getSeedPrice,
+  getPlantSpecies,
+  getPetSpecies,
+  getPetMaxScale,
+  getPetHoursToMature,
+  getDecor,
+  getEggType,
+  getItemPrice,
+  areCatalogsReady,
+} from '../catalogs/gameCatalogs';
+import { computeMutationMultiplier } from '../utils/cropMultipliers';
+import { debounceCancelable } from '../utils/debounce';
+import { storage } from '../utils/storage';
+import { createLogger } from '../utils/logger';
+import { criticalInterval, timerManager } from '../utils/timerManager';
+
+const log = createLogger('QPM:StorageValue');
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const STORAGE_CONFIG_KEY = 'qpm.storageValue.v1';
+const MODAL_RETRY_TIMER_ID = 'storageValue:modalAtomRetry';
+const MODAL_RETRY_MAX = 30;
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+export interface StorageValueConfig {
+  seedSilo: boolean;
+  petHutch: boolean;
+  decorShed: boolean;
+  inventory: boolean;
+}
+
+const DEFAULT_CONFIG: StorageValueConfig = {
+  seedSilo: true,
+  petHutch: true,
+  decorShed: true,
+  inventory: true,
+};
+
+// ---------------------------------------------------------------------------
+// State types
+// ---------------------------------------------------------------------------
+
+export type StorageValueStatus = 'ready' | 'loading' | 'hidden';
+
+export interface StorageValueState {
+  activeModal: string | null;
+  value: number;
+  status: StorageValueStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Target modals and storage mapping
+// ---------------------------------------------------------------------------
+
+const TARGET_MODALS = new Set(['seedSilo', 'petHutch', 'decorShed', 'inventory']);
+
+const MODAL_TO_STORAGE_DECORID: Record<string, string> = {
+  seedSilo: 'SeedSilo',
+  petHutch: 'PetHutch',
+  decorShed: 'DecorShed',
+};
+
+// ---------------------------------------------------------------------------
+// Pet scale formula (exact game logic from pets.ts)
+// ---------------------------------------------------------------------------
+
+function computeGamePetScale(
+  xp: number,
+  targetScale: number,
+  maxScale: number,
+  hoursToMature: number,
+): number {
+  const BASE_TARGET_STRENGTH = 80;
+  const MAX_TARGET_STRENGTH = 100;
+  const STRENGTH_BIRTH_TO_MATURITY = 30;
+  const XP_PER_HOUR = 3600;
+
+  let targetStrength: number;
+  if (targetScale <= 1) {
+    targetStrength = BASE_TARGET_STRENGTH;
+  } else if (targetScale >= maxScale) {
+    targetStrength = MAX_TARGET_STRENGTH;
+  } else {
+    const scaleProgress = (targetScale - 1) / (maxScale - 1);
+    targetStrength = Math.floor(
+      BASE_TARGET_STRENGTH + (MAX_TARGET_STRENGTH - BASE_TARGET_STRENGTH) * scaleProgress,
+    );
+  }
+
+  const startingStrength = targetStrength - STRENGTH_BIRTH_TO_MATURITY;
+  const hoursGrown = xp / XP_PER_HOUR;
+  const strengthGainedPerHour = STRENGTH_BIRTH_TO_MATURITY / hoursToMature;
+  const strengthGained = Math.min(strengthGainedPerHour * hoursGrown, STRENGTH_BIRTH_TO_MATURITY);
+  const currentStrength = Math.floor(startingStrength + strengthGained);
+
+  const progress = targetStrength > 0 ? currentStrength / targetStrength : 1;
+  return progress * targetScale;
+}
+
+// ---------------------------------------------------------------------------
+// Value computations
+// ---------------------------------------------------------------------------
+
+function computePetSellPrice(pet: Record<string, unknown>): number {
+  const species = ((pet.petSpecies ?? pet.species) as string | undefined) ?? '';
+  if (!species) return 0;
+
+  const entry = getPetSpecies(species) as Record<string, unknown> | null;
+  if (!entry) return 0;
+
+  const maturitySellPrice = typeof entry.maturitySellPrice === 'number' ? entry.maturitySellPrice : 0;
+  if (!maturitySellPrice) return 0;
+
+  const xp = typeof pet.xp === 'number' ? pet.xp : 0;
+  const targetScale = typeof pet.targetScale === 'number' ? pet.targetScale : 1;
+  const maxScale = getPetMaxScale(species) ?? 2;
+  const hoursToMature = getPetHoursToMature(species) ?? 12;
+  const scale = computeGamePetScale(xp, targetScale, maxScale, hoursToMature);
+  const mutations = Array.isArray(pet.mutations) ? (pet.mutations as string[]) : [];
+  const { totalMultiplier } = computeMutationMultiplier(mutations);
+
+  return Math.round(maturitySellPrice * scale * totalMultiplier);
+}
+
+function computeStorageItemsValue(items: unknown[]): number {
+  let total = 0;
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+
+    const quantity =
+      typeof raw.quantity === 'number' ? raw.quantity :
+      typeof raw.qty === 'number' ? raw.qty :
+      typeof raw.count === 'number' ? raw.count : 1;
+
+    const itemType = typeof raw.itemType === 'string' ? raw.itemType.toLowerCase() : '';
+
+    if (itemType === 'pet' || 'petSpecies' in raw) {
+      total += computePetSellPrice(raw);
+    } else if (raw.decorId && typeof raw.decorId === 'string') {
+      const entry = getDecor(raw.decorId);
+      total += (entry?.coinPrice ?? 0) * quantity;
+    } else {
+      // Seeds (silo items): try species or seedName
+      const species =
+        (typeof raw.species === 'string' ? raw.species : null) ??
+        (typeof raw.seedName === 'string' ? raw.seedName : null) ??
+        (typeof raw.crop === 'string' ? raw.crop : null);
+      if (species) {
+        const price = getSeedPrice(species);
+        total += (price?.coins ?? 0) * quantity;
+      }
+    }
+  }
+  return total;
+}
+
+function computeInventoryValue(): number {
+  const items = getInventoryItems();
+  let total = 0;
+
+  for (const item of items) {
+    const raw = item.raw as Record<string, unknown>;
+    const quantity = item.quantity ?? 1;
+    const itemType = (
+      (item.itemType as string | null) ??
+      (raw.itemType as string | undefined) ??
+      ''
+    ).toLowerCase();
+
+    if (itemType === 'pet' || 'petSpecies' in raw) {
+      total += computePetSellPrice(raw);
+    } else if (itemType === 'produce') {
+      const species = (
+        (item.species as string | null) ??
+        (raw.species as string | undefined) ??
+        ''
+      );
+      if (species) {
+        const plantEntry = getPlantSpecies(species) as Record<string, unknown> | null;
+        const cropEntry = plantEntry?.crop as Record<string, unknown> | undefined;
+        const baseSellPrice = typeof cropEntry?.baseSellPrice === 'number' ? cropEntry.baseSellPrice : 0;
+        if (baseSellPrice > 0) {
+          const scale =
+            typeof raw.scale === 'number' ? raw.scale :
+            typeof raw.targetScale === 'number' ? raw.targetScale : 1;
+          const mutations = Array.isArray(raw.mutations) ? (raw.mutations as string[]) : [];
+          const { totalMultiplier } = computeMutationMultiplier(mutations);
+          total += Math.round(baseSellPrice * scale * totalMultiplier) * quantity;
+        }
+      }
+    } else if (itemType === 'seed') {
+      const species =
+        (item.species as string | null) ??
+        (raw.species as string | undefined) ??
+        (raw.seedName as string | undefined) ??
+        '';
+      if (species) {
+        const price = getSeedPrice(species);
+        total += (price?.coins ?? 0) * quantity;
+      }
+    } else if (itemType === 'egg') {
+      const eggId = (raw.eggId as string | undefined) ?? '';
+      if (eggId) {
+        const entry = getEggType(eggId);
+        total += (entry?.coinPrice ?? 0) * quantity;
+      }
+    } else if (itemType === 'tool') {
+      const toolId = (raw.toolId as string | undefined) ?? '';
+      if (toolId) {
+        const price = getItemPrice(toolId);
+        total += (price?.coins ?? 0) * quantity;
+      }
+    } else if (itemType === 'decor') {
+      const decorId = (raw.decorId as string | undefined) ?? '';
+      if (decorId) {
+        const entry = getDecor(decorId);
+        total += (entry?.coinPrice ?? 0) * quantity;
+      }
+    } else if (itemType === 'plant') {
+      // Growing plants: approximate as seed cost
+      const species = (item.species as string | null) ?? (raw.species as string | undefined) ?? '';
+      if (species) {
+        const price = getSeedPrice(species);
+        total += price?.coins ?? 0;
+      }
+    }
+  }
+
+  return total;
+}
+
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
+
+let started = false;
+let currentConfig: StorageValueConfig = { ...DEFAULT_CONFIG };
+let currentState: StorageValueState = { activeModal: null, value: 0, status: 'hidden' };
+let currentModalId: string | null = null;
+let cachedStorages: unknown[] = [];
+let modalAtomRetryCount = 0;
+
+const stateListeners = new Set<(state: StorageValueState) => void>();
+
+// Subscriptions (cleaned up on stop)
+let modalAtomUnsub: (() => void) | null = null;
+let dataAtomUnsub: (() => void) | null = null;
+let invUnsub: (() => void) | null = null;
+let stopRetryTimer: (() => void) | null = null;
+let debouncedRecompute: ((() => void) & { cancel: () => void }) | null = null;
+
+// ---------------------------------------------------------------------------
+// State helpers
+// ---------------------------------------------------------------------------
+
+function notifyListeners(state: StorageValueState): void {
+  currentState = state;
+  for (const listener of stateListeners) {
+    try { listener(state); } catch {}
+  }
+}
+
+function getDetectedStorages(): Set<string> {
+  const detected = new Set<string>();
+  for (const s of cachedStorages) {
+    if (!s || typeof s !== 'object') continue;
+    const decorId = (s as Record<string, unknown>).decorId as string | undefined;
+    if (decorId) detected.add(decorId);
+  }
+  return detected;
+}
+
+function isEnabledForModal(modalId: string): boolean {
+  const detected = getDetectedStorages();
+  if (modalId === 'inventory') return currentConfig.inventory;
+  if (modalId === 'seedSilo') return currentConfig.seedSilo && detected.has('SeedSilo');
+  if (modalId === 'petHutch') return currentConfig.petHutch && detected.has('PetHutch');
+  if (modalId === 'decorShed') return currentConfig.decorShed && detected.has('DecorShed');
+  return false;
+}
+
+function computeValueForModal(modalId: string): number {
+  if (modalId === 'inventory') {
+    return computeInventoryValue();
+  }
+  const storageDecorId = MODAL_TO_STORAGE_DECORID[modalId];
+  if (!storageDecorId) return 0;
+
+  const storageEntry = cachedStorages.find((s) => {
+    if (!s || typeof s !== 'object') return false;
+    return (s as Record<string, unknown>).decorId === storageDecorId;
+  }) as Record<string, unknown> | undefined;
+
+  if (!storageEntry) return 0;
+  const items = Array.isArray(storageEntry.items) ? (storageEntry.items as unknown[]) : [];
+  return computeStorageItemsValue(items);
+}
+
+function recompute(): void {
+  if (!currentModalId || !TARGET_MODALS.has(currentModalId)) {
+    notifyListeners({ activeModal: null, value: 0, status: 'hidden' });
+    return;
+  }
+  if (!isEnabledForModal(currentModalId)) {
+    notifyListeners({ activeModal: currentModalId, value: 0, status: 'hidden' });
+    return;
+  }
+  if (!areCatalogsReady()) {
+    notifyListeners({ activeModal: currentModalId, value: 0, status: 'loading' });
+    return;
+  }
+  const value = computeValueForModal(currentModalId);
+  notifyListeners({ activeModal: currentModalId, value, status: 'ready' });
+}
+
+// ---------------------------------------------------------------------------
+// Atom subscriptions (async, fire-and-forget)
+// ---------------------------------------------------------------------------
+
+async function trySubscribeModalAtom(): Promise<boolean> {
+  if (modalAtomUnsub) return true;
+
+  const atom = getAtomByLabel('activeModalAtom');
+  if (!atom) return false;
+
+  try {
+    const unsub = await subscribeAtom<string | null>(atom, (value) => {
+      currentModalId = typeof value === 'string' && TARGET_MODALS.has(value) ? value : null;
+      recompute();
+    });
+    modalAtomUnsub = unsub;
+    // Kill retry timer — atom found
+    timerManager.destroy(MODAL_RETRY_TIMER_ID);
+    stopRetryTimer = null;
+    log('Subscribed to activeModalAtom');
+    return true;
+  } catch (err) {
+    log('Failed to subscribe to activeModalAtom', err);
+    return false;
+  }
+}
+
+async function initDataAtomSubscription(): Promise<void> {
+  if (dataAtomUnsub) return;
+  const atom = getAtomByLabel('myDataAtom');
+  if (!atom) {
+    log('myDataAtom not found — storage detection unavailable');
+    return;
+  }
+  try {
+    const unsub = await subscribeAtom<Record<string, unknown> | null>(atom, (value) => {
+      const inv = value?.inventory as Record<string, unknown> | undefined;
+      cachedStorages = Array.isArray(inv?.storages) ? (inv!.storages as unknown[]) : [];
+      if (currentModalId && TARGET_MODALS.has(currentModalId)) {
+        debouncedRecompute?.();
+      }
+    });
+    dataAtomUnsub = unsub;
+    log('Subscribed to myDataAtom');
+  } catch (err) {
+    log('Failed to subscribe to myDataAtom', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export function getStorageValueState(): StorageValueState {
+  return { ...currentState };
+}
+
+export function onStorageValueChange(cb: (state: StorageValueState) => void): () => void {
+  stateListeners.add(cb);
+  return () => { stateListeners.delete(cb); };
+}
+
+export function getStorageValueConfig(): StorageValueConfig {
+  return { ...currentConfig };
+}
+
+export function saveStorageValueConfig(next: StorageValueConfig): void {
+  currentConfig = { ...next };
+  storage.set(STORAGE_CONFIG_KEY, currentConfig);
+  recompute();
+}
+
+export function getDetectedStorageIds(): Set<string> {
+  return getDetectedStorages();
+}
+
+export function startStorageValue(): void {
+  if (started) return;
+  started = true;
+
+  currentConfig = {
+    ...DEFAULT_CONFIG,
+    ...storage.get<Partial<StorageValueConfig>>(STORAGE_CONFIG_KEY, {}),
+  };
+
+  debouncedRecompute = debounceCancelable(recompute, 200);
+
+  // Try subscribing to modal atom immediately
+  void trySubscribeModalAtom();
+
+  // Retry every second until found (handles minified label-less builds)
+  stopRetryTimer = criticalInterval(MODAL_RETRY_TIMER_ID, () => {
+    if (modalAtomUnsub) {
+      timerManager.destroy(MODAL_RETRY_TIMER_ID);
+      stopRetryTimer = null;
+      return;
+    }
+    modalAtomRetryCount++;
+    if (modalAtomRetryCount >= MODAL_RETRY_MAX) {
+      timerManager.destroy(MODAL_RETRY_TIMER_ID);
+      stopRetryTimer = null;
+      return;
+    }
+    void trySubscribeModalAtom();
+  }, 1000);
+
+  // Subscribe to game data atom for storage building contents
+  void initDataAtomSubscription();
+
+  // Subscribe to inventory changes (for Inventory modal)
+  invUnsub = onInventoryChange(() => {
+    if (currentModalId === 'inventory') {
+      debouncedRecompute?.();
+    }
+  });
+
+  log('Started');
+}
+
+export function stopStorageValue(): void {
+  if (!started) return;
+  started = false;
+
+  debouncedRecompute?.cancel();
+  debouncedRecompute = null;
+
+  timerManager.destroy(MODAL_RETRY_TIMER_ID);
+  stopRetryTimer = null;
+
+  modalAtomUnsub?.();
+  modalAtomUnsub = null;
+
+  dataAtomUnsub?.();
+  dataAtomUnsub = null;
+
+  invUnsub?.();
+  invUnsub = null;
+
+  stateListeners.clear();
+  currentModalId = null;
+  cachedStorages = [];
+  modalAtomRetryCount = 0;
+  currentState = { activeModal: null, value: 0, status: 'hidden' };
+
+  log('Stopped');
+}

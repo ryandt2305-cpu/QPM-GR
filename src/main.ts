@@ -84,6 +84,10 @@ import { storage } from './utils/storage';
 import { DEBUG_GLOBALS_OPT_IN_KEY, isDebugGlobalsEnabled } from './utils/debugGlobals';
 import { timerManager } from './utils/timerManager';
 import { startController, stopController } from './features/controller/index';
+import { startStorageValue, stopStorageValue } from './features/storageValue';
+import { startStorageValueOverlay, stopStorageValueOverlay } from './ui/storageValueOverlay';
+import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/textureSwapper';
+import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1470,6 +1474,8 @@ window.addEventListener('beforeunload', () => {
   stopPetTeamsStore();
   stopPetTeamsLogs();
   stopPetsWindow();
+  stopStorageValueOverlay();
+  stopStorageValue();
 }, { once: true });
 
 async function waitForGame(): Promise<void> {
@@ -1640,6 +1646,11 @@ async function initialize(): Promise<void> {
   initCropSizeIndicator();
   startNativeFeedIntercept();
   startController();
+  startStorageValue();
+  startStorageValueOverlay();
+  if (TEXTURE_MANIPULATOR_ENABLED) {
+    initTextureSwapper();
+  }
   if (SHOP_QUAD_SPIKE_ENABLED) {
     initializeShopQuadModalSpike();
   } else {
@@ -1730,6 +1741,9 @@ async function initialize(): Promise<void> {
   registerWindowOpener('utility-hub', openUtilityHubWindow);
   registerWindowOpener('tools-hub', openToolsHubWindow);
   registerWindowOpener('tools-guide', openGuideWindow);
+  if (TEXTURE_MANIPULATOR_ENABLED) {
+    registerWindowOpener('texture-swapper', openTextureSwapperWindow);
+  }
   registerWindowOpener('pet-hub', () => {
     const render = (root: HTMLElement) => import('./ui/petHubWindow').then(({ renderPetHubWindow }) => renderPetHubWindow(root));
     toggleWindow('pet-hub', '🐾 Pet Hub', render, '1600px', '92vh');
@@ -1767,4 +1781,3 @@ async function initialize(): Promise<void> {
 initialize().catch(error => {
   console.error('[QuinoaPetMgr] Initialization failed:', error);
 });
-

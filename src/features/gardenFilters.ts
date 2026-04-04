@@ -136,6 +136,7 @@ function collectMutationKeys(value: unknown, out: Set<string>, seen: WeakSet<obj
 export interface GardenFiltersConfig {
   enabled: boolean;
   mutations: string[]; // List of mutations to show (Rainbow, Gold, Frozen, etc)
+  excludeMutations: boolean; // Invert: show plants WITHOUT the selected mutations
   cropSpecies: string[]; // List of crop species to show (Carrot, Strawberry, etc)
   eggTypes: string[]; // List of egg types to show (CommonEgg, RareEgg, etc)
   growthStates: ('mature' | 'growing')[]; // Growth state filter ([] = show all)
@@ -144,6 +145,7 @@ export interface GardenFiltersConfig {
 let config: GardenFiltersConfig = {
   enabled: false,
   mutations: [],
+  excludeMutations: false,
   cropSpecies: [],
   eggTypes: [],
   growthStates: [],
@@ -186,6 +188,27 @@ function getOrBuildFilterSets(): CachedFilterSets {
  * Never touches config or storage.
  */
 let statsHubOverride: string[] | null = null;
+
+/**
+ * Stats hub exclude mutations override — when non-null, shows tiles WITHOUT the given mutations.
+ * Takes priority over the tile index override. Never touches config or storage.
+ */
+let statsHubExcludeMutationsSet: Set<string> | null = null;
+
+/**
+ * Stats hub tile key override — when non-null, shows only tiles whose tileKey
+ * ("g:<dirtTileIdx>" or "b:<boardwalkTileIdx>") is in this set.
+ * Takes priority over the species override. Never touches config or storage.
+ */
+let statsHubTileKeySet: Set<string> | null = null;
+
+/**
+ * Exclude mutations matching mode for the stats hub "Filter Remaining" overlay.
+ * false (default/ANY): show tile if it's missing AT LEAST ONE selected mutation.
+ * true  (ALL):         show tile only if it has NONE of the selected mutations.
+ * Only used when statsHubExcludeMutationsSet is non-null.
+ */
+let statsHubExcludeMutationsAllMode = false;
 
 /**
  * Access PIXI app via QPM's own capture system
@@ -402,14 +425,25 @@ function applyFiltersToStage(
             speciesMatches = unknownSpeciesToShow.has(tileData.species);
           }
 
-          // Check mutations (ANY slot has ANY selected mutation)
+          // Check mutations
           if (mutationsToShow.size > 0) {
             const tileMutations = getTileMutations(tileData);
-            mutationMatches = tileMutations.some((m: string) => mutationsToShow.has(m));
-
-            // Debug first tile with data
-            if (stats.withData === 1) {
-              log(`[GARDEN-FILTERS-DEBUG] First tile with data (${x}, ${y}): species=${tileData.species}, mutations=${JSON.stringify(tileMutations)}, mutationMatches=${mutationMatches}`);
+            const shouldExclude = statsHubExcludeMutationsSet !== null || config.excludeMutations;
+            if (shouldExclude) {
+              if (statsHubExcludeMutationsAllMode) {
+                // ALL mode: show tile only if it has NONE of the selected mutations
+                const hasMutation = tileMutations.some((m: string) => mutationsToShow.has(m));
+                mutationMatches = !hasMutation;
+              } else {
+                // ANY mode (default): show tile if it's missing AT LEAST ONE selected mutation
+                // (hide only when the tile already has ALL selected mutations = fully complete)
+                const tileMutSet = new Set<string>(tileMutations);
+                const hasAllMutations = Array.from(mutationsToShow).every(m => tileMutSet.has(m));
+                mutationMatches = !hasAllMutations;
+              }
+            } else {
+              // Include mode: show tile if it has ANY of the selected mutations
+              mutationMatches = tileMutations.some((m: string) => mutationsToShow.has(m));
             }
           }
 
@@ -505,6 +539,66 @@ function buildSpeciesLabelSets(
  * growthStates/eggTypes) using the override list — main config is untouched.
  */
 function applyFilters(): void {
+  // ── Stats hub exclude mutations override ─────────────────────────────────
+  // Shows tiles WITHOUT the given mutations. Takes priority over species override.
+  if (statsHubExcludeMutationsSet !== null) {
+    try {
+      const app = getPixiApp();
+      if (!app || !app.stage) return;
+      const emptySet = new Set<string>();
+      const stats = { visible: 0, dimmed: 0, withData: 0, withoutData: 0 };
+      const tileNodes = getOrBuildTileNodeCache(app.stage);
+      for (const { node } of tileNodes) {
+        applyFiltersToStage(node, emptySet, emptySet, statsHubExcludeMutationsSet, emptySet, emptySet, stats, 0, 0);
+      }
+      log(`🔍 [GARDEN-FILTERS] Exclude override: ${stats.visible} visible, ${stats.dimmed} dimmed`);
+    } catch (error) {
+      log('⚠️ [GARDEN-FILTERS] Error applying exclude override', error);
+    }
+    return;
+  }
+
+  // ── Stats hub tile key override ───────────────────────────────────────────
+  // Shows only specific individual tiles by tileKey ("g:<dirtTileIdx>" or "b:<boardwalkTileIdx>").
+  // Uses the forward map (globalIdx → dirtTileIdx) to match PIXI nodes — avoids reverse-map issues.
+  if (statsHubTileKeySet !== null) {
+    try {
+      const app = getPixiApp();
+      if (!app || !app.stage) return;
+      const map = getMapSnapshot();
+      if (!map) return;
+      const tileNodes = getOrBuildTileNodeCache(app.stage);
+      let visible = 0; let dimmed = 0;
+      for (const { node, x, y } of tileNodes) {
+        const childLabel = node.children?.[0]?.label;
+        if (!childLabel || childLabel === 'Sprite') continue;
+        const globalIdx = x + y * map.cols;
+        // Forward lookup: globalIdx → local tile index (same path used in getGardenTileData)
+        let tileKey: string | null = null;
+        const dirtMapping = map.globalTileIdxToDirtTile?.[globalIdx];
+        if (dirtMapping) {
+          tileKey = `g:${Number(dirtMapping.dirtTileIdx)}`;
+        } else {
+          const boardwalkMapping = map.globalTileIdxToBoardwalk?.[globalIdx];
+          if (boardwalkMapping) {
+            tileKey = `b:${Number(boardwalkMapping.boardwalkTileIdx)}`;
+          }
+        }
+        if (tileKey !== null && statsHubTileKeySet.has(tileKey)) {
+          node.alpha = 1.0;
+          visible++;
+        } else {
+          node.alpha = DIM_ALPHA;
+          dimmed++;
+        }
+      }
+      log(`🔍 [GARDEN-FILTERS] Tile key override: ${visible} visible, ${dimmed} dimmed`);
+    } catch (error) {
+      log('⚠️ [GARDEN-FILTERS] Error applying tile key override', error);
+    }
+    return;
+  }
+
   // ── Stats hub override path ───────────────────────────────────────────────
   // Takes full priority; main config (including enabled, mutations, etc.) is ignored.
   if (statsHubOverride !== null) {
@@ -596,6 +690,7 @@ function loadConfig(): void {
       config = {
         enabled: stored.enabled ?? config.enabled,
         mutations: stored.mutations ?? config.mutations,
+        excludeMutations: stored.excludeMutations ?? config.excludeMutations,
         cropSpecies: stored.cropSpecies ?? config.cropSpecies,
         eggTypes: stored.eggTypes ?? config.eggTypes,
         growthStates: stored.growthStates ?? config.growthStates,
@@ -642,8 +737,11 @@ function startFilteringPolling(): void {
   cleanupInterval = visibleInterval(
     'garden-filters-poll',
     () => {
-      // Override always wins — keep it fresh as garden state changes
-      if (statsHubOverride !== null) { applyFilters(); return; }
+      // Any override wins — keep it fresh as garden state changes
+      if (statsHubOverride !== null || statsHubTileKeySet !== null || statsHubExcludeMutationsSet !== null) {
+        applyFilters();
+        return;
+      }
       if (!config.enabled) return;
       applyFilters();
     },
@@ -661,6 +759,9 @@ function stopFilteringPolling(): void {
     cleanupInterval();
     cleanupInterval = null;
     statsHubOverride = null;
+    statsHubExcludeMutationsSet = null;
+    statsHubExcludeMutationsAllMode = false;
+    statsHubTileKeySet = null;
     tileNodeCache = null;
     tileNodeCacheStageLength = -1;
     log('⏹️ [GARDEN-FILTERS] Polling stopped');
@@ -730,6 +831,68 @@ export function applyGardenFiltersNow(): void {
  */
 export function resetGardenFiltersNow(): void {
   resetFilters();
+}
+
+/**
+ * Stats hub exclude mutations override — shows tiles that do NOT have any of the given mutations.
+ * Takes priority over the species override. Pass null to release.
+ * Does NOT write to storage and does NOT modify config.
+ */
+export function setStatsHubExcludeMutationsOverride(mutations: string[] | null): void {
+  if (mutations === null) {
+    statsHubExcludeMutationsSet = null;
+    statsHubExcludeMutationsAllMode = false;
+    // Restore: tile key or species override if active, else main config
+    if (statsHubTileKeySet !== null || statsHubOverride !== null) {
+      applyFilters();
+    } else if (config.enabled) {
+      applyFilters();
+    } else {
+      resetFilters();
+    }
+  } else {
+    const normalized = new Set<string>();
+    for (const m of mutations) {
+      const key = normalizeMutationFilterKey(m);
+      if (key) normalized.add(key);
+    }
+    statsHubExcludeMutationsSet = normalized;
+    applyFilters();
+  }
+}
+
+/**
+ * Stats hub tile key override — show only tiles whose tileKey ("g:<dirtTileIdx>" or
+ * "b:<boardwalkTileIdx>") is in the given list. Pass null to release.
+ * Does NOT write to storage and does NOT modify config.
+ */
+export function setStatsHubTileOverride(tileKeys: string[] | null): void {
+  if (tileKeys === null) {
+    statsHubTileKeySet = null;
+    if (statsHubExcludeMutationsSet !== null || statsHubOverride !== null) {
+      applyFilters();
+    } else if (config.enabled) {
+      applyFilters();
+    } else {
+      resetFilters();
+    }
+  } else {
+    statsHubTileKeySet = new Set(tileKeys);
+    applyFilters();
+  }
+}
+
+/**
+ * Set the matching mode for the stats hub exclude mutations overlay.
+ * false (default/ANY): show tile if it's missing AT LEAST ONE selected mutation.
+ * true  (ALL):         show tile only if it has NONE of the selected mutations.
+ * Only takes effect when statsHubExcludeMutationsSet is active.
+ */
+export function setStatsHubExcludeMutationsAllMode(allMode: boolean): void {
+  statsHubExcludeMutationsAllMode = allMode;
+  if (statsHubExcludeMutationsSet !== null) {
+    applyFilters();
+  }
 }
 
 /**

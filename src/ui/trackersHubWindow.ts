@@ -6,6 +6,7 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 
 const VISIBLE_TRACKERS_KEY = 'qpm.trackersHub.visibleTrackers';
+const STORAGE_VALUE_MIGRATION_KEY = 'qpm.trackers.storageValue.migrated.v1';
 
 const TRACKER_DEFS = [
   {
@@ -53,6 +54,15 @@ const TRACKER_DEFS = [
     windowId: 'trackers-detached-stats',
     width: '920px',
   },
+  {
+    key: 'storageValue',
+    label: 'Storage Value',
+    icon: '💰',
+    desc: 'Show the total coin value of items in Seed Silo, Pet Hutch, Decor Shed, and Inventory',
+    windowTitle: '💰 Storage Value',
+    windowId: 'trackers-detached-storageValue',
+    width: '420px',
+  },
 ] as const;
 
 type TrackerKey = (typeof TRACKER_DEFS)[number]['key'];
@@ -60,8 +70,23 @@ type TrackerDef = (typeof TRACKER_DEFS)[number];
 
 function loadVisibleTrackers(): TrackerKey[] {
   const saved = storage.get<TrackerKey[] | null>(VISIBLE_TRACKERS_KEY, null);
-  if (Array.isArray(saved) && saved.length > 0) return saved;
-  return TRACKER_DEFS.map((t) => t.key);
+
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return TRACKER_DEFS.map((t) => t.key);
+  }
+
+  // One-time migration: add storageValue for existing users
+  const migrated = storage.get<boolean>(STORAGE_VALUE_MIGRATION_KEY, false);
+  if (!migrated) {
+    storage.set(STORAGE_VALUE_MIGRATION_KEY, true);
+    if (!saved.includes('storageValue')) {
+      const next = [...saved, 'storageValue'] as TrackerKey[];
+      storage.set(VISIBLE_TRACKERS_KEY, next);
+      return next;
+    }
+  }
+
+  return saved;
 }
 
 /**
@@ -123,6 +148,10 @@ async function loadTrackerIntoRoot(key: TrackerKey, root: HTMLElement): Promise<
   } else if (key === 'stats') {
     const { renderStatsHub } = await import('./statsHubWindow');
     renderStatsHub(root);
+  } else if (key === 'storageValue') {
+    const { renderStorageValueSettings } = await import('./storageValueWindow');
+    root.style.cssText += ';overflow-y:auto;';
+    renderStorageValueSettings(root);
   }
 }
 
@@ -444,6 +473,7 @@ function renderTrackersHub(root: HTMLElement): void {
     if (overlayEl) { closeOverlay(); return; }
     overlayEl = buildCustomizeOverlay(root, closeOverlay, (selected) => {
       storage.set(VISIBLE_TRACKERS_KEY, selected);
+      storage.set(STORAGE_VALUE_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

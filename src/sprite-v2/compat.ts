@@ -107,6 +107,40 @@ export function clearSpriteDataUrlCache(): void {
   dataUrlCache.clear();
 }
 
+/**
+ * Invalidate the sprite LRU variant cache for a specific key (or all keys if none given).
+ * Also clears the data URL cache.
+ * Use after overriding svc.state.tex to ensure stale renders are evicted.
+ */
+export function invalidateSpriteKeyCache(key?: string): void {
+  if (service) {
+    const state = service.state;
+    if (key) {
+      // Per-key removal: delete matching entries and subtract their cost
+      let removed = 0;
+      for (const [k, entry] of state.lru) {
+        if (k === key || k.startsWith(key + '|')) {
+          // Estimate cost: 1 per frame (animation frames count individually)
+          const entryCost = (entry as any).isAnim
+            ? ((entry as any).frames?.length ?? 1)
+            : 1;
+          removed += entryCost;
+          state.lru.delete(k);
+        }
+      }
+      state.cost = Math.max(0, state.cost - removed);
+      // srcCan is keyed by PIXI.Texture object; full clear is safe since we just replaced a texture
+      state.srcCan.clear();
+    } else {
+      // Full clear
+      state.lru.clear();
+      state.cost = 0;
+      state.srcCan.clear();
+    }
+  }
+  clearSpriteDataUrlCache();
+}
+
 type QpmSpriteDescriptor = {
   kind: 'crop' | 'pet' | 'any' | 'produce' | 'unknown';
   id: string;

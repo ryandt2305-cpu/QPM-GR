@@ -67,15 +67,56 @@ export async function createGardenFiltersSection(): Promise<HTMLElement> {
   const mutationsSection = document.createElement('div');
   mutationsSection.style.cssText = 'margin-bottom: 16px;';
 
+  const mutationsHeader = document.createElement('div');
+  mutationsHeader.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  `;
+
   const mutationsTitle = document.createElement('h4');
   mutationsTitle.textContent = 'Mutation Filters';
   mutationsTitle.style.cssText = `
-    margin: 0 0 8px 0;
+    margin: 0;
     font-size: 13px;
     font-weight: 600;
     color: var(--qpm-accent, #4CAF50);
   `;
-  mutationsSection.appendChild(mutationsTitle);
+
+  const filterRemainingToggle = document.createElement('label');
+  filterRemainingToggle.style.cssText = `
+    display: none;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--qpm-text-muted, rgba(232,224,255,0.6));
+    white-space: nowrap;
+  `;
+
+  const filterRemainingInput = document.createElement('input');
+  filterRemainingInput.type = 'checkbox';
+  filterRemainingInput.checked = config.excludeMutations;
+  filterRemainingInput.style.cssText = 'width: 14px; height: 14px; cursor: pointer;';
+  filterRemainingInput.addEventListener('change', () => {
+    updateGardenFiltersConfig({ excludeMutations: filterRemainingInput.checked });
+  });
+
+  const filterRemainingLabel = document.createElement('span');
+  filterRemainingLabel.textContent = 'Filter Remaining';
+
+  filterRemainingToggle.appendChild(filterRemainingInput);
+  filterRemainingToggle.appendChild(filterRemainingLabel);
+
+  mutationsHeader.appendChild(mutationsTitle);
+  mutationsHeader.appendChild(filterRemainingToggle);
+  mutationsSection.appendChild(mutationsHeader);
+
+  function updateFilterRemainingVisibility(): void {
+    const hasMutations = getGardenFiltersConfig().mutations.length > 0;
+    filterRemainingToggle.style.display = hasMutations ? 'flex' : 'none';
+  }
 
   // Get mutations from catalog — wait for catalogs first since the mutation catalog
   // may arrive slightly after the pet catalog (separate Object.keys() call from the game).
@@ -118,6 +159,7 @@ export async function createGardenFiltersSection(): Promise<HTMLElement> {
         ? [...current, mutationId]
         : current.filter(m => m !== mutationId);
       updateGardenFiltersConfig({ mutations: updated });
+      updateFilterRemainingVisibility();
     });
 
     // Use sprite instead of emoji (VERIFIED working!)
@@ -147,6 +189,7 @@ export async function createGardenFiltersSection(): Promise<HTMLElement> {
     mutationsSection.appendChild(checkbox);
   }
 
+  updateFilterRemainingVisibility();
   body.appendChild(mutationsSection);
 
   // === CROP SPECIES FILTERS ===

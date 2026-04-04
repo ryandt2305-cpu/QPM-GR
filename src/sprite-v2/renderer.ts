@@ -202,7 +202,7 @@ function applyFilterOnto(ctx: CanvasRenderingContext2D, sourceCanvas: HTMLCanvas
   ctx.restore();
 }
 
-function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig): HTMLCanvasElement {
+export function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig): HTMLCanvasElement {
   const hit = state.srcCan.get(tex);
   if (hit) return hit;
 

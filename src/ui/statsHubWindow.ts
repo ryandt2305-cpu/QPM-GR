@@ -30,7 +30,7 @@ import { visibleInterval } from '../utils/timerManager';
 import { findVariantBadge, getVariantChipColors } from '../data/variantBadges';
 import { log } from '../utils/logger';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
-import { setStatsHubSpeciesOverride } from '../features/gardenFilters';
+import { setStatsHubSpeciesOverride, setStatsHubExcludeMutationsOverride, setStatsHubTileOverride, setStatsHubExcludeMutationsAllMode } from '../features/gardenFilters';
 import { lookupMaxScale } from '../utils/plantScales';
 import { normalizeSpeciesKey } from '../utils/helpers';
 
@@ -511,6 +511,14 @@ function tileValue(tile: TileEntry): number {
   } catch { return 0; }
 }
 
+/**
+ * Convert a list of TileEntry objects to global tile indices (x + y * cols).
+ * Used to drive the per-tile garden highlight override.
+ */
+function tilesToKeys(tiles: TileEntry[]): string[] {
+  return tiles.map(t => t.tileKey);
+}
+
 // ---------------------------------------------------------------------------
 // Floating popover — used for tile slot detail on multi-harvest cards
 // ---------------------------------------------------------------------------
@@ -970,7 +978,7 @@ function makeWhenCompleteHint(gain: number, extraCss = ''): HTMLElement {
 // Garden: toggle switch helper
 // ---------------------------------------------------------------------------
 
-function buildToggleSwitch(active: boolean, onChange: (active: boolean) => void): HTMLElement {
+function buildToggleSwitch(active: boolean, onChange: (active: boolean) => void, toggleLabel = 'Filter garden'): HTMLElement {
   const label = document.createElement('label');
   label.style.cssText = 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:10px;color:rgba(224,224,224,0.45);';
   label.title = 'Show/hide these crops in the game garden';
@@ -1001,7 +1009,7 @@ function buildToggleSwitch(active: boolean, onChange: (active: boolean) => void)
   label.appendChild(track);
 
   const txt = document.createElement('span');
-  txt.textContent = 'Filter garden';
+  txt.textContent = toggleLabel;
   label.appendChild(txt);
 
   label.addEventListener('click', (e) => {
@@ -1078,35 +1086,66 @@ function buildGardenTab(container: HTMLElement): () => void {
   type SectionFilterSource = 'remaining' | 'complete' | null;
   let activeSectionFilterSource: SectionFilterSource = null;
 
-  // Active in-game garden filter species (null = no filter)
-  let activeTileFilterSpecies: string | null = null;
+  // Active per-tile garden filter key (TileEntry.tileKey, null = no filter)
+  let activeTileFilterKey: string | null = null;
 
   // Clear any stale override from a previous session — never touches the main Garden Filters config
   setStatsHubSpeciesOverride(null);
+  setStatsHubExcludeMutationsOverride(null);
+  setStatsHubTileOverride(null);
+
+  let filterRemainingActive = false;
+  let filterRemainingAllMode = false;
+
+  function applyFilterRemaining(on: boolean): void {
+    filterRemainingActive = on;
+    if (on) {
+      // Deactivate species-based section filter when switching to exclude mode
+      activeSectionFilterSource = null;
+      activeTileFilterKey = null;
+      setStatsHubTileOverride(null);
+      setStatsHubSpeciesOverride(null);
+      setStatsHubExcludeMutationsOverride(Array.from(activeFilters));
+    } else {
+      filterRemainingAllMode = false;
+      setStatsHubExcludeMutationsAllMode(false);
+      setStatsHubExcludeMutationsOverride(null);
+    }
+  }
 
   // Pre-built array of ready-badge entries — populated at the end of renderContent() so the
   // 1s interval tick doesn't need to do a querySelectorAll DOM scan every second.
   let readyBadgeEntries: Array<{ endTime: number; badge: HTMLElement }> = [];
 
   function disableGardenFilter(): void {
+    setStatsHubTileOverride(null);
     setStatsHubSpeciesOverride(null);
   }
 
-  function setTileFilter(species: string): void {
+  function setTileFilter(tile: TileEntry): void {
+    filterRemainingActive = false;
+    setStatsHubExcludeMutationsOverride(null);
     activeSectionFilterSource = null;
-    activeTileFilterSpecies = species;
-    setStatsHubSpeciesOverride([species]);
+    activeTileFilterKey = tile.tileKey;
+    setStatsHubSpeciesOverride(null);
+    setStatsHubTileOverride([tile.tileKey]);
   }
 
   function clearTileFilter(): void {
-    activeTileFilterSpecies = null;
+    activeTileFilterKey = null;
     if (activeSectionFilterSource === null) disableGardenFilter();
   }
 
-  function applySectionFilter(source: SectionFilterSource, speciesInSection: string[]): void {
+  function applySectionFilter(source: SectionFilterSource, tilesInSection: TileEntry[]): void {
+    if (source !== null && filterRemainingActive) {
+      filterRemainingActive = false;
+      filterRemainingAllMode = false;
+      setStatsHubExcludeMutationsOverride(null);
+    }
     activeSectionFilterSource = source;
-    activeTileFilterSpecies = null;
-    setStatsHubSpeciesOverride(source !== null ? speciesInSection : null);
+    activeTileFilterKey = null;
+    setStatsHubSpeciesOverride(null);
+    setStatsHubTileOverride(source !== null ? tilesToKeys(tilesInSection) : null);
   }
 
   // ---- Plants dropdown ----
@@ -1354,6 +1393,16 @@ function buildGardenTab(container: HTMLElement): () => void {
     const allTiles = extractTiles(currentSnapshot);
     const selected = Array.from(activeFilters);
 
+    // Keep exclude override in sync if filter remaining is active
+    if (filterRemainingActive) {
+      if (selected.length > 0) {
+        setStatsHubExcludeMutationsOverride(selected);
+      } else {
+        filterRemainingActive = false;
+        setStatsHubExcludeMutationsOverride(null);
+      }
+    }
+
     // Apply stats-window species filter
     const tiles = activeSpeciesFilters.size > 0
       ? allTiles.filter((t) => activeSpeciesFilters.has(tileSpecies(t)))
@@ -1377,7 +1426,7 @@ function buildGardenTab(container: HTMLElement): () => void {
 
     const gardenHint = document.createElement('div');
     gardenHint.style.cssText = 'color:rgba(224,224,224,0.25);font-size:11px;padding:0 0 4px;';
-    gardenHint.textContent = 'Click a plant to show/hide that species in your garden.';
+    gardenHint.textContent = 'Click a plant to highlight that specific tile in your garden.';
     content.appendChild(gardenHint);
 
     const remaining: TileEntry[] = [];
@@ -1397,12 +1446,12 @@ function buildGardenTab(container: HTMLElement): () => void {
     }
 
     const tileFilterProps = {
-      activeTileFilterSpecies,
-      onFilter: (species: string) => {
-        if (activeTileFilterSpecies === species) {
+      activeTileFilterKey,
+      onFilter: (tile: TileEntry) => {
+        if (activeTileFilterKey === tile.tileKey) {
           clearTileFilter();
         } else {
-          setTileFilter(species);
+          setTileFilter(tile);
         }
         renderContent();
       },
@@ -1421,11 +1470,28 @@ function buildGardenTab(container: HTMLElement): () => void {
         {
           active: activeSectionFilterSource === 'remaining',
           onToggle: (on) => {
-            applySectionFilter(on ? 'remaining' : null, remaining.map(tileSpecies));
+            applySectionFilter(on ? 'remaining' : null, remaining);
             renderContent();
           },
         },
         tileFilterProps,
+        selected.length > 0 ? {
+          label: 'Filter Remaining',
+          active: filterRemainingActive,
+          onToggle: (on) => {
+            applyFilterRemaining(on);
+            renderContent();
+          },
+          subToggle: (filterRemainingActive || activeSectionFilterSource === 'remaining') ? {
+            label: 'Match ALL',
+            active: filterRemainingAllMode,
+            onToggle: (on) => {
+              filterRemainingAllMode = on;
+              setStatsHubExcludeMutationsAllMode(on);
+              renderContent();
+            },
+          } : null,
+        } : null,
       ));
 
       // Visual divider between Remaining and Complete
@@ -1439,7 +1505,7 @@ function buildGardenTab(container: HTMLElement): () => void {
       {
         active: activeSectionFilterSource === 'complete',
         onToggle: (on) => {
-          applySectionFilter(on ? 'complete' : null, complete.map(tileSpecies));
+          applySectionFilter(on ? 'complete' : null, complete);
           renderContent();
         },
       },
@@ -1478,7 +1544,8 @@ function buildGardenTab(container: HTMLElement): () => void {
     unsubscribe();
     readyCleanup();
     closePlantDropdown();
-    disableGardenFilter();
+    disableGardenFilter(); // clears both tile and species overrides
+    setStatsHubExcludeMutationsOverride(null);
   };
 }
 
@@ -1492,8 +1559,18 @@ function buildTileSection(
     onToggle: (active: boolean) => void;
   } | null = null,
   tileFilterProps: {
-    activeTileFilterSpecies: string | null;
-    onFilter: (species: string) => void;
+    activeTileFilterKey: string | null;
+    onFilter: (tile: TileEntry) => void;
+  } | null = null,
+  extraSectionFilterProps: {
+    label: string;
+    active: boolean;
+    onToggle: (active: boolean) => void;
+    subToggle?: {
+      label: string;
+      active: boolean;
+      onToggle: (active: boolean) => void;
+    } | null;
   } | null = null,
 ): HTMLElement {
   const section = document.createElement('div');
@@ -1506,11 +1583,32 @@ function buildTileSection(
   hdrText.textContent = title;
   hdr.appendChild(hdrText);
 
-  if (sectionFilterProps) {
-    const toggle = buildToggleSwitch(sectionFilterProps.active, (active) => {
-      sectionFilterProps.onToggle(active);
-    });
-    hdr.appendChild(toggle);
+  if (sectionFilterProps || extraSectionFilterProps) {
+    const togglesGroup = document.createElement('div');
+    togglesGroup.style.cssText = 'display:flex;align-items:center;gap:12px;';
+    if (extraSectionFilterProps) {
+      if (extraSectionFilterProps.subToggle) {
+        const subTog = buildToggleSwitch(
+          extraSectionFilterProps.subToggle.active,
+          extraSectionFilterProps.subToggle.onToggle,
+          extraSectionFilterProps.subToggle.label,
+        );
+        togglesGroup.appendChild(subTog);
+      }
+      const extraToggle = buildToggleSwitch(
+        extraSectionFilterProps.active,
+        extraSectionFilterProps.onToggle,
+        extraSectionFilterProps.label,
+      );
+      togglesGroup.appendChild(extraToggle);
+    }
+    if (sectionFilterProps) {
+      const toggle = buildToggleSwitch(sectionFilterProps.active, (active) => {
+        sectionFilterProps.onToggle(active);
+      });
+      togglesGroup.appendChild(toggle);
+    }
+    hdr.appendChild(togglesGroup);
   }
   section.appendChild(hdr);
 
@@ -1533,12 +1631,10 @@ function buildTileSection(
   const grid = document.createElement('div');
   grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;';
   for (const tile of sorted) {
-    const sp = tileSpecies(tile);
-    // Highlight ALL cards of the active species (matches what the garden filter shows)
-    const isFilterActive = tileFilterProps?.activeTileFilterSpecies === sp;
+    const isFilterActive = tileFilterProps?.activeTileFilterKey === tile.tileKey;
     grid.appendChild(buildTileCard(tile, selectedMutations, isComplete, {
       active: isFilterActive,
-      onFilter: () => tileFilterProps?.onFilter(sp),
+      onFilter: () => tileFilterProps?.onFilter(tile),
     }));
   }
   section.appendChild(grid);

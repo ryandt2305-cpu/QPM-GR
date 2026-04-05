@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.36', date: '2026-04', notes: [
+    'pet optimizer: added per-card Keep/Return override so manual keeps persist and can be reverted to live recommendations',
+  ]},
 { version: '3.1.35', date: '2026-04', notes: [
     'pet optimizer internals refactored into modular ranking and decision pipelines with no intended behavior changes',
     'pet optimizer window internals split into focused modules for filters, rendering, actions, and sell flows',

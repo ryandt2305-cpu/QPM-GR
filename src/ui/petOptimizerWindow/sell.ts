@@ -316,15 +316,24 @@ export function appendSellButton(
   card: HTMLElement,
   comparison: PetComparison,
   onAfterSell: () => void,
+  options?: {
+    rightOffsetPx?: number;
+    topOffsetPx?: number;
+    zIndex?: number;
+  },
 ): void {
+  const rightOffsetPx = options?.rightOffsetPx ?? 8;
+  const topOffsetPx = options?.topOffsetPx ?? 8;
+  const zIndex = options?.zIndex ?? 5;
+
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.title = 'Sell this pet';
   btn.textContent = '💰';
   btn.style.cssText = [
     'position:absolute',
-    'top:8px',
-    'right:8px',
+    `top:${topOffsetPx}px`,
+    `right:${rightOffsetPx}px`,
     'width:26px',
     'height:26px',
     'border-radius:6px',
@@ -339,7 +348,7 @@ export function appendSellButton(
     'padding:0',
     'opacity:0.5',
     'transition:opacity 0.15s, background 0.15s',
-    'z-index:5',
+    `z-index:${zIndex}`,
     'line-height:1',
   ].join(';');
 

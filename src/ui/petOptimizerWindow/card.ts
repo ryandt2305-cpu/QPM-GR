@@ -1,4 +1,9 @@
-import type { PetComparison } from '../../features/petOptimizer';
+import {
+  getOptimizerConfig,
+  protectPet,
+  unprotectPet,
+  type PetComparison,
+} from '../../features/petOptimizer';
 import { getAbilityColor, normalizeAbilityName } from '../../utils/petCardRenderer';
 import { toOrdinal } from './familyGroups';
 import { openBetterPetsCompare } from './actions';
@@ -12,12 +17,96 @@ const LOCATION_ICONS: Record<string, string> = {
   hutch: '🏠',
 };
 
+function appendManualKeepButton(
+  card: HTMLElement,
+  comparison: PetComparison,
+  isReturnAction: boolean,
+  onAfterChange: () => void,
+): void {
+  const button = document.createElement('button');
+  const palette = isReturnAction
+    ? {
+      border: 'rgba(255,193,7,0.55)',
+      background: 'rgba(255,193,7,0.16)',
+      text: '#ffe08a',
+    }
+    : {
+      border: 'rgba(76,175,80,0.55)',
+      background: 'rgba(76,175,80,0.18)',
+      text: '#9de6a8',
+    };
+
+  button.type = 'button';
+  button.textContent = isReturnAction ? 'Return' : 'Keep';
+  button.title = isReturnAction
+    ? 'Return this pet to optimizer recommendations'
+    : 'Keep this pet in the optimizer';
+  button.style.cssText = [
+    'position:absolute',
+    'top:8px',
+    'right:40px',
+    'height:26px',
+    'min-width:54px',
+    'padding:0 9px',
+    'border-radius:6px',
+    `border:1px solid ${palette.border}`,
+    `background:${palette.background}`,
+    `color:${palette.text}`,
+    'font-size:11px',
+    'font-weight:700',
+    'cursor:pointer',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'line-height:1',
+    'opacity:0.82',
+    'transition:opacity 0.15s, filter 0.15s',
+    'z-index:6',
+  ].join(';');
+
+  button.addEventListener('mouseenter', () => {
+    button.style.opacity = '1';
+    button.style.filter = 'brightness(1.05)';
+  });
+  button.addEventListener('mouseleave', () => {
+    button.style.opacity = '0.82';
+    button.style.filter = 'none';
+  });
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    button.disabled = true;
+    button.style.opacity = '0.6';
+    button.style.pointerEvents = 'none';
+
+    try {
+      if (isReturnAction) {
+        unprotectPet(comparison.pet.id);
+      } else {
+        protectPet(comparison.pet.id);
+      }
+      onAfterChange();
+    } catch (error) {
+      console.error('[Pet Optimizer] Failed to update manual keep status:', error);
+      button.disabled = false;
+      button.style.opacity = '1';
+      button.style.pointerEvents = 'auto';
+    }
+  });
+
+  card.appendChild(button);
+}
+
 export function createPetCard(
   comparison: PetComparison,
   familyEntry: FamilyPetEntry | undefined,
   onAfterSell: () => void,
 ): HTMLElement {
   const { pet, score, status, reason, betterAlternatives, decisionFamilyLabel } = comparison;
+  const isManuallyProtected = getOptimizerConfig().protectedPetIds.has(pet.id);
+  const canKeepManually = status === 'sell' || status === 'review';
+  const canReturnToOptimizer = status === 'keep' && isManuallyProtected;
+  const showManualKeepButton = canKeepManually || canReturnToOptimizer;
+  const scoreColumnRightMarginPx = showManualKeepButton ? 104 : 30;
 
   const card = document.createElement('div');
   card.style.cssText = `
@@ -164,7 +253,7 @@ export function createPetCard(
         ` : ''}
       </div>
 
-      <div style="flex-shrink: 0; text-align: right; margin-right: 30px;">
+      <div style="flex-shrink: 0; text-align: right; margin-right: ${scoreColumnRightMarginPx}px;">
         <div style="font-size: 18px; font-weight: bold; color: #42A5F5;">${Math.round(score.total - score.granterBonus)}</div>
         ${score.granterBonus > 0 ? `
           <div style="
@@ -185,7 +274,15 @@ export function createPetCard(
     </div>
   `;
 
-  appendSellButton(card, comparison, onAfterSell);
+  if (showManualKeepButton) {
+    appendManualKeepButton(card, comparison, canReturnToOptimizer, onAfterSell);
+  }
+
+  appendSellButton(card, comparison, onAfterSell, {
+    rightOffsetPx: 8,
+    topOffsetPx: 8,
+    zIndex: 6,
+  });
 
   const compareBtn = card.querySelector<HTMLButtonElement>('button[data-better-compare="true"]');
   if (compareBtn) {

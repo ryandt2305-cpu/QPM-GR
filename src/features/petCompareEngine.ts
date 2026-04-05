@@ -7,6 +7,7 @@ import {
   getAbilityDefinition,
   type AbilityDefinition,
 } from '../data/petAbilities';
+import { getAbilityDef } from '../catalogs/gameCatalogs';
 import {
   buildAbilityValuationContext,
   resolveDynamicAbilityEffect,
@@ -16,6 +17,7 @@ import { calculateMaxStrength } from '../store/xpTracker';
 import { getStatsSnapshot } from '../store/stats';
 import { getInventoryItems, type InventoryItem } from '../store/inventory';
 import { getGardenSnapshot } from './gardenBridge';
+import { getWeatherSnapshot } from '../store/weatherHub';
 
 export interface ComparePetInput {
   id: string;
@@ -30,6 +32,8 @@ export type ProgressionStage = 'early' | 'mid' | 'late';
 
 export interface ProgressionSignalSnapshot {
   rbwCount: number | null;
+  rainbowGranterPetCount: number;
+  petPowerBand: number | null;
   storage: {
     petHutch: number | null;
     seedSilo: number | null;
@@ -111,19 +115,46 @@ export interface TeamCompareProfile {
   score: number;
 }
 
+export interface OptimizerAbilityFamilyInfo {
+  exactFamilyKey: string;
+  exactFamilyLabel: string;
+  broadRoleFamilyKey: string;
+  broadRoleFamilyLabel: string;
+  hidden: boolean;
+}
 
-const FOOD_ABILITY_IDS = new Set(['HungerRestore', 'HungerRestoreII', 'HungerBoost', 'HungerBoostII']);
-const HATCH_DOLLAR_ABILITY_IDS = new Set(['PetRefund', 'PetRefundII']);
-const HATCH_TRIO_ABILITY_IDS = new Set([
-  'PetMutationBoost',
-  'PetMutationBoostII',
-  'PetAgeBoost',
-  'PetAgeBoostII',
-  'PetHatchSizeBoost',
-  'PetHatchSizeBoostII',
-  'DoubleHatch',
-]);
+const FOOD_FAMILY_KEYS = new Set(['hungerrestore', 'hungerboost']);
+const HATCH_DOLLAR_FAMILY_KEYS = new Set(['petrefund']);
+const HATCH_TRIO_FAMILY_KEYS = new Set(['petmutationboost', 'petageboost', 'pethatchsizeboost', 'doublehatch']);
 const ISOLATED_ABILITY_IDS = new Set(['Copycat', 'RainDance']);
+const HATCH_MODIFIER_PARAM_KEYS = new Set(['mutationChanceIncreasePercentage']);
+const CONTINUOUS_MODIFIER_PARAM_KEYS = new Set([
+  'mutationChanceIncreasePercentage',
+  'hungerRefundPercentage',
+  'hungerRestorePercentage',
+  'plantGrowthReductionMinutes',
+  'eggGrowthTimeReductionMinutes',
+]);
+const OPTIMIZER_HIDDEN_FAMILY_KEYS = new Set(['dawnsustain', 'dawnbinderboost']);
+const OPTIMIZER_BROAD_ROLE_LABELS: Record<string, string> = {
+  coinfinder: 'Coin Finder',
+  egggrowthboost: 'Egg Growth Boost',
+  goldgranter: 'Gold Granter',
+  hungerboost: 'Hunger Boost',
+  hungerrestore: 'Hunger Restore',
+  petageboost: 'Hatch XP Boost',
+  pethatchsizeboost: 'Max Strength Boost',
+  petmutationboost: 'Pet Mutation Boost',
+  petrefund: 'Pet Refund',
+  petxpboost: 'XP Boost',
+  plantgrowthboost: 'Plant Growth Boost',
+  producemutationboost: 'Crop Mutation Boost',
+  produceeater: 'Crop Eater',
+  producescaleboost: 'Crop Size Boost',
+  rainbowgranter: 'Rainbow Granter',
+  seedfinder: 'Seed Finder',
+  sellboost: 'Sell Boost',
+};
 
 const ABILITY_BASE_TRIGGER_VALUE: Record<string, number> = {
   // Sale / crop-proc approximations (relative values for compare scoring when direct value is absent)
@@ -164,6 +195,111 @@ function getWorkingStrength(pet: ComparePetInput): number {
   return 100;
 }
 
+function getStrengthScaleFactor(strength: number): number {
+  return Math.max(0.25, strength / 100);
+}
+
+function toFinitePositiveNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function isAbilityWeatherActive(definition: AbilityDefinition | null): boolean {
+  if (!definition?.requiredWeather) return true;
+  return getWeatherSnapshot().kind === definition.requiredWeather;
+}
+
+function resolveCatalogFamilyKey(abilityId: string): string | null {
+  const catalogEntry = getAbilityDef(abilityId);
+  if (!catalogEntry?.baseParameters || typeof catalogEntry.baseParameters !== 'object') {
+    return null;
+  }
+
+  const params = catalogEntry.baseParameters as Record<string, unknown>;
+  if (toFinitePositiveNumber(params['plantGrowthReductionMinutes']) != null) return 'plantgrowthboost';
+  if (toFinitePositiveNumber(params['eggGrowthTimeReductionMinutes']) != null) return 'egggrowthboost';
+  if (toFinitePositiveNumber(params['hungerRestorePercentage']) != null) return 'hungerrestore';
+  if (toFinitePositiveNumber(params['hungerRefundPercentage']) != null) return 'hungerboost';
+  if (toFinitePositiveNumber(params['scaleIncreasePercentage']) != null) return 'producescaleboost';
+  if (toFinitePositiveNumber(params['baseMaxCoinsFindable']) != null) return 'coinfinder';
+  if (toFinitePositiveNumber(params['bonusXp']) != null) {
+    return catalogEntry.trigger === 'hatchEgg' ? 'petageboost' : 'petxpboost';
+  }
+  if (toFinitePositiveNumber(params['mutationChanceIncreasePercentage']) != null) {
+    return catalogEntry.trigger === 'hatchEgg' ? 'petmutationboost' : 'producemutationboost';
+  }
+  if (toFinitePositiveNumber(params['maxStrengthIncreasePercentage']) != null) return 'pethatchsizeboost';
+  if (toFinitePositiveNumber(params['cropSellPriceIncreasePercentage']) != null) {
+    return catalogEntry.trigger === 'sellAllCrops' ? 'sellboost' : null;
+  }
+  return null;
+}
+
+function resolveCatalogScaledParameterValue(
+  abilityId: string,
+  strength: number,
+): { value: number; sourceKey: string } | null {
+  const catalogEntry = getAbilityDef(abilityId);
+  if (!catalogEntry || !catalogEntry.baseParameters || typeof catalogEntry.baseParameters !== 'object') {
+    return null;
+  }
+
+  const params = catalogEntry.baseParameters as Record<string, unknown>;
+  const strengthScaleFactor = getStrengthScaleFactor(strength);
+
+  const orderedKeys = [
+    'mutationChanceIncreasePercentage',
+    'cropSellPriceIncreasePercentage',
+    'hungerRefundPercentage',
+    'hungerRestorePercentage',
+    'plantGrowthReductionMinutes',
+    'eggGrowthTimeReductionMinutes',
+    'scaleIncreasePercentage',
+    'baseMaxCoinsFindable',
+    'bonusXp',
+    'maxStrengthIncreasePercentage',
+  ] as const;
+
+  for (const key of orderedKeys) {
+    const raw = toFinitePositiveNumber(params[key]);
+    if (raw == null) continue;
+    return {
+      value: raw * strengthScaleFactor,
+      sourceKey: key,
+    };
+  }
+
+  return null;
+}
+
+function hasCatalogBaseProbability(abilityId: string): boolean {
+  const entry = getAbilityDef(abilityId);
+  return typeof entry?.baseProbability === 'number' && Number.isFinite(entry.baseProbability);
+}
+
+function shouldTreatAsAlwaysOnAction(
+  abilityId: string,
+  definition: AbilityDefinition | null,
+  parameterSourceKey: string | null,
+): boolean {
+  if (!definition || definition.trigger !== 'hatchEgg') return false;
+  if (!parameterSourceKey || !HATCH_MODIFIER_PARAM_KEYS.has(parameterSourceKey)) return false;
+  return !hasCatalogBaseProbability(abilityId);
+}
+
+function shouldTreatAsContinuousModifier(
+  definition: AbilityDefinition | null,
+  parameterSourceKey: string | null,
+): boolean {
+  if (!definition || definition.trigger !== 'continuous') return false;
+  if (!parameterSourceKey) return false;
+  return CONTINUOUS_MODIFIER_PARAM_KEYS.has(parameterSourceKey);
+}
+
 function normalizeAbilityId(rawAbilityId: string, definition: AbilityDefinition | null): string {
   return definition?.id ?? rawAbilityId;
 }
@@ -188,9 +324,11 @@ function getTriggerLabel(definition: AbilityDefinition | null): string {
 function classifyAbilityGroup(abilityId: string, definition: AbilityDefinition | null): CompareAbilityGroup {
   if (!definition) return 'isolated';
   if (ISOLATED_ABILITY_IDS.has(abilityId)) return 'isolated';
-  if (FOOD_ABILITY_IDS.has(abilityId)) return 'food';
-  if (HATCH_DOLLAR_ABILITY_IDS.has(abilityId)) return 'hatch_dollar';
-  if (HATCH_TRIO_ABILITY_IDS.has(abilityId)) return 'hatch_trio';
+
+  const familyKey = getAbilityFamilyKey(abilityId).trim().toLowerCase();
+  if (FOOD_FAMILY_KEYS.has(familyKey)) return 'food';
+  if (HATCH_DOLLAR_FAMILY_KEYS.has(familyKey)) return 'hatch_dollar';
+  if (HATCH_TRIO_FAMILY_KEYS.has(familyKey)) return 'hatch_trio';
 
   if (definition.trigger === 'sellAllCrops' || definition.trigger === 'harvest') {
     return 'sale';
@@ -252,6 +390,11 @@ function resolveValuePerTrigger(
     }
   }
 
+  const catalogScaled = resolveCatalogScaledParameterValue(abilityId, strength);
+  if (catalogScaled && Number.isFinite(catalogScaled.value) && catalogScaled.value > 0) {
+    return catalogScaled.value;
+  }
+
   if (Number.isFinite(definition.effectValuePerProc) && (definition.effectValuePerProc ?? 0) > 0) {
     return Math.max(0, definition.effectValuePerProc ?? 0);
   }
@@ -269,6 +412,10 @@ function toScoreValue(contribution: AbilityContribution): number {
   if (contribution.isAction) {
     if (contribution.expectedValuePerTrigger > 0) {
       return contribution.expectedValuePerTrigger;
+    }
+    if (contribution.valuePerTrigger > 0 && contribution.chancePercent <= 0) {
+      // Hatch modifiers without proc chance are modeled as per-trigger effects.
+      return contribution.valuePerTrigger;
     }
     if (contribution.valuePerTrigger > 0) {
       return contribution.valuePerTrigger * (contribution.chancePercent / 100);
@@ -291,9 +438,88 @@ export function areContributionsComparable(a: AbilityContribution, b: AbilityCon
 }
 
 export function getAbilityFamilyKey(abilityId: string): string {
-  return abilityId
+  const normalizedAbilityId = getAbilityDefinition(abilityId)?.id ?? abilityId;
+  const catalogFamilyKey = resolveCatalogFamilyKey(normalizedAbilityId);
+  if (catalogFamilyKey) {
+    return catalogFamilyKey;
+  }
+
+  return normalizedAbilityId
     .replace(/_NEW$/i, '')
     .replace(/(I{1,3}|IV)$/i, '');
+}
+
+function stripOptimizerAbilityFamilySuffix(value: string): string {
+  return value
+    .replace(/_NEW$/i, '')
+    .replace(/(I{1,3}|IV)$/i, '');
+}
+
+function normalizeOptimizerFamilyLabel(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+(?:IV|III|II|I)$/i, '')
+    .replace(/\s+[1-4]$/i, '')
+    .trim();
+}
+
+function resolveOptimizerBroadRoleFamilyLabel(
+  broadRoleFamilyKey: string,
+  exactFamilyLabel: string,
+): string {
+  return OPTIMIZER_BROAD_ROLE_LABELS[broadRoleFamilyKey] ?? exactFamilyLabel;
+}
+
+export function getOptimizerAbilityFamilyInfo(
+  abilityId: string,
+  fallbackName = '',
+): OptimizerAbilityFamilyInfo | null {
+  const fallback = fallbackName.trim();
+  const rawAbilityId = abilityId.trim();
+  if (!rawAbilityId && !fallback) return null;
+
+  const definition = getAbilityDefinition(rawAbilityId || fallback);
+  const normalizedAbilityId = (definition?.id ?? rawAbilityId ?? fallback).trim();
+  if (!normalizedAbilityId) return null;
+
+  const exactFamilyKey = stripOptimizerAbilityFamilySuffix(normalizedAbilityId).trim().toLowerCase();
+  if (!exactFamilyKey) return null;
+
+  const exactFamilyLabelSource = definition?.name ?? fallback ?? normalizedAbilityId;
+  const exactFamilyLabel = normalizeOptimizerFamilyLabel(exactFamilyLabelSource)
+    || exactFamilyLabelSource
+    || normalizedAbilityId;
+  const broadRoleFamilyKeyRaw = getAbilityFamilyKey(normalizedAbilityId).trim();
+  const broadRoleFamilyKey = (broadRoleFamilyKeyRaw || exactFamilyKey).trim().toLowerCase();
+  const broadRoleFamilyLabel = resolveOptimizerBroadRoleFamilyLabel(
+    broadRoleFamilyKey,
+    exactFamilyLabel,
+  );
+
+  return {
+    exactFamilyKey,
+    exactFamilyLabel,
+    broadRoleFamilyKey,
+    broadRoleFamilyLabel,
+    hidden: OPTIMIZER_HIDDEN_FAMILY_KEYS.has(exactFamilyKey),
+  };
+}
+
+export function getOptimizerCompetitionFamilyKey(abilityId: string, fallbackName = ''): string {
+  return getOptimizerAbilityFamilyInfo(abilityId, fallbackName)?.exactFamilyKey ?? '';
+}
+
+export function getOptimizerCompetitionFamilyLabel(abilityId: string, fallbackName = ''): string {
+  return getOptimizerAbilityFamilyInfo(abilityId, fallbackName)?.exactFamilyLabel ?? fallbackName ?? abilityId;
+}
+
+export function getOptimizerBroadRoleFamilyKey(abilityId: string, fallbackName = ''): string {
+  return getOptimizerAbilityFamilyInfo(abilityId, fallbackName)?.broadRoleFamilyKey ?? '';
+}
+
+export function isOptimizerAbilityVisible(abilityId: string, fallbackName = ''): boolean {
+  const info = getOptimizerAbilityFamilyInfo(abilityId, fallbackName);
+  return !!info && !info.hidden;
 }
 
 export function buildPetCompareProfile(
@@ -321,21 +547,36 @@ export function buildPetCompareProfile(
     const group = classifyAbilityGroup(abilityId, definition);
     const triggerLabel = getTriggerLabel(definition);
     const actionBucket = getActionBucket(definition);
+    const weatherActive = isAbilityWeatherActive(definition);
 
-    const stats = definition ? computeAbilityStats(definition, strength) : null;
+    const stats = definition && weatherActive ? computeAbilityStats(definition, strength) : null;
+    const catalogScaled = weatherActive ? resolveCatalogScaledParameterValue(abilityId, strength) : null;
+    const parameterSourceKey = catalogScaled?.sourceKey ?? null;
+    const treatAsAlwaysOnAction = shouldTreatAsAlwaysOnAction(abilityId, definition, parameterSourceKey);
+    const treatAsContinuousModifier = shouldTreatAsContinuousModifier(definition, parameterSourceKey);
+
     const chancePercent = stats ? clamp(stats.chancePerMinute, 0, 100) : 0;
     const procsPerHour = stats ? Math.max(0, stats.procsPerHour) : 0;
 
-    const valuePerTrigger = resolveValuePerTrigger(abilityId, definition, strength, valuationContext, stage);
-    const expectedValuePerTrigger = valuePerTrigger * (chancePercent / 100);
+    const valuePerTrigger = weatherActive
+      ? resolveValuePerTrigger(abilityId, definition, strength, valuationContext, stage)
+      : 0;
+    const expectedValuePerTrigger = treatAsAlwaysOnAction
+      ? valuePerTrigger
+      : valuePerTrigger * (chancePercent / 100);
     const expectedValuePerHour = expectedValuePerTrigger * procsPerHour;
 
     let impactPerHour = 0;
     if (definition && !actionBucket) {
       if (valuePerTrigger > 0) {
-        impactPerHour = valuePerTrigger * procsPerHour;
-      } else {
-        impactPerHour = computeEffectPerHour(definition, stats!);
+        if (procsPerHour > 0) {
+          impactPerHour = valuePerTrigger * procsPerHour;
+        } else if (treatAsContinuousModifier) {
+          // Passive modifiers without proc probability still contribute continuously.
+          impactPerHour = valuePerTrigger;
+        }
+      } else if (stats) {
+        impactPerHour = computeEffectPerHour(definition, stats);
       }
     }
 
@@ -560,6 +801,30 @@ function scoreCoinBand(value: number | null): number | null {
   return 1.0;
 }
 
+function scoreRainbowGranterBand(value: number): number {
+  if (value <= 0) return 0.2;
+  if (value === 1) return 0.6;
+  return 1.0;
+}
+
+function scorePetPowerBand(pets: ComparePetInput[]): number | null {
+  if (!Array.isArray(pets) || pets.length === 0) return null;
+
+  const strengths = pets
+    .map((pet) => getWorkingStrength(pet))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => b - a);
+
+  if (strengths.length === 0) return null;
+
+  const sample = strengths.slice(0, Math.min(6, strengths.length));
+  const average = sample.reduce((sum, value) => sum + value, 0) / sample.length;
+
+  if (average < 75) return 0.2;
+  if (average < 88) return 0.6;
+  return 1.0;
+}
+
 function weightedAverage(values: Array<{ weight: number; value: number | null }>): number | null {
   let weighted = 0;
   let totalWeight = 0;
@@ -714,6 +979,10 @@ export function captureProgressionSignals(pets: ComparePetInput[] = []): Progres
     const mutations = Array.isArray(pet.mutations) ? pet.mutations : [];
     return sum + (mutations.some((mutation) => /rainbow/i.test(mutation)) ? 1 : 0);
   }, 0);
+  const rainbowGranterPetCount = pets.reduce((sum, pet) => {
+    const abilities = Array.isArray(pet.abilities) ? pet.abilities : [];
+    return sum + (abilities.some((ability) => ability === 'RainbowGranter') ? 1 : 0);
+  }, 0);
 
   const items = getInventoryItems();
   const storageSignals = resolveStorageSignals(items);
@@ -731,6 +1000,8 @@ export function captureProgressionSignals(pets: ComparePetInput[] = []): Progres
 
   return {
     rbwCount: Number.isFinite(rbwMerged) ? rbwMerged : null,
+    rainbowGranterPetCount,
+    petPowerBand: scorePetPowerBand(pets),
     storage: storageSignals,
     celestial,
     eggs,
@@ -752,11 +1023,13 @@ export function evaluateProgressionStage(signals: ProgressionSignalSnapshot): Pr
   ]);
 
   const totalScore = weightedAverage([
-    { weight: 25, value: scoreRbwBand(signals.rbwCount) },
-    { weight: 20, value: storageScore },
-    { weight: 20, value: celestialScore },
-    { weight: 20, value: scoreEggBand(signals.eggs) },
-    { weight: 15, value: scoreCoinBand(signals.coins) },
+    { weight: 18, value: scoreRbwBand(signals.rbwCount) },
+    { weight: 18, value: scoreEggBand(signals.eggs) },
+    { weight: 16, value: storageScore },
+    { weight: 10, value: celestialScore },
+    { weight: 10, value: scoreCoinBand(signals.coins) },
+    { weight: 14, value: signals.petPowerBand },
+    { weight: 14, value: scoreRainbowGranterBand(signals.rainbowGranterPetCount) },
   ]);
 
   const score = Math.round(((totalScore ?? 0) * 100) * 100) / 100;
@@ -764,7 +1037,7 @@ export function evaluateProgressionStage(signals: ProgressionSignalSnapshot): Pr
   let stage: ProgressionStage = 'early';
   if (score >= 75) {
     stage = 'late';
-  } else if (score >= 45) {
+  } else if (score >= 42) {
     stage = 'mid';
   }
 

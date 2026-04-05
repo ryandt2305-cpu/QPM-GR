@@ -5,11 +5,14 @@ import { getGardenSnapshot, type GardenSnapshot } from './gardenBridge';
 import { shareGlobal } from '../core/pageContext';
 import { calculatePlantValue } from './valueCalculator';
 import { computeMutationMultiplier } from '../utils/cropMultipliers';
+import { getMutationApplicationResult } from '../utils/mutationCompatibility';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { lookupMaxScale } from '../utils/plantScales';
 import { analyzeCropMutationPotential } from './cropMutationAnalytics';
 import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
 import { getAbilityDef } from '../catalogs/gameCatalogs';
+import { getWeatherSnapshot } from '../store/weatherHub';
+import { getAbilityDefinition } from '../data/petAbilities';
 
 const FRIEND_BONUS_MULTIPLIER = 1.5; // Assume max friend bonus (50%).
 const MIN_SCALE = 1;
@@ -99,6 +102,74 @@ function coercePositiveInteger(value: unknown): number | null {
 
   const rounded = Math.floor(numeric);
   return rounded > 0 ? rounded : null;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getStrengthScaleFactor(strength: number | null | undefined): number {
+  const normalizedStrength = typeof strength === 'number' && Number.isFinite(strength)
+    ? Math.max(0, strength)
+    : 100;
+  return normalizedStrength / 100;
+}
+
+function normalizeWeatherRequirement(value: unknown): 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'sunny') return 'sunny';
+  if (normalized === 'rain') return 'rain';
+  if (normalized === 'frost' || normalized === 'snow') return 'snow';
+  if (normalized === 'dawn') return 'dawn';
+  if (normalized === 'amber' || normalized === 'ambermoon') return 'amber';
+  return null;
+}
+
+function getCurrentWeatherKind(): 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | 'unknown' {
+  return getWeatherSnapshot().kind;
+}
+
+function isRequiredWeatherActive(requirement: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | null): boolean {
+  if (!requirement) return true;
+  return getCurrentWeatherKind() === requirement;
+}
+
+function formatRequiredWeatherLabel(requirement: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber' | null): string {
+  switch (requirement) {
+    case 'rain':
+      return 'Rain';
+    case 'snow':
+      return 'Snow';
+    case 'dawn':
+      return 'Dawn';
+    case 'amber':
+      return 'Amber Moon';
+    case 'sunny':
+      return 'Sunny';
+    default:
+      return 'the required weather';
+  }
+}
+
+function resolveCatalogScaledParameter(
+  abilityId: string,
+  parameterKey: string,
+  strength: number | null | undefined,
+): number | null {
+  const catalogEntry = getAbilityDef(abilityId);
+  if (!catalogEntry?.baseParameters || typeof catalogEntry.baseParameters !== 'object') {
+    return null;
+  }
+
+  const rawValue = toFiniteNumber(catalogEntry.baseParameters[parameterKey]);
+  if (rawValue == null) return null;
+  return rawValue * getStrengthScaleFactor(strength);
 }
 
 function resolveFruitCount(slot: Record<string, unknown>, allowMultiHarvest: boolean): number {
@@ -294,10 +365,15 @@ export function buildAbilityValuationContext(snapshot: GardenSnapshot | null = g
 function resolveCropScaleEffect(
   context: AbilityValuationContext,
   strength: number | null | undefined,
-  basePercent: number,
+  basePercent: number | null,
+  abilityId?: string,
 ): DynamicAbilityEffect | null {
-  const strengthPercent = typeof strength === 'number' && Number.isFinite(strength) ? Math.max(0, strength) : 100;
-  const effectPercent = (basePercent * strengthPercent) / 100;
+  const effectPercent = basePercent != null
+    ? (basePercent * getStrengthScaleFactor(strength))
+    : (abilityId ? resolveCatalogScaledParameter(abilityId, 'scaleIncreasePercentage', strength) : null);
+  if (effectPercent == null) {
+    return null;
+  }
   if (!context.crops.length || effectPercent <= 0) {
     return null;
   }
@@ -394,62 +470,26 @@ function resolveColorGranterEffect(
   };
 }
 
-// Mutation exclusivity sets (matching game's updateMutationList.ts)
-const GRANTER_DAWN_MUTS  = new Set(['dawnlit', 'dawncharged', 'dawnbound', 'dawncelestial']);
-const GRANTER_AMBER_MUTS = new Set(['ambershine', 'ambercharged', 'amberbound', 'amberlit', 'amberradiant']);
-const GRANTER_WATER_MUTS = new Set(['wet', 'chilled', 'frozen']);
-
-/**
- * Returns true if `mutationName` can be applied to a crop that already has `existingMutations`.
- * Enforces the same exclusivity rules as the game.
- */
-function isMutationCompatibleWithExisting(mutationName: string, existingMutations: string[]): boolean {
-  const ml = mutationName.toLowerCase();
-  const ex = existingMutations.map((m) => m.toLowerCase());
-
-  if (GRANTER_DAWN_MUTS.has(ml)) {
-    // Dawn group: blocked by any existing Dawn OR Amber mutation
-    return !ex.some((m) => GRANTER_DAWN_MUTS.has(m) || GRANTER_AMBER_MUTS.has(m));
-  }
-  if (GRANTER_AMBER_MUTS.has(ml)) {
-    // Amber group: blocked by any existing Dawn OR Amber mutation
-    return !ex.some((m) => GRANTER_DAWN_MUTS.has(m) || GRANTER_AMBER_MUTS.has(m));
-  }
-  if (ml === 'thunderstruck') {
-    // Thunderstruck: blocked by any water mutation (Wet, Chilled, Frozen)
-    return !ex.some((m) => GRANTER_WATER_MUTS.has(m));
-  }
-  if (GRANTER_WATER_MUTS.has(ml)) {
-    // Water mutations: blocked by Thunderstruck
-    return !ex.includes('thunderstruck');
-  }
-  // Gold/Rainbow: handled by resolveColorGranterEffect which uses uncoloredCrops
-  return true;
-}
-
-/**
- * Generalized granter effect: calculates average value gain from granting
- * `mutationName` to one eligible mature crop.
- * Eligible = isMature AND does NOT already have `mutationName` AND is mutation-compatible.
- */
 function resolveGranterEffect(
   context: AbilityValuationContext,
   mutationName: string,
 ): DynamicAbilityEffect | null {
-  const eligible = context.crops.filter(
-    (crop) => !crop.mutations.some((m) => m.toLowerCase() === mutationName.toLowerCase()) && isMutationCompatibleWithExisting(mutationName, crop.mutations),
-  );
-  if (!eligible.length) return null;
-
   let weightedDelta = 0;
   let totalWeight = 0;
+  let eligibleCount = 0;
+  let fruitSlots = 0;
 
-  for (const crop of eligible) {
+  for (const crop of context.crops) {
+    const nextMutations = getMutationApplicationResult(crop.mutations, mutationName);
+    if (!nextMutations) continue;
+
     const weight = Math.max(1, Math.floor(crop.fruitCount));
+    fruitSlots += weight;
+    eligibleCount += 1;
     const newValue = calculatePlantValue(
       crop.species,
       crop.scale,
-      [...crop.mutations, mutationName],
+      nextMutations,
       FRIEND_BONUS_MULTIPLIER,
     );
     const delta = newValue - crop.currentValue;
@@ -462,10 +502,9 @@ function resolveGranterEffect(
   if (totalWeight === 0 || weightedDelta <= 0) return null;
 
   const averageDelta = weightedDelta / totalWeight;
-  const fruitSlots = eligible.reduce((s, c) => s + Math.max(1, c.fruitCount), 0);
   return {
     effectPerProc: averageDelta,
-    detail: `Grants ${mutationName} to 1 eligible crop. ${eligible.length} plant${eligible.length === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) eligible (50% friend bonus, weighted by fruit count).`,
+    detail: `Grants ${mutationName} to 1 eligible crop. ${eligibleCount} plant${eligibleCount === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) eligible (50% friend bonus, weighted by fruit count).`,
   };
 }
 
@@ -494,11 +533,47 @@ function resolveMatureFruitValueEffect(
   };
 }
 
+function resolveCatalogBackedDynamicEffect(
+  abilityId: string,
+  context: AbilityValuationContext,
+  strength: number | null | undefined,
+): DynamicAbilityEffect | null {
+  const catalogEntry = getAbilityDef(abilityId);
+  const baseParameters = catalogEntry?.baseParameters;
+  if (!baseParameters || typeof baseParameters !== 'object') {
+    return null;
+  }
+
+  const definition = getAbilityDefinition(abilityId);
+  const requiredWeather = definition?.requiredWeather ?? normalizeWeatherRequirement(baseParameters['requiredWeather']);
+  if (requiredWeather && !isRequiredWeatherActive(requiredWeather)) {
+    return {
+      effectPerProc: 0,
+      detail: `Only active during ${formatRequiredWeatherLabel(requiredWeather)}.`,
+    };
+  }
+
+  if (toFiniteNumber(baseParameters['scaleIncreasePercentage']) != null) {
+    return resolveCropScaleEffect(context, strength, null, abilityId);
+  }
+
+  if (toFiniteNumber(baseParameters['mutationChanceIncreasePercentage']) != null) {
+    return resolveCropMutationEffect(abilityId, strength);
+  }
+
+  return null;
+}
+
 export function resolveDynamicAbilityEffect(
   abilityId: string,
   context: AbilityValuationContext,
   strength: number | null | undefined,
 ): DynamicAbilityEffect | null {
+  const catalogBacked = resolveCatalogBackedDynamicEffect(abilityId, context, strength);
+  if (catalogBacked) {
+    return catalogBacked;
+  }
+
   switch (abilityId) {
     case 'ProduceScaleBoost':
       return resolveCropScaleEffect(context, strength, 6);
@@ -508,9 +583,6 @@ export function resolveDynamicAbilityEffect(
       return resolveColorGranterEffect(context, 'Gold');
     case 'RainbowGranter':
       return resolveColorGranterEffect(context, 'Rainbow');
-    case 'ProduceMutationBoost':
-    case 'ProduceMutationBoostII':
-      return resolveCropMutationEffect(abilityId);
     case 'DoubleHarvest':
       return resolveMatureFruitValueEffect(context, 'Duplicates 1 harvested fruit');
     case 'ProduceRefund':
@@ -524,20 +596,39 @@ export function resolveDynamicAbilityEffect(
 }
 
 /**
- * Calculate the effect of Crop Mutation Boost abilities
- * These grant weather/lunar mutations during active weather events
+ * Calculate the event-value uplift of weather mutation boost abilities.
+ * These are passive modifiers to the active weather/lunar mutation chance,
+ * not proc-based abilities.
  */
-function resolveCropMutationEffect(abilityId: string): DynamicAbilityEffect | null {
+function resolveCropMutationEffect(
+  abilityId: string,
+  strength: number | null | undefined,
+): DynamicAbilityEffect | null {
   const potential = analyzeCropMutationPotential();
+  const definition = getAbilityDefinition(abilityId);
+  const requiredWeather = definition?.requiredWeather ?? normalizeWeatherRequirement(
+    getAbilityDef(abilityId)?.baseParameters?.['requiredWeather'],
+  );
 
-  if (!potential.weather || potential.eligibleCrops.length === 0) {
+  if (requiredWeather && !isRequiredWeatherActive(requiredWeather)) {
+    return {
+      effectPerProc: 0,
+      detail: `Only active during ${formatRequiredWeatherLabel(requiredWeather)}.`,
+    };
+  }
+
+  if (!potential.weather || potential.eligibleCrops.length === 0 || potential.averageValueGain <= 0) {
     return {
       effectPerProc: 0,
       detail: 'No active weather/lunar event or no eligible crops. Mutations only proc during Rain, Snow, Dawn, or Amber Moon.',
     };
   }
 
-  // Prefer catalog-derived names; fall back to the legacy category switch
+  const addedChance = resolveCatalogScaledParameter(abilityId, 'mutationChanceIncreasePercentage', strength);
+  if (addedChance == null || addedChance <= 0) {
+    return null;
+  }
+
   const weatherName = potential.weatherDisplayName ?? (
     potential.weather === 'rain' ? 'Rain' :
     potential.weather === 'snow' ? 'Snow' :
@@ -552,12 +643,16 @@ function resolveCropMutationEffect(abilityId: string): DynamicAbilityEffect | nu
     'Ambershine'
   );
 
-  // Calculate expected value from mutations during this event
-  const expectedTotalValue = potential.projectedMutationsPerEvent * potential.averageValueGain;
+  const effectiveChanceIncrease = Math.min(
+    addedChance,
+    Math.max(0, 100 - potential.baseMutationChance),
+  );
+  const additionalMutationsPerEvent = potential.eligibleCrops.length * (effectiveChanceIncrease / 100);
+  const expectedTotalValue = additionalMutationsPerEvent * potential.averageValueGain;
 
   return {
     effectPerProc: expectedTotalValue,
-    detail: `${weatherName} active (${potential.baseMutationChance.toFixed(1)}% chance/crop). ${potential.eligibleCrops.length} eligible plant${potential.eligibleCrops.length === 1 ? '' : 's'} (${potential.eligibleFruits} fruit${potential.eligibleFruits === 1 ? '' : 's'}). Expected: ${potential.projectedMutationsPerEvent.toFixed(2)} ${mutationName} mutation${potential.projectedMutationsPerEvent === 1 ? '' : 's'}/event, avg ${formatMutationCoin(potential.averageValueGain)}/mutation.`,
+    detail: `${weatherName} active (${potential.baseMutationChance.toFixed(1)}% base chance/crop). Adds ${effectiveChanceIncrease.toFixed(1)} percentage points for ${potential.eligibleCrops.length} eligible plant${potential.eligibleCrops.length === 1 ? '' : 's'} (${potential.eligibleFruits} fruit${potential.eligibleFruits === 1 ? '' : 's'}). Expected uplift: ${additionalMutationsPerEvent.toFixed(2)} extra ${mutationName} mutation${additionalMutationsPerEvent === 1 ? '' : 's'}/event, avg ${formatMutationCoin(potential.averageValueGain)}/mutation.`,
   };
 }
 

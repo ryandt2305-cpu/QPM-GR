@@ -1,16 +1,19 @@
 // src/features/cropMutationAnalytics.ts - Analytics for Crop Mutation Boost abilities
 
-import { getGardenSnapshot, type GardenSnapshot } from './gardenBridge';
+import { getGardenSnapshot } from './gardenBridge';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { calculatePlantValue } from './valueCalculator';
-import { computeMutationMultiplier } from '../utils/cropMultipliers';
 import { normalizeSpeciesKey } from '../utils/helpers';
-import { log } from '../utils/logger';
 import { getWeatherCatalog } from '../catalogs/gameCatalogs';
+import { getMutationApplicationResult } from '../utils/mutationCompatibility';
 
 const FRIEND_BONUS = 1.5;
+const HYDRO_EVENT_DURATION_MINUTES = 5;
+const LUNAR_EVENT_DURATION_MINUTES = 10;
 
-interface EligibleCrop {
+type MutationWeatherKind = 'rain' | 'snow' | 'dawn' | 'amber';
+
+export interface EligibleCrop {
   species: string;
   scale: number;
   mutations: string[];
@@ -19,161 +22,301 @@ interface EligibleCrop {
   index: number;
 }
 
-interface MutationPotential {
-  weather: 'rain' | 'snow' | 'dawn' | 'amber' | null;
-  /** Display name from the weather catalog (e.g. 'Rain', 'Snow', 'Dawn', 'Amber Moon'). */
+export interface MutationPotential {
+  weather: MutationWeatherKind | null;
   weatherDisplayName: string | null;
-  /** The mutation ID this weather grants, from catalog (e.g. 'Wet', 'Chilled', 'Dawnlit'). */
   grantedMutation: string | null;
   eligibleCrops: EligibleCrop[];
   eligibleFruits: number;
   averageValueGain: number;
-  projectedMutationsPerEvent: number; // Expected mutations during current event
-  baseMutationChance: number; // Base % chance per crop per event
+  projectedMutationsPerEvent: number;
+  baseMutationChance: number;
 }
 
-/**
- * Looks up the current weather type in the runtime catalog to get its granted mutation
- * and display name. Falls back to the hardcoded classification if catalog isn't ready.
- */
-function resolveWeatherMutationEntry(weatherType: string | undefined | null): {
+interface WeatherMutationEntry {
   mutation: string | null;
   displayName: string | null;
-} {
-  if (!weatherType) return { mutation: null, displayName: null };
+  chancePerMinutePerCrop: number | null;
+  groupId: string | null;
+}
+
+function emptyMutationPotential(): MutationPotential {
+  return {
+    weather: null,
+    weatherDisplayName: null,
+    grantedMutation: null,
+    eligibleCrops: [],
+    eligibleFruits: 0,
+    averageValueGain: 0,
+    projectedMutationsPerEvent: 0,
+    baseMutationChance: 0,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function normalizeWeatherKind(
+  value: string | null | undefined,
+): MutationWeatherKind | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes('rain')) return 'rain';
+  if (normalized.includes('frost') || normalized.includes('snow')) return 'snow';
+  if (normalized.includes('dawn')) return 'dawn';
+  if (normalized.includes('amber')) return 'amber';
+  return null;
+}
+
+function getMutationForWeather(weather: MutationWeatherKind): string {
+  switch (weather) {
+    case 'rain':
+      return 'Wet';
+    case 'snow':
+      return 'Chilled';
+    case 'dawn':
+      return 'Dawnlit';
+    case 'amber':
+      return 'Ambershine';
+  }
+}
+
+function getFallbackChancePerMinute(weather: MutationWeatherKind): number {
+  return weather === 'rain' || weather === 'snow' ? 7 : 1;
+}
+
+function getFallbackDurationMinutes(weather: MutationWeatherKind): number {
+  return weather === 'rain' || weather === 'snow'
+    ? HYDRO_EVENT_DURATION_MINUTES
+    : LUNAR_EVENT_DURATION_MINUTES;
+}
+
+function resolveWeatherDurationMinutes(
+  groupId: string | null,
+  startedAt: number | null,
+  expectedEndAt: number | null,
+  weather: MutationWeatherKind,
+): number {
+  if (startedAt != null && expectedEndAt != null && expectedEndAt > startedAt) {
+    return (expectedEndAt - startedAt) / 60000;
+  }
+
+  const normalizedGroup = String(groupId ?? '').trim().toLowerCase();
+  if (normalizedGroup === 'hydro') return HYDRO_EVENT_DURATION_MINUTES;
+  if (normalizedGroup === 'lunar') return LUNAR_EVENT_DURATION_MINUTES;
+  return getFallbackDurationMinutes(weather);
+}
+
+function resolvePerEventMutationChance(chancePerMinutePerCrop: number, durationMinutes: number): number {
+  const perMinuteChance = Math.min(1, Math.max(0, chancePerMinutePerCrop / 100));
+  if (perMinuteChance <= 0 || durationMinutes <= 0) return 0;
+  return (1 - Math.pow(1 - perMinuteChance, durationMinutes)) * 100;
+}
+
+function resolveWeatherMutationEntry(weatherType: string | undefined | null): WeatherMutationEntry {
+  if (!weatherType) {
+    return {
+      mutation: null,
+      displayName: null,
+      chancePerMinutePerCrop: null,
+      groupId: null,
+    };
+  }
+
   const catalog = getWeatherCatalog();
   if (catalog) {
-    const lc = weatherType.toLowerCase();
+    const normalized = weatherType.toLowerCase();
     for (const [id, rawEntry] of Object.entries(catalog)) {
-      const entry = rawEntry as Record<string, unknown>;
-      const entryName = typeof entry.name === 'string' ? entry.name.toLowerCase() : '';
+      if (!isRecord(rawEntry)) continue;
+      const entryName = typeof rawEntry.name === 'string' ? rawEntry.name.toLowerCase() : '';
       if (
-        id.toLowerCase() === lc ||
-        entryName === lc ||
-        id.toLowerCase().includes(lc) ||
-        lc.includes(id.toLowerCase())
+        id.toLowerCase() === normalized ||
+        entryName === normalized ||
+        id.toLowerCase().includes(normalized) ||
+        normalized.includes(id.toLowerCase())
       ) {
-        const mutator = entry.mutator as Record<string, unknown> | undefined;
+        const mutator = isRecord(rawEntry.mutator) ? rawEntry.mutator : null;
         const mutation = typeof mutator?.mutation === 'string' ? mutator.mutation : null;
-        const displayName = typeof entry.name === 'string' && entry.name ? entry.name : id;
-        if (mutation) return { mutation, displayName };
+        const chancePerMinutePerCrop = toFiniteNumber(mutator?.chancePerMinutePerCrop);
+        const displayName = typeof rawEntry.name === 'string' && rawEntry.name.trim().length > 0
+          ? rawEntry.name
+          : id;
+        const groupId = typeof rawEntry.groupId === 'string' ? rawEntry.groupId : null;
+        if (mutation) {
+          return {
+            mutation,
+            displayName,
+            chancePerMinutePerCrop,
+            groupId,
+          };
+        }
       }
     }
   }
 
-  // Catalog miss — fall back to hardcoded mapping
-  const classified = classifyWeatherForMutation(weatherType);
-  if (!classified) return { mutation: null, displayName: null };
+  const classified = normalizeWeatherKind(weatherType);
+  if (!classified) {
+    return {
+      mutation: null,
+      displayName: null,
+      chancePerMinutePerCrop: null,
+      groupId: null,
+    };
+  }
+
   return {
     mutation: getMutationForWeather(classified),
-    displayName: classified === 'rain' ? 'Rain' : classified === 'snow' ? 'Snow' : classified === 'dawn' ? 'Dawn' : 'Amber Moon',
+    displayName: classified === 'rain'
+      ? 'Rain'
+      : classified === 'snow'
+        ? 'Snow'
+        : classified === 'dawn'
+          ? 'Dawn'
+          : 'Amber Moon',
+    chancePerMinutePerCrop: getFallbackChancePerMinute(classified),
+    groupId: classified === 'rain' || classified === 'snow' ? 'Hydro' : 'Lunar',
   };
 }
 
-/**
- * Analyze eligible crops for mutation boost during current weather/lunar event
- */
+function extractFruitCount(tile: Record<string, unknown>): number {
+  const fruitCount = toFiniteNumber(tile.fruitCount);
+  if (fruitCount != null && fruitCount > 0) {
+    return Math.floor(fruitCount);
+  }
+
+  const slotStates = tile.slotStates;
+  if (Array.isArray(slotStates) && slotStates.length > 0) {
+    return slotStates.length;
+  }
+
+  const displayName = typeof tile.displayName === 'string'
+    ? tile.displayName
+    : typeof tile.name === 'string'
+      ? tile.name
+      : null;
+  if (displayName) {
+    const match = displayName.match(/\+(\d+)/);
+    if (match?.[1]) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+  }
+
+  return 1;
+}
+
 export function analyzeCropMutationPotential(): MutationPotential {
   const snapshot = getGardenSnapshot();
   const weather = getWeatherSnapshot();
 
-  if (!snapshot || !weather) {
-    return {
-      weather: null,
-      weatherDisplayName: null,
-      grantedMutation: null,
-      eligibleCrops: [],
-      eligibleFruits: 0,
-      averageValueGain: 0,
-      projectedMutationsPerEvent: 0,
-      baseMutationChance: 0,
-    };
+  if (!snapshot) {
+    return emptyMutationPotential();
   }
 
-  // Extract current weather type from weather snapshot
-  const weatherType = typeof weather === 'string' ? weather : (weather as any).type || (weather as any).name;
+  const weatherType = weather.label ?? weather.kind ?? null;
+  const activeWeather = weather.kind === 'rain'
+    || weather.kind === 'snow'
+    || weather.kind === 'dawn'
+    || weather.kind === 'amber'
+    ? weather.kind
+    : normalizeWeatherKind(weatherType);
 
-  // Resolve mutation and display name — catalog-first, hardcoded fallback
-  const { mutation: grantedMutation, displayName: weatherDisplayName } = resolveWeatherMutationEntry(weatherType);
+  if (!activeWeather) {
+    return emptyMutationPotential();
+  }
 
-  // Keep legacy category classification for callers that still need it
-  const currentWeather = classifyWeatherForMutation(weatherType);
-  if (!currentWeather || !grantedMutation) {
-    return {
-      weather: null,
-      weatherDisplayName: null,
-      grantedMutation: null,
-      eligibleCrops: [],
-      eligibleFruits: 0,
-      averageValueGain: 0,
-      projectedMutationsPerEvent: 0,
-      baseMutationChance: 0,
-    };
+  const weatherEntry = resolveWeatherMutationEntry(weatherType);
+  const grantedMutation = weatherEntry.mutation ?? getMutationForWeather(activeWeather);
+  if (!grantedMutation) {
+    return emptyMutationPotential();
   }
 
   const eligible: EligibleCrop[] = [];
   let totalFruits = 0;
   let totalPotentialValue = 0;
 
-  // Scan garden for eligible crops
-  const tileObjects = snapshot.tileObjects || {};
-  Object.entries(tileObjects).forEach(([tileIndex, tile]: [string, any]) => {
-    if (!tile || tile.objectType !== 'plant') return;
+  const tileObjects = snapshot.tileObjects;
+  if (tileObjects && typeof tileObjects === 'object') {
+    for (const [tileIndex, rawTile] of Object.entries(tileObjects)) {
+      if (!isRecord(rawTile) || rawTile.objectType !== 'plant') continue;
 
-    const species = tile.species || tile.plantSpecies || tile.seedSpecies;
-    if (!species) return;
+      const species = typeof rawTile.species === 'string'
+        ? rawTile.species
+        : typeof rawTile.plantSpecies === 'string'
+          ? rawTile.plantSpecies
+          : typeof rawTile.seedSpecies === 'string'
+            ? rawTile.seedSpecies
+            : null;
+      if (!species) continue;
 
-    const isMature = tile.fullyMature === true || tile.isMature === true;
-    if (!isMature) return;
+      const isMature = rawTile.fullyMature === true || rawTile.isMature === true;
+      if (!isMature) continue;
 
-    const scale = typeof tile.scale === 'number' ? tile.scale : 1;
-    const mutations = Array.isArray(tile.mutations) ? [...tile.mutations] : [];
+      const scale = toFiniteNumber(rawTile.scale) ?? 1;
+      const mutations = Array.isArray(rawTile.mutations)
+        ? rawTile.mutations.filter((value): value is string => typeof value === 'string')
+        : [];
 
-    // Check if plant can receive the current weather mutation
-    const canReceiveMutation = checkMutationEligibility(mutations, currentWeather);
-    if (!canReceiveMutation) return;
+      const nextMutations = getMutationApplicationResult(mutations, grantedMutation);
+      if (!nextMutations) continue;
 
-    const fruitCount = extractFruitCount(tile);
-    if (fruitCount <= 0) return;
+      const fruitCount = extractFruitCount(rawTile);
+      if (fruitCount <= 0) continue;
 
-    const normalizedSpecies = normalizeSpeciesKey(species);
-    const currentValue = calculatePlantValue(normalizedSpecies, scale, mutations, FRIEND_BONUS);
+      const normalizedSpecies = normalizeSpeciesKey(species);
+      const currentValue = calculatePlantValue(normalizedSpecies, scale, mutations, FRIEND_BONUS);
+      const newValue = calculatePlantValue(normalizedSpecies, scale, nextMutations, FRIEND_BONUS);
+      const valueGain = newValue - currentValue;
 
-    // Calculate value with new mutation — use catalog-resolved mutation name
-    const newMutations = [...mutations, grantedMutation];
-    const newValue = calculatePlantValue(normalizedSpecies, scale, newMutations, FRIEND_BONUS);
-    const valueGain = newValue - currentValue;
+      if (!Number.isFinite(valueGain) || valueGain <= 0) continue;
 
-    if (valueGain > 0) {
       eligible.push({
         species,
         scale,
         mutations,
         currentValue,
         fruitCount,
-        index: parseInt(tileIndex, 10),
+        index: Number.parseInt(tileIndex, 10),
       });
-
       totalFruits += fruitCount;
-      totalPotentialValue += valueGain * fruitCount; // Weight by fruit count
+      totalPotentialValue += valueGain * fruitCount;
     }
-  });
+  }
 
-  const averageValueGain = eligible.length > 0 ? totalPotentialValue / totalFruits : 0;
-
-  // Base mutation chances per event (from gameinfo.txt)
-  // Rain: 3/4 * (1 - (1-0.07)^5) ≈ 22.8%
-  // Snow: 1/4 * (1 - (1-0.07)^5) ≈ 7.6%
-  // Dawn: 2/3 * (1 - (1-0.01)^10) ≈ 6.37%
-  // Amber: 1/3 * (1 - (1-0.01)^10) ≈ 3.19%
-  const baseMutationChance = getBaseMutationChance(currentWeather);
-
-  // Expected mutations during this event = eligible crops × base chance
+  const averageValueGain = totalFruits > 0 ? totalPotentialValue / totalFruits : 0;
+  const chancePerMinutePerCrop = weatherEntry.chancePerMinutePerCrop ?? getFallbackChancePerMinute(activeWeather);
+  const durationMinutes = resolveWeatherDurationMinutes(
+    weatherEntry.groupId,
+    weather.startedAt,
+    weather.expectedEndAt,
+    activeWeather,
+  );
+  const baseMutationChance = resolvePerEventMutationChance(chancePerMinutePerCrop, durationMinutes);
   const projectedMutationsPerEvent = eligible.length * (baseMutationChance / 100);
 
   return {
-    weather: currentWeather,
-    weatherDisplayName,
+    weather: activeWeather,
+    weatherDisplayName: weatherEntry.displayName ?? (
+      activeWeather === 'rain'
+        ? 'Rain'
+        : activeWeather === 'snow'
+          ? 'Snow'
+          : activeWeather === 'dawn'
+            ? 'Dawn'
+            : 'Amber Moon'
+    ),
     grantedMutation,
     eligibleCrops: eligible,
     eligibleFruits: totalFruits,
@@ -181,105 +324,4 @@ export function analyzeCropMutationPotential(): MutationPotential {
     projectedMutationsPerEvent,
     baseMutationChance,
   };
-}
-
-/**
- * Get base mutation chance per crop per event (from gameinfo.txt)
- */
-function getBaseMutationChance(weather: 'rain' | 'snow' | 'dawn' | 'amber'): number {
-  switch (weather) {
-    case 'rain':
-      // Rain: 75% of weather events, 7% per minute × 5 minutes
-      // Chance per event: 1 - (1-0.07)^5 ≈ 30.4%
-      // Rain-specific: 3/4 × 30.4% ≈ 22.8%
-      return 22.8;
-    case 'snow':
-      // Snow: 25% of weather events, 7% per minute × 5 minutes
-      // Snow-specific: 1/4 × 30.4% ≈ 7.6%
-      return 7.6;
-    case 'dawn':
-      // Dawn: 67% of lunar events, 1% per minute × 10 minutes
-      // Chance per event: 1 - (1-0.01)^10 ≈ 9.56%
-      // Dawn-specific: 2/3 × 9.56% ≈ 6.37%
-      return 6.37;
-    case 'amber':
-      // Amber: 33% of lunar events, 1% per minute × 10 minutes
-      // Amber-specific: 1/3 × 9.56% ≈ 3.19%
-      return 3.19;
-  }
-}
-
-function classifyWeatherForMutation(weatherType: string | undefined): 'rain' | 'snow' | 'dawn' | 'amber' | null {
-  if (!weatherType) return null;
-  const normalized = weatherType.toLowerCase();
-  if (normalized.includes('rain')) return 'rain';
-  if (normalized.includes('snow')) return 'snow';
-  if (normalized.includes('dawn')) return 'dawn';
-  if (normalized.includes('amber')) return 'amber';
-  return null;
-}
-
-function getMutationForWeather(weather: 'rain' | 'snow' | 'dawn' | 'amber'): string {
-  switch (weather) {
-    case 'rain': return 'Wet';
-    case 'snow': return 'Frozen';
-    case 'dawn': return 'Dawnlit';
-    case 'amber': return 'Amberlit';
-  }
-}
-
-function checkMutationEligibility(mutations: string[], weather: 'rain' | 'snow' | 'dawn' | 'amber'): boolean {
-  const hasWet = mutations.some(m => m === 'Wet' || m === 'Frozen');
-  const hasDawn = mutations.some(m => m === 'Dawnlit' || m === 'Dawnbound');
-  const hasAmber = mutations.some(m => m === 'Amberlit' || m === 'Amberbound');
-  const hasGold = mutations.includes('Gold');
-  const hasRainbow = mutations.includes('Rainbow');
-
-  // Can't add conflicting color mutations
-  if ((weather === 'dawn' && (hasAmber || hasGold)) ||
-      (weather === 'amber' && (hasDawn || hasGold)) ||
-      (hasRainbow)) {
-    return false;
-  }
-
-  // Can't add rain/snow mutations if already has wet
-  if ((weather === 'rain' || weather === 'snow') && hasWet) {
-    return false;
-  }
-
-  // Can't add dawn if already has dawnlit
-  if (weather === 'dawn' && hasDawn) {
-    return false;
-  }
-
-  // Can't add amber if already has amberlit
-  if (weather === 'amber' && hasAmber) {
-    return false;
-  }
-
-  return true;
-}
-
-function extractFruitCount(tile: any): number {
-  // Multi-harvest plants
-  if (typeof tile.fruitCount === 'number' && tile.fruitCount > 0) {
-    return tile.fruitCount;
-  }
-
-  // Slot states
-  if (Array.isArray(tile.slotStates) && tile.slotStates.length > 0) {
-    return tile.slotStates.length;
-  }
-
-  // Display name parsing (e.g., "Pepper Plant+9")
-  const displayName = tile.displayName || tile.name;
-  if (typeof displayName === 'string') {
-    const match = displayName.match(/\+(\d+)/);
-    if (match && match[1]) {
-      return parseInt(match[1], 10);
-    }
-  }
-
-  // Default to 1 for single-harvest
-  return 1;
 }

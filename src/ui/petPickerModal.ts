@@ -270,7 +270,7 @@ const STYLES = `
 /* --- Pet card --- */
 .qpm-pet-card {
   border-radius: 9px; padding: 10px 8px;
-  cursor: pointer; transition: opacity 0.15s, box-shadow 0.15s;
+  cursor: pointer; transition: opacity 0.15s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
   display: flex; flex-direction: column; align-items: center; gap: 5px;
   position: relative;
   border: 1px solid rgba(143,130,255,0.2);
@@ -281,6 +281,16 @@ const STYLES = `
 .qpm-pet-card--compare-selected {
   box-shadow: 0 0 0 2px rgba(143,130,255,0.9), 0 0 10px rgba(143,130,255,0.35);
   outline: none;
+}
+.qpm-pet-card--compare-win {
+  border-color: rgba(64,255,194,0.75) !important;
+  box-shadow: 0 0 0 2px rgba(64,255,194,0.95), 0 0 12px rgba(64,255,194,0.28) !important;
+  background: rgba(64,255,194,0.08);
+}
+.qpm-pet-card--compare-loss {
+  border-color: rgba(255,107,107,0.7) !important;
+  box-shadow: 0 0 0 2px rgba(255,107,107,0.9), 0 0 12px rgba(255,107,107,0.25) !important;
+  background: rgba(255,107,107,0.08);
 }
 .qpm-pet-card__sprite {
   width: 48px; height: 48px;
@@ -1593,6 +1603,11 @@ function getUniqueSpecies(pets: PooledPet[]): string[] {
 export interface OpenPickerOptions {
   teamId?: string;
   usedPetIds?: Set<string>;
+  mode?: 'select' | 'compare_only';
+  allowedItemIds?: Set<string>;
+  startInCompareMode?: boolean;
+  preselectedCompareItemIds?: string[];
+  title?: string;
   onSelect: (petItemId: string) => void;
   onCancel?: () => void;
 }
@@ -1616,7 +1631,9 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   const title = document.createElement('div');
   title.className = 'qpm-picker__title';
-  title.textContent = 'Pick a Pet';
+  const mode = options.mode ?? 'select';
+  const isCompareOnlyMode = mode === 'compare_only';
+  title.textContent = options.title ?? (isCompareOnlyMode ? 'Compare Pets' : 'Pick a Pet');
   header.appendChild(title);
 
   const search = document.createElement('input');
@@ -1685,6 +1702,9 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   const compareBtn = document.createElement('button');
   compareBtn.className = 'qpm-picker__compare-btn';
   compareBtn.textContent = '⚖ Compare';
+  if (isCompareOnlyMode) {
+    compareBtn.style.display = 'none';
+  }
   header.appendChild(compareBtn);
 
   modal.appendChild(header);
@@ -1720,6 +1740,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   let hoverTimeout: number | null = null;
   let compareMode = false;
   let compareSelected: PooledPet[] = [];
+  const shouldStartInCompareMode = options.startInCompareMode ?? isCompareOnlyMode;
   const savedFilters = getSavedPickerFilters(options.teamId);
   let compareAbilityFilter = savedFilters?.compareAbility ?? 'all';
   let selectedSpecies = new Set<string>(Array.isArray(savedFilters?.species) ? savedFilters.species : []);
@@ -1827,6 +1848,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
   // --- Compare mode ---
   function setCompareMode(active: boolean): void {
+    if (isCompareOnlyMode && !active) return;
     compareMode = active;
     compareSelected = [];
     compareBtn.classList.toggle('qpm-picker__compare-btn--active', active);
@@ -1835,10 +1857,48 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
     syncCompareHighlights();
   }
 
+  function getCompareSelectionVerdict(): 'a' | 'b' | 'tie' | 'review' | null {
+    if (compareSelected.length !== 2) return null;
+
+    let valuationContext: AbilityValuationContext | null = null;
+    try {
+      valuationContext = buildAbilityValuationContext();
+    } catch {
+      valuationContext = null;
+    }
+
+    const model = buildCompareCardViewModel({
+      petA: compareSelected[0] ?? null,
+      petB: compareSelected[1] ?? null,
+      abilityFilter: compareAbilityFilter,
+      valuationContext,
+      stage: derivePickerCompareStage(allPets),
+      poolForRank: compareSelected,
+      compactNumbers: true,
+    });
+
+    return model?.verdict ?? null;
+  }
+
   function syncCompareHighlights(): void {
     const selectedIds = new Set(compareSelected.map(p => p.id));
+    const verdict = getCompareSelectionVerdict();
+    const firstSelectedId = compareSelected[0]?.id ?? null;
+    const secondSelectedId = compareSelected[1]?.id ?? null;
+
     for (const [petId, card] of cardMap.entries()) {
-      card.classList.toggle('qpm-pet-card--compare-selected', selectedIds.has(petId));
+      const isSelected = selectedIds.has(petId);
+      card.classList.toggle('qpm-pet-card--compare-selected', isSelected);
+      card.classList.remove('qpm-pet-card--compare-win', 'qpm-pet-card--compare-loss');
+
+      if (!isSelected || compareSelected.length !== 2) continue;
+      if (verdict === 'a') {
+        card.classList.toggle('qpm-pet-card--compare-win', petId === firstSelectedId);
+        card.classList.toggle('qpm-pet-card--compare-loss', petId === secondSelectedId);
+      } else if (verdict === 'b') {
+        card.classList.toggle('qpm-pet-card--compare-win', petId === secondSelectedId);
+        card.classList.toggle('qpm-pet-card--compare-loss', petId === firstSelectedId);
+      }
     }
   }
 
@@ -1849,7 +1909,12 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
           compareSelected[0]!, compareSelected[1]!, rightPanel,
           compareAbilityFilter,
           derivePickerCompareStage(allPets),
-          (newFilter) => { compareAbilityFilter = newFilter; persistFilters(); updateRightPanel(null); },
+          (newFilter) => {
+            compareAbilityFilter = newFilter;
+            persistFilters();
+            syncCompareHighlights();
+            updateRightPanel(null);
+          },
         );
       } else {
         rightPanel.className = 'qpm-picker__hover-panel qpm-picker__hover-panel--empty';
@@ -1876,8 +1941,16 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
 
         const clearBtn2 = document.createElement('button');
         clearBtn2.className = 'qpm-picker__compare-clear';
-        clearBtn2.textContent = '✕ Cancel Compare';
-        clearBtn2.addEventListener('click', () => setCompareMode(false));
+        clearBtn2.textContent = isCompareOnlyMode ? 'Clear Selection' : '✕ Cancel Compare';
+        clearBtn2.addEventListener('click', () => {
+          if (isCompareOnlyMode) {
+            compareSelected = [];
+            syncCompareHighlights();
+            updateRightPanel(null);
+            return;
+          }
+          setCompareMode(false);
+        });
         banner.appendChild(clearBtn2);
 
         rightPanel.appendChild(banner);
@@ -1904,7 +1977,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   }
 
   function handleCardClick(pet: PooledPet): void {
-    if (compareMode) {
+    if (compareMode || isCompareOnlyMode) {
       const existingIdx = compareSelected.findIndex(p => p.id === pet.id);
       if (existingIdx >= 0) {
         // Deselect
@@ -1954,6 +2027,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
     const tierVal = tierFilter.value;
 
     let filtered = allPets.filter(p => {
+      if (options.allowedItemIds && !options.allowedItemIds.has(p.id)) return false;
       if (loc !== 'all' && p.location !== loc) return false;
       if (term && !p.name.toLowerCase().includes(term) && !p.species.toLowerCase().includes(term)) return false;
       if (selectedSpecies.size > 0 && !selectedSpecies.has(p.species)) return false;
@@ -1979,7 +2053,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
     }
 
     for (const pet of filtered) {
-      const inUse = options.usedPetIds?.has(pet.id) && pet.location !== 'active';
+      const inUse = !isCompareOnlyMode && options.usedPetIds?.has(pet.id) && pet.location !== 'active';
       const card = renderPetCard(pet, () => handleCardClick(pet), onHover);
       if (inUse) {
         card.style.opacity = '0.45';
@@ -1996,7 +2070,10 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   // --- Load pets ---
   try {
     allPets = await getAllPooledPets();
-    buildAbilityFilterOptions(allPets, abilityFilter);
+    const abilitySourcePets = options.allowedItemIds
+      ? allPets.filter((pet) => options.allowedItemIds?.has(pet.id))
+      : allPets;
+    buildAbilityFilterOptions(abilitySourcePets, abilityFilter);
     if (savedFilters?.ability && [...abilityFilter.options].some(o => o.value === savedFilters.ability)) {
       abilityFilter.value = savedFilters.ability;
     }
@@ -2007,7 +2084,23 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   } catch (error) {
     log('⚠️ petPickerModal: failed to load pets', error);
   }
+
+  if (Array.isArray(options.preselectedCompareItemIds) && options.preselectedCompareItemIds.length > 0) {
+    const preselectedSet = new Set(options.preselectedCompareItemIds);
+    compareSelected = allPets.filter((pet) => preselectedSet.has(pet.id)).slice(0, 2);
+  }
+
+  if (shouldStartInCompareMode) {
+    compareMode = true;
+    compareBtn.classList.add('qpm-picker__compare-btn--active');
+    compareBtn.textContent = '✕ Exit Compare';
+    if (isCompareOnlyMode) {
+      compareBtn.style.display = 'none';
+    }
+  }
+
   renderList();
+  updateRightPanel(null);
   persistFilters();
 
   // --- Wire events ---
@@ -2030,8 +2123,10 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   });
 
   const onCompareClick = (): void => setCompareMode(!compareMode);
-  compareBtn.addEventListener('click', onCompareClick);
-  cleanups.push(() => compareBtn.removeEventListener('click', onCompareClick));
+  if (!isCompareOnlyMode) {
+    compareBtn.addEventListener('click', onCompareClick);
+    cleanups.push(() => compareBtn.removeEventListener('click', onCompareClick));
+  }
 
   const doClose = () => { options.onCancel?.(); closePickerModal(); };
   cancelBtn.addEventListener('click', doClose);

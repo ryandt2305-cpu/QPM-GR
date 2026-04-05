@@ -21,6 +21,11 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.35', date: '2026-04', notes: [
+    'pet optimizer internals refactored into modular ranking and decision pipelines with no intended behavior changes',
+    'pet optimizer window internals split into focused modules for filters, rendering, actions, and sell flows',
+    'fixed optimizer cross-realm pets window tab switch dispatch and tightened ranking reason consistency',
+  ]},
 { version: '3.1.34', date: '2026-04', notes: [
     'rewrote garden filter to use per-tile PIXI forward-map traversal; fixes tile click and section filter accuracy',
     'added Stats Hub garden filter: filter remaining mutations, match-all toggle, per-tile click highlight',

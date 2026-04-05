@@ -89,7 +89,9 @@ const QPM_STORAGE_KEYS = [
   'qpm.dashboardModules',
 
   // Pet Optimizer
+  'qpm.petOptimizer.config.v4',
   'petOptimizer:config.v2',
+  'petOptimizer:config.v3',
 
   // Sprite Debug
   'qpm.debug.sprite.allowLegacyFallbackOnKtx2',

@@ -75,6 +75,12 @@ import { openTrackersHubWindow, openDetachedTracker, getTrackerWindowDefs } from
 import { openStatsHubWindow } from './ui/statsHubWindow';
 import { openUtilityHubWindow, openDetachedFeature, getFeatureWindowDefs } from './ui/utilityHubWindow';
 import { openToolsHubWindow, openGuideWindow } from './ui/toolsHubWindow';
+import {
+  getOptimizerDebugSnapshot,
+  getOptimizerDebugFamily,
+  getOptimizerDebugExplain,
+  startPetOptimizer,
+} from './features/petOptimizer';
 import { exposeAriesBridge } from './integrations/ariesBridge';
 import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
 import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
@@ -254,6 +260,11 @@ const QPM_DEBUG_API = {
   activityLogClear: () => clearActivityLogEnhancerEntries(),
   activityLogSummary: (enabled?: boolean) => setActivityLogEnhancerSummaryVisible(enabled),
   activityLogVerify: () => verifyActivityLogEnhancerEntries(),
+  optimizerSnapshot: (mode?: 'specialist' | 'slot_efficiency') => getOptimizerDebugSnapshot(mode),
+  optimizerFamily: (familyKeyOrAbility: string, mode?: 'specialist' | 'slot_efficiency') =>
+    getOptimizerDebugFamily(familyKeyOrAbility, mode),
+  optimizerExplain: (petIdOrName: string, mode?: 'specialist' | 'slot_efficiency') =>
+    getOptimizerDebugExplain(petIdOrName, mode),
   activityLogEnabled: async (enabled?: boolean) => {
     if (typeof enabled === 'boolean') {
       await setActivityLogEnhancerEnabled(enabled);
@@ -1643,6 +1654,7 @@ async function initialize(): Promise<void> {
 
   // Phase 8: Non-critical features (can load after UI is visible)
   startCropBoostTracker();
+  startPetOptimizer();
   initCropSizeIndicator();
   startNativeFeedIntercept();
   startController();

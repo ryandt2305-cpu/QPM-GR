@@ -1,7 +1,11 @@
 // src/data/petAbilities.ts
 // Ability metadata used for tracker projections.
 
-import { getAbilityDef, getAllAbilities, areCatalogsReady } from '../catalogs/gameCatalogs';
+import {
+  getAbilityDef,
+  getAllAbilities,
+  areCatalogsReady,
+} from '../catalogs/gameCatalogs';
 
 export type AbilityCategory = 'plantGrowth' | 'eggGrowth' | 'xp' | 'coins' | 'misc';
 
@@ -25,6 +29,11 @@ export interface AbilityDefinition {
   // Weather requirement (for abilities like SnowyPetXpBoost)
   requiredWeather?: 'sunny' | 'rain' | 'snow' | 'dawn' | 'amber';
 }
+
+type CatalogParameterMetadata = Pick<
+  AbilityDefinition,
+  'category' | 'effectUnit' | 'effectLabel' | 'effectBaseValue' | 'effectSuffix'
+>;
 
 const ABILITY_DEFINITIONS: AbilityDefinition[] = [
   {
@@ -144,13 +153,12 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     aliases: ['Crop Mutation Boost 1'],
     category: 'misc',
     trigger: 'continuous',
-    baseProbability: 0.1,
     rollPeriodMinutes: 1,
     effectUnit: 'coins',
     effectLabel: 'Chance increase',
-    effectBaseValue: 10,
+    effectBaseValue: 15,
     effectSuffix: '%',
-    notes: 'Increases the base weather mutation chance (0.1% × STR) by 10% × STR during active weather/lunar events. Only works when weather/lunar event is active. Grants: Wet (Rain), Frozen (Snow), Dawnlit (Dawn), Amberlit (Dusk).',
+    notes: 'Increases the base weather mutation chance during active weather/lunar events. Grants: Wet (Rain), Chilled (Snow), Dawnlit (Dawn), Ambershine (Amber Moon).',
   },
   {
     id: 'ProduceMutationBoostII',
@@ -158,13 +166,25 @@ const ABILITY_DEFINITIONS: AbilityDefinition[] = [
     aliases: ['Crop Mutation Boost 2'],
     category: 'misc',
     trigger: 'continuous',
-    baseProbability: 0.1,
     rollPeriodMinutes: 1,
     effectUnit: 'coins',
     effectLabel: 'Chance increase',
-    effectBaseValue: 15,
+    effectBaseValue: 20,
     effectSuffix: '%',
-    notes: 'Increases the base weather mutation chance (0.1% × STR) by 15% × STR during active weather/lunar events. Only works when weather/lunar event is active. Grants: Wet (Rain), Frozen (Snow), Dawnlit (Dawn), Amberlit (Dusk).',
+    notes: 'Increases the base weather mutation chance during active weather/lunar events. Grants: Wet (Rain), Chilled (Snow), Dawnlit (Dawn), Ambershine (Amber Moon).',
+  },
+  {
+    id: 'ProduceMutationBoostIII',
+    name: 'Crop Mutation Boost III',
+    aliases: ['Crop Mutation Boost 3'],
+    category: 'misc',
+    trigger: 'continuous',
+    rollPeriodMinutes: 1,
+    effectUnit: 'coins',
+    effectLabel: 'Chance increase',
+    effectBaseValue: 25,
+    effectSuffix: '%',
+    notes: 'Increases the base weather mutation chance during active weather/lunar events. Grants: Wet (Rain), Chilled (Snow), Dawnlit (Dawn), Ambershine (Amber Moon).',
   },
   {
     id: 'PetMutationBoost',
@@ -593,6 +613,122 @@ function normalizeCatalogTrigger(trigger: unknown): AbilityDefinition['trigger']
   return 'continuous';
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function normalizeCatalogRequiredWeather(value: unknown): AbilityDefinition['requiredWeather'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = normalizeCompactKey(value);
+  switch (normalized) {
+    case 'sunny':
+      return 'sunny';
+    case 'rain':
+      return 'rain';
+    case 'frost':
+    case 'snow':
+      return 'snow';
+    case 'dawn':
+      return 'dawn';
+    case 'amber':
+    case 'ambermoon':
+      return 'amber';
+    default:
+      return undefined;
+  }
+}
+
+function resolveCatalogParameterMetadata(
+  abilityId: string,
+  trigger: AbilityDefinition['trigger'],
+  baseParameters: Record<string, unknown>,
+): CatalogParameterMetadata {
+  const knownParameters: Array<[string, CatalogParameterMetadata]> = [
+    ['plantGrowthReductionMinutes', {
+      category: 'plantGrowth',
+      effectUnit: 'minutes',
+      effectLabel: 'Growth time reduction',
+      effectSuffix: 'm',
+    }],
+    ['eggGrowthTimeReductionMinutes', {
+      category: 'eggGrowth',
+      effectUnit: 'minutes',
+      effectLabel: 'Hatch time reduction',
+      effectSuffix: 'm',
+    }],
+    ['bonusXp', {
+      category: 'xp',
+      effectUnit: 'xp',
+      effectLabel: 'Bonus XP',
+      effectSuffix: '',
+    }],
+    ['baseMaxCoinsFindable', {
+      category: 'coins',
+      effectUnit: 'coins',
+      effectLabel: 'Coin range',
+      effectSuffix: '',
+    }],
+    ['scaleIncreasePercentage', {
+      category: 'misc',
+      effectUnit: 'coins',
+      effectLabel: 'Scale increase',
+      effectSuffix: '%',
+    }],
+    ['mutationChanceIncreasePercentage', {
+      ...(trigger === 'continuous' ? { effectUnit: 'coins' as const } : {}),
+      category: 'misc',
+      effectLabel: 'Chance increase',
+      effectSuffix: '%',
+    }],
+    ['hungerRestorePercentage', {
+      category: 'misc',
+      effectLabel: 'Hunger restore',
+      effectSuffix: '%',
+    }],
+    ['hungerRefundPercentage', {
+      category: 'misc',
+      effectLabel: 'Hunger refund',
+      effectSuffix: '%',
+    }],
+    ['cropSellPriceIncreasePercentage', {
+      ...(trigger === 'continuous' ? { effectUnit: 'coins' as const } : {}),
+      category: trigger === 'continuous' ? 'coins' : 'misc',
+      effectLabel: 'Sell price bonus',
+      effectSuffix: '%',
+    }],
+    ['maxStrengthIncreasePercentage', {
+      category: 'misc',
+      effectLabel: 'Max Strength increase',
+      effectSuffix: '%',
+    }],
+  ];
+
+  for (const [key, metadata] of knownParameters) {
+    const value = toFiniteNumber(baseParameters[key]);
+    if (value == null) continue;
+    return {
+      ...metadata,
+      effectBaseValue: value,
+    };
+  }
+
+  if (abilityId.endsWith('Granter')) {
+    return {
+      category: 'misc',
+      effectUnit: 'coins',
+    };
+  }
+
+  return {
+    category: trigger === 'hatchEgg' ? 'eggGrowth' : 'misc',
+  };
+}
+
 function buildCatalogLookupCache(): CatalogLookupCache | null {
   if (!areCatalogsReady()) return null;
 
@@ -634,13 +770,23 @@ function buildDefinitionFromCatalog(abilityId: string, raw: string): AbilityDefi
   if (!catalogEntry) return null;
 
   const trigger = normalizeCatalogTrigger(catalogEntry.trigger);
+  const baseParameters = catalogEntry.baseParameters && typeof catalogEntry.baseParameters === 'object'
+    ? catalogEntry.baseParameters
+    : {};
+  const parameterMetadata = resolveCatalogParameterMetadata(abilityId, trigger, baseParameters);
+  const requiredWeather = normalizeCatalogRequiredWeather(baseParameters['requiredWeather']);
   const definition: AbilityDefinition = {
     id: abilityId,
     name: typeof catalogEntry.name === 'string' && catalogEntry.name.trim().length > 0 ? catalogEntry.name : abilityId,
-    category: trigger === 'hatchEgg' ? 'eggGrowth' : 'misc',
+    category: parameterMetadata.category,
     trigger,
     rollPeriodMinutes: 1,
     notes: 'Auto-discovered from game catalog',
+    ...(parameterMetadata.effectUnit ? { effectUnit: parameterMetadata.effectUnit } : {}),
+    ...(parameterMetadata.effectLabel ? { effectLabel: parameterMetadata.effectLabel } : {}),
+    ...(parameterMetadata.effectBaseValue != null ? { effectBaseValue: parameterMetadata.effectBaseValue } : {}),
+    ...(parameterMetadata.effectSuffix != null ? { effectSuffix: parameterMetadata.effectSuffix } : {}),
+    ...(requiredWeather ? { requiredWeather } : {}),
   };
 
   if (typeof catalogEntry.baseProbability === 'number' && Number.isFinite(catalogEntry.baseProbability)) {
@@ -648,6 +794,19 @@ function buildDefinitionFromCatalog(abilityId: string, raw: string): AbilityDefi
   }
 
   return attachWeatherConstraint(raw, definition);
+}
+
+function mergeDefinitionWithCatalog(
+  baseDefinition: AbilityDefinition,
+  catalogDefinition: AbilityDefinition,
+  raw: string,
+): AbilityDefinition {
+  return attachWeatherConstraint(raw, {
+    ...baseDefinition,
+    ...catalogDefinition,
+    ...(baseDefinition.aliases ? { aliases: baseDefinition.aliases } : {}),
+    ...(baseDefinition.notes ? { notes: baseDefinition.notes } : catalogDefinition.notes ? { notes: catalogDefinition.notes } : {}),
+  });
 }
 
 export function getAbilityDefinition(raw: string | null | undefined): AbilityDefinition | null {
@@ -662,32 +821,43 @@ export function getAbilityDefinition(raw: string | null | undefined): AbilityDef
 
   const lookupCandidates = buildLookupCandidates(trimmed);
 
-  // Priority 1: Hardcoded definitions (full metadata)
+  let hardcoded: AbilityDefinition | null = null;
   for (const key of lookupCandidates) {
-    const hardcoded = abilityLookup.get(key);
-    if (hardcoded) {
-      return attachWeatherConstraint(trimmed, hardcoded);
-    }
+    hardcoded = abilityLookup.get(key) ?? null;
+    if (hardcoded) break;
   }
 
-  // Priority 2: Runtime catalog (futureproof)
+  let catalogDefinition: AbilityDefinition | null = null;
   if (areCatalogsReady()) {
     const cache = buildCatalogLookupCache();
     if (cache) {
       for (const key of lookupCandidates) {
         const abilityId = cache.byKey.get(key);
         if (!abilityId) continue;
-        const definition = buildDefinitionFromCatalog(abilityId, trimmed);
-        if (definition) return definition;
+        catalogDefinition = buildDefinitionFromCatalog(abilityId, trimmed);
+        if (catalogDefinition) break;
       }
     }
+  }
+
+  if (hardcoded && catalogDefinition) {
+    return mergeDefinitionWithCatalog(hardcoded, catalogDefinition, trimmed);
+  }
+  if (hardcoded) {
+    return attachWeatherConstraint(trimmed, hardcoded);
+  }
+  if (catalogDefinition) {
+    return catalogDefinition;
   }
 
   return null;
 }
 
 export function getAllAbilityDefinitions(): AbilityDefinition[] {
-  const definitions = [...ABILITY_DEFINITIONS];
+  const definitions = ABILITY_DEFINITIONS.map((definition) => {
+    const catalogDefinition = buildDefinitionFromCatalog(definition.id, definition.id);
+    return catalogDefinition ? mergeDefinitionWithCatalog(definition, catalogDefinition, definition.id) : definition;
+  });
 
   // Add catalog abilities that aren't in hardcoded list (FUTUREPROOF!)
   if (areCatalogsReady()) {
@@ -697,29 +867,8 @@ export function getAllAbilityDefinitions(): AbilityDefinition[] {
     for (const abilityId of catalogAbilityIds) {
       if (!existingIds.has(normalizeKey(abilityId))) {
         // New ability from catalog - create basic definition
-        const catalogEntry = getAbilityDef(abilityId);
-        if (catalogEntry) {
-          const category: AbilityCategory =
-            catalogEntry.trigger === 'hatchEgg' ? 'eggGrowth' :
-            catalogEntry.trigger === 'continuous' ? 'misc' :
-            'misc';
-
-          const definition: AbilityDefinition = {
-            id: abilityId,
-            name: catalogEntry.name || abilityId,
-            category,
-            trigger: catalogEntry.trigger as any,
-            rollPeriodMinutes: 1,
-            notes: 'Auto-discovered from game catalog',
-          };
-
-          // Only add baseProbability if it exists
-          if (catalogEntry.baseProbability !== undefined) {
-            definition.baseProbability = catalogEntry.baseProbability;
-          }
-
-          definitions.push(definition);
-        }
+        const definition = buildDefinitionFromCatalog(abilityId, abilityId);
+        if (definition) definitions.push(definition);
       }
     }
   }
@@ -784,3 +933,4 @@ export function computeEffectPerHour(definition: AbilityDefinition, stats: Abili
 }
 
 export const abilityDefinitions = ABILITY_DEFINITIONS;
+

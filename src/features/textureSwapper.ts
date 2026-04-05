@@ -8,7 +8,6 @@ import { notify } from '../core/notifications';
 import { pageWindow } from '../core/pageContext';
 import { dispatchCustomEventAll } from '../core/pageContext';
 import { serviceReady, onSpritesReady, invalidateSpriteKeyCache } from '../sprite-v2/compat';
-import { visibleInterval } from '../utils/timerManager';
 import type { SpriteService, SpriteCategory } from '../sprite-v2/types';
 
 const log = createLogger('QPM:TextureSwapper', false);
@@ -23,7 +22,7 @@ export const TEXTURE_MANIPULATOR_ENABLED = false;
 export const UPLOADS_ENABLED = true;
 const MAX_UPLOAD_BYTES = 512 * 1024; // 512 KB
 const COMPRESS_SIZE = 256;
-const LAYER_B_INTERVAL_MS = 2500;
+const LAYER_B_REFRESH_DELAYS_MS = [0, 300, 1200, 3000, 7000] as const;
 const MAX_WALK_DEPTH = 25;
 
 // ---------------------------------------------------------------------------
@@ -91,6 +90,8 @@ const objectIdentity = new WeakMap<object, number>();
 let nextObjectIdentity = 1;
 
 let textureSwapperDebugEnabled = false;
+let layerBRefreshRunId = 0;
+const layerBRefreshTimers = new Set<number>();
 
 let started = false;
 const cleanups: Array<() => void> = [];
@@ -250,9 +251,18 @@ function getRuleTargetTexture(rule: TextureOverrideRule, svc: SpriteService): an
   return svc.state.tex.get(rule.targetSpriteKey) ?? item?.first ?? null;
 }
 
-function getTextureDimensions(tex: any): { width: number; height: number } | null {
+type TextureCanvasLayout = {
+  canvasWidth: number;
+  canvasHeight: number;
+  contentX: number;
+  contentY: number;
+  contentWidth: number;
+  contentHeight: number;
+};
+
+function getTextureCanvasLayout(tex: any): TextureCanvasLayout | null {
   if (!tex) return null;
-  const w = Math.round(
+  const canvasWidth = Math.round(
     Number(
       tex?.orig?.width
       ?? tex?._orig?.width
@@ -262,7 +272,7 @@ function getTextureDimensions(tex: any): { width: number; height: number } | nul
       ?? 0
     )
   );
-  const h = Math.round(
+  const canvasHeight = Math.round(
     Number(
       tex?.orig?.height
       ?? tex?._orig?.height
@@ -272,20 +282,59 @@ function getTextureDimensions(tex: any): { width: number; height: number } | nul
       ?? 0
     )
   );
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
-  return { width: w, height: h };
+  if (!Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) {
+    return null;
+  }
+
+  const trim = tex?.trim ?? tex?._trim ?? null;
+  const trimWidth = Math.round(Number(trim?.width ?? 0));
+  const trimHeight = Math.round(Number(trim?.height ?? 0));
+  const hasTrim = Number.isFinite(trimWidth) && Number.isFinite(trimHeight) && trimWidth > 0 && trimHeight > 0;
+
+  let contentX = hasTrim ? Math.round(Number(trim?.x ?? 0)) : 0;
+  let contentY = hasTrim ? Math.round(Number(trim?.y ?? 0)) : 0;
+  let contentWidth = hasTrim ? trimWidth : canvasWidth;
+  let contentHeight = hasTrim ? trimHeight : canvasHeight;
+
+  contentX = Math.max(0, Math.min(canvasWidth - 1, contentX));
+  contentY = Math.max(0, Math.min(canvasHeight - 1, contentY));
+  contentWidth = Math.max(1, Math.min(canvasWidth - contentX, contentWidth));
+  contentHeight = Math.max(1, Math.min(canvasHeight - contentY, contentHeight));
+
+  return {
+    canvasWidth,
+    canvasHeight,
+    contentX,
+    contentY,
+    contentWidth,
+    contentHeight,
+  };
 }
 
-function resizeCanvasTo(source: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
-  if (source.width === width && source.height === height) return source;
+function resizeCanvasToLayout(source: HTMLCanvasElement, layout: TextureCanvasLayout): HTMLCanvasElement {
+  const { canvasWidth, canvasHeight, contentX, contentY, contentWidth, contentHeight } = layout;
+  const isIdentity = source.width === canvasWidth
+    && source.height === canvasHeight
+    && contentX === 0
+    && contentY === 0
+    && contentWidth === canvasWidth
+    && contentHeight === canvasHeight;
+  if (isIdentity) return source;
   const out = document.createElement('canvas');
-  out.width = width;
-  out.height = height;
+  out.width = canvasWidth;
+  out.height = canvasHeight;
   const ctx = out.getContext('2d');
   if (!ctx) return source;
-  ctx.clearRect(0, 0, width, height);
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(source, 0, 0, width, height);
+  // Preserve aspect ratio and align to the target texture layout.
+  // Vertical bottom alignment keeps plant/pet baseline placement stable.
+  const scale = Math.min(contentWidth / Math.max(1, source.width), contentHeight / Math.max(1, source.height));
+  const drawWidth = Math.min(contentWidth, Math.max(1, Math.round(source.width * scale)));
+  const drawHeight = Math.min(contentHeight, Math.max(1, Math.round(source.height * scale)));
+  const offsetX = contentX + Math.floor((contentWidth - drawWidth) / 2);
+  const offsetY = contentY + (contentHeight - drawHeight);
+  ctx.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
   return out;
 }
 
@@ -325,9 +374,9 @@ async function buildCustomCanvas(rule: TextureOverrideRule, svc: SpriteService):
 
   // Keep replacement dimensions aligned with target sprite to avoid scale/size jumps.
   const targetTex = getRuleTargetTexture(rule, svc);
-  const targetDims = getTextureDimensions(targetTex);
-  if (targetDims) {
-    out = resizeCanvasTo(out, targetDims.width, targetDims.height);
+  const targetLayout = getTextureCanvasLayout(targetTex);
+  if (targetLayout) {
+    out = resizeCanvasToLayout(out, targetLayout);
   }
   return out;
 }
@@ -425,9 +474,43 @@ function flushPendingTextureDestroy(): void {
   }
 }
 
+function clearLayerBRefreshTimers(): void {
+  for (const id of layerBRefreshTimers) {
+    clearTimeout(id);
+  }
+  layerBRefreshTimers.clear();
+}
+
+function scheduleLayerBRefreshBurst(forceFirst = false): void {
+  const runId = ++layerBRefreshRunId;
+  clearLayerBRefreshTimers();
+
+  for (const delay of LAYER_B_REFRESH_DELAYS_MS) {
+    const run = () => {
+      if (runId !== layerBRefreshRunId) return;
+      try {
+        maybeApplyLayerB(activeRules, forceFirst && delay === 0);
+      } catch (e) {
+        log('scheduleLayerBRefreshBurst tick failed', e);
+      }
+    };
+
+    if (delay === 0) {
+      run();
+      continue;
+    }
+
+    const timerId = setTimeout(() => {
+      layerBRefreshTimers.delete(timerId as unknown as number);
+      run();
+    }, delay) as unknown as number;
+    layerBRefreshTimers.add(timerId);
+  }
+}
+
 function refreshLayerBNow(): void {
   try {
-    maybeApplyLayerB(activeRules, true);
+    scheduleLayerBRefreshBurst(true);
   } catch (e) {
     log('refreshLayerBNow failed', e);
   }
@@ -1192,25 +1275,17 @@ function mixHash(seed: number, value: number): number {
 function buildStageSignature(stage: any): string {
   let spriteCount = 0;
   let spriteHash = 2166136261 >>> 0;
-  let texHash = 2166136261 >>> 0;
-  let frameHash = 2166136261 >>> 0;
+  let sourceHash = 2166136261 >>> 0;
 
   walkSpriteTree(stage, (sprite) => {
     spriteCount++;
     spriteHash = mixHash(spriteHash, getObjectIdentity(sprite));
 
     const tex = sprite?.texture ?? null;
-    texHash = mixHash(texHash, getObjectIdentity(tex));
     const source = tex?.source ?? tex?.baseTexture ?? tex?._source ?? tex?._baseTexture ?? null;
-    texHash = mixHash(texHash, getObjectIdentity(source));
-
-    const frame = getTextureFrame(tex);
-    if (frame) {
-      frameHash = mixHash(frameHash, safeNum(frame.x));
-      frameHash = mixHash(frameHash, safeNum(frame.y));
-      frameHash = mixHash(frameHash, safeNum(frame.width));
-      frameHash = mixHash(frameHash, safeNum(frame.height));
-    }
+    // Keep signature stable across animated frame swaps.
+    // Re-apply is still triggered when scene structure or source backing changes.
+    sourceHash = mixHash(sourceHash, getObjectIdentity(source));
   });
 
   const childCount = Array.isArray(stage?.children) ? stage.children.length : 0;
@@ -1218,8 +1293,7 @@ function buildStageSignature(stage: any): string {
     childCount,
     spriteCount,
     spriteHash.toString(16),
-    texHash.toString(16),
-    frameHash.toString(16),
+    sourceHash.toString(16),
   ].join('|');
 }
 
@@ -1861,13 +1935,6 @@ export function initTextureSwapper(): () => void {
       await applyAllLayerA(activeRules);
       refreshLayerBNow();
 
-      const stopLayerB = visibleInterval(
-        'texture-swapper-layerb',
-        () => maybeApplyLayerB(activeRules),
-        LAYER_B_INTERVAL_MS,
-      );
-      cleanups.push(stopLayerB);
-
       // Listen for WebGL context restore
       try {
         const captured = (pageWindow as Record<string, unknown>).__QPM_PIXI_CAPTURED__ as
@@ -1896,6 +1963,8 @@ export function initTextureSwapper(): () => void {
 
   return () => {
     started = false;
+    layerBRefreshRunId++;
+    clearLayerBRefreshTimers();
     revertAll();
     flushPendingTextureDestroy();
     for (const fn of cleanups) fn();

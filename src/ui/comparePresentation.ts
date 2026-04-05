@@ -76,6 +76,8 @@ interface CompareFormattingOptions {
 
 const EMPTY_SIGNALS: ProgressionSignalSnapshot = {
   rbwCount: null,
+  rainbowGranterPetCount: 0,
+  petPowerBand: null,
   storage: {
     petHutch: null,
     seedSilo: null,

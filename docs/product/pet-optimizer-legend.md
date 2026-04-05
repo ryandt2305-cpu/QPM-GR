@@ -87,3 +87,4 @@ Order matters:
 - Ranking decides competitiveness.
 - Top 3 family rank is the main keep threshold in both modes.
 - This tool is not made to 'do the thinking for you', you must still be aware of what pets you are actually selling!
+- See "QPM-GR\docs\product\pet-optimizer-benefits-penalties.md" (on github) for full benefits and penalties

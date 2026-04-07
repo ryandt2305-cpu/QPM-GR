@@ -21,7 +21,7 @@ function appendManualKeepButton(
   card: HTMLElement,
   comparison: PetComparison,
   isReturnAction: boolean,
-  onAfterChange: () => void,
+  onAfterKeep: () => void,
 ): void {
   const button = document.createElement('button');
   const palette = isReturnAction
@@ -84,7 +84,7 @@ function appendManualKeepButton(
       } else {
         protectPet(comparison.pet.id);
       }
-      onAfterChange();
+      onAfterKeep();
     } catch (error) {
       console.error('[Pet Optimizer] Failed to update manual keep status:', error);
       button.disabled = false;
@@ -100,6 +100,7 @@ export function createPetCard(
   comparison: PetComparison,
   familyEntry: FamilyPetEntry | undefined,
   onAfterSell: () => void,
+  onAfterKeep: () => void,
 ): HTMLElement {
   const { pet, score, status, reason, betterAlternatives, decisionFamilyLabel } = comparison;
   const isManuallyProtected = getOptimizerConfig().protectedPetIds.has(pet.id);
@@ -275,7 +276,7 @@ export function createPetCard(
   `;
 
   if (showManualKeepButton) {
-    appendManualKeepButton(card, comparison, canReturnToOptimizer, onAfterSell);
+    appendManualKeepButton(card, comparison, canReturnToOptimizer, onAfterKeep);
   }
 
   appendSellButton(card, comparison, onAfterSell, {

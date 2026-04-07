@@ -11,16 +11,21 @@ import {
 
 function renderCurrentAnalysis(): void {
   const globalState = getGlobalState();
-  if (globalState?.currentAnalysis) {
-    renderResults(globalState.currentAnalysis, () => {
-      void refreshAnalysis(true);
-    });
-  }
+  if (!globalState?.currentAnalysis) return;
+  const savedScroll = globalState.root.scrollTop;
+  renderResults(
+    globalState.currentAnalysis,
+    () => void refreshAnalysis(true),
+    () => renderCurrentAnalysis(),
+  );
+  globalState.root.scrollTop = savedScroll;
 }
 
 async function refreshAnalysis(forceRefresh = false): Promise<void> {
   const globalState = getGlobalState();
   if (!globalState) return;
+
+  const savedScroll = globalState.root.scrollTop;
 
   globalState.summaryContainer.innerHTML = '<div style="color: #aaa;">⏳ Loading pets...</div>';
   globalState.resultsContainer.innerHTML = '';
@@ -58,9 +63,15 @@ async function refreshAnalysis(forceRefresh = false): Promise<void> {
 
     globalState.currentAnalysis = analysis;
     renderSummary(analysis);
-    renderResults(analysis, () => {
-      void refreshAnalysis(true);
-    });
+    renderResults(
+      analysis,
+      () => void refreshAnalysis(true),
+      () => renderCurrentAnalysis(),
+    );
+    // Restore scroll after content is rebuilt. Re-read state in case window
+    // was torn down and rebuilt during the async fetch.
+    const stateAfter = getGlobalState();
+    if (stateAfter) stateAfter.root.scrollTop = savedScroll;
   } catch (error) {
     console.error('[Pet Optimizer] Error:', error);
     globalState.summaryContainer.innerHTML = `

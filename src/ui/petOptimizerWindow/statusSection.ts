@@ -43,6 +43,7 @@ export function createStatusSection(
   status: StatusSectionId,
   comparisons: PetComparison[],
   onAfterSell: () => void,
+  onAfterKeep: () => void,
 ): HTMLElement {
   const sectionConfig = STATUS_CONFIG[status];
   const optimizerConfig = getOptimizerConfig();
@@ -214,7 +215,7 @@ export function createStatusSection(
       : family.pets;
 
     for (const entry of visiblePets) {
-      const petCard = createPetCard(entry.comparison, entry, onAfterSell);
+      const petCard = createPetCard(entry.comparison, entry, onAfterSell, onAfterKeep);
       petsContainer.appendChild(petCard);
     }
   }

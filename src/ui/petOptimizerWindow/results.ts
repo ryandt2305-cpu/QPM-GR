@@ -31,7 +31,11 @@ function sortComparisons(comparisons: PetComparison[], config: ReturnType<typeof
   });
 }
 
-export function renderResults(analysis: OptimizerAnalysis, onAfterSell: () => void): void {
+export function renderResults(
+  analysis: OptimizerAnalysis,
+  onAfterSell: () => void,
+  onAfterKeep: () => void,
+): void {
   const globalState = getGlobalState();
   if (!globalState) return;
 
@@ -85,7 +89,7 @@ export function renderResults(analysis: OptimizerAnalysis, onAfterSell: () => vo
     for (const status of STATUS_ORDER) {
       const pets = byStatus[status];
       if (pets.length === 0) continue;
-      const section = createStatusSection(status, pets, onAfterSell);
+      const section = createStatusSection(status, pets, onAfterSell, onAfterKeep);
       globalState.resultsContainer.appendChild(section);
     }
   } catch (error) {

@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.38', date: '2026-04', notes: [
+    'pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling — no longer jumps back to top',
+  ]},
 { version: '3.1.37', date: '2026-04', notes: [
     'fixed update button: cache-bust query param ensures Tampermonkey sees the latest version instead of a stale GitHub CDN response',
   ]},

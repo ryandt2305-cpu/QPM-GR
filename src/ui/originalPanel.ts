@@ -94,23 +94,28 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   };
 
-  const versionClickUrl = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
-  versionBubble.href = versionClickUrl;
+  const VERSION_SCRIPT_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
+  versionBubble.href = VERSION_SCRIPT_URL;
 
   const openVersionLink = (): void => {
+    // Append cache-busting param so GitHub CDN is bypassed and Tampermonkey
+    // sees the fresh @version (not the stale cached file).
+    const freshUrl = `${VERSION_SCRIPT_URL}?t=${Date.now()}`;
+    versionBubble.href = freshUrl;
+
     const gmOpen = (globalThis as any).GM_openInTab || (globalThis as any).GM?.openInTab;
     if (typeof gmOpen === 'function') {
       try {
-        gmOpen(versionClickUrl, { active: true, insert: true, setParent: true });
+        gmOpen(freshUrl, { active: true, insert: true, setParent: true });
         return;
       } catch (error) {
         console.warn('[QPM] GM_openInTab failed, falling back', error);
       }
     }
 
-    const win = window.open(versionClickUrl, '_blank', 'noopener,noreferrer');
+    const win = window.open(freshUrl, '_blank', 'noopener,noreferrer');
     if (!win) {
-      window.location.href = versionClickUrl;
+      window.location.href = freshUrl;
     }
   };
 

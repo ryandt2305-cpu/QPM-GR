@@ -66,6 +66,7 @@ function restoreWindowFromMinimize(w: WindowState): void {
   requestAnimationFrame(() => {
     clampWindowSize(w.el);
     clampWindowRect(w.el);
+    saveWindowPosition(w.id, w.el);
   });
 }
 
@@ -100,8 +101,10 @@ function clampWindowRect(win: HTMLElement): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  let right = parseFloat(win.style.right) || (vw - rect.right);
-  let top = parseFloat(win.style.top) || rect.top;
+  const sr = parseFloat(win.style.right);
+  const st = parseFloat(win.style.top);
+  let right = Number.isFinite(sr) ? sr : (vw - rect.right);
+  let top = Number.isFinite(st) ? st : rect.top;
 
   const maxRight = Math.max(WINDOW_MARGIN, vw - rect.width - WINDOW_MARGIN);
   const maxTop = Math.max(WINDOW_MARGIN, vh - rect.height - WINDOW_MARGIN);
@@ -123,6 +126,7 @@ function clampAllWindows(): void {
     if (!state.isMinimized) {
       clampWindowSize(state.el);
       clampWindowRect(state.el);
+      saveWindowPosition(state.id, state.el);
     }
   });
 }
@@ -295,10 +299,14 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   // Restore saved size if available (overrides max-width/max-height)
   restoreWindowSize(id, win);
 
-  // Ensure window stays on screen after positioning
+  // Ensure window stays on screen after positioning, then persist the final coords.
+  // Without this save, clampWindowRect may silently move the window (e.g. after a
+  // viewport resize between sessions) and the adjusted position is never written back,
+  // causing the pre-clamp position to be re-applied on every reload.
   requestAnimationFrame(() => {
     clampWindowSize(win);
     clampWindowRect(win);
+    saveWindowPosition(id, win);
   });
 
   // Add resize listener to keep windows visible (Aries mod pattern)
@@ -497,8 +505,10 @@ function makeDraggable(win: HTMLElement, head: HTMLElement, id: string): void {
     sy = e.clientY;
 
     const rect = win.getBoundingClientRect();
-    or = parseFloat(win.style.right) || (window.innerWidth - rect.right);
-    ot = parseFloat(win.style.top) || rect.top;
+    const dsr = parseFloat(win.style.right);
+    const dst = parseFloat(win.style.top);
+    or = Number.isFinite(dsr) ? dsr : (window.innerWidth - rect.right);
+    ot = Number.isFinite(dst) ? dst : rect.top;
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -621,9 +631,11 @@ function restoreWindowSize(id: string, win: HTMLElement): void {
  */
 function saveWindowPosition(id: string, win: HTMLElement): void {
   const rect = win.getBoundingClientRect();
+  const sr = parseFloat(win.style.right);
+  const st = parseFloat(win.style.top);
   const position = {
-    right: parseFloat(win.style.right) || (window.innerWidth - rect.right),
-    top: parseFloat(win.style.top) || rect.top,
+    right: Number.isFinite(sr) ? sr : (window.innerWidth - rect.right),
+    top: Number.isFinite(st) ? st : rect.top,
   };
   storage.set(WINDOW_POSITION_KEY + id, position);
 }
@@ -755,6 +767,7 @@ export function destroyWindow(id: string): void {
   if (!w) return;
 
   w.el.remove();
+  document.getElementById(`qpm-window-scrollbar-${id}`)?.remove();
   windows.delete(id);
   saveWindowState(id, false, false);
 }
@@ -794,11 +807,27 @@ export function restoreOpenWindows(): void {
         if (isWindowOpen(id)) continue;
 
         const result = opener();
-        // If the opener is async, catch rejections
-        if (result && typeof (result as Promise<unknown>).catch === 'function') {
-          (result as Promise<unknown>).catch((err) => {
-            log(`[Window] Failed to restore window "${id}"`, err);
-          });
+        const isAsync = result != null && typeof (result as Promise<unknown>).then === 'function';
+
+        // Restore minimized state — opener always opens the window full-size,
+        // so we need to re-minimize it afterwards if that was the saved state.
+        // For async openers the window is not in the map yet, so defer until resolution.
+        const applyMinimized = (): void => {
+          if (!saved.isMinimized) return;
+          const w = windows.get(id);
+          if (w && !w.isMinimized) {
+            toggleMinimize(id);
+          }
+        };
+
+        if (isAsync) {
+          (result as Promise<unknown>)
+            .then(applyMinimized)
+            .catch((err) => {
+              log(`[Window] Failed to restore window "${id}"`, err);
+            });
+        } else {
+          applyMinimized();
         }
       } catch (error) {
         log(`[Window] Failed to restore window "${id}"`, error);

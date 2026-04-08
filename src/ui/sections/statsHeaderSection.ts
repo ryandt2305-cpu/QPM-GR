@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.39', date: '2026-04', notes: [
+    'fixed window persistence: viewport resize, un-minimize, and async openers now correctly save and restore position; scrollbar style elements cleaned up on destroy',
+  ]},
 { version: '3.1.38', date: '2026-04', notes: [
     'pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling — no longer jumps back to top',
   ]},

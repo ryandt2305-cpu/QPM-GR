@@ -89,7 +89,7 @@ export function renderResults(
     for (const status of STATUS_ORDER) {
       const pets = byStatus[status];
       if (pets.length === 0) continue;
-      const section = createStatusSection(status, pets, onAfterSell, onAfterKeep);
+      const section = createStatusSection(status, pets, comparisons, onAfterSell, onAfterKeep);
       globalState.resultsContainer.appendChild(section);
     }
   } catch (error) {

@@ -76,3 +76,29 @@ export function openBetterPetsCompare(comparison: PetComparison): void {
     onSelect: () => {},
   });
 }
+
+export function openCompetitorsPetCompare(
+  comparison: PetComparison,
+  familyLabel: string,
+  peers: PetComparison[],
+): void {
+  const current = comparison.pet;
+  if (!current || peers.length === 0) return;
+
+  const allowedItemIds = new Set<string>([
+    current.itemId || current.id,
+    ...peers.map((peer) => peer.pet.itemId || peer.pet.id),
+  ]);
+
+  const preselected = [current.itemId || current.id]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+  void openPetPicker({
+    mode: 'compare_only',
+    title: `${familyLabel} Competitors`,
+    allowedItemIds,
+    startInCompareMode: true,
+    preselectedCompareItemIds: preselected,
+    onSelect: () => {},
+  });
+}

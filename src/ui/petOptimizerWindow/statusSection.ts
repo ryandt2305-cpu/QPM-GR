@@ -42,11 +42,28 @@ const STATUS_CONFIG: Record<StatusSectionId, {
 export function createStatusSection(
   status: StatusSectionId,
   comparisons: PetComparison[],
+  allComparisons: PetComparison[],
   onAfterSell: () => void,
   onAfterKeep: () => void,
 ): HTMLElement {
   const sectionConfig = STATUS_CONFIG[status];
   const optimizerConfig = getOptimizerConfig();
+
+  // Build a map of familyKey → all comparisons in that family (across all statuses).
+  // Used to populate the competitors compare button on keep-section cards.
+  const familyPeersMap = new Map<string, PetComparison[]>();
+  if (status === 'keep') {
+    for (const comparison of allComparisons) {
+      for (const rank of (comparison.familyRanks ?? [])) {
+        let bucket = familyPeersMap.get(rank.familyKey);
+        if (!bucket) {
+          bucket = [];
+          familyPeersMap.set(rank.familyKey, bucket);
+        }
+        bucket.push(comparison);
+      }
+    }
+  }
 
   const section = document.createElement('div');
   section.style.cssText = `
@@ -215,7 +232,10 @@ export function createStatusSection(
       : family.pets;
 
     for (const entry of visiblePets) {
-      const petCard = createPetCard(entry.comparison, entry, onAfterSell, onAfterKeep);
+      const peers = status === 'keep'
+        ? (familyPeersMap.get(entry.familyKey) ?? []).filter((p) => p.pet.id !== entry.comparison.pet.id)
+        : undefined;
+      const petCard = createPetCard(entry.comparison, entry, peers, onAfterSell, onAfterKeep);
       petsContainer.appendChild(petCard);
     }
   }

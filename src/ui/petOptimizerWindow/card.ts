@@ -6,7 +6,7 @@ import {
 } from '../../features/petOptimizer';
 import { getAbilityColor, normalizeAbilityName } from '../../utils/petCardRenderer';
 import { toOrdinal } from './familyGroups';
-import { openBetterPetsCompare } from './actions';
+import { openBetterPetsCompare, openCompetitorsPetCompare } from './actions';
 import { appendSellButton } from './sell';
 import { getPetSprite, renderAbilitySquares } from './sprites';
 import type { FamilyPetEntry } from './types';
@@ -99,6 +99,7 @@ function appendManualKeepButton(
 export function createPetCard(
   comparison: PetComparison,
   familyEntry: FamilyPetEntry | undefined,
+  familyPeers: PetComparison[] | undefined,
   onAfterSell: () => void,
   onAfterKeep: () => void,
 ): HTMLElement {
@@ -145,6 +146,7 @@ export function createPetCard(
       ? 'Specialist'
       : null;
   const showModeLabel = status === 'sell' && !!modeLabel;
+  const showCompetitorsButton = status === 'keep' && !!rankMetaLabel && !!familyPeers && familyPeers.length > 0;
 
   card.innerHTML = `
     <div style="display: flex; gap: 12px; align-items: start;">
@@ -269,7 +271,27 @@ export function createPetCard(
         ` : ''}
         <div style="font-size: 10px; color: #666;">SCORE</div>
         ${rankLabel ? `<div style="font-size: 11px; color: #8bbfff; margin-top: 6px;">${rankLabel}</div>` : ''}
-        ${rankMetaLabel ? `<div style="font-size: 10px; color: #6f84a8; margin-top: 2px;">${rankMetaLabel}</div>` : ''}
+        ${showCompetitorsButton ? `
+          <button
+            type="button"
+            data-competitors-compare="true"
+            style="
+              border: 1px solid rgba(127,179,255,0.45);
+              background: rgba(127,179,255,0.1);
+              color: #8ab8f5;
+              border-radius: 5px;
+              font-size: 10px;
+              padding: 2px 6px;
+              cursor: pointer;
+              display: block;
+              margin-top: 2px;
+              white-space: nowrap;
+              width: 100%;
+              text-align: center;
+              transition: background 0.15s, border-color 0.15s;
+            "
+          >${rankMetaLabel}</button>
+        ` : (rankMetaLabel ? `<div style="font-size: 10px; color: #6f84a8; margin-top: 2px;">${rankMetaLabel}</div>` : '')}
         ${familyTierLabel ? `<div style="font-size: 10px; color: #777; margin-top: 2px;">${familyTierLabel}</div>` : ''}
       </div>
     </div>
@@ -290,6 +312,22 @@ export function createPetCard(
     compareBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       openBetterPetsCompare(comparison);
+    });
+  }
+
+  const competitorsBtn = card.querySelector<HTMLButtonElement>('button[data-competitors-compare="true"]');
+  if (competitorsBtn && familyPeers && familyPeers.length > 0 && familyEntry) {
+    competitorsBtn.addEventListener('mouseenter', () => {
+      competitorsBtn.style.background = 'rgba(127,179,255,0.2)';
+      competitorsBtn.style.borderColor = 'rgba(127,179,255,0.7)';
+    });
+    competitorsBtn.addEventListener('mouseleave', () => {
+      competitorsBtn.style.background = 'rgba(127,179,255,0.1)';
+      competitorsBtn.style.borderColor = 'rgba(127,179,255,0.45)';
+    });
+    competitorsBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openCompetitorsPetCompare(comparison, familyEntry.familyLabel, familyPeers);
     });
   }
 

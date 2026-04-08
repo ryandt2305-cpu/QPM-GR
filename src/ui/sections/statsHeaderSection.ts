@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.40', date: '2026-04', notes: [
+    'Pet Optimizer now checks top 3 of both Specialist and Slot Efficiency modes before marking a pet to sell. Added buttons to the keep category to compare competitive pets easier',
+  ]},
 { version: '3.1.39', date: '2026-04', notes: [
     'fixed window persistence: viewport resize, un-minimize, and async openers now correctly save and restore position; scrollbar style elements cleaned up on destroy',
   ]},

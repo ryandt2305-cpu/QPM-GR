@@ -1655,7 +1655,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   // Sort filter
   const sortFilter = document.createElement('select');
   sortFilter.className = 'qpm-picker__filter qpm-select';
-  for (const [value, label] of [['str-desc', 'STR ↓'], ['str-asc', 'STR ↑'], ['name-az', 'Name A→Z'], ['rainbow', 'Rainbow first']] as const) {
+  for (const [value, label] of [['str-desc', 'STR ↓'], ['str-asc', 'STR ↑'], ['max-str-desc', 'Max STR ↓'], ['max-str-asc', 'Max STR ↑'], ['name-az', 'Name A→Z'], ['rainbow', 'Rainbow first']] as const) {
     const opt = document.createElement('option');
     opt.value = value; opt.textContent = label;
     sortFilter.appendChild(opt);
@@ -2005,6 +2005,18 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
       copy.sort((a, b) => (b.strength ?? -1) - (a.strength ?? -1));
     } else if (sort === 'str-asc') {
       copy.sort((a, b) => (a.strength ?? -1) - (b.strength ?? -1));
+    } else if (sort === 'max-str-desc') {
+      copy.sort((a, b) => {
+        const aMax = calculateMaxStrength(a.targetScale, a.species) ?? a.strength ?? -1;
+        const bMax = calculateMaxStrength(b.targetScale, b.species) ?? b.strength ?? -1;
+        return bMax - aMax;
+      });
+    } else if (sort === 'max-str-asc') {
+      copy.sort((a, b) => {
+        const aMax = calculateMaxStrength(a.targetScale, a.species) ?? a.strength ?? -1;
+        const bMax = calculateMaxStrength(b.targetScale, b.species) ?? b.strength ?? -1;
+        return aMax - bMax;
+      });
     } else if (sort === 'name-az') {
       copy.sort((a, b) => (a.name || a.species).localeCompare(b.name || b.species));
     } else if (sort === 'rainbow') {

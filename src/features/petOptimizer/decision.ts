@@ -192,6 +192,29 @@ export function analyzePet(
     });
   }
 
+  // Cross-mode safety: in slot_efficiency mode a pet's slot-efficiency rank can fall below top-3
+  // even when it's the outright specialist leader for a family (due to support-synergy scoring).
+  // Protect such pets from auto-sell — they are the best dedicated provider of that ability.
+  if (activeMode === 'slot_efficiency') {
+    const specialistTopFamilies = specialistFamilyResults
+      .filter((result) => result.rank < 3)
+      .map((result) => result.familyLabel);
+
+    if (specialistTopFamilies.length > 0) {
+      const reason = specialistTopFamilies.length === 1
+        ? `Top 3 specialist for ${specialistTopFamilies[0]}`
+        : `Top 3 specialist in ${specialistTopFamilies.length} ability families`;
+
+      return buildComparison({
+        status: 'keep',
+        reason,
+        betterAlternatives: [],
+        decisionMode: 'specialist',
+        topFamilies: specialistTopFamilies,
+      });
+    }
+  }
+
   const decision = [...familyResults]
     .sort((a, b) => {
       const diff = b.betterEntries.length - a.betterEntries.length;

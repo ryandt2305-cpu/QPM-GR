@@ -4,6 +4,7 @@ import { getMutationSpriteDataUrl } from './petMutationRenderer';
 import { canvasToDataUrl } from './canvasHelpers';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../store/xpTracker';
 import { getAbilityDef, getPetAbilitiesCatalog } from '../catalogs/gameCatalogs';
+import { getAbilityDefinition } from '../data/petAbilities';
 
 interface PetCardConfig {
   species: string;
@@ -21,6 +22,11 @@ interface PetCardConfig {
  */
 export function normalizeAbilityName(abilityId: string): string {
   if (!abilityId) return '';
+
+  const catalogName = getAbilityDefinition(abilityId)?.name;
+  if (typeof catalogName === 'string' && catalogName.trim().length > 0) {
+    return catalogName.trim();
+  }
 
   // Add spaces before capital letters and numbers
   const withSpaces = abilityId

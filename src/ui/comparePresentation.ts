@@ -218,7 +218,8 @@ function getTieValue(entry: AbilityContribution): number {
 }
 
 function normalizeAbilityFilter(filter: string): string {
-  return filter.trim().toLowerCase();
+  const normalized = filter.trim().toLowerCase();
+  return normalized.startsWith('family:') ? normalized.slice('family:'.length) : normalized;
 }
 
 function normalizeAbilityId(value: string): string {

@@ -37,6 +37,7 @@ import {
   buildTeamCompareProfile,
   captureProgressionStage,
   getAbilityFamilyKey,
+  getOptimizerAbilityFamilyInfo,
   type ComparePetInput,
   type TeamCompareProfile,
 } from '../features/petCompareEngine';
@@ -1739,7 +1740,7 @@ function renderComparePetColumn(params: {
   for (const abilityId of pet.abilities.slice(0, 4)) {
     const dot = document.createElement('span');
     dot.className = 'qpm-tcmp-adot';
-    dot.title = abilityId;
+    dot.title = getAbilityDefinition(abilityId)?.name ?? abilityId;
     dot.style.background = getAbilityColor(abilityId).base;
     abilityDots.appendChild(dot);
   }
@@ -1941,6 +1942,7 @@ function buildCompareTeamsPanel(
   allOption.value = 'all';
   allOption.textContent = 'All';
   filterSel.appendChild(allOption);
+  const abilityFilterLabels = new Map<string, string>([['all', 'All abilities']]);
   const activeFilterChip = document.createElement('span');
   activeFilterChip.className = 'qpm-tcmp-filter-chip';
   activeFilterChip.textContent = 'All abilities';
@@ -1961,27 +1963,72 @@ function buildCompareTeamsPanel(
     return team.slots.map((slotId) => (slotId ? (pool.find((pet) => pet.id === slotId) ?? null) : null));
   }
 
+  function resolveCompareFamilyFilterValue(rawAbilityId: string): { value: string; label: string } | null {
+    const raw = String(rawAbilityId || '').trim();
+    if (!raw) return null;
+
+    const canonicalId = getAbilityDefinition(raw)?.id ?? raw;
+    const displayName = getAbilityDefinition(raw)?.name ?? raw;
+    const info = getOptimizerAbilityFamilyInfo(canonicalId, displayName);
+    const fallbackFamilyKey = getAbilityFamilyKey(canonicalId).trim().toLowerCase();
+    const value = (info?.exactFamilyKey ?? fallbackFamilyKey).trim().toLowerCase();
+    if (!value) return null;
+    const label = (info?.exactFamilyLabel ?? displayName).trim() || canonicalId;
+    return { value, label };
+  }
+
+  function resolvePreferredAbilityFilterValue(preferredAbility: string, validValues: Set<string>): string {
+    const raw = String(preferredAbility || '').trim();
+    if (!raw) return 'all';
+    if (validValues.has(raw)) return raw;
+
+    const family = resolveCompareFamilyFilterValue(raw);
+    if (family && validValues.has(family.value)) {
+      return family.value;
+    }
+    return 'all';
+  }
+
   function updateAbilityFilter(allPets: (PooledPet | null)[], preferredAbility: string): void {
-    const allIds = new Set<string>();
+    const grouped = new Map<string, { label: string; abilityIds: Set<string> }>();
     allPets.forEach((pet) => {
       if (!pet) return;
-      pet.abilities.forEach((id) => allIds.add(id));
+      pet.abilities.forEach((abilityId) => {
+        const family = resolveCompareFamilyFilterValue(abilityId);
+        const canonicalId = getAbilityDefinition(abilityId)?.id ?? abilityId;
+        if (!family || !canonicalId) return;
+
+        const existing = grouped.get(family.value);
+        if (existing) {
+          existing.abilityIds.add(canonicalId);
+          return;
+        }
+        grouped.set(family.value, {
+          label: family.label,
+          abilityIds: new Set<string>([canonicalId]),
+        });
+      });
     });
 
+    const sortedGroups = [...grouped.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label));
+    const validValues = new Set<string>(['all', ...sortedGroups.map(([value]) => value)]);
+
     filterSel.innerHTML = '';
+    abilityFilterLabels.clear();
+    abilityFilterLabels.set('all', 'All abilities');
     const all = document.createElement('option');
     all.value = 'all';
     all.textContent = 'All';
     filterSel.appendChild(all);
 
-    for (const abilityId of allIds) {
-      const def = getAbilityDefinition(abilityId);
+    for (const [value, group] of sortedGroups) {
       const option = document.createElement('option');
-      option.value = abilityId;
-      option.textContent = def?.name ?? abilityId;
+      option.value = value;
+      option.textContent = group.label;
       filterSel.appendChild(option);
+      abilityFilterLabels.set(value, group.label);
     }
-    filterSel.value = allIds.has(preferredAbility) ? preferredAbility : 'all';
+    filterSel.value = resolvePreferredAbilityFilterValue(preferredAbility, validValues);
   }
 
   function normalizePair(): void {
@@ -2041,9 +2088,7 @@ function buildCompareTeamsPanel(
     const preferredAbility = getCompareAbilityForPair(pairKey) ?? filterSel.value;
     updateAbilityFilter([...petsA, ...petsB], preferredAbility);
     saveCompareAbilityForPair(pairKey, filterSel.value);
-    activeFilterChip.textContent = filterSel.value === 'all'
-      ? 'All abilities'
-      : (getAbilityDefinition(filterSel.value)?.name ?? filterSel.value);
+    activeFilterChip.textContent = abilityFilterLabels.get(filterSel.value) ?? 'All abilities';
 
     let valuationContext: AbilityValuationContext | null = null;
     try {
@@ -2615,7 +2660,7 @@ function buildManagerTab(
             const dot = document.createElement('div');
             dot.className = 'qpm-slot__ability-dot';
             dot.style.background = color.base;
-            dot.title = abilId;
+            dot.title = getAbilityDefinition(abilId)?.name ?? abilId;
             dotsWrap.appendChild(dot);
           }
           info.appendChild(dotsWrap);

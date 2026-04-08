@@ -151,17 +151,29 @@ export function createPetCard(
   card.innerHTML = `
     <div style="display: flex; gap: 12px; align-items: start;">
       <div style="flex-shrink: 0;">
-        ${sprite ? `
-          <div style="position: relative; width: 48px; height: 48px;">
+        <div style="
+          position: relative;
+          width: 48px;
+          height: 48px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 6px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.03);
+        ">
+          ${sprite ? `
             <img src="${sprite}" alt="${pet.species}" style="
               width: 100%;
               height: 100%;
               object-fit: contain;
               image-rendering: pixelated;
             ">
-            ${renderAbilitySquares(pet.abilities, 12, pet.hasRainbow, pet.hasGold, pet.species || undefined)}
-          </div>
-        ` : ''}
+          ` : `
+            <span style="font-size: 18px; color: #666;">•</span>
+          `}
+          ${renderAbilitySquares(pet.abilities, 12, pet.hasRainbow, pet.hasGold, pet.species || undefined)}
+        </div>
       </div>
 
       <div style="flex: 1; min-width: 0;">

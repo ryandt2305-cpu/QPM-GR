@@ -14,6 +14,10 @@ export type RoomActionType =
   | 'PlayerPosition'
   | 'RetrieveItemFromStorage'
   | 'PutItemInStorage'
+  | 'PurchaseSeed'
+  | 'PurchaseEgg'
+  | 'PurchaseTool'
+  | 'PurchaseDecor'
   | 'SwapPet';
 
 export type WebSocketSendFailureReason =
@@ -47,10 +51,14 @@ type PlayerPositionPayload = {
   position: { x: number; y: number };
 };
 
-type RetrievePayload = { itemId: string; storageId: string; toInventoryIndex?: number };
-type PutInStoragePayload = { itemId: string; storageId: string; toStorageIndex?: number };
+type RetrievePayload = { itemId: string; storageId: string; toInventoryIndex?: number; quantity?: number };
+type PutInStoragePayload = { itemId: string; storageId: string; toStorageIndex?: number; quantity?: number };
 type PickupPetPayload = { petId: string };
 type SwapPayload = { petSlotId: string; petInventoryId: string };
+type PurchaseSeedPayload = { species: string };
+type PurchaseEggPayload = { eggId: string };
+type PurchaseToolPayload = { toolId: string };
+type PurchaseDecorPayload = { decorId: string };
 
 const DEFAULT_SCOPE_PATH = ['Room', 'Quinoa'] as const;
 const DEFAULT_THROTTLE_MS = 100;
@@ -110,12 +118,30 @@ function validatePayload(type: RoomActionType, payload: Record<string, unknown>)
     case 'RetrieveItemFromStorage': {
       const p = payload as RetrievePayload;
       const hasIndex = p.toInventoryIndex == null || isFiniteNumber(p.toInventoryIndex);
-      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex;
+      const hasQuantity = p.quantity == null || (isFiniteNumber(p.quantity) && p.quantity > 0);
+      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex && hasQuantity;
     }
     case 'PutItemInStorage': {
       const p = payload as PutInStoragePayload;
       const hasIndex = p.toStorageIndex == null || isFiniteNumber(p.toStorageIndex);
-      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex;
+      const hasQuantity = p.quantity == null || (isFiniteNumber(p.quantity) && p.quantity > 0);
+      return isNonEmptyString(p.itemId) && isNonEmptyString(p.storageId) && hasIndex && hasQuantity;
+    }
+    case 'PurchaseSeed': {
+      const p = payload as PurchaseSeedPayload;
+      return isNonEmptyString(p.species);
+    }
+    case 'PurchaseEgg': {
+      const p = payload as PurchaseEggPayload;
+      return isNonEmptyString(p.eggId);
+    }
+    case 'PurchaseTool': {
+      const p = payload as PurchaseToolPayload;
+      return isNonEmptyString(p.toolId);
+    }
+    case 'PurchaseDecor': {
+      const p = payload as PurchaseDecorPayload;
+      return isNonEmptyString(p.decorId);
     }
     case 'SwapPet': {
       const p = payload as SwapPayload;
@@ -135,6 +161,14 @@ function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>):
     case 'RetrieveItemFromStorage':
     case 'PutItemInStorage':
       return `${type}:${String(payload.itemId ?? '')}`;
+    case 'PurchaseSeed':
+      return `${type}:${String(payload.species ?? '')}`;
+    case 'PurchaseEgg':
+      return `${type}:${String(payload.eggId ?? '')}`;
+    case 'PurchaseTool':
+      return `${type}:${String(payload.toolId ?? '')}`;
+    case 'PurchaseDecor':
+      return `${type}:${String(payload.decorId ?? '')}`;
     case 'PickupPet':
       return `${type}:${String(payload.petId ?? '')}`;
     case 'FeedPet':

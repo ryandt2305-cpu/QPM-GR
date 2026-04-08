@@ -86,6 +86,7 @@ const QPM_STORAGE_KEYS = [
   'qpm.restockCache.v2',
   'qpm.restockCache.v3',
   'qpm.restock.refreshBudget.v1',
+  'qpm.restock.detailWindows.v1',
   'qpm.dashboardModules',
 
   // Pet Optimizer

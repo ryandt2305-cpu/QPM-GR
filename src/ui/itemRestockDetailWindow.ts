@@ -1,0 +1,1203 @@
+// src/ui/itemRestockDetailWindow.ts
+// Per-item restock history with overview card + navigable event accuracy cards.
+
+import { openWindow, destroyWindow, registerWindowOpener } from './modalWindow';
+import { fetchItemEvents } from '../utils/itemEventService';
+import type { RestockItem } from '../utils/restockDataService';
+import {
+  canonicalItemId,
+  getItemIdVariants,
+  getItemProbability,
+  getRestockDataSync,
+  patchCachedItemLastSeen,
+} from '../utils/restockDataService';
+import { getPetSpriteCanvas, getCropSpriteCanvas } from '../sprite-v2/compat';
+import { canvasToDataUrl } from '../utils/canvasHelpers';
+import { storage } from '../utils/storage';
+
+const INITIAL_ROWS = 5;
+const DETAIL_WINDOW_REGISTRY_KEY = 'qpm.restock.detailWindows.v1';
+const DETAIL_WINDOW_REGISTRY_MAX = 160;
+
+type DetailShopType = 'seed' | 'egg' | 'decor';
+
+interface DetailWindowRegistryEntry {
+  shopType: DetailShopType;
+  itemId: string;
+  itemName: string;
+  updatedAt: number;
+}
+
+function isDetailShopType(value: unknown): value is DetailShopType {
+  return value === 'seed' || value === 'egg' || value === 'decor';
+}
+
+function loadDetailWindowRegistry(): DetailWindowRegistryEntry[] {
+  const raw = storage.get<unknown>(DETAIL_WINDOW_REGISTRY_KEY, []);
+  if (!Array.isArray(raw)) return [];
+
+  const rows: DetailWindowRegistryEntry[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = entry as Record<string, unknown>;
+    const shopType = row.shopType;
+    const itemId = row.itemId;
+    const itemName = row.itemName;
+    const updatedAt = Number(row.updatedAt);
+    if (!isDetailShopType(shopType)) continue;
+    if (typeof itemId !== 'string' || itemId.length === 0) continue;
+    if (typeof itemName !== 'string' || itemName.length === 0) continue;
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+    rows.push({ shopType, itemId, itemName, updatedAt });
+  }
+  rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  return rows.slice(0, DETAIL_WINDOW_REGISTRY_MAX);
+}
+
+function saveDetailWindowRegistry(entries: DetailWindowRegistryEntry[]): void {
+  storage.set(DETAIL_WINDOW_REGISTRY_KEY, entries.slice(0, DETAIL_WINDOW_REGISTRY_MAX));
+}
+
+function getDetailWindowId(shopType: DetailShopType, itemId: string): string {
+  return `item-detail-${shopType}-${itemId}`;
+}
+
+function makeFallbackDetailItem(shopType: DetailShopType, itemId: string): RestockItem {
+  return {
+    item_id: itemId,
+    shop_type: shopType,
+    current_probability: null,
+    appearance_rate: null,
+    estimated_next_timestamp: null,
+    median_interval_ms: null,
+    last_seen: null,
+    average_quantity: null,
+    total_quantity: null,
+    total_occurrences: null,
+    algorithm_version: null,
+    algorithm_updated_at: null,
+  };
+}
+
+function resolveDetailRestockItem(
+  shopType: DetailShopType,
+  itemId: string,
+  fallback?: RestockItem,
+): RestockItem {
+  const canonicalId = canonicalItemId(shopType, itemId);
+  const variants = new Set<string>(getItemIdVariants(shopType, canonicalId));
+  variants.add(canonicalId);
+  variants.add(itemId);
+  const cached = getRestockDataSync() ?? [];
+  const found = cached.find((row) => row.shop_type === shopType && variants.has(row.item_id));
+  if (found) {
+    return {
+      ...found,
+      shop_type: shopType,
+      item_id: canonicalId,
+    };
+  }
+  if (fallback) {
+    return {
+      ...fallback,
+      shop_type: shopType,
+      item_id: canonicalId,
+    };
+  }
+  return makeFallbackDetailItem(shopType, canonicalId);
+}
+
+function rememberDetailWindow(shopType: DetailShopType, itemId: string, itemName: string): void {
+  const canonicalId = canonicalItemId(shopType, itemId);
+  const label = itemName.trim() || canonicalId;
+  const now = Date.now();
+  const existing = loadDetailWindowRegistry();
+  const nextEntry: DetailWindowRegistryEntry = {
+    shopType,
+    itemId: canonicalId,
+    itemName: label,
+    updatedAt: now,
+  };
+  const merged = [
+    nextEntry,
+    ...existing.filter((entry) => !(entry.shopType === shopType && entry.itemId === canonicalId)),
+  ];
+  saveDetailWindowRegistry(merged);
+}
+
+function registerDetailWindowOpener(shopType: DetailShopType, itemId: string, itemName: string): void {
+  const canonicalId = canonicalItemId(shopType, itemId);
+  const label = itemName.trim() || canonicalId;
+  const winId = getDetailWindowId(shopType, canonicalId);
+  registerWindowOpener(winId, () => {
+    const restockItem = resolveDetailRestockItem(shopType, canonicalId);
+    openItemRestockDetail(restockItem, label);
+  });
+}
+
+export function registerPersistedItemRestockDetailOpeners(): void {
+  const entries = loadDetailWindowRegistry();
+  for (const entry of entries) {
+    registerDetailWindowOpener(entry.shopType, entry.itemId, entry.itemName);
+  }
+}
+
+// ── Formatting helpers ───────────────────────────────────────────────────────
+
+function fmtTimestamp(ts: number): string {
+  const d    = new Date(ts);
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${date}  ${time}`;
+}
+
+function fmtAbsoluteWithZone(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
+}
+
+function fmtDuration(ms: number): string {
+  const abs = Math.abs(ms);
+  const d   = Math.floor(abs / 86_400_000);
+  const h   = Math.floor((abs % 86_400_000) / 3_600_000);
+  const m   = Math.floor((abs % 3_600_000)  / 60_000);
+  const parts: string[] = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (!d && !h) parts.push(`${m}m`);
+  else if (m && !d) parts.push(`${m}m`);
+  return parts.join(' ') || '0m';
+}
+
+function fmtRelative(ts: number | null): string {
+  if (!ts) return 'Never seen';
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'Just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function fmtPercent(rate: number | null): string {
+  if (rate == null) return '\u2014';
+  const pct = rate * 100;
+  if (!Number.isFinite(pct)) return '\u2014';
+  const formatted = pct.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
+  return `${formatted}%`;
+}
+
+function fmtCountdown(ts: number | null): string {
+  if (!ts) return '\u2014';
+  const diff = ts - Date.now();
+  if (diff <= 0) return 'Overdue';
+  return `~${fmtDuration(diff)}`;
+}
+
+// ── Accuracy tier (adaptive) ─────────────────────────────────────────────────
+
+type Tier = 'good' | 'warn' | 'bad' | 'none';
+
+const TIER_COLOR: Record<Tier, string> = {
+  good: '#4ade80',
+  warn: '#fbbf24',
+  bad:  '#f87171',
+  none: 'rgba(143,130,255,0.22)',
+};
+
+interface Accuracy { tier: Tier; color: string; pill: string }
+
+/**
+ * Adaptive accuracy tier based on median interval.
+ * Good = within max(20min, 10% of median).
+ * Warn = within max(2h, 30% of median).
+ * Bad  = beyond that.
+ */
+function getAccuracyWindows(medianMs: number | null): { goodMs: number; warnMs: number; scoreScaleMs: number } {
+  const hasMedian = medianMs != null && Number.isFinite(medianMs) && medianMs > 0;
+  const base = hasMedian ? medianMs : null;
+  const goodMs = base != null
+    ? Math.min(60 * 60_000, Math.max(10 * 60_000, base * 0.05))
+    : 20 * 60_000;
+  const warnMs = base != null
+    ? Math.min(8 * 3_600_000, Math.max(45 * 60_000, base * 0.18))
+    : 2 * 3_600_000;
+  const scoreScaleMs = base != null
+    ? Math.min(12 * 3_600_000, Math.max(30 * 60_000, base * 0.12))
+    : 45 * 60_000;
+  return { goodMs, warnMs, scoreScaleMs };
+}
+
+/**
+ * Non-linear accuracy score.
+ * Uses a cubic decay so large misses (for example multi-day drift) drop quickly.
+ */
+function computeAccuracyScore(errorMs: number, medianMs: number | null): number {
+  const absError = Math.abs(errorMs);
+  const { scoreScaleMs } = getAccuracyWindows(medianMs);
+  const ratio = scoreScaleMs > 0 ? absError / scoreScaleMs : 0;
+  const score = 100 / (1 + Math.pow(ratio, 3.2));
+  return Math.max(0, Math.min(100, score));
+}
+
+function getAccuracy(errorMs: number | null, medianMs: number | null): Accuracy {
+  if (errorMs === null) {
+    return { tier: 'none', color: TIER_COLOR.none, pill: '' };
+  }
+  const absError = Math.abs(errorMs);
+  const { goodMs, warnMs } = getAccuracyWindows(medianMs);
+
+  if (absError <= goodMs) {
+    return { tier: 'good', color: TIER_COLOR.good, pill: '\u2713 on time' };
+  }
+  const dir   = errorMs < 0 ? 'early' : 'late';
+  const label = `${fmtDuration(errorMs)} ${dir}`;
+  if (absError <= warnMs) {
+    return { tier: 'warn', color: TIER_COLOR.warn, pill: label };
+  }
+  return { tier: 'bad', color: TIER_COLOR.bad, pill: label };
+}
+
+// ── Row data ─────────────────────────────────────────────────────────────────
+
+interface RowData {
+  timestamp: number;
+  quantity:  number | null;
+  gapMs:     number | null;
+  errorMs:   number | null;
+}
+
+function normalizeEpochMs(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  // Guard mixed epoch units from backend/rpc: convert unix-seconds to ms.
+  if (value < 1_000_000_000_000) return Math.round(value * 1000);
+  return Math.round(value);
+}
+
+function sortEventsNewestFirst<T extends { timestamp: number }>(events: readonly T[]): T[] {
+  return events
+    .filter((event) => Number.isFinite(event.timestamp) && event.timestamp > 0)
+    .slice()
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+function getAlgorithmMarkerInsertIndex(rows: RowData[], updatedAtMs: number | null): number {
+  if (updatedAtMs == null || !Number.isFinite(updatedAtMs)) return -1;
+  for (let i = 0; i < rows.length; i++) {
+    // rows are newest -> oldest; insert marker before first row that is at/older than update time
+    if (rows[i]!.timestamp <= updatedAtMs) return i;
+  }
+  return rows.length;
+}
+
+type MarkerPositionContext = 'between' | 'after-latest' | 'before-oldest';
+
+function makeAlgorithmUpdateMarker(updatedAtMs: number, context: MarkerPositionContext): HTMLElement {
+  const marker = document.createElement('div');
+  marker.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'padding:6px 10px',
+    'margin:4px 0 6px',
+    'border-radius:6px',
+    'border:1px solid rgba(143,130,255,0.25)',
+    'background:rgba(143,130,255,0.08)',
+    'font-size:10px',
+    'letter-spacing:0.2px',
+    'color:rgba(220,210,255,0.72)',
+    'text-transform:uppercase',
+    'white-space:nowrap',
+    'overflow:hidden',
+    'text-overflow:ellipsis',
+  ].join(';');
+  const suffix = context === 'after-latest'
+    ? ' (after latest listed restock)'
+    : context === 'before-oldest'
+      ? ' (before oldest listed restock)'
+      : '';
+  marker.textContent = `Estimation algorithm updated - ${fmtAbsoluteWithZone(updatedAtMs)}${suffix}`;
+  // Keep an absolute UTC reference for auditability across timezones.
+  marker.title = `Updated at ${new Date(updatedAtMs).toISOString()}`;
+  return marker;
+}
+
+// ── Sprite helper ────────────────────────────────────────────────────────────
+
+function getItemSpriteUrl(shopType: string, itemId: string): string | null {
+  const tryResolve = (candidateId: string): string | null => {
+    let url: string | null = null;
+    try { url = canvasToDataUrl(getPetSpriteCanvas(candidateId)) || null; } catch { /* */ }
+    if (!url) {
+      try { url = canvasToDataUrl(getCropSpriteCanvas(candidateId)) || null; } catch { /* */ }
+    }
+    return url;
+  };
+
+  const directUrl = tryResolve(itemId);
+  if (directUrl) return directUrl;
+
+  for (const variantId of getItemIdVariants(shopType, itemId)) {
+    if (!variantId || variantId === itemId) continue;
+    const variantUrl = tryResolve(variantId);
+    if (variantUrl) return variantUrl;
+  }
+  return null;
+}
+
+// ── Category & status helpers ────────────────────────────────────────────────
+
+const SHOP_LABELS: Record<string, string> = {
+  seed: 'Seeds', egg: 'Eggs', decor: 'Decor',
+};
+
+type EventStatus = 'accurate' | 'early' | 'late' | 'first';
+
+interface EventAccuracy {
+  score: number;
+  status: EventStatus;
+  diffMs: number;
+  estimatedTs: number | null;
+  actualTs: number;
+}
+
+function computeEventAccuracy(
+  row: RowData,
+  prevRow: RowData | null,
+  medianMs: number | null,
+): EventAccuracy {
+  if (!prevRow || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
+    return { score: 0, status: 'first', diffMs: 0, estimatedTs: null, actualTs: row.timestamp };
+  }
+  const estimatedTs = prevRow.timestamp + medianMs;
+  const diffMs = row.timestamp - estimatedTs;
+  const absDiff = Math.abs(diffMs);
+  const score = computeAccuracyScore(diffMs, medianMs);
+
+  const { goodMs } = getAccuracyWindows(medianMs);
+  let status: EventStatus;
+  if (absDiff <= goodMs) {
+    status = 'accurate';
+  } else if (diffMs < 0) {
+    status = 'early';
+  } else {
+    status = 'late';
+  }
+  return { score, status, diffMs, estimatedTs, actualTs: row.timestamp };
+}
+
+function getRowAccuracyPercent(row: RowData, medianMs: number | null): number | null {
+  if (row.errorMs === null || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
+    return null;
+  }
+  return computeAccuracyScore(row.errorMs, medianMs);
+}
+
+const STATUS_CONFIG: Record<EventStatus, { icon: string; label: string; color: string; bg: string }> = {
+  accurate: { icon: '\u2713', label: 'Accurate',    color: '#4ade80', bg: 'rgba(74,222,128,0.10)' },
+  early:    { icon: '\u21D7', label: 'Early',        color: '#60a5fa', bg: 'rgba(96,165,250,0.10)' },
+  late:     { icon: '\u23F1', label: 'Late',          color: '#fbbf24', bg: 'rgba(251,191,36,0.10)' },
+  first:    { icon: '\u2014', label: 'First Event',   color: 'rgba(232,224,255,0.5)', bg: 'rgba(143,130,255,0.06)' },
+};
+
+// ── Shared card styles ───────────────────────────────────────────────────────
+
+const CARD_STYLE = [
+  'flex-shrink:0',
+  'margin:12px 12px 0',
+  'border-radius:12px',
+  'border:1px solid rgba(143,130,255,0.3)',
+  'background:rgba(143,130,255,0.06)',
+  'overflow:hidden',
+].join(';');
+
+function makeCardHeader(
+  itemName: string,
+  shopType: string,
+  spriteUrl: string | null,
+): { header: HTMLElement; statusIcon: HTMLElement } {
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:10px;padding:14px 16px 10px;';
+
+  if (spriteUrl) {
+    const img = document.createElement('img');
+    img.src = spriteUrl;
+    img.style.cssText = 'width:36px;height:36px;object-fit:contain;image-rendering:pixelated;border-radius:6px;';
+    header.appendChild(img);
+  }
+
+  const headerText = document.createElement('div');
+  headerText.style.cssText = 'flex:1;min-width:0;';
+
+  const nameEl = document.createElement('div');
+  nameEl.style.cssText = 'font-size:15px;font-weight:700;color:#e8e0ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  nameEl.textContent = itemName;
+  headerText.appendChild(nameEl);
+
+  const catBadge = document.createElement('span');
+  catBadge.style.cssText = [
+    'display:inline-block', 'margin-top:3px',
+    'font-size:10px', 'font-weight:600',
+    'padding:1px 8px', 'border-radius:10px',
+    'color:#a78bfa',
+    'background:rgba(143,130,255,0.12)',
+    'border:1px solid rgba(143,130,255,0.2)',
+    'text-transform:uppercase', 'letter-spacing:0.4px',
+  ].join(';');
+  catBadge.textContent = SHOP_LABELS[shopType] || shopType;
+  headerText.appendChild(catBadge);
+  header.appendChild(headerText);
+
+  const statusIcon = document.createElement('div');
+  statusIcon.style.cssText = 'font-size:20px;flex-shrink:0;';
+  header.appendChild(statusIcon);
+
+  return { header, statusIcon };
+}
+
+// ── Overview card ────────────────────────────────────────────────────────────
+
+interface OverviewHandle {
+  container: HTMLElement;
+  setEventCount: (count: number) => void;
+  setOverallAccuracy: (score: number) => void;
+  setLastSeen: (timestamp: number | null) => void;
+  browseBtn: HTMLButtonElement;
+}
+
+function buildOverviewCard(
+  itemName: string,
+  shopType: string,
+  item: RestockItem,
+  spriteUrl: string | null,
+): OverviewHandle {
+  const card = document.createElement('div');
+  card.style.cssText = CARD_STYLE;
+
+  const { header, statusIcon } = makeCardHeader(itemName, shopType, spriteUrl);
+  const prob = getItemProbability(item);
+  if (prob != null && prob >= 0.5) {
+    statusIcon.textContent = '\u{1F525}';
+    statusIcon.title = 'High probability';
+  } else {
+    statusIcon.textContent = '\u{1F4CA}';
+    statusIcon.title = 'Overview';
+  }
+  card.appendChild(header);
+
+  // Stats chips
+  const statsRow = document.createElement('div');
+  statsRow.style.cssText = 'display:flex;border-top:1px solid rgba(143,130,255,0.12);border-bottom:1px solid rgba(143,130,255,0.12);';
+
+  const makeChip = (value: string, label: string, color = '#e8e0ff'): HTMLElement => {
+    const chip = document.createElement('div');
+    chip.style.cssText = [
+      'flex:1', 'display:flex', 'flex-direction:column', 'align-items:center',
+      'padding:10px 6px', 'gap:2px',
+      'border-right:1px solid rgba(143,130,255,0.08)',
+    ].join(';');
+    const v = document.createElement('div');
+    v.style.cssText = `font-size:15px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;white-space:nowrap;`;
+    v.textContent = value;
+    const l = document.createElement('div');
+    l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;';
+    l.textContent = label;
+    chip.append(v, l);
+    return chip;
+  };
+
+  const eventCountChip = makeChip(String(item.total_occurrences ?? 0), 'Sightings');
+  statsRow.appendChild(eventCountChip);
+  if (item.median_interval_ms != null) {
+    statsRow.appendChild(makeChip(fmtDuration(item.median_interval_ms), 'Median', '#a78bfa'));
+  }
+  if (item.average_quantity != null && item.average_quantity > 0) {
+    const qty = item.average_quantity >= 10
+      ? `~${Math.round(item.average_quantity)}`
+      : `~${item.average_quantity.toFixed(1)}`;
+    statsRow.appendChild(makeChip(qty, 'Avg Qty'));
+  }
+  const lastChip = statsRow.lastElementChild as HTMLElement | null;
+  if (lastChip) lastChip.style.borderRight = 'none';
+  card.appendChild(statsRow);
+
+  // Prediction + last seen section
+  const infoSection = document.createElement('div');
+  infoSection.style.cssText = 'padding:12px 16px;display:flex;flex-direction:column;gap:8px;';
+
+  // Last seen
+  const lastSeenRow = document.createElement('div');
+  lastSeenRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+  const lastSeenLabel = document.createElement('span');
+  lastSeenLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
+  lastSeenLabel.textContent = 'Last Seen';
+  const lastSeenValue = document.createElement('span');
+  lastSeenValue.style.cssText = 'font-size:13px;font-weight:600;color:#e8e0ff;';
+  const setLastSeen = (timestamp: number | null): void => {
+    lastSeenValue.textContent = timestamp ? fmtRelative(timestamp) : 'Never';
+    lastSeenValue.title = timestamp ? fmtAbsoluteWithZone(timestamp) : 'Never seen';
+  };
+  setLastSeen(item.last_seen ?? null);
+  lastSeenRow.append(lastSeenLabel, lastSeenValue);
+  infoSection.appendChild(lastSeenRow);
+
+  // Next estimated
+  const nextRow = document.createElement('div');
+  nextRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+  const nextLabel = document.createElement('span');
+  nextLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
+  nextLabel.textContent = 'Next Estimated';
+  const nextValue = document.createElement('span');
+  const isOverdue = item.estimated_next_timestamp != null && item.estimated_next_timestamp <= Date.now();
+  nextValue.style.cssText = `font-size:13px;font-weight:600;color:${isOverdue ? '#4ade80' : '#e8e0ff'};`;
+  nextValue.textContent = item.estimated_next_timestamp
+    ? fmtCountdown(item.estimated_next_timestamp)
+    : '\u2014';
+  nextRow.append(nextLabel, nextValue);
+  infoSection.appendChild(nextRow);
+
+  // Current probability bar
+  if (prob != null) {
+    const probRow = document.createElement('div');
+    probRow.style.cssText = 'margin-top:4px;';
+    const probHeader = document.createElement('div');
+    probHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;';
+    const probLabel = document.createElement('span');
+    probLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
+    probLabel.textContent = 'Current Probability';
+    const probValue = document.createElement('span');
+    probValue.style.cssText = [
+      'font-size:18px', 'font-weight:800',
+      'background:linear-gradient(to right, #8f82ff, #f0abfc)',
+      '-webkit-background-clip:text', '-webkit-text-fill-color:transparent',
+      'background-clip:text',
+    ].join(';');
+    probValue.textContent = fmtPercent(prob);
+    probHeader.append(probLabel, probValue);
+    probRow.appendChild(probHeader);
+
+    const barTrack = document.createElement('div');
+    barTrack.style.cssText = 'width:100%;height:8px;border-radius:4px;background:rgba(143,130,255,0.12);overflow:hidden;';
+    const barFill = document.createElement('div');
+    barFill.style.cssText = `height:100%;border-radius:4px;background:linear-gradient(to right, #8f82ff, #f0abfc);width:${Math.round(prob * 100)}%;`;
+    barTrack.appendChild(barFill);
+    probRow.appendChild(barTrack);
+    infoSection.appendChild(probRow);
+  }
+
+  // Overall accuracy (filled in after events load)
+  const accuracyRow = document.createElement('div');
+  accuracyRow.style.cssText = 'margin-top:4px;display:none;';
+  const accuracyHeader = document.createElement('div');
+  accuracyHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;';
+  const accuracyLabel = document.createElement('span');
+  accuracyLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
+  accuracyLabel.textContent = 'Overall Accuracy';
+  const accuracyValue = document.createElement('span');
+  accuracyValue.style.cssText = 'font-size:16px;font-weight:700;color:#e8e0ff;';
+  accuracyHeader.append(accuracyLabel, accuracyValue);
+  accuracyRow.appendChild(accuracyHeader);
+
+  const accBarTrack = document.createElement('div');
+  accBarTrack.style.cssText = 'width:100%;height:6px;border-radius:3px;background:rgba(143,130,255,0.12);overflow:hidden;';
+  const accBarFill = document.createElement('div');
+  accBarFill.style.cssText = 'height:100%;border-radius:3px;transition:width 0.3s ease;';
+  accBarTrack.appendChild(accBarFill);
+  accuracyRow.appendChild(accBarTrack);
+  infoSection.appendChild(accuracyRow);
+  card.appendChild(infoSection);
+
+  // Browse events button
+  const btnWrap = document.createElement('div');
+  btnWrap.style.cssText = 'padding:0 16px 14px;';
+  const browseBtn = document.createElement('button');
+  browseBtn.type = 'button';
+  browseBtn.textContent = 'Loading events\u2026';
+  browseBtn.disabled = true;
+  browseBtn.style.cssText = [
+    'display:block', 'width:100%', 'padding:9px',
+    'font-size:13px', 'font-weight:600', 'cursor:pointer',
+    'background:rgba(143,130,255,0.12)',
+    'border:1px solid rgba(143,130,255,0.3)',
+    'border-radius:8px', 'color:#c8c0ff',
+    'transition:background 0.15s',
+    'opacity:0.6',
+  ].join(';');
+  browseBtn.addEventListener('mouseenter', () => {
+    if (!browseBtn.disabled) browseBtn.style.background = 'rgba(143,130,255,0.22)';
+  });
+  browseBtn.addEventListener('mouseleave', () => {
+    browseBtn.style.background = 'rgba(143,130,255,0.12)';
+  });
+  btnWrap.appendChild(browseBtn);
+  card.appendChild(btnWrap);
+
+  return {
+    container: card,
+    setEventCount: (count: number) => {
+      browseBtn.disabled = count === 0;
+      browseBtn.style.opacity = count === 0 ? '0.4' : '1';
+      browseBtn.style.cursor = count === 0 ? 'default' : 'pointer';
+      browseBtn.textContent = count > 0
+        ? `Browse ${count} Restock Event${count !== 1 ? 's' : ''}`
+        : 'No events recorded';
+      const chipValue = eventCountChip.firstElementChild as HTMLElement | null;
+      if (chipValue) chipValue.textContent = String(count);
+    },
+    setOverallAccuracy: (score: number) => {
+      accuracyRow.style.display = '';
+      accuracyValue.textContent = `${Math.round(score)}%`;
+      const color = score >= 70 ? '#4ade80' : score >= 40 ? '#fbbf24' : '#f87171';
+      accBarFill.style.width = `${Math.round(score)}%`;
+      accBarFill.style.background = color;
+      accuracyValue.style.color = color;
+    },
+    setLastSeen,
+    browseBtn,
+  };
+}
+
+// ── Event accuracy card ──────────────────────────────────────────────────────
+
+interface EventCardHandle {
+  container: HTMLElement;
+  update: (index: number) => void;
+}
+
+function buildEventCard(
+  itemName: string,
+  shopType: string,
+  rows: RowData[],
+  medianMs: number | null,
+  spriteUrl: string | null,
+  onNavigate: (index: number) => void,
+  onBack: () => void,
+): EventCardHandle {
+  const card = document.createElement('div');
+  card.style.cssText = CARD_STYLE;
+
+  const { header, statusIcon } = makeCardHeader(itemName, shopType, spriteUrl);
+  card.appendChild(header);
+
+  // Score section
+  const scoreSection = document.createElement('div');
+  scoreSection.style.cssText = 'padding:0 16px 12px;';
+
+  const scoreRow = document.createElement('div');
+  scoreRow.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;';
+  const scoreLabel = document.createElement('span');
+  scoreLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);font-weight:600;';
+  scoreLabel.textContent = 'Prediction Accuracy';
+  const scoreValue = document.createElement('span');
+  scoreValue.style.cssText = [
+    'font-size:20px', 'font-weight:800',
+    'background:linear-gradient(to right, #8f82ff, #f0abfc)',
+    '-webkit-background-clip:text', '-webkit-text-fill-color:transparent',
+    'background-clip:text',
+    'font-variant-numeric:tabular-nums',
+  ].join(';');
+  scoreRow.append(scoreLabel, scoreValue);
+  scoreSection.appendChild(scoreRow);
+
+  const barTrack = document.createElement('div');
+  barTrack.style.cssText = 'width:100%;height:8px;border-radius:4px;background:rgba(143,130,255,0.12);overflow:hidden;';
+  const barFill = document.createElement('div');
+  barFill.style.cssText = 'height:100%;border-radius:4px;background:linear-gradient(to right, #8f82ff, #f0abfc);transition:width 0.3s ease;';
+  barTrack.appendChild(barFill);
+  scoreSection.appendChild(barTrack);
+  card.appendChild(scoreSection);
+
+  // Time comparison
+  const timeSection = document.createElement('div');
+  timeSection.style.cssText = 'padding:0 16px 12px;display:flex;flex-direction:column;gap:8px;';
+
+  const makeTimeBox = (labelText: string, iconChar: string, color: string, bgColor: string): { box: HTMLElement; valueEl: HTMLElement } => {
+    const box = document.createElement('div');
+    box.style.cssText = `border-radius:8px;border:1px solid ${color}30;background:${bgColor};padding:10px 12px;`;
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
+    const icon = document.createElement('span');
+    icon.style.cssText = `font-size:12px;color:${color};`;
+    icon.textContent = iconChar;
+    const lbl = document.createElement('span');
+    lbl.style.cssText = `font-size:11px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.3px;`;
+    lbl.textContent = labelText;
+    topRow.append(icon, lbl);
+    const valueEl = document.createElement('div');
+    valueEl.style.cssText = 'font-size:13px;font-weight:600;color:#e8e0ff;font-variant-numeric:tabular-nums;';
+    box.append(topRow, valueEl);
+    return { box, valueEl };
+  };
+
+  const estimated = makeTimeBox('Estimated Restock', '\u{1F52E}', '#a78bfa', 'rgba(143,130,255,0.06)');
+  const actual    = makeTimeBox('Actual Restock', '\u{1F4CD}', '#f0abfc', 'rgba(255,143,230,0.06)');
+  timeSection.append(estimated.box, actual.box);
+  card.appendChild(timeSection);
+
+  // Status + diff
+  const statusSection = document.createElement('div');
+  statusSection.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid rgba(143,130,255,0.12);';
+
+  const statusBadge = document.createElement('span');
+  statusBadge.style.cssText = 'font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;';
+
+  const diffText = document.createElement('span');
+  diffText.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.6);font-variant-numeric:tabular-nums;';
+
+  statusSection.append(statusBadge, diffText);
+  card.appendChild(statusSection);
+
+  // Navigation
+  const navSection = document.createElement('div');
+  navSection.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px 12px;border-top:1px solid rgba(143,130,255,0.08);';
+
+  const makeNavBtn = (text: string): HTMLButtonElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = text;
+    btn.style.cssText = [
+      'padding:4px 12px', 'font-size:12px', 'font-weight:600',
+      'border-radius:6px', 'cursor:pointer',
+      'background:rgba(143,130,255,0.10)',
+      'border:1px solid rgba(143,130,255,0.2)',
+      'color:#c8c0ff', 'transition:background 0.15s',
+    ].join(';');
+    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(143,130,255,0.20)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(143,130,255,0.10)'; });
+    return btn;
+  };
+
+  const prevBtn = makeNavBtn('\u25C0 Prev');
+  const nextBtn = makeNavBtn('Next \u25B6');
+  const counter = document.createElement('span');
+  counter.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);font-variant-numeric:tabular-nums;min-width:60px;text-align:center;';
+
+  let currentIndex = 0;
+
+  prevBtn.addEventListener('click', () => {
+    if (currentIndex < rows.length - 1) {
+      update(currentIndex + 1);
+      onNavigate(currentIndex);
+    }
+  });
+  nextBtn.addEventListener('click', () => {
+    if (currentIndex > 0) {
+      update(currentIndex - 1);
+      onNavigate(currentIndex);
+    }
+  });
+
+  navSection.append(prevBtn, counter, nextBtn);
+  card.appendChild(navSection);
+
+  // Back to overview link
+  const backRow = document.createElement('div');
+  backRow.style.cssText = 'text-align:center;padding:0 16px 10px;';
+  const backLink = document.createElement('button');
+  backLink.type = 'button';
+  backLink.textContent = '\u2190 Back to Overview';
+  backLink.style.cssText = [
+    'background:none', 'border:none', 'cursor:pointer',
+    'font-size:11px', 'color:rgba(200,192,255,0.55)',
+    'text-decoration:underline', 'text-underline-offset:2px',
+  ].join(';');
+  backLink.addEventListener('mouseenter', () => { backLink.style.color = '#c8c0ff'; });
+  backLink.addEventListener('mouseleave', () => { backLink.style.color = 'rgba(200,192,255,0.55)'; });
+  backLink.addEventListener('click', onBack);
+  backRow.appendChild(backLink);
+  card.appendChild(backRow);
+
+  function update(index: number): void {
+    currentIndex = index;
+    const row = rows[index]!;
+    const prevRow = index + 1 < rows.length ? rows[index + 1]! : null;
+    const acc = computeEventAccuracy(row, prevRow, medianMs);
+    const cfg = STATUS_CONFIG[acc.status];
+
+    statusIcon.textContent = cfg.icon;
+    statusIcon.style.color = cfg.color;
+
+    if (acc.status === 'first') {
+      scoreValue.textContent = '\u2014';
+      barFill.style.width = '0%';
+    } else {
+      scoreValue.textContent = `${Math.round(acc.score)}%`;
+      barFill.style.width = `${Math.round(acc.score)}%`;
+    }
+
+    if (acc.status === 'first') {
+      estimated.valueEl.textContent = '\u2014';
+      estimated.valueEl.style.color = 'rgba(232,224,255,0.3)';
+      actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
+      actual.valueEl.style.color = '#e8e0ff';
+    } else {
+      estimated.valueEl.textContent = acc.estimatedTs != null ? fmtTimestamp(acc.estimatedTs) : '\u2014';
+      estimated.valueEl.style.color = '#e8e0ff';
+      actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
+      actual.valueEl.style.color = '#e8e0ff';
+    }
+
+    statusBadge.textContent = `${cfg.icon}  ${cfg.label}`;
+    statusBadge.style.color = cfg.color;
+    statusBadge.style.background = cfg.bg;
+    statusBadge.style.border = `1px solid ${cfg.color}30`;
+
+    if (acc.status === 'first') {
+      diffText.textContent = 'First recorded \u2014 no comparison available';
+    } else {
+      const absDiff = Math.abs(acc.diffMs);
+      const dir = acc.diffMs < 0 ? 'early' : acc.diffMs > 0 ? 'late' : 'exact';
+      diffText.textContent = dir === 'exact' ? 'Exact match' : `${fmtDuration(absDiff)} ${dir}`;
+    }
+
+    counter.textContent = `${index + 1} of ${rows.length}`;
+    prevBtn.disabled = index >= rows.length - 1;
+    nextBtn.disabled = index <= 0;
+    prevBtn.style.opacity = prevBtn.disabled ? '0.3' : '1';
+    nextBtn.style.opacity = nextBtn.disabled ? '0.3' : '1';
+    prevBtn.style.cursor = prevBtn.disabled ? 'default' : 'pointer';
+    nextBtn.style.cursor = nextBtn.disabled ? 'default' : 'pointer';
+  }
+
+  return { container: card, update };
+}
+
+// ── Row element ──────────────────────────────────────────────────────────────
+
+function makeRowEl(row: RowData, index: number, medianMs: number | null, onClick: (i: number) => void): HTMLElement {
+  const { color, pill } = getAccuracy(row.errorMs, medianMs);
+  const rowAccuracy = getRowAccuracyPercent(row, medianMs);
+
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'display:grid',
+    'grid-template-columns:1fr 76px 96px',
+    'align-items:center',
+    `border-left:3px solid ${color}`,
+    'padding:7px 10px 7px 11px',
+    'border-radius:0 6px 6px 0',
+    'margin-bottom:2px',
+    'cursor:pointer',
+    'transition:background 0.15s',
+  ].join(';');
+  el.addEventListener('mouseenter', () => {
+    if (!el.dataset.active) el.style.background = 'rgba(143,130,255,0.08)';
+  });
+  el.addEventListener('mouseleave', () => {
+    if (!el.dataset.active) el.style.background = '';
+  });
+  el.addEventListener('click', () => onClick(index));
+
+  const tsEl = document.createElement('span');
+  tsEl.style.cssText = 'font-size:12px;font-variant-numeric:tabular-nums;color:rgba(232,224,255,0.50);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  tsEl.textContent = fmtTimestamp(row.timestamp);
+  el.appendChild(tsEl);
+
+  const gapEl = document.createElement('span');
+  gapEl.style.cssText = 'font-size:13px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;';
+  if (rowAccuracy !== null) {
+    gapEl.style.color = color;
+    gapEl.textContent = `${Math.round(rowAccuracy)}%`;
+  } else {
+    gapEl.style.color = 'rgba(232,224,255,0.18)';
+    gapEl.textContent = '\u2014';
+  }
+  el.appendChild(gapEl);
+
+  const pillCell = document.createElement('div');
+  pillCell.style.cssText = 'display:flex;justify-content:flex-end;min-width:0;';
+  if (pill) {
+    const badge = document.createElement('span');
+    badge.style.cssText = [
+      `color:${color}`,
+      `background:${color}14`,
+      `border:1px solid ${color}38`,
+      'font-size:10px', 'font-weight:600',
+      'padding:2px 7px', 'border-radius:20px',
+      'white-space:nowrap', 'font-variant-numeric:tabular-nums',
+    ].join(';');
+    badge.textContent = pill;
+    pillCell.appendChild(badge);
+  }
+  el.appendChild(pillCell);
+
+  return el;
+}
+
+// ── Public entry ─────────────────────────────────────────────────────────────
+
+export function openItemRestockDetail(item: RestockItem, itemName: string): void {
+  const shopType = item.shop_type;
+  if (!isDetailShopType(shopType)) return;
+
+  const canonicalId = canonicalItemId(shopType, item.item_id);
+  const safeItemName = itemName.trim() || canonicalId;
+  const selectedItem = resolveDetailRestockItem(shopType, canonicalId, item);
+
+  rememberDetailWindow(shopType, canonicalId, safeItemName);
+  registerDetailWindowOpener(shopType, canonicalId, safeItemName);
+
+  const winId = getDetailWindowId(shopType, canonicalId);
+  destroyWindow(winId);
+
+  openWindow(winId, `${safeItemName} \u2014 Restock History`, (root) => {
+    root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
+    const item = selectedItem;
+
+    const spriteUrl = getItemSpriteUrl(item.shop_type, item.item_id);
+    const medianMs = item.median_interval_ms;
+    const algorithmUpdatedAtMs = normalizeEpochMs(item.algorithm_updated_at);
+
+    // ── Overview card (shown immediately with RestockItem data) ──
+    const overview = buildOverviewCard(itemName, item.shop_type, item, spriteUrl);
+    root.appendChild(overview.container);
+
+    // ── Placeholder for event card (hidden initially) ──
+    let eventCard: EventCardHandle | null = null;
+    let eventCardEl: HTMLElement | null = null;
+
+    // ── Event list container (populated after fetch) ──
+    const eventListSection = document.createElement('div');
+    eventListSection.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
+
+    const spinner = document.createElement('div');
+    spinner.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:20px;font-size:12px;color:rgba(224,224,224,0.4);';
+    spinner.textContent = '\u23F3 Loading events\u2026';
+    eventListSection.appendChild(spinner);
+    root.appendChild(eventListSection);
+
+    // ── Shared state ──
+    let rows: RowData[] = [];
+    const rowElements: HTMLElement[] = [];
+    let activeRowIndex = -1;
+
+    function setActiveRow(index: number): void {
+      const prev = rowElements[activeRowIndex];
+      if (prev) {
+        delete prev.dataset.active;
+        prev.style.background = '';
+      }
+      activeRowIndex = index;
+      const next = rowElements[index];
+      if (next) {
+        next.dataset.active = '1';
+        next.style.background = 'rgba(143,130,255,0.10)';
+        next.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+
+    function showOverview(): void {
+      overview.container.style.display = '';
+      if (eventCardEl) eventCardEl.style.display = 'none';
+      setActiveRow(-1);
+    }
+
+    function showEventCard(index: number): void {
+      if (!eventCard || !eventCardEl || rows.length === 0) return;
+      overview.container.style.display = 'none';
+      eventCardEl.style.display = '';
+      eventCard.update(index);
+      setActiveRow(index);
+    }
+
+    // ── Fetch events ──
+    void (async () => {
+      let events: Awaited<ReturnType<typeof fetchItemEvents>> = [];
+      try {
+        events = await fetchItemEvents(item.shop_type, item.item_id);
+      } catch {
+        /* network error — events stays [] */
+      }
+
+      if (!eventListSection.contains(spinner)) return; // window closed
+      eventListSection.removeChild(spinner);
+
+      if (!events.length) {
+        overview.setEventCount(0);
+        const empty = document.createElement('div');
+        empty.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:24px;font-size:12px;color:rgba(224,224,224,0.35);';
+        empty.textContent = 'No raw event history found for this item.';
+        eventListSection.appendChild(empty);
+        return;
+      }
+
+      const normalizedEvents = events
+        .map((ev) => {
+          const ts = normalizeEpochMs(ev.timestamp);
+          if (ts == null) return null;
+          return { ...ev, timestamp: ts };
+        })
+        .filter((ev): ev is { timestamp: number; quantity: number | null } => ev !== null);
+      const orderedEvents = sortEventsNewestFirst(normalizedEvents);
+      overview.setEventCount(orderedEvents.length);
+
+      rows = orderedEvents.map((ev, i): RowData => {
+        const prev    = i + 1 < orderedEvents.length ? orderedEvents[i + 1]! : null;
+        const gapMs   = prev !== null ? ev.timestamp - prev.timestamp : null;
+        const errorMs = (gapMs !== null && medianMs != null) ? gapMs - medianMs : null;
+        return { timestamp: ev.timestamp, quantity: ev.quantity, gapMs, errorMs };
+      });
+
+      const latestEventTs = rows[0]?.timestamp ?? null;
+      if (latestEventTs != null) {
+        if ((item.last_seen ?? 0) < latestEventTs) {
+          item.last_seen = latestEventTs;
+          patchCachedItemLastSeen(item.shop_type, item.item_id, latestEventTs);
+        }
+        overview.setLastSeen(item.last_seen ?? latestEventTs);
+      }
+
+      // Compute overall accuracy
+      const withComparison = rows.filter((_, i) => i + 1 < rows.length);
+      if (withComparison.length > 0 && medianMs != null && medianMs > 0) {
+        const scores = withComparison.map((row, i) => {
+          const prevRow = rows[i + 1]!;
+          return computeEventAccuracy(row, prevRow, medianMs).score;
+        });
+        const avgScore = scores.reduce((s, v) => s + v, 0) / scores.length;
+        overview.setOverallAccuracy(avgScore);
+      }
+
+      // Build event card (hidden initially)
+      eventCard = buildEventCard(
+        itemName, item.shop_type, rows, medianMs, spriteUrl,
+        (index) => setActiveRow(index),
+        showOverview,
+      );
+      eventCardEl = eventCard.container;
+      eventCardEl.style.display = 'none';
+      root.insertBefore(eventCardEl, eventListSection);
+
+      // Wire browse button
+      overview.browseBtn.addEventListener('click', () => {
+        if (rows.length > 0) showEventCard(0);
+      });
+
+      // ── Summary strip ──
+      const strip = document.createElement('div');
+      strip.style.cssText = 'display:flex;flex-shrink:0;border-bottom:1px solid rgba(143,130,255,0.15);margin-top:8px;';
+
+      const makeChip = (value: string, label: string, color = 'rgba(232,224,255,0.9)'): HTMLElement => {
+        const chip = document.createElement('div');
+        chip.style.cssText = [
+          'flex:1', 'display:flex', 'flex-direction:column', 'align-items:center',
+          'padding:10px 8px', 'gap:2px',
+          'border-right:1px solid rgba(143,130,255,0.08)',
+        ].join(';');
+        const v = document.createElement('div');
+        v.style.cssText = `font-size:15px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;white-space:nowrap;`;
+        v.textContent = value;
+        const l = document.createElement('div');
+        l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;';
+        l.textContent = label;
+        chip.append(v, l);
+        return chip;
+      };
+
+      strip.appendChild(makeChip(String(rows.length), 'Events'));
+      if (medianMs != null) {
+        strip.appendChild(makeChip(fmtDuration(medianMs), 'Median gap', '#a78bfa'));
+      }
+      const withError = rows.filter(r => r.errorMs !== null);
+      if (withError.length > 0) {
+        const avgErr = withError.reduce((s, r) => s + Math.abs(r.errorMs!), 0) / withError.length;
+        const c = avgErr < 1_800_000 ? '#4ade80' : avgErr < 10_800_000 ? '#fbbf24' : '#f87171';
+        strip.appendChild(makeChip(fmtDuration(avgErr), 'Avg error', c));
+      }
+      const lastChip = strip.lastElementChild as HTMLElement | null;
+      if (lastChip) lastChip.style.borderRight = 'none';
+      eventListSection.appendChild(strip);
+
+      // ── Column headers ──
+      const colHdr = document.createElement('div');
+      colHdr.style.cssText = [
+        'display:grid', 'grid-template-columns:1fr 76px 96px',
+        'padding:6px 10px 3px 18px',
+        'font-size:10px', 'font-weight:700', 'letter-spacing:0.5px',
+        'text-transform:uppercase', 'color:rgba(224,224,224,0.25)',
+        'flex-shrink:0',
+      ].join(';');
+      const hL = document.createElement('span');
+      hL.textContent = 'Restocked';
+      const hM = document.createElement('span');
+      hM.style.textAlign = 'right';
+      hM.textContent = 'Accuracy';
+      const hR = document.createElement('span');
+      hR.style.textAlign = 'right';
+      hR.textContent = 'Status';
+      colHdr.append(hL, hM, hR);
+      eventListSection.appendChild(colHdr);
+
+      // ── Scrollable event list ──
+      const listWrap = document.createElement('div');
+      listWrap.style.cssText = 'flex:1;overflow-y:auto;min-height:0;padding:4px 10px 10px;';
+
+      const handleRowClick = (index: number): void => {
+        showEventCard(index);
+      };
+
+      let renderedCount = 0;
+      const markerInsertIndex = getAlgorithmMarkerInsertIndex(rows, algorithmUpdatedAtMs);
+      const markerContext: MarkerPositionContext =
+        markerInsertIndex <= 0 ? 'after-latest' : markerInsertIndex >= rows.length ? 'before-oldest' : 'between';
+      let markerInserted = false;
+
+      const appendMarkerIfNeeded = (beforeIndex: number): void => {
+        if (markerInserted || markerInsertIndex < 0 || beforeIndex !== markerInsertIndex || algorithmUpdatedAtMs == null) return;
+        listWrap.appendChild(
+          makeAlgorithmUpdateMarker(algorithmUpdatedAtMs, markerContext),
+        );
+        markerInserted = true;
+      };
+
+      for (let i = 0; i < Math.min(INITIAL_ROWS, rows.length); i++) {
+        appendMarkerIfNeeded(i);
+        const rowEl = makeRowEl(rows[i]!, i, medianMs, handleRowClick);
+        rowElements[i] = rowEl;
+        listWrap.appendChild(rowEl);
+        renderedCount++;
+      }
+      appendMarkerIfNeeded(renderedCount);
+
+      if (rows.length > INITIAL_ROWS) {
+        const remaining = rows.length - INITIAL_ROWS;
+        const moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.textContent = `Show ${remaining} more`;
+        moreBtn.style.cssText = [
+          'display:block', 'width:100%', 'margin-top:6px', 'padding:7px',
+          'font-size:12px', 'font-weight:600', 'cursor:pointer',
+          'background:rgba(143,130,255,0.08)',
+          'border:1px solid rgba(143,130,255,0.2)',
+          'border-radius:7px', 'color:rgba(200,192,255,0.55)',
+          'transition:background 0.1s',
+        ].join(';');
+        moreBtn.addEventListener('mouseenter', () => { moreBtn.style.background = 'rgba(143,130,255,0.14)'; });
+        moreBtn.addEventListener('mouseleave', () => { moreBtn.style.background = 'rgba(143,130,255,0.08)'; });
+        moreBtn.addEventListener('click', () => {
+          moreBtn.remove();
+          for (let i = renderedCount; i < rows.length; i++) {
+            appendMarkerIfNeeded(i);
+            const rowEl = makeRowEl(rows[i]!, i, medianMs, handleRowClick);
+            rowElements[i] = rowEl;
+            listWrap.appendChild(rowEl);
+          }
+          appendMarkerIfNeeded(rows.length);
+          if (activeRowIndex >= 0) setActiveRow(activeRowIndex);
+        });
+        listWrap.appendChild(moreBtn);
+      }
+
+      eventListSection.appendChild(listWrap);
+    })();
+  }, '520px', '80vh');
+}

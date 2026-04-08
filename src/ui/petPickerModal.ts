@@ -6,7 +6,7 @@
 
 import { log } from '../utils/logger';
 import { getAllPooledPets } from '../store/petTeams';
-import { getPetSpriteDataUrlWithMutations, isSpritesReady } from '../sprite-v2/compat';
+import { getPetSpriteDataUrlWithMutations, isSpritesReady, onSpritesReady } from '../sprite-v2/compat';
 import { getAbilityColor } from '../utils/petCardRenderer';
 import { getAbilityDefinition, computeAbilityStats, computeEffectPerHour, type AbilityDefinition } from '../data/petAbilities';
 import { findAbilityHistoryForIdentifiers } from '../store/abilityLogs';
@@ -18,7 +18,7 @@ import { getPetMetadata } from '../data/petMetadata';
 import { getHungerDepletionTime } from '../data/petHungerDepletion';
 import { buildAbilityValuationContext, resolveDynamicAbilityEffect, type AbilityValuationContext } from '../features/abilityValuation';
 import { buildCompareCardViewModel } from './comparePresentation';
-import { captureProgressionStage, type ComparePetInput } from '../features/petCompareEngine';
+import { captureProgressionStage, getOptimizerAbilityFamilyInfo, type ComparePetInput } from '../features/petCompareEngine';
 import type { CompareStage } from '../data/petCompareRules';
 import { storage } from '../utils/storage';
 
@@ -1002,10 +1002,22 @@ function buildComparePanel(
     valuationContext = null;
   }
 
+  const quickFilterAbilityIds = [...new Set([...petA.abilities, ...petB.abilities])];
+  const compareAbilitySelectionMap = new Map<string, Set<string>>();
+  const compareAbilityGroups = buildGroupedAbilityGroups(quickFilterAbilityIds, 'compare');
+  for (const option of compareAbilityGroups) {
+    compareAbilitySelectionMap.set(option.value, option.abilityIds);
+  }
+  const resolvedAbilityFilter = resolveSavedAbilityFilter(
+    abilityFilter,
+    compareAbilitySelectionMap,
+    'compare',
+  );
+
   const sharedModel = buildCompareCardViewModel({
     petA,
     petB,
-    abilityFilter,
+    abilityFilter: resolvedAbilityFilter,
     valuationContext,
     stage,
     poolForRank: [petA, petB],
@@ -1020,22 +1032,20 @@ function buildComparePanel(
   sharedHeader.appendChild(sharedTitle);
   container.appendChild(sharedHeader);
 
-  const quickFilterAbilityIds = [...new Set([...petA.abilities, ...petB.abilities])];
-  if (quickFilterAbilityIds.length > 0) {
+  if (compareAbilityGroups.length > 0) {
     const filterSel = document.createElement('select');
     filterSel.className = 'qpm-compare__ability-filter qpm-select';
     const allOpt = document.createElement('option');
     allOpt.value = 'all';
     allOpt.textContent = 'All Abilities';
     filterSel.appendChild(allOpt);
-    for (const id of quickFilterAbilityIds) {
-      const def = getAbilityDefinition(id);
+    for (const group of compareAbilityGroups) {
       const opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = def?.name ?? id;
+      opt.value = group.value;
+      opt.textContent = group.label;
       filterSel.appendChild(opt);
     }
-    filterSel.value = abilityFilter;
+    filterSel.value = resolvedAbilityFilter;
     filterSel.addEventListener('change', () => onFilterChange(filterSel.value));
     container.appendChild(filterSel);
   }
@@ -1482,7 +1492,7 @@ function renderPetCard(
   applyMutationTierStyle(card, tier);
 
   const mutNames = pet.mutations.join(', ') || 'No mutations';
-  const abilNames = pet.abilities.join(', ') || 'None';
+  const abilNames = pet.abilities.map((abilityId) => getAbilityDisplayName(abilityId)).join(', ') || 'None';
   card.title = `${pet.name || pet.species}\nSTR ${pet.strength ?? '?'}\nMutations: ${mutNames}\nAbilities: ${abilNames}`;
   card.addEventListener('click', onClick);
   card.addEventListener('mouseenter', () => onHover(pet));
@@ -1525,7 +1535,7 @@ function renderPetCard(
       const dot = document.createElement('div');
       dot.className = 'qpm-pet-card__dot';
       dot.style.background = color.base;
-      dot.title = abilityId;
+      dot.title = getAbilityDisplayName(abilityId);
       dotsWrap.appendChild(dot);
     }
     card.appendChild(dotsWrap);
@@ -1548,28 +1558,135 @@ function renderPetCard(
 // Ability filter builder
 // ---------------------------------------------------------------------------
 
-function buildAbilityFilterOptions(pets: PooledPet[], sel: HTMLSelectElement): void {
-  const idToName = new Map<string, string>();
-  for (const pet of pets) {
-    for (const id of pet.abilities) {
-      if (!idToName.has(id)) {
-        const def = getAbilityDefinition(id);
-        idToName.set(id, def?.name ?? id);
-      }
-    }
-  }
+function getAbilityCanonicalId(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return getAbilityDefinition(raw)?.id ?? raw;
+}
+
+function getAbilityDisplayName(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return getAbilityDefinition(raw)?.name ?? raw;
+}
+
+function stripTierSuffix(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+(?:IV|III|II|I)$/i, '')
+    .replace(/\s+[1-4]$/i, '')
+    .trim();
+}
+
+type AbilityFilterMode = 'picker' | 'compare';
+
+interface GroupedAbilityOption {
+  value: string;
+  label: string;
+  abilityIds: Set<string>;
+}
+
+function buildAbilityFilterSelectionValue(
+  abilityId: string,
+  displayName: string,
+  mode: AbilityFilterMode = 'picker',
+): { value: string; label: string } {
+  const info = getOptimizerAbilityFamilyInfo(abilityId, displayName);
+  const fallbackKey = abilityId
+    .replace(/_NEW$/i, '')
+    .replace(/(?:I{1,3}|IV)$/i, '')
+    .trim()
+    .toLowerCase();
+  const familyKey = (info?.exactFamilyKey ?? fallbackKey ?? abilityId.toLowerCase()).trim().toLowerCase();
+  const familyLabel = (info?.exactFamilyLabel ?? stripTierSuffix(displayName) ?? displayName ?? abilityId).trim();
+
+  return {
+    value: mode === 'compare' ? familyKey : `family:${familyKey}`,
+    label: familyLabel || abilityId,
+  };
+}
+
+function resolveSavedAbilityFilter(
+  rawValue: string | null | undefined,
+  selectionMap: Map<string, Set<string>>,
+  mode: AbilityFilterMode = 'picker',
+): string {
+  const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (!value) return 'all';
+  if (selectionMap.has(value)) return value;
+
+  const canonicalId = getAbilityCanonicalId(value);
+  if (!canonicalId) return 'all';
+  const displayName = getAbilityDisplayName(value);
+  const family = buildAbilityFilterSelectionValue(canonicalId, displayName, mode);
+  return selectionMap.has(family.value) ? family.value : 'all';
+}
+
+function petMatchesAbilityFilter(
+  pet: PooledPet,
+  selectedValue: string,
+  selectionMap: Map<string, Set<string>>,
+): boolean {
+  if (selectedValue === 'all') return true;
+  const allowedIds = selectionMap.get(selectedValue);
+  if (!allowedIds || allowedIds.size === 0) return false;
+
+  return pet.abilities.some((abilityId) => {
+    const canonicalId = getAbilityCanonicalId(abilityId);
+    return canonicalId.length > 0 && allowedIds.has(canonicalId);
+  });
+}
+
+function buildAbilityFilterOptions(
+  pets: PooledPet[],
+  sel: HTMLSelectElement,
+  selectionMap: Map<string, Set<string>>,
+): void {
+  selectionMap.clear();
+  const abilityIds = pets.flatMap((pet) => pet.abilities);
+  const grouped = buildGroupedAbilityGroups(abilityIds, 'picker');
+
   sel.innerHTML = '';
   const allOpt = document.createElement('option');
   allOpt.value = 'all';
   allOpt.textContent = 'All Abilities';
   sel.appendChild(allOpt);
-  const sorted = [...idToName.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  for (const [id, name] of sorted) {
+
+  for (const group of grouped) {
+    selectionMap.set(group.value, group.abilityIds);
     const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = name;
+    opt.value = group.value;
+    opt.textContent = group.label;
     sel.appendChild(opt);
   }
+}
+
+function buildGroupedAbilityGroups(
+  abilityIds: string[],
+  mode: AbilityFilterMode,
+): GroupedAbilityOption[] {
+  const grouped = new Map<string, GroupedAbilityOption>();
+
+  for (const rawAbilityId of abilityIds) {
+    const canonicalId = getAbilityCanonicalId(rawAbilityId);
+    if (!canonicalId) continue;
+
+    const displayName = getAbilityDisplayName(rawAbilityId);
+    const family = buildAbilityFilterSelectionValue(canonicalId, displayName, mode);
+    const existing = grouped.get(family.value);
+    if (existing) {
+      existing.abilityIds.add(canonicalId);
+      continue;
+    }
+
+    grouped.set(family.value, {
+      value: family.value,
+      label: family.label,
+      abilityIds: new Set<string>([canonicalId]),
+    });
+  }
+
+  return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function toCompareInput(pet: PooledPet): ComparePetInput {
@@ -1740,6 +1857,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   let hoverTimeout: number | null = null;
   let compareMode = false;
   let compareSelected: PooledPet[] = [];
+  const abilityFilterSelectionMap = new Map<string, Set<string>>();
   const shouldStartInCompareMode = options.startInCompareMode ?? isCompareOnlyMode;
   const savedFilters = getSavedPickerFilters(options.teamId);
   let compareAbilityFilter = savedFilters?.compareAbility ?? 'all';
@@ -2048,7 +2166,7 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
         if (tierVal === 'clean' && t !== 'none') return false;
         if (tierVal !== 'clean' && t !== tierVal) return false;
       }
-      if (abilityFilter.value !== 'all' && !p.abilities.includes(abilityFilter.value)) return false;
+      if (!petMatchesAbilityFilter(p, abilityFilter.value, abilityFilterSelectionMap)) return false;
       return true;
     });
 
@@ -2085,10 +2203,8 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
     const abilitySourcePets = options.allowedItemIds
       ? allPets.filter((pet) => options.allowedItemIds?.has(pet.id))
       : allPets;
-    buildAbilityFilterOptions(abilitySourcePets, abilityFilter);
-    if (savedFilters?.ability && [...abilityFilter.options].some(o => o.value === savedFilters.ability)) {
-      abilityFilter.value = savedFilters.ability;
-    }
+    buildAbilityFilterOptions(abilitySourcePets, abilityFilter, abilityFilterSelectionMap);
+    abilityFilter.value = resolveSavedAbilityFilter(savedFilters?.ability, abilityFilterSelectionMap);
     const validSpecies = new Set(getUniqueSpecies(allPets));
     selectedSpecies = new Set([...selectedSpecies].filter((species) => validSpecies.has(species)));
     updateSpeciesSummaryLabel();
@@ -2114,6 +2230,15 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
   renderList();
   updateRightPanel(null);
   persistFilters();
+
+  if (!isSpritesReady()) {
+    const offSpritesReady = onSpritesReady(() => {
+      renderSpeciesPopover();
+      renderList();
+      updateRightPanel(null);
+    });
+    cleanups.push(offSpritesReady);
+  }
 
   // --- Wire events ---
   const onSearch = () => renderList();

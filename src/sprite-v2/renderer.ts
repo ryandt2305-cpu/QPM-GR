@@ -207,58 +207,40 @@ export function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig)
   if (hit) return hit;
 
   let c: HTMLCanvasElement | null = null;
-  const RDR = state.renderer;
 
-  // Try to use renderer.extract if available
-  try {
-    if (RDR?.extract?.canvas && (RDR?.resolution ?? 1) === 1) {
-      const s = new state.ctors!.Sprite(tex);
-      c = RDR.extract.canvas(s);
-      s.destroy?.({ children: true, texture: false, baseTexture: false });
-    }
-  } catch (e) {
-    // Fall through to manual extraction
-  }
-
+  // --- Priority 1: Direct 2D canvas extraction from stored KTX2 source ---
+  // KTX2-decoded textures have a source canvas stored in state.ktx2Canvases.
+  // Using this is faster AND more reliable than GPU extract (which can return
+  // blank canvases when the texture was never rendered to screen).
   if (!c) {
-    // Manual canvas extraction
-    const fr = tex?.frame || tex?._frame;
-    const orig = tex?.orig || tex?._orig;
-    const trim = tex?.trim || tex?._trim;
-    const rot = tex?.rotate || tex?._rotate || 0;
-    const src =
-      tex?.source?.resource?.source ||
-      tex?.source?.resource ||
-      tex?._source?.resource?.source ||
-      tex?._source?.resource ||
-      tex?._baseTexture?.resource?.source ||
-      tex?._baseTexture?.resource ||
-      null;
+    c = tryDirectCanvasExtract(tex, state);
+  }
 
-    if (!fr || !src) throw new Error('textureToCanvas failed');
-
-    c = document.createElement('canvas');
-    const fullW = Math.max(1, (orig?.width ?? fr.width) | 0);
-    const fullH = Math.max(1, (orig?.height ?? fr.height) | 0);
-    const offX = trim?.x ?? 0;
-    const offY = trim?.y ?? 0;
-
-    c.width = fullW;
-    c.height = fullH;
-    const ctx = c.getContext('2d', { willReadFrequently: true })!;
-    ctx.imageSmoothingEnabled = false;
-
-    const rotated = rot === true || rot === 2 || rot === 8;
-    if (rotated) {
-      ctx.save();
-      ctx.translate(offX + fr.height / 2, offY + fr.width / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.drawImage(src, fr.x, fr.y, fr.width, fr.height, -fr.width / 2, -fr.height / 2, fr.width, fr.height);
-      ctx.restore();
-    } else {
-      ctx.drawImage(src, fr.x, fr.y, fr.width, fr.height, offX, offY, fr.width, fr.height);
+  // --- Priority 2: GPU extract via renderer ---
+  if (!c) {
+    const RDR = state.renderer;
+    try {
+      if (RDR?.extract?.canvas && (RDR?.resolution ?? 1) === 1) {
+        const s = new state.ctors!.Sprite(tex);
+        const extracted = RDR.extract.canvas(s);
+        s.destroy?.({ children: true, texture: false, baseTexture: false });
+        // Validate the extraction produced visible content — GPU textures that
+        // were never rendered to screen may yield blank (all-transparent) canvases.
+        if (extracted && !isCanvasBlank(extracted)) {
+          c = extracted;
+        }
+      }
+    } catch (e) {
+      // Fall through to manual extraction
     }
   }
+
+  // --- Priority 3: Manual canvas extraction from PIXI source chain ---
+  if (!c) {
+    c = tryManualCanvasExtract(tex, state);
+  }
+
+  if (!c) throw new Error('textureToCanvas failed');
 
   state.srcCan.set(tex, c);
   if (state.srcCan.size > cfg.srcCanvasMax) {
@@ -267,6 +249,121 @@ export function textureToCanvas(tex: any, state: SpriteState, cfg: SpriteConfig)
   }
 
   return c;
+}
+
+/**
+ * Try to extract a sub-region directly from a stored KTX2 source canvas.
+ * This bypasses GPU extraction entirely, which is more reliable when textures
+ * have not been rendered to screen (common for QPM's offscreen sprite use).
+ */
+function tryDirectCanvasExtract(tex: any, state: SpriteState): HTMLCanvasElement | null {
+  if (!state.ktx2Canvases) return null;
+
+  const texSource = tex?.source ?? tex?._source;
+  if (!texSource || typeof texSource !== 'object') return null;
+
+  const srcCanvas = state.ktx2Canvases.get(texSource as object);
+  if (!srcCanvas) return null;
+
+  return drawSubRegion(tex, srcCanvas);
+}
+
+/**
+ * Manual canvas extraction from PIXI's internal source chain.
+ * Walks multiple property paths to find the underlying canvas/image resource.
+ */
+function tryManualCanvasExtract(tex: any, state: SpriteState): HTMLCanvasElement | null {
+  const fr = tex?.frame || tex?._frame;
+  if (!fr) return null;
+
+  // Walk PIXI's internal property chain to find the underlying canvas/image.
+  // Covers PIXI v7 (_baseTexture.resource) and v8 (source.resource) layouts.
+  const src =
+    tex?.source?.resource?.source ||
+    tex?.source?.resource ||
+    tex?._source?.resource?.source ||
+    tex?._source?.resource ||
+    tex?._baseTexture?.resource?.source ||
+    tex?._baseTexture?.resource ||
+    null;
+
+  // Also check if the source itself IS the drawable (some PIXI v8 paths)
+  const drawable = (src instanceof HTMLCanvasElement || src instanceof HTMLImageElement)
+    ? src
+    : (tex?.source instanceof HTMLCanvasElement ? tex.source : null);
+
+  if (!drawable) return null;
+
+  return drawSubRegion(tex, drawable);
+}
+
+/**
+ * Draw a sub-region from a source canvas/image using the texture's frame/trim/rotation.
+ */
+function drawSubRegion(tex: any, src: HTMLCanvasElement | HTMLImageElement): HTMLCanvasElement | null {
+  const fr = tex?.frame || tex?._frame;
+  if (!fr) return null;
+
+  const orig = tex?.orig || tex?._orig;
+  const trim = tex?.trim || tex?._trim;
+  const rot = tex?.rotate || tex?._rotate || 0;
+
+  const c = document.createElement('canvas');
+  const fullW = Math.max(1, (orig?.width ?? fr.width) | 0);
+  const fullH = Math.max(1, (orig?.height ?? fr.height) | 0);
+  const offX = trim?.x ?? 0;
+  const offY = trim?.y ?? 0;
+
+  c.width = fullW;
+  c.height = fullH;
+  const ctx2d = c.getContext('2d', { willReadFrequently: true });
+  if (!ctx2d) return null;
+  ctx2d.imageSmoothingEnabled = false;
+
+  const rotated = rot === true || rot === 2 || rot === 8;
+  if (rotated) {
+    ctx2d.save();
+    ctx2d.translate(offX + fr.height / 2, offY + fr.width / 2);
+    ctx2d.rotate(-Math.PI / 2);
+    ctx2d.drawImage(src, fr.x, fr.y, fr.width, fr.height, -fr.width / 2, -fr.height / 2, fr.width, fr.height);
+    ctx2d.restore();
+  } else {
+    ctx2d.drawImage(src, fr.x, fr.y, fr.width, fr.height, offX, offY, fr.width, fr.height);
+  }
+
+  return c;
+}
+
+/**
+ * Quick check if a canvas is completely transparent (blank).
+ * Samples a small region to avoid reading the entire pixel buffer.
+ */
+function isCanvasBlank(canvas: HTMLCanvasElement): boolean {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w === 0 || h === 0) return true;
+
+  try {
+    const ctx2d = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx2d) return true;
+
+    // Sample the center and four quadrant points (5 pixels total).
+    // If all sampled alphas are 0, the canvas is likely blank.
+    const points: [number, number][] = [
+      [w >> 1, h >> 1],
+      [w >> 2, h >> 2],
+      [(w * 3) >> 2, h >> 2],
+      [w >> 2, (h * 3) >> 2],
+      [(w * 3) >> 2, (h * 3) >> 2],
+    ];
+    for (const [px, py] of points) {
+      const data = ctx2d.getImageData(px, py, 1, 1).data;
+      if (data[3] !== 0) return false; // Non-zero alpha → not blank
+    }
+    return true;
+  } catch {
+    return false; // If getImageData fails (tainted), assume not blank
+  }
 }
 
 function findOverlayTexture(itKey: string, mutName: MutationName, state: SpriteState, preferTall: boolean): { tex: any; key: string } | null {
@@ -367,11 +464,11 @@ function computeIconLayout(tex: any, baseName: string, isTall: boolean) {
 
 export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, state: SpriteState, cfg: SpriteConfig): any {
   try {
-    if (!tex || !state.renderer || !state.ctors?.Container || !state.ctors?.Sprite || !state.ctors?.Texture) {
+    if (!tex || !state.ctors?.Texture) {
       return tex ?? null;
     }
 
-    const { Container, Sprite, Texture } = state.ctors;
+    const { Texture } = state.ctors;
 
     const w = tex?.orig?.width ?? tex?.frame?.width ?? tex?.width ?? 1;
     const h = tex?.orig?.height ?? tex?.frame?.height ?? tex?.height ?? 1;
@@ -379,30 +476,6 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
     const aY = tex?.defaultAnchor?.y ?? 0.5;
     const basePos = { x: w * aX, y: h * aY };
     const baseCanvas = textureToCanvas(tex, state, cfg);
-
-    const root = new Container();
-    root.sortableChildren = true;
-
-    // Lock sprite for bounds
-    try {
-      const lock = new Sprite(tex);
-      lock.anchor?.set?.(aX, aY);
-      lock.position.set(basePos.x, basePos.y);
-      lock.width = w;
-      lock.height = h;
-      lock.alpha = 0;
-      lock.zIndex = -1000;
-      root.addChild(lock);
-    } catch (e) {
-      // Ignore
-    }
-
-    // Base sprite
-    const base = new Sprite(tex);
-    base.anchor?.set?.(aX, aY);
-    base.position.set(basePos.x, basePos.y);
-    base.zIndex = 0;
-    root.addChild(base);
 
     const isTall = isTallKey(itKey);
     const pipeline = buildMutationPipeline(V.muts, isTall);
@@ -412,13 +485,20 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
     const baseName = baseNameOf(itKey);
     const iconLayout = computeIconLayout(tex, baseName, isTall);
 
+    // --- Pure 2D canvas compositing (no GPU dependency) ---
+    // This avoids PIXI GPU pipeline issues where canvas-based textures
+    // haven't been uploaded to the GPU (common with KTX2-decoded sources).
+    const out = document.createElement('canvas');
+    out.width = w;
+    out.height = h;
+    const octx = out.getContext('2d', { willReadFrequently: true })!;
+    octx.imageSmoothingEnabled = false;
+
+    // Draw base sprite
+    octx.drawImage(baseCanvas, 0, 0);
+
     // Color layers
     for (const step of pipeline) {
-      const clone = new Sprite(tex);
-      clone.anchor?.set?.(aX, aY);
-      clone.position.set(basePos.x, basePos.y);
-      clone.zIndex = 1;
-
       const layerCanvas = document.createElement('canvas');
       layerCanvas.width = w;
       layerCanvas.height = h;
@@ -429,10 +509,7 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
       lctx.drawImage(baseCanvas, -w * aX, -h * aY);
       lctx.restore();
       applyFilterOnto(lctx, layerCanvas, step.name, step.isTall);
-
-      const filteredTex = Texture.from(layerCanvas);
-      clone.texture = filteredTex;
-      root.addChild(clone);
+      octx.drawImage(layerCanvas, 0, 0);
     }
 
     // Tall overlays
@@ -445,7 +522,7 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
         if (!oCan) continue;
 
         const ow = oCan.width;
-        const overlayPos = { x: basePos.x - aX * ow, y: 0 };
+        const overlayX = basePos.x - aX * ow;
 
         const maskedCanvas = document.createElement('canvas');
         maskedCanvas.width = ow;
@@ -454,58 +531,41 @@ export function renderMutatedTexture(tex: any, itKey: string, V: VariantInfo, st
         mctx.imageSmoothingEnabled = false;
         mctx.drawImage(oCan, 0, 0);
         mctx.globalCompositeOperation = 'destination-in';
-        mctx.drawImage(baseCanvas, -overlayPos.x, -overlayPos.y);
+        mctx.drawImage(baseCanvas, -overlayX, 0);
 
-        const maskedTex = Texture.from(maskedCanvas);
-        const ov = new Sprite(maskedTex);
-        ov.anchor?.set?.(0, 0);
-        ov.position.set(overlayPos.x, overlayPos.y);
-        ov.scale.set(1);
-        ov.alpha = 1;
-        ov.zIndex = 3;
-        root.addChild(ov);
+        octx.drawImage(maskedCanvas, overlayX, 0);
       }
     }
 
-    // Icons
+    // Icons (mutation badge sprites)
     for (const step of iconPipeline) {
       if (step.name === 'Gold' || step.name === 'Rainbow') continue;
 
       const itex = findIconTexture(itKey, step.name, step.isTall, state);
       if (!itex) continue;
 
-      const icon = new Sprite(itex);
+      const iconCanvas = textureToCanvas(itex, state, cfg);
+      if (!iconCanvas) continue;
+
       const iconAnchorX = itex?.defaultAnchor?.x ?? 0.5;
       const iconAnchorY = itex?.defaultAnchor?.y ?? 0.5;
-      icon.anchor?.set?.(iconAnchorX, iconAnchorY);
-      icon.position.set(basePos.x + iconLayout.offset.x, basePos.y + iconLayout.offset.y);
-      icon.scale.set(iconLayout.iconScale);
+      const iconW = iconCanvas.width * iconLayout.iconScale;
+      const iconH = iconCanvas.height * iconLayout.iconScale;
+      const drawX = basePos.x + iconLayout.offset.x - iconAnchorX * iconW;
+      const drawY = basePos.y + iconLayout.offset.y - iconAnchorY * iconH;
 
-      if (step.isTall) icon.zIndex = -1;
-      if (FLOATING_MUTATION_ICONS.has(step.name)) icon.zIndex = 10;
-      if (!icon.zIndex) icon.zIndex = 2;
-
-      root.addChild(icon);
+      octx.drawImage(iconCanvas, drawX, drawY, iconW, iconH);
     }
 
-    // Render to texture
-    const RDR = state.renderer;
-    let rt: any = null;
-    const RectCtor = state.ctors.Rectangle;
-    const crop = RectCtor ? new RectCtor(0, 0, w, h) : null;
+    // Wrap the final canvas as a PIXI Texture for the sprite system
+    const outTex = Texture.from(out);
 
-    if (typeof RDR?.generateTexture === 'function') {
-      rt = RDR.generateTexture(root, { resolution: 1, region: crop ?? undefined });
-    } else if (RDR?.textureGenerator?.generateTexture) {
-      rt = RDR.textureGenerator.generateTexture({ target: root, resolution: 1 });
+    // Store the composited canvas so textureToCanvas can extract it later
+    // without going through the GPU.
+    const texSource = outTex?.source ?? outTex?._source ?? outTex;
+    if (texSource && typeof texSource === 'object' && state.ktx2Canvases) {
+      state.ktx2Canvases.set(texSource as object, out);
     }
-
-    if (!rt) throw new Error('No render texture');
-
-    const outTex = rt instanceof Texture ? rt : Texture.from(RDR.extract.canvas(rt));
-    if (rt && rt !== outTex) rt.destroy?.(true);
-
-    root.destroy({ children: true, texture: false, baseTexture: false });
 
     try {
       (outTex as any).__mg_gen = true;

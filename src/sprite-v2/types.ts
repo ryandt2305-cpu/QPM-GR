@@ -131,6 +131,8 @@ export interface SpriteState {
     totalDecodeMs: number;
   };
   runtimeTextureHints?: any[];
+  /** WeakMap from PIXI texture source → KTX2-decoded source canvas for reliable 2D extraction */
+  ktx2Canvases?: WeakMap<object, HTMLCanvasElement>;
 }
 
 export interface PixiConstructors {

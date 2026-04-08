@@ -80,6 +80,7 @@ function showSellConfirmModal(
 
       const iconWrap = document.createElement('div');
       iconWrap.style.cssText = 'width:42px;height:42px;border-radius:10px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;overflow:hidden;';
+      let hasSprite = false;
       try {
         const spriteUrl = getPetSprite(pet.species, pet.hasRainbow, pet.hasGold);
         if (spriteUrl) {
@@ -88,9 +89,16 @@ function showSellConfirmModal(
           img.alt = pet.species ?? 'Pet';
           img.style.cssText = 'width:42px;height:42px;image-rendering:pixelated;object-fit:contain;';
           iconWrap.appendChild(img);
+          hasSprite = true;
         }
       } catch {
         // noop
+      }
+      if (!hasSprite) {
+        const placeholder = document.createElement('span');
+        placeholder.textContent = '•';
+        placeholder.style.cssText = 'font-size:18px;color:rgba(255,255,255,0.45);line-height:1;';
+        iconWrap.appendChild(placeholder);
       }
 
       const info = document.createElement('div');

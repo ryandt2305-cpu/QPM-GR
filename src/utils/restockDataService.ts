@@ -5,7 +5,7 @@ import { storage } from './storage';
 import { log } from './logger';
 
 const RESTOCK_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_predictions';
-const RESTOCK_ANON_KEY =
+export const RESTOCK_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqdXZyeWpncmpjaGJoaml4d3poIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxMDYyODMsImV4cCI6MjA4NTY4MjI4M30.MqQCBG-UMR4HYJU44Tz2orHUj9gMgJTMJtxpb_MHeps';
 const RESTOCK_COLUMNS = [
   'item_id',
@@ -19,14 +19,107 @@ const RESTOCK_COLUMNS = [
   'average_quantity',
   'total_quantity',
   'total_occurrences',
+  'algorithm_version',
+  'algorithm_updated_at_ms',
 ] as const;
+const RESTOCK_LEGACY_COLUMNS = RESTOCK_COLUMNS.filter(
+  (c) => c !== 'algorithm_version' && c !== 'algorithm_updated_at_ms',
+);
 const RESTOCK_QUERY = `select=${RESTOCK_COLUMNS.join(',')}`;
+const RESTOCK_LEGACY_QUERY = `select=${RESTOCK_LEGACY_COLUMNS.join(',')}`;
 const RESTOCK_URL = `${RESTOCK_ENDPOINT}?${RESTOCK_QUERY}`;
+const RESTOCK_URL_LEGACY = `${RESTOCK_ENDPOINT}?${RESTOCK_LEGACY_QUERY}`;
 
 // v3 key separates cache from the prior weather-inclusive payload.
 const CACHE_KEY = 'qpm.restockCache.v3';
 const REFRESH_BUDGET_KEY = 'qpm.restock.refreshBudget.v1';
 const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor']);
+
+// Known item ID aliases for deduplication (legacy → canonical).
+// Scoped to "shop_type:oldId" to avoid cross-shop confusion.
+const ITEM_ID_ALIASES: Record<string, string> = {
+  'seed:Dawnbinder': 'DawnbinderPod',
+  'seed:DawnCelestial': 'DawnbinderPod',
+  'seed:Moonbinder': 'MoonbinderPod',
+  'seed:MoonCelestial': 'MoonbinderPod',
+  'seed:Starweaver': 'StarweaverPod',
+};
+
+/** Resolve canonical item_id for known aliases within a shop_type. */
+export function canonicalItemId(shopType: string, itemId: string): string {
+  return ITEM_ID_ALIASES[`${shopType}:${itemId}`] ?? itemId;
+}
+
+/** Get all known item_id variants for a (shopType, itemId) pair. */
+export function getItemIdVariants(shopType: string, itemId: string): string[] {
+  const canonical = canonicalItemId(shopType, itemId);
+  const variants = new Set<string>([itemId, canonical]);
+  for (const [key, target] of Object.entries(ITEM_ID_ALIASES)) {
+    if (target === canonical) {
+      const alias = key.split(':')[1];
+      if (alias && key.startsWith(`${shopType}:`)) variants.add(alias);
+    }
+  }
+  return Array.from(variants);
+}
+
+function numOrNegInf(value: number | null | undefined): number {
+  return value == null || !Number.isFinite(value) ? Number.NEGATIVE_INFINITY : value;
+}
+
+function pickPreferredRow(a: RestockItem, b: RestockItem): RestockItem {
+  const aLast = numOrNegInf(a.last_seen);
+  const bLast = numOrNegInf(b.last_seen);
+  if (aLast !== bLast) return bLast > aLast ? b : a;
+
+  const aOcc = numOrNegInf(a.total_occurrences);
+  const bOcc = numOrNegInf(b.total_occurrences);
+  if (aOcc !== bOcc) return bOcc > aOcc ? b : a;
+
+  return b;
+}
+
+function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): RestockItem {
+  const preferred = pickPreferredRow(existing, incoming);
+  const fallback = preferred === existing ? incoming : existing;
+  const mergedLastSeen = Math.max(numOrNegInf(existing.last_seen), numOrNegInf(incoming.last_seen));
+  const mergedAlgorithmUpdatedAt = Math.max(
+    numOrNegInf(existing.algorithm_updated_at),
+    numOrNegInf(incoming.algorithm_updated_at),
+  );
+
+  return {
+    item_id: preferred.item_id,
+    shop_type: preferred.shop_type,
+    current_probability: preferred.current_probability ?? fallback.current_probability ?? null,
+    appearance_rate: preferred.appearance_rate ?? fallback.appearance_rate ?? null,
+    estimated_next_timestamp: preferred.estimated_next_timestamp ?? fallback.estimated_next_timestamp ?? null,
+    median_interval_ms: preferred.median_interval_ms ?? fallback.median_interval_ms ?? null,
+    last_seen: Number.isFinite(mergedLastSeen) ? mergedLastSeen : null,
+    average_quantity: preferred.average_quantity ?? fallback.average_quantity ?? null,
+    total_quantity: Math.max(numOrNegInf(existing.total_quantity), numOrNegInf(incoming.total_quantity)),
+    total_occurrences: Math.max(numOrNegInf(existing.total_occurrences), numOrNegInf(incoming.total_occurrences)),
+    algorithm_version: preferred.algorithm_version ?? fallback.algorithm_version ?? null,
+    algorithm_updated_at: Number.isFinite(mergedAlgorithmUpdatedAt) ? mergedAlgorithmUpdatedAt : null,
+  };
+}
+
+/** Merge duplicate items (same canonical ID + shop_type), preserving freshest last_seen data. */
+function deduplicateItems(items: RestockItem[]): RestockItem[] {
+  const map = new Map<string, RestockItem>();
+  for (const item of items) {
+    const canonical = canonicalItemId(item.shop_type, item.item_id);
+    const key = `${item.shop_type}:${canonical}`;
+    const normalized = canonical !== item.item_id ? { ...item, item_id: canonical } : item;
+    const existing = map.get(key);
+    map.set(key, existing ? mergeDuplicateItemRows(existing, normalized) : normalized);
+  }
+  return Array.from(map.values()).map((row) => ({
+    ...row,
+    total_quantity: Number.isFinite(row.total_quantity ?? NaN) ? row.total_quantity : null,
+    total_occurrences: Number.isFinite(row.total_occurrences ?? NaN) ? row.total_occurrences : null,
+  }));
+}
 
 export const RESTOCK_REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const RESTOCK_REFRESH_MAX = 5;
@@ -46,6 +139,8 @@ export interface RestockItem {
   average_quantity: number | null;
   total_quantity: number | null;
   total_occurrences: number | null;
+  algorithm_version: string | null;
+  algorithm_updated_at: number | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -76,9 +171,10 @@ interface RefreshBudgetEntry {
   windowStartedAt: number;
 }
 
-type GmXhr = (details: {
+export type GmXhr = (details: {
   method: 'GET' | 'POST';
   url: string;
+  data?: string;
   headers?: Record<string, string>;
   onload?: (res: { status: number; responseText: string }) => void;
   onerror?: (err: unknown) => void;
@@ -86,11 +182,34 @@ type GmXhr = (details: {
   timeout?: number;
 }) => void;
 
+interface FetchTextResult {
+  ok: boolean;
+  status: number;
+  text: string | null;
+  error: string | null;
+}
+
 function resolveGmXhr(): GmXhr | null {
   if (typeof GM_xmlhttpRequest === 'function') return GM_xmlhttpRequest as unknown as GmXhr;
-  const gm = (globalThis as any).GM;
-  if (gm?.xmlHttpRequest) return gm.xmlHttpRequest.bind(gm) as GmXhr;
+  const gm = (globalThis as { GM?: { xmlHttpRequest?: GmXhr } }).GM;
+  if (typeof gm?.xmlHttpRequest === 'function') return gm.xmlHttpRequest.bind(gm) as GmXhr;
   return null;
+}
+
+function toErrorText(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+function bodySnippet(text: string, max = 180): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
 function getRestockRequestConfig(): { url: string; key: string } | null {
@@ -107,8 +226,14 @@ function getRestockRequestConfig(): { url: string; key: string } | null {
   return { url, key };
 }
 
-/** Promisified GM XHR GET -> resolves with response text or null on failure. */
-function gmGet(gm: GmXhr, url: string, apiKey: string): Promise<string | null> {
+/** Promisified GM XHR GET with status/error details. */
+export function gmGet(
+  gm: GmXhr,
+  url: string,
+  apiKey: string,
+  timeoutMs = 15_000,
+  extraHeaders?: Record<string, string>,
+): Promise<FetchTextResult> {
   return new Promise((resolve) => {
     gm({
       method: 'GET',
@@ -117,13 +242,95 @@ function gmGet(gm: GmXhr, url: string, apiKey: string): Promise<string | null> {
         Authorization: `Bearer ${apiKey}`,
         apikey: apiKey,
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
+        ...extraHeaders,
       },
-      timeout: 15_000,
-      onload: (res) => resolve(res.status >= 200 && res.status < 300 ? res.responseText : null),
-      onerror: () => resolve(null),
-      ontimeout: () => resolve(null),
+      timeout: timeoutMs,
+      onload: (res) => {
+        if (res.status >= 200 && res.status < 300) {
+          resolve({ ok: true, status: res.status, text: res.responseText, error: null });
+          return;
+        }
+        const snippet = bodySnippet(res.responseText);
+        resolve({
+          ok: false,
+          status: res.status,
+          text: null,
+          error: snippet ? `HTTP ${res.status}: ${snippet}` : `HTTP ${res.status}`,
+        });
+      },
+      onerror: (err) =>
+        resolve({
+          ok: false,
+          status: 0,
+          text: null,
+          error: `Network error: ${toErrorText(err)}`,
+        }),
+      ontimeout: () =>
+        resolve({
+          ok: false,
+          status: 0,
+          text: null,
+          error: `Timeout after ${timeoutMs}ms`,
+        }),
     });
   });
+}
+
+async function webGet(
+  url: string,
+  apiKey: string,
+  timeoutMs = 15_000,
+  extraHeaders?: Record<string, string>,
+): Promise<FetchTextResult> {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        apikey: apiKey,
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
+        ...extraHeaders,
+      },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const snippet = bodySnippet(text);
+      return {
+        ok: false,
+        status: response.status,
+        text: null,
+        error: snippet ? `HTTP ${response.status}: ${snippet}` : `HTTP ${response.status}`,
+      };
+    }
+    return { ok: true, status: response.status, text, error: null };
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    const message = toErrorText(err);
+    if (name === 'AbortError') {
+      return {
+        ok: false,
+        status: 0,
+        text: null,
+        error: `Timeout after ${timeoutMs}ms`,
+      };
+    }
+    return {
+      ok: false,
+      status: 0,
+      text: null,
+      error: `Fetch error: ${message}`,
+    };
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
 }
 
 /** Convert a raw Supabase timestamp value to Unix ms regardless of format. */
@@ -158,6 +365,7 @@ function toFloat(v: unknown): number | null {
 }
 
 let fetchingPromise: Promise<RestockItem[]> | null = null;
+let fetchingIsForce = false;
 let weatherDisabledLogged = false;
 let invalidConfigLogged = false;
 
@@ -167,7 +375,8 @@ function emitRestockDataUpdated(detail: RestockDataUpdatedDetail): void {
 }
 
 function sanitizeItems(items: RestockItem[]): RestockItem[] {
-  return items.filter((item) => !!item.item_id && ALLOWED_SHOP_TYPES.has(item.shop_type));
+  const filtered = items.filter((item) => !!item.item_id && ALLOWED_SHOP_TYPES.has(item.shop_type));
+  return deduplicateItems(filtered);
 }
 
 /** Load cache from storage (may be stale). */
@@ -292,6 +501,10 @@ const RESTOCK_ITEM_FIELDS = new Set([
   'totalQuantity',
   'total_occurrences',
   'totalOccurrences',
+  'algorithm_version',
+  'algorithmVersion',
+  'algorithm_updated_at_ms',
+  'algorithmUpdatedAtMs',
 ]);
 
 /** Return true if value looks like a RestockItem (has at least one known field). */
@@ -336,6 +549,10 @@ function normalizeRestockItem(raw: Record<string, unknown>): RestockItem {
     average_quantity: toFloat(raw.average_quantity ?? raw.averageQuantity),
     total_quantity: toFloat(raw.total_quantity ?? raw.totalQuantity),
     total_occurrences: toFloat(raw.total_occurrences ?? raw.totalOccurrences),
+    algorithm_version: typeof (raw.algorithm_version ?? raw.algorithmVersion) === 'string'
+      ? String(raw.algorithm_version ?? raw.algorithmVersion)
+      : null,
+    algorithm_updated_at: toMs(raw.algorithm_updated_at_ms ?? raw.algorithmUpdatedAtMs),
   };
 }
 
@@ -385,6 +602,14 @@ function safeCacheFallback(cache: CacheEntry | null): RestockItem[] {
   return Array.isArray(cache?.data) ? sanitizeItems(cache.data) : [];
 }
 
+function withCacheBust(url: string, force: boolean): string {
+  if (force) {
+    // PostgREST treats unknown query params as filters and returns HTTP 400.
+    // Keep cache-busting header-only for force refresh.
+  }
+  return url;
+}
+
 /**
  * Fetch restock data from Supabase.
  * Non-force mode is cache-only once cache exists.
@@ -399,7 +624,19 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
   }
 
   // Deduplicate concurrent fetches.
-  if (fetchingPromise) return fetchingPromise;
+  if (fetchingPromise) {
+    // If a force refresh is requested while a non-force fetch is in-flight,
+    // wait for the first request and then continue with a true force fetch.
+    if (force && !fetchingIsForce) {
+      try {
+        await fetchingPromise;
+      } catch {
+        // Ignore and continue to force fetch path.
+      }
+    } else {
+      return fetchingPromise;
+    }
+  }
 
   if (force) {
     const budget = getRestockRefreshBudget();
@@ -407,9 +644,9 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
       log('[RestockData] Refresh blocked by 2h quota.');
       return safeCacheFallback(cache);
     }
-    tryConsumeRestockRefresh();
   }
 
+  fetchingIsForce = force;
   fetchingPromise = (async (): Promise<RestockItem[]> => {
     const reqConfig = getRestockRequestConfig();
     if (!reqConfig) {
@@ -417,10 +654,6 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
     }
 
     const gm = resolveGmXhr();
-    if (!gm) {
-      log('[RestockData] GM_xmlhttpRequest unavailable, returning cache');
-      return safeCacheFallback(cache);
-    }
 
     if (!weatherDisabledLogged) {
       log('[RestockData] Weather disabled until unified API is available.');
@@ -428,10 +661,46 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
     }
 
     // Weather is intentionally disabled for this interim mode.
-    const mainText = await gmGet(gm, reqConfig.url, reqConfig.key);
+    const forceMarker = force ? String(Date.now()) : '';
+    const forceHeaders = force
+      ? { 'X-QPM-Force-Refresh': forceMarker, Prefer: 'count=none' }
+      : undefined;
+    const requestText = async (
+      url: string,
+    ): Promise<{ text: string | null; errors: string[] }> => {
+      const errors: string[] = [];
+      if (gm) {
+        const gmResult = await gmGet(gm, url, reqConfig.key, 15_000, forceHeaders);
+        if (gmResult.ok && gmResult.text !== null) {
+          return { text: gmResult.text, errors };
+        }
+        errors.push(`[gm] ${gmResult.error ?? `HTTP ${gmResult.status}`}`);
+      }
+      const webResult = await webGet(url, reqConfig.key, 15_000, forceHeaders);
+      if (webResult.ok && webResult.text !== null) {
+        return { text: webResult.text, errors };
+      }
+      errors.push(`[web] ${webResult.error ?? `HTTP ${webResult.status}`}`);
+      return { text: null, errors };
+    };
+
+    const primaryUrl = withCacheBust(reqConfig.url, force);
+    const primary = await requestText(primaryUrl);
+    let mainText = primary.text;
+    const fetchErrors = [...primary.errors];
+    if (!mainText) {
+      // Compatibility fallback for older DB views that don't yet expose new metadata columns.
+      const legacyUrl = withCacheBust(RESTOCK_URL_LEGACY, force);
+      const legacy = await requestText(legacyUrl);
+      mainText = legacy.text;
+      fetchErrors.push(...legacy.errors);
+    }
 
     if (!mainText) {
-      log('[RestockData] Main fetch failed');
+      const reason = fetchErrors.length ? ` :: ${fetchErrors.join(' | ')}` : '';
+      const msg = `[RestockData] Main fetch failed (force=${force}, gm=${gm ? 'yes' : 'no'})${reason}`;
+      if (force) throw new Error(msg);
+      log(msg);
       return safeCacheFallback(cache);
     }
 
@@ -441,6 +710,7 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
       const items = extractItemsArray(raw);
       if (!items || items.length === 0) {
         const shape = raw && typeof raw === 'object' ? Object.keys(raw as object).slice(0, 8) : typeof raw;
+        if (force) throw new Error(`[RestockData] Unexpected response shape: ${JSON.stringify(shape)}`);
         log('[RestockData] Unexpected response shape', shape);
         return safeCacheFallback(cache);
       }
@@ -448,11 +718,16 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
         .map((item) => normalizeRestockItem(item as unknown as Record<string, unknown>))
         .filter((item) => item.shop_type !== 'tool');
     } catch (err) {
+      if (force) throw err instanceof Error ? err : new Error(String(err));
       log('[RestockData] JSON parse error (main)', err);
       return safeCacheFallback(cache);
     }
 
     normalized = sanitizeItems(normalized);
+
+    if (force) {
+      tryConsumeRestockRefresh();
+    }
 
     const entry: CacheEntry = { data: normalized, fetchedAt: Date.now() };
     storage.set(CACHE_KEY, entry);
@@ -467,8 +742,12 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
 
   try {
     return await fetchingPromise;
+  } catch (err) {
+    console.error('[QPM][RestockData] fetchRestockData failed', err);
+    throw err;
   } finally {
     fetchingPromise = null;
+    fetchingIsForce = false;
   }
 }
 
@@ -487,4 +766,36 @@ export function getRestockFetchedAt(): number | null {
 export function clearRestockCache(): void {
   storage.remove('qpm.restockCache.v2');
   storage.remove(CACHE_KEY);
+}
+
+/**
+ * Patch last_seen for a cached item row (and aliases) when we observe fresher raw events.
+ * Keeps QPM display in sync even if a stale row won deduplication previously.
+ */
+export function patchCachedItemLastSeen(shopType: string, itemId: string, lastSeenMs: number): boolean {
+  if (!shopType || !itemId || !Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return false;
+  const cached = readCache();
+  if (!cached || !Array.isArray(cached.data) || cached.data.length === 0) return false;
+
+  const canonical = canonicalItemId(shopType, itemId);
+  let changed = false;
+  const nextData = cached.data.map((row) => {
+    if (row.shop_type !== shopType) return row;
+    if (canonicalItemId(row.shop_type, row.item_id) !== canonical) return row;
+    const prev = row.last_seen ?? 0;
+    if (lastSeenMs <= prev) return row;
+    changed = true;
+    return { ...row, last_seen: lastSeenMs };
+  });
+
+  if (!changed) return false;
+  const merged = sanitizeItems(nextData);
+  const entry: CacheEntry = { data: merged, fetchedAt: cached.fetchedAt };
+  storage.set(CACHE_KEY, entry);
+  emitRestockDataUpdated({
+    fetchedAt: entry.fetchedAt,
+    count: merged.length,
+    items: merged,
+  });
+  return true;
 }

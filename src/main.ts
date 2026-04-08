@@ -75,6 +75,7 @@ import { openTrackersHubWindow, openDetachedTracker, getTrackerWindowDefs } from
 import { openStatsHubWindow } from './ui/statsHubWindow';
 import { openUtilityHubWindow, openDetachedFeature, getFeatureWindowDefs } from './ui/utilityHubWindow';
 import { openToolsHubWindow, openGuideWindow } from './ui/toolsHubWindow';
+import { registerPersistedItemRestockDetailOpeners } from './ui/itemRestockDetailWindow';
 import {
   getOptimizerDebugSnapshot,
   getOptimizerDebugFamily,
@@ -94,6 +95,7 @@ import { startStorageValue, stopStorageValue } from './features/storageValue';
 import { startStorageValueOverlay, stopStorageValueOverlay } from './ui/storageValueOverlay';
 import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/textureSwapper';
 import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
+import { startShopRestockAlerts } from './ui/shopRestockAlerts';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1739,6 +1741,12 @@ async function initialize(): Promise<void> {
 
   // Create UI (needs sprites to be ready)
   await createOriginalUI();
+  // Keep alerts non-blocking: never let this feature break core UI bootstrap.
+  try {
+    startShopRestockAlerts();
+  } catch (error) {
+    console.error('[QPM][ShopRestockAlerts] failed to start (non-fatal):', error);
+  }
   initPetsWindow();
 
   // Register window openers and restore previously open windows
@@ -1771,6 +1779,7 @@ async function initialize(): Promise<void> {
     registerWindowOpener(`utility-feature-${def.key}`, () => openDetachedFeature(def.key));
   }
 
+  registerPersistedItemRestockDetailOpeners();
   restoreOpenWindows();
 
   // Start version checker (checks for updates periodically)

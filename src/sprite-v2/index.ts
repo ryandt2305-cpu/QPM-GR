@@ -73,6 +73,7 @@ function createInitialState(): SpriteState {
     fallbackBase: null,
     decoder: createDecoderTelemetry(),
     runtimeTextureHints: [],
+    ktx2Canvases: new WeakMap(),
   };
 }
 
@@ -1409,6 +1410,13 @@ async function loadCompressedAtlasViaDecoder(
   const baseTex = state.ctors!.Texture.from(canvas);
   buildAtlasTextures(data, baseTex, state.tex, state.atlasBases, state.ctors!);
 
+  // Store the KTX2 source canvas so textureToCanvas can bypass GPU extraction.
+  // GPU textures may not be uploaded (never rendered to screen), causing blank extract.
+  const texSource = baseTex?.source ?? baseTex?._source ?? baseTex;
+  if (texSource && typeof texSource === 'object' && state.ktx2Canvases) {
+    state.ktx2Canvases.set(texSource as object, canvas);
+  }
+
   const hydrated = countHydratedFrames(frameKeys, state);
   const coverage = expected > 0 ? hydrated / expected : 1;
   return {
@@ -2475,19 +2483,10 @@ async function start(): Promise<SpriteService> {
       return null;
     };
 
-    const currentRenderer = state.renderer;
-    const appRenderer = state.app?.renderer ?? null;
-
-    const direct = tryExtract(currentRenderer, 'state.renderer');
-    if (direct) return direct;
-
-    const appHit = tryExtract(appRenderer, 'app.renderer');
-    if (appHit) return appHit;
-
-    const resolved = resolveActiveRenderer(state);
-    const resolvedHit = tryExtract(resolved, 'resolved.renderer');
-    if (resolvedHit) return resolvedHit;
-
+    // Priority 1: textureToCanvas — uses stored KTX2 source canvas (no GPU needed)
+    // then falls back to GPU extract with blank detection, then PIXI source chain.
+    // This order avoids the common blank-canvas problem when GPU textures are
+    // never rendered to screen (KTX2-decoded textures used only for offscreen extraction).
     try {
       const fallback = textureToCanvas(tex, state, ctx!.cfg);
       if (fallback) {
@@ -2506,8 +2505,21 @@ async function start(): Promise<SpriteService> {
         error: msg,
       });
       setRenderError(`manual-fallback:${msg}`);
-      return null;
     }
+
+    // Priority 2: GPU extract — fallback when no KTX2 source canvas or manual path fails
+    const currentRenderer = state.renderer;
+    const appRenderer = state.app?.renderer ?? null;
+
+    const direct = tryExtract(currentRenderer, 'state.renderer');
+    if (direct) return direct;
+
+    const appHit = tryExtract(appRenderer, 'app.renderer');
+    if (appHit) return appHit;
+
+    const resolved = resolveActiveRenderer(state);
+    const resolvedHit = tryExtract(resolved, 'resolved.renderer');
+    if (resolvedHit) return resolvedHit;
 
     return null;
   };

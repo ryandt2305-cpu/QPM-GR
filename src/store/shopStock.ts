@@ -2,6 +2,7 @@
 // Normalized view of shop atom data and restock timers.
 
 import { readAtomValue, subscribeAtomValue } from '../core/atomRegistry';
+import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
 import type {
   ShopInventoryEntry,
@@ -10,6 +11,8 @@ import type {
   ShopPurchasesAtomSnapshot,
 } from '../types/gameAtoms';
 import { SHOP_CATEGORIES, type ShopCategory } from '../types/shops';
+
+const MY_USER_SLOT_ATOM_LABEL = 'myUserSlotAtom';
 
 const ATOM_KEY_BY_CATEGORY: Record<ShopCategory, 'seed' | 'egg' | 'tool' | 'decor'> = {
   seeds: 'seed',
@@ -59,13 +62,17 @@ export interface ShopStockState {
   categories: Record<ShopCategory, ShopStockCategoryState>;
 }
 
+type CustomInventoryMap = Record<string, { items: ShopInventoryEntry[] } | null> | null;
+
 const listeners = new Set<(state: ShopStockState) => void>();
 let shopsSnapshot: ShopsAtomSnapshot | null = null;
 let purchasesSnapshot: ShopPurchasesAtomSnapshot | null = null;
+let customInventories: CustomInventoryMap = null;
 let cachedState: ShopStockState = createEmptyState();
 let startPromise: Promise<void> | null = null;
 let shopsUnsubscribe: (() => void) | null = null;
 let purchasesUnsubscribe: (() => void) | null = null;
+let customInventoriesUnsubscribe: (() => void) | null = null;
 
 function createEmptyState(): ShopStockState {
   const categories = Object.create(null) as Record<ShopCategory, ShopStockCategoryState>;
@@ -235,6 +242,14 @@ function computeRemaining(initialStock: number | null, purchased: number, canSpa
   return canSpawn ? remaining : 0;
 }
 
+function extractCustomInventories(slotValue: unknown): CustomInventoryMap {
+  if (!slotValue || typeof slotValue !== 'object') return null;
+  const slot = slotValue as Record<string, unknown>;
+  const custom = slot.customRestockInventories;
+  if (!custom || typeof custom !== 'object') return null;
+  return custom as CustomInventoryMap;
+}
+
 function normalizeEntry(
   category: ShopCategory,
   entry: ShopInventoryEntry,
@@ -252,7 +267,7 @@ function normalizeEntry(
 
   const label = deriveItemLabel(entry);
   const initialStock = extractInitialStock(entry);
-  const currentStock = toPositiveInteger(entry.stock ?? entry.availableStock ?? entry.remaining);
+  const currentStock = toPositiveInteger(entry.stock ?? entry.availableStock);
   const quantityPerPurchase = extractQuantityPerPurchase(entry);
   const { coins: priceCoins, credits: priceCredits } = extractPrice(entry);
   // NOTE: canSpawnHere was removed from the game in Nov 2025 update
@@ -301,7 +316,11 @@ function normalizeCategory(
   purchases: ShopPurchasesAtomSnapshot | null,
 ): ShopStockCategoryState {
   const now = Date.now();
-  const inventory = Array.isArray(snapshot?.inventory) ? snapshot!.inventory : [];
+  const atomKey = ATOM_KEY_BY_CATEGORY[category];
+  const customCategoryInventory = customInventories?.[atomKey];
+  const inventory: ShopInventoryEntry[] = Array.isArray(customCategoryInventory?.items)
+    ? (customCategoryInventory!.items as ShopInventoryEntry[])
+    : Array.isArray(snapshot?.inventory) ? snapshot!.inventory : [];
   const items: ShopStockItem[] = [];
   inventory.forEach((entry, index) => {
     const normalized = normalizeEntry(category, entry, purchases, index);
@@ -382,6 +401,18 @@ export async function startShopStockStore(): Promise<void> {
     } catch (error) {
       log('⚠️ Failed to subscribe to shop purchases atom', error);
     }
+
+    const myUserSlotAtomRef = getAtomByLabel(MY_USER_SLOT_ATOM_LABEL);
+    if (myUserSlotAtomRef) {
+      try {
+        customInventoriesUnsubscribe = await subscribeAtom<unknown>(myUserSlotAtomRef, (value) => {
+          customInventories = extractCustomInventories(value);
+          rebuildState();
+        });
+      } catch (error) {
+        log('⚠️ Failed to subscribe to myUserSlotAtom', error);
+      }
+    }
   })().catch((error) => {
     log('⚠️ startShopStockStore error', error);
     startPromise = null;
@@ -396,11 +427,16 @@ export function stopShopStockStore(): void {
   try {
     purchasesUnsubscribe?.();
   } catch {}
+  try {
+    customInventoriesUnsubscribe?.();
+  } catch {}
   shopsUnsubscribe = null;
   purchasesUnsubscribe = null;
+  customInventoriesUnsubscribe = null;
   startPromise = null;
   shopsSnapshot = null;
   purchasesSnapshot = null;
+  customInventories = null;
   cachedState = createEmptyState();
 }
 

@@ -21,6 +21,13 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.43', date: '2026-04', notes: [
+    'shop restock alerts: fixed Buy All showing success when purchases were not server-confirmed; now verifies via purchases atom delta after sends',
+    'shop restock alerts: added insufficient balance modal — shows cost breakdown and buys as many as your balance allows',
+    'shop restock alerts: increased send delay to 100ms to respect WS throttle; fixed throttle bypass',
+    'shop stock: fixed custom shop inventories (customRestockInventories) not being applied, matching game behaviour',
+    'shop stock: fixed currentStock incorrectly inflated when entry.remaining was present in the raw atom',
+  ]},
 { version: '3.1.42', date: '2026-04', notes: [
     'item shop history: improved resize behavior so the restock history/detail window remains scrollable and stable after window size changes',
     'shop restock alerts: fixed in-stock alerts persisting after purchase by honoring purchase-limited availability and inventory/silo ownership updates',

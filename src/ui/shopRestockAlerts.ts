@@ -8,6 +8,13 @@ import {
   type ShopStockItem,
   type ShopStockState,
 } from '../store/shopStock';
+import {
+  onInventoryChange,
+  startInventoryStore,
+  type InventoryData,
+  type InventoryItem,
+} from '../store/inventory';
+import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { sendRoomAction } from '../websocket/api';
 import { canonicalItemId, getItemIdVariants } from '../utils/restockDataService';
 import { storage } from '../utils/storage';
@@ -20,8 +27,10 @@ const ALERT_ROOT_ID = 'qpm-restock-alert-root';
 const ALERT_STYLE_ID = 'qpm-restock-alert-style';
 const ALERT_SUCCESS_HIDE_MS = 1_300;
 const BUY_SEND_DELAY_MS = 55;
+const MY_DATA_ATOM_LABEL = 'myDataAtom';
+const SEED_SILO_STORAGE_ID = 'seedsilo';
 
-type RestockShopType = 'seed' | 'egg' | 'decor';
+type RestockShopType = 'seed' | 'egg' | 'decor' | 'tool';
 
 interface AlertModel {
   key: string;
@@ -50,10 +59,16 @@ interface BuyAllResult {
 
 let started = false;
 let stopStockListener: (() => void) | null = null;
+let stopInventoryListener: (() => void) | null = null;
+let stopMyDataListener: (() => void) | null = null;
 let trackedChangedHandler: ((event: Event) => void) | null = null;
 
 const activeAlerts = new Map<string, ActiveAlert>();
 const dismissedInStockKeys = new Set<string>();
+let inventoryKeyCounts = new Map<string, number>();
+let seedSiloKeyCounts = new Map<string, number>();
+let hasInventoryBaseline = false;
+let hasSeedSiloBaseline = false;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -74,18 +89,208 @@ function categoryToShopType(category: ShopCategory): RestockShopType | null {
       return 'egg';
     case 'decor':
       return 'decor';
+    case 'tools':
+      return 'tool';
     default:
       return null;
   }
 }
 
+function toLowerTrimmed(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const next = value.trim().toLowerCase();
+  return next.length > 0 ? next : null;
+}
+
+function toNonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function asNonNegativeQuantity(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function getPurchaseLimitedQuantity(item: ShopStockItem): number | null {
+  const initialStock = asNonNegativeQuantity(item.initialStock);
+  if (initialStock == null) {
+    return null;
+  }
+  const purchased = asNonNegativeQuantity(item.purchased) ?? 0;
+  return Math.max(0, initialStock - purchased);
+}
+
+function toCanonicalKey(shopType: RestockShopType, itemId: string): string {
+  const canonicalId = canonicalItemId(shopType, itemId);
+  return `${shopType}:${canonicalId}`;
+}
+
+function addCount(map: Map<string, number>, key: string, amount: number): void {
+  if (amount <= 0 || !Number.isFinite(amount)) return;
+  map.set(key, (map.get(key) ?? 0) + amount);
+}
+
+function normalizeShopType(rawType: unknown): RestockShopType | null {
+  const type = toLowerTrimmed(rawType);
+  if (!type) return null;
+  if (type === 'seed' || type === 'seeds') return 'seed';
+  if (type === 'egg' || type === 'eggs') return 'egg';
+  if (type === 'decor' || type === 'decoration' || type === 'decorations') return 'decor';
+  if (type === 'tool' || type === 'tools') return 'tool';
+  return null;
+}
+
+function firstString(values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function getInventoryItemKey(item: InventoryItem): string | null {
+  const raw = item.raw && typeof item.raw === 'object' ? item.raw as Record<string, unknown> : null;
+  const inferredType =
+    normalizeShopType(item.itemType) ??
+    normalizeShopType(raw?.itemType) ??
+    normalizeShopType(raw?.type);
+
+  const eggId = firstString([raw?.eggId, item.itemId]);
+  if (eggId) return toCanonicalKey('egg', eggId);
+
+  const toolId = firstString([raw?.toolId, item.itemId]);
+  if (toolId && inferredType !== 'seed') return toCanonicalKey('tool', toolId);
+
+  const decorId = firstString([raw?.decorId, item.itemId]);
+  if (decorId && inferredType !== 'seed') return toCanonicalKey('decor', decorId);
+
+  const seedId = firstString([item.species, raw?.species, raw?.seedName, item.itemId]);
+  if (seedId && (inferredType === 'seed' || inferredType == null)) {
+    return toCanonicalKey('seed', seedId);
+  }
+
+  if (inferredType === 'egg' && eggId) return toCanonicalKey('egg', eggId);
+  if (inferredType === 'tool' && toolId) return toCanonicalKey('tool', toolId);
+  if (inferredType === 'decor' && decorId) return toCanonicalKey('decor', decorId);
+  return null;
+}
+
+function buildInventoryKeyCounts(data: InventoryData): Map<string, number> {
+  const next = new Map<string, number>();
+  const items = Array.isArray(data.items) ? data.items : [];
+  for (const item of items) {
+    const key = getInventoryItemKey(item);
+    if (!key) continue;
+    const quantity = toNonNegativeInteger(item.quantity) ?? 1;
+    addCount(next, key, Math.max(1, quantity));
+  }
+  return next;
+}
+
+function isSeedSiloStorage(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const row = entry as Record<string, unknown>;
+  const fields = [row.storageId, row.decorId, row.id, row.type, row.name];
+  return fields.some((value) => toLowerTrimmed(value) === SEED_SILO_STORAGE_ID);
+}
+
+function buildSeedSiloKeyCounts(myDataValue: unknown): Map<string, number> {
+  const next = new Map<string, number>();
+  if (!myDataValue || typeof myDataValue !== 'object') return next;
+  const inventory = (myDataValue as Record<string, unknown>).inventory;
+  if (!inventory || typeof inventory !== 'object') return next;
+
+  const rawStorages = (inventory as Record<string, unknown>).storages;
+  const storages = Array.isArray(rawStorages)
+    ? rawStorages
+    : rawStorages && typeof rawStorages === 'object'
+      ? Object.values(rawStorages)
+      : [];
+  const seedSilo = storages.find((entry) => isSeedSiloStorage(entry));
+  if (!seedSilo || typeof seedSilo !== 'object') return next;
+
+  const items = Array.isArray((seedSilo as Record<string, unknown>).items)
+    ? ((seedSilo as Record<string, unknown>).items as unknown[])
+    : [];
+  for (const rawItem of items) {
+    if (!rawItem || typeof rawItem !== 'object') continue;
+    const row = rawItem as Record<string, unknown>;
+    const species = firstString([row.species, row.seedName, row.itemId, row.id]);
+    if (!species) continue;
+    const quantity = toNonNegativeInteger(row.quantity ?? row.qty ?? row.count ?? row.amount ?? row.stackSize) ?? 1;
+    addCount(next, toCanonicalKey('seed', species), Math.max(1, quantity));
+  }
+  return next;
+}
+
+function combinedOwnedCount(
+  key: string,
+  inventoryCounts: Map<string, number>,
+  siloCounts: Map<string, number>,
+): number {
+  const inventoryQty = inventoryCounts.get(key) ?? 0;
+  if (!key.startsWith('seed:')) return inventoryQty;
+  return inventoryQty + (siloCounts.get(key) ?? 0);
+}
+
+function applyOwnershipDelta(
+  prevInventoryCounts: Map<string, number>,
+  prevSiloCounts: Map<string, number>,
+  nextInventoryCounts: Map<string, number>,
+  nextSiloCounts: Map<string, number>,
+): void {
+  if (activeAlerts.size === 0) return;
+  for (const key of Array.from(activeAlerts.keys())) {
+    const previous = combinedOwnedCount(key, prevInventoryCounts, prevSiloCounts);
+    const next = combinedOwnedCount(key, nextInventoryCounts, nextSiloCounts);
+    if (next <= previous) continue;
+    dismissedInStockKeys.add(key);
+    removeAlert(key);
+  }
+}
+
+function handleInventorySnapshot(data: InventoryData): void {
+  const nextCounts = buildInventoryKeyCounts(data);
+  if (!hasInventoryBaseline) {
+    inventoryKeyCounts = nextCounts;
+    hasInventoryBaseline = true;
+    return;
+  }
+  const prevCounts = inventoryKeyCounts;
+  inventoryKeyCounts = nextCounts;
+  applyOwnershipDelta(prevCounts, seedSiloKeyCounts, inventoryKeyCounts, seedSiloKeyCounts);
+}
+
+function handleMyDataSnapshot(value: unknown): void {
+  const nextCounts = buildSeedSiloKeyCounts(value);
+  if (!hasSeedSiloBaseline) {
+    seedSiloKeyCounts = nextCounts;
+    hasSeedSiloBaseline = true;
+    return;
+  }
+  const prevCounts = seedSiloKeyCounts;
+  seedSiloKeyCounts = nextCounts;
+  applyOwnershipDelta(inventoryKeyCounts, prevCounts, inventoryKeyCounts, seedSiloKeyCounts);
+}
+
 function getItemQuantity(item: ShopStockItem): number {
-  if (typeof item.currentStock === 'number' && Number.isFinite(item.currentStock)) {
-    return Math.max(0, Math.floor(item.currentStock));
+  const liveStock = asNonNegativeQuantity(item.currentStock);
+  const derivedRemaining = asNonNegativeQuantity(item.remaining);
+  const purchaseLimited = getPurchaseLimitedQuantity(item);
+
+  let quantity: number | null = null;
+  for (const candidate of [liveStock, derivedRemaining, purchaseLimited]) {
+    if (candidate == null) continue;
+    quantity = quantity == null ? candidate : Math.min(quantity, candidate);
   }
-  if (typeof item.remaining === 'number' && Number.isFinite(item.remaining)) {
-    return Math.max(0, Math.floor(item.remaining));
-  }
+  if (quantity != null) return quantity;
+
   return item.isAvailable ? 1 : 0;
 }
 
@@ -189,6 +394,8 @@ function sendPurchase(shopType: RestockShopType, itemId: string): boolean {
       return sendRoomAction('PurchaseEgg', { eggId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
     case 'decor':
       return sendRoomAction('PurchaseDecor', { decorId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
+    case 'tool':
+      return sendRoomAction('PurchaseTool', { toolId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
     default:
       return false;
   }
@@ -292,6 +499,7 @@ function createAlert(model: AlertModel): ActiveAlert {
   actions.append(buyBtn, dismissBtn);
 
   card.append(top, qtyEl, statusEl, actions);
+  card.addEventListener('click', (e) => { e.stopPropagation(); }, true);
   root.prepend(card);
 
   const active: ActiveAlert = {
@@ -305,9 +513,10 @@ function createAlert(model: AlertModel): ActiveAlert {
     busy: false,
   };
 
-  dismissBtn.addEventListener('click', () => dismissAlertForCurrentStock(model.key));
-  closeBtn.addEventListener('click', () => dismissAlertForCurrentStock(model.key));
-  buyBtn.addEventListener('click', () => {
+  dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); dismissAlertForCurrentStock(model.key); });
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); dismissAlertForCurrentStock(model.key); });
+  buyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     if (active.busy) return;
     setAlertBusy(active, true);
     active.statusEl.style.color = 'rgba(200,192,255,0.72)';
@@ -323,6 +532,7 @@ function createAlert(model: AlertModel): ActiveAlert {
       const storedNote = active.model.shopType === 'seed' && result.storedInSilo ? ' + moved to Seed Silo' : '';
       active.statusEl.style.color = '#86efac';
       active.statusEl.textContent = `Purchased ${result.purchased}${storedNote}`;
+      dismissedInStockKeys.add(active.model.key);
       window.setTimeout(() => {
         removeAlert(active.model.key);
       }, ALERT_SUCCESS_HIDE_MS);
@@ -356,7 +566,7 @@ function upsertAlert(model: AlertModel): void {
 function processShopStock(state: ShopStockState): void {
   const tracked = loadTrackedSet();
   const seenKeys = new Set<string>();
-  const categories: ShopCategory[] = ['seeds', 'eggs', 'decor'];
+  const categories: ShopCategory[] = ['seeds', 'eggs', 'decor', 'tools'];
 
   for (const category of categories) {
     const shopType = categoryToShopType(category);
@@ -425,6 +635,10 @@ export function startShopRestockAlerts(): void {
   try {
     started = true;
     dismissedInStockKeys.clear();
+    inventoryKeyCounts = new Map<string, number>();
+    seedSiloKeyCounts = new Map<string, number>();
+    hasInventoryBaseline = false;
+    hasSeedSiloBaseline = false;
 
     void startShopStockStore().then(() => {
       if (!started) return;
@@ -434,6 +648,30 @@ export function startShopRestockAlerts(): void {
     }).catch((error) => {
       log('[ShopRestockAlerts] Failed to start shop stock store', error);
     });
+
+    void startInventoryStore().then(() => {
+      if (!started) return;
+      stopInventoryListener = onInventoryChange((data) => {
+        handleInventorySnapshot(data);
+      }, true);
+    }).catch((error) => {
+      log('[ShopRestockAlerts] Failed to start inventory store', error);
+    });
+
+    const myDataAtom = getAtomByLabel(MY_DATA_ATOM_LABEL);
+    if (myDataAtom) {
+      void subscribeAtom<unknown>(myDataAtom, (value) => {
+        handleMyDataSnapshot(value);
+      }).then((unsubscribe) => {
+        if (!started) {
+          unsubscribe();
+          return;
+        }
+        stopMyDataListener = unsubscribe;
+      }).catch((error) => {
+        log('[ShopRestockAlerts] Failed to subscribe to myDataAtom', error);
+      });
+    }
 
     trackedChangedHandler = () => {
       processShopStock(getShopStockState());
@@ -451,12 +689,20 @@ export function stopShopRestockAlerts(): void {
 
   stopStockListener?.();
   stopStockListener = null;
+  stopInventoryListener?.();
+  stopInventoryListener = null;
+  stopMyDataListener?.();
+  stopMyDataListener = null;
   if (trackedChangedHandler) {
     window.removeEventListener(TRACKED_UPDATED_EVENT, trackedChangedHandler as EventListener);
     trackedChangedHandler = null;
   }
 
   dismissedInStockKeys.clear();
+  inventoryKeyCounts = new Map<string, number>();
+  seedSiloKeyCounts = new Map<string, number>();
+  hasInventoryBaseline = false;
+  hasSeedSiloBaseline = false;
   for (const key of Array.from(activeAlerts.keys())) {
     removeAlert(key);
   }

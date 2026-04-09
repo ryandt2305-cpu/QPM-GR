@@ -1,4 +1,5 @@
 import { addStyle } from '../utils/dom';
+import { visibleInterval } from '../utils/timerManager';
 import { getAtomByLabel, readAtomValue, subscribeAtom, writeAtomValue } from '../core/jotaiBridge';
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
@@ -332,7 +333,7 @@ let filters: FilterState = loadFilters();
 let showSummaryInDebug = loadSummaryDebugPreference();
 let enhancerEnabled = loadEnabledPreference();
 
-let modalObserver: MutationObserver | null = null;
+let modalPollStop: (() => void) | null = null;
 let modalSyncTimer: number | null = null;
 let modalHandles: ModalHandles | null = null;
 let myDataUnsubscribe: (() => void) | null = null;
@@ -3210,21 +3211,15 @@ function queueModalSync(): void {
 }
 
 function startModalObserver(): void {
-  if (modalObserver) return;
-  modalObserver = new MutationObserver(() => {
-    queueModalSync();
-  });
-  modalObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
+  if (modalPollStop) return;
   syncModalMount();
+  modalPollStop = visibleInterval('qpm-activity-modal-sync', syncModalMount, 250);
 }
 
 function stopModalObserver(): void {
-  if (modalObserver) {
-    modalObserver.disconnect();
-    modalObserver = null;
+  if (modalPollStop) {
+    modalPollStop();
+    modalPollStop = null;
   }
   if (modalSyncTimer != null) {
     clearTimeout(modalSyncTimer);

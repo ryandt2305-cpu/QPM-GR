@@ -21,6 +21,11 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.42', date: '2026-04', notes: [
+    'item shop history: improved resize behavior so the restock history/detail window remains scrollable and stable after window size changes',
+    'shop restock alerts: fixed in-stock alerts persisting after purchase by honoring purchase-limited availability and inventory/silo ownership updates',
+    'crop boost tracker: fixed window scrolling by restoring modal body scroll layout and preserving scroll position across reactive refreshes',
+  ]},
 { version: '3.1.41', date: '2026-04', notes: [
     'shop restock: fixed Seen time sync so history rows now reflect the latest per-item event data consistently',
     'restock history UX: kept the View History modal flow with per-event accuracy percentages and exact probability display',

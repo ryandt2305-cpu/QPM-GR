@@ -66,12 +66,13 @@ const RARITY_GLOW: Record<string, string> = {
   celestial: '0 0 12px rgba(255,0,255,0.5)',
 };
 
-const SHOP_ORDER: Record<string, number> = { seed: 0, egg: 1, decor: 2 };
+const SHOP_ORDER: Record<string, number> = { seed: 0, egg: 1, decor: 2, tool: 3 };
 
 const SHOP_CYCLE_INTERVALS: Record<string, number> = {
   seed:  5  * 60 * 1000,
   egg:   15 * 60 * 1000,
   decor: 60 * 60 * 1000,
+  tool:  10 * 60 * 1000,
 };
 
 const TRACKED_KEY    = 'qpm.restock.tracked';
@@ -95,19 +96,21 @@ const SHOP_FILTERS = [
   { label: 'Seeds', value: 'seed' },
   { label: 'Eggs', value: 'egg' },
   { label: 'Decor', value: 'decor' },
+  { label: 'Tools', value: 'tool' },
 ] as const;
 
 const CATEGORY_LABELS: Record<string, string> = {
   seed: 'Seeds',
   egg: 'Eggs',
   decor: 'Decor',
+  tool: 'Tools',
 };
 
 // ---------------------------------------------------------------------------
 // Item meta cache (populated by Ariedam /data)
 // ---------------------------------------------------------------------------
 
-interface ItemMeta { name: string; rarity: string; price: number }
+interface ItemMeta { name: string; rarity: string; price: number; spriteUrl?: string | null }
 const itemMetaCache = new Map<string, ItemMeta>();
 const itemCatalogOrder = new Map<string, number>();
 const toolItemIds   = new Set<string>();
@@ -186,10 +189,20 @@ function buildItemMetaCache(gameData: any): void {
       name:   decorData.name || decorId,
       rarity: (decorData.rarity ?? 'common').toLowerCase(),
       price:  decorData.coinPrice ?? 0,
+      spriteUrl: typeof decorData.sprite === 'string' ? decorData.sprite : null,
     });
     itemCatalogOrder.set(key, decorOrder++);
   }
-  for (const [itemId] of Object.entries<any>(gameData.items ?? {})) {
+  let toolOrder = 0;
+  for (const [itemId, itemData] of Object.entries<any>(gameData.items ?? {})) {
+    const key = `tool:${itemId}`;
+    itemMetaCache.set(key, {
+      name: (typeof itemData?.name === 'string' && itemData.name.trim()) ? itemData.name : itemId,
+      rarity: String(itemData?.rarity ?? 'common').toLowerCase(),
+      price: Number.isFinite(itemData?.coinPrice) ? itemData.coinPrice : 0,
+      spriteUrl: typeof itemData?.sprite === 'string' ? itemData.sprite : null,
+    });
+    itemCatalogOrder.set(key, toolOrder++);
     toolItemIds.add(itemId);
     toolItemIds.add(itemId + 's');
   }
@@ -239,6 +252,43 @@ function getItemPrice(itemId: string, shopType: string): number {
 function getCatalogOrder(itemId: string, shopType: string): number | null {
   const order = itemCatalogOrder.get(`${shopType}:${itemId}`);
   return Number.isFinite(order) ? (order as number) : null;
+}
+
+function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
+  const toolCatalogIds = Array.from(itemMetaCache.keys())
+    .filter((key) => key.startsWith('tool:'))
+    .map((key) => key.slice('tool:'.length))
+    .filter((id) => id.length > 0);
+
+  if (toolCatalogIds.length === 0) return items;
+
+  const existingToolIds = new Set<string>();
+  for (const row of items) {
+    if (row.shop_type !== 'tool') continue;
+    existingToolIds.add(row.item_id);
+  }
+
+  if (existingToolIds.size >= toolCatalogIds.length) return items;
+
+  const merged = items.slice();
+  for (const toolId of toolCatalogIds) {
+    if (existingToolIds.has(toolId)) continue;
+    merged.push({
+      item_id: toolId,
+      shop_type: 'tool',
+      current_probability: null,
+      appearance_rate: null,
+      estimated_next_timestamp: null,
+      median_interval_ms: null,
+      last_seen: null,
+      average_quantity: null,
+      total_quantity: 0,
+      total_occurrences: 0,
+      algorithm_version: null,
+      algorithm_updated_at: null,
+    });
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +467,28 @@ function getSpriteUrl(item: RestockItem): string | null {
       spriteUrlCache.set(cacheKey, variantUrl);
       return variantUrl;
     }
+  }
+
+  const directMetaSprite = getItemMeta(id, item.shop_type)?.spriteUrl ?? null;
+  if (directMetaSprite) {
+    spriteUrlCache.set(cacheKey, directMetaSprite);
+    return directMetaSprite;
+  }
+
+  for (const variantId of getItemIdVariants(item.shop_type, id)) {
+    if (!variantId || variantId === id) continue;
+    const variantMetaSprite = getItemMeta(variantId, item.shop_type)?.spriteUrl ?? null;
+    if (variantMetaSprite) {
+      spriteUrlCache.set(cacheKey, variantMetaSprite);
+      return variantMetaSprite;
+    }
+  }
+
+  if (item.shop_type === 'tool') {
+    const normalizedId = id.endsWith('s') && id.length > 1 ? id.slice(0, -1) : id;
+    const fallbackUrl = `https://mg-api.ariedam.fr/assets/sprites/items/${encodeURIComponent(normalizedId)}.png`;
+    spriteUrlCache.set(cacheKey, fallbackUrl);
+    return fallbackUrl;
   }
 
   return null;
@@ -776,8 +848,8 @@ function renderShopRestockWindow(root: HTMLElement): void {
     const updated = Array.isArray(detail.items) && detail.items.length > 0
       ? detail.items
       : getRestockDataSync();
-    if (!updated || updated.length === 0) return;
-    allData = updated;
+    if (!updated) return;
+    allData = mergeToolFallbackRows(updated);
     scheduleRender(true, true);
     updateLastUpdated();
   });
@@ -1045,8 +1117,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
     const frag = document.createDocumentFragment();
 
     const pinned = allData
-      .filter(item => trackedItems.has(`${item.shop_type}:${item.item_id}`)
-        && !toolItemIds.has(item.item_id))
+      .filter(item => trackedItems.has(`${item.shop_type}:${item.item_id}`))
       .sort((a, b) => {
         const aEmpty = (a.total_occurrences ?? 0) < 2 || !(a.estimated_next_timestamp ?? 0);
         const bEmpty = (b.total_occurrences ?? 0) < 2 || !(b.estimated_next_timestamp ?? 0);
@@ -1115,8 +1186,6 @@ function renderShopRestockWindow(root: HTMLElement): void {
     let filtered = allData.filter(item => {
       const key = `${item.shop_type}:${item.item_id}`;
       if (trackedItems.has(key)) return false;           // pinned items not shown in history
-      if (item.shop_type === 'tool') return false;
-      if (toolItemIds.has(item.item_id)) return false;   // tools/potions from API
 
       const expiryMs = ITEM_EXPIRY[key] ?? null;
       if (expiryMs && expiryMs <= now) return false;     // expired seasonal items
@@ -1315,13 +1384,13 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
     const cached = getRestockDataSync();
     if (!force && cached?.length) {
-      allData = cached;
+      allData = mergeToolFallbackRows(cached);
       scheduleRender(true, true);
       updateLastUpdated();
     }
 
     try {
-      allData = await fetchRestockData(force);
+      allData = mergeToolFallbackRows(await fetchRestockData(force));
       scheduleRender(true, true);
       updateLastUpdated();
     } catch (err) {
@@ -1344,6 +1413,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
   // Kick off both in parallel -- game data load doesn't block restock data
   void initGameData().then(() => {
+    allData = mergeToolFallbackRows(allData);
     scheduleRender(true, true);
   });
   void load(false);

@@ -18,8 +18,14 @@ import { storage } from '../utils/storage';
 const INITIAL_ROWS = 5;
 const DETAIL_WINDOW_REGISTRY_KEY = 'qpm.restock.detailWindows.v1';
 const DETAIL_WINDOW_REGISTRY_MAX = 160;
+const ARIEDAM_KEY = 'qpm.ariedam.gamedata';
+const DETAIL_WINDOW_SCALE_KEY = 'qpm.restock.detailScale.v1';
+const DETAIL_WINDOW_SCALE_MIN = 0.5;
+const DETAIL_WINDOW_SCALE_MAX = 2.2;
+const DETAIL_WINDOW_SCALE_DEFAULT = 1;
+let detailScaleLegacyCleared = false;
 
-type DetailShopType = 'seed' | 'egg' | 'decor';
+type DetailShopType = 'seed' | 'egg' | 'decor' | 'tool';
 
 interface DetailWindowRegistryEntry {
   shopType: DetailShopType;
@@ -29,7 +35,12 @@ interface DetailWindowRegistryEntry {
 }
 
 function isDetailShopType(value: unknown): value is DetailShopType {
-  return value === 'seed' || value === 'egg' || value === 'decor';
+  return value === 'seed' || value === 'egg' || value === 'decor' || value === 'tool';
+}
+
+function clampDetailScale(value: number): number {
+  if (!Number.isFinite(value)) return DETAIL_WINDOW_SCALE_DEFAULT;
+  return Math.min(DETAIL_WINDOW_SCALE_MAX, Math.max(DETAIL_WINDOW_SCALE_MIN, value));
 }
 
 function loadDetailWindowRegistry(): DetailWindowRegistryEntry[] {
@@ -351,13 +362,37 @@ function getItemSpriteUrl(shopType: string, itemId: string): string | null {
     const variantUrl = tryResolve(variantId);
     if (variantUrl) return variantUrl;
   }
+
+  if (shopType === 'tool') {
+    const candidates = new Set<string>([itemId, ...getItemIdVariants(shopType, itemId)]);
+    if (itemId.endsWith('s') && itemId.length > 1) candidates.add(itemId.slice(0, -1));
+    if (!itemId.endsWith('s')) candidates.add(`${itemId}s`);
+
+    const cached = storage.get<{ data?: unknown } | null>(ARIEDAM_KEY, null);
+    const data = cached?.data;
+    const items = data && typeof data === 'object'
+      ? ((data as Record<string, unknown>).items as Record<string, unknown> | undefined)
+      : undefined;
+    if (items && typeof items === 'object') {
+      for (const candidateId of candidates) {
+        const row = items[candidateId];
+        if (!row || typeof row !== 'object') continue;
+        const sprite = (row as Record<string, unknown>).sprite;
+        if (typeof sprite === 'string' && sprite.trim()) return sprite;
+      }
+    }
+
+    const normalizedId = itemId.endsWith('s') && itemId.length > 1 ? itemId.slice(0, -1) : itemId;
+    return `https://mg-api.ariedam.fr/assets/sprites/items/${encodeURIComponent(normalizedId)}.png`;
+  }
+
   return null;
 }
 
 // ── Category & status helpers ────────────────────────────────────────────────
 
 const SHOP_LABELS: Record<string, string> = {
-  seed: 'Seeds', egg: 'Eggs', decor: 'Decor',
+  seed: 'Seeds', egg: 'Eggs', decor: 'Decor', tool: 'Tools',
 };
 
 type EventStatus = 'accurate' | 'early' | 'late' | 'first';
@@ -936,6 +971,12 @@ function makeRowEl(row: RowData, index: number, medianMs: number | null, onClick
 // ── Public entry ─────────────────────────────────────────────────────────────
 
 export function openItemRestockDetail(item: RestockItem, itemName: string): void {
+  if (!detailScaleLegacyCleared) {
+    // Old manual scale controls were removed; clear any stale persisted value once.
+    storage.remove(DETAIL_WINDOW_SCALE_KEY);
+    detailScaleLegacyCleared = true;
+  }
+
   const shopType = item.shop_type;
   if (!isDetailShopType(shopType)) return;
 
@@ -950,16 +991,93 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
   destroyWindow(winId);
 
   openWindow(winId, `${safeItemName} \u2014 Restock History`, (root) => {
-    root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
+    root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;';
     const item = selectedItem;
+
+    const contentViewport = document.createElement('div');
+    contentViewport.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;';
+    root.appendChild(contentViewport);
+
+    const contentRoot = document.createElement('div');
+    contentRoot.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;transform-origin:top left;will-change:transform;';
+    contentViewport.appendChild(contentRoot);
+
+    const manualScale = DETAIL_WINDOW_SCALE_DEFAULT;
+    let linkedScaleFactor = 1;
+    let baseViewportWidth: number | null = null;
+    let baseViewportHeight: number | null = null;
+    const hostWindow = root.closest('.qpm-window') as HTMLElement | null;
+
+    const renderScale = (): void => {
+      let effectiveScale = clampDetailScale(manualScale * linkedScaleFactor);
+
+      const applyScale = (scale: number): void => {
+        contentRoot.style.transform = `scale(${scale.toFixed(3)})`;
+        contentRoot.style.width = `${(100 / scale).toFixed(3)}%`;
+      };
+
+      applyScale(effectiveScale);
+
+      // Safety correction: if scaled content still overflows horizontally, shrink further.
+      const viewportRect = contentViewport.getBoundingClientRect();
+      const visualRect = contentRoot.getBoundingClientRect();
+      if (viewportRect.width > 0 && visualRect.width > viewportRect.width + 1) {
+        const ratio = viewportRect.width / visualRect.width;
+        if (Number.isFinite(ratio) && ratio > 0) {
+          effectiveScale = clampDetailScale(effectiveScale * ratio);
+          applyScale(effectiveScale);
+        }
+      }
+    };
+
+    const updateLinkedScaleFromWindow = (): void => {
+      const viewportWidth = contentViewport.clientWidth;
+      const viewportHeight = contentViewport.clientHeight;
+      if (!Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight) || viewportWidth <= 0 || viewportHeight <= 0) return;
+      if (baseViewportWidth == null || baseViewportHeight == null) {
+        baseViewportWidth = viewportWidth;
+        baseViewportHeight = viewportHeight;
+        linkedScaleFactor = 1;
+        renderScale();
+        return;
+      }
+      const widthRatio = viewportWidth / baseViewportWidth;
+      const heightRatio = viewportHeight / baseViewportHeight;
+      if (!Number.isFinite(widthRatio) || !Number.isFinite(heightRatio) || widthRatio <= 0 || heightRatio <= 0) return;
+      // Use the tighter dimension so content always scales down enough to fit.
+      linkedScaleFactor = Math.min(widthRatio, heightRatio);
+      renderScale();
+    };
+
+    let resizeObserver: ResizeObserver | null = null;
+    let detachObserver: MutationObserver | null = null;
+    if (hostWindow && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        updateLinkedScaleFromWindow();
+      });
+      resizeObserver.observe(hostWindow);
+      resizeObserver.observe(contentViewport);
+      updateLinkedScaleFromWindow();
+
+      detachObserver = new MutationObserver(() => {
+        if (root.isConnected) return;
+        resizeObserver?.disconnect();
+        detachObserver?.disconnect();
+        resizeObserver = null;
+        detachObserver = null;
+      });
+      detachObserver.observe(document.body, { childList: true, subtree: true });
+    } else {
+      renderScale();
+    }
 
     const spriteUrl = getItemSpriteUrl(item.shop_type, item.item_id);
     const medianMs = item.median_interval_ms;
     const algorithmUpdatedAtMs = normalizeEpochMs(item.algorithm_updated_at);
 
     // ── Overview card (shown immediately with RestockItem data) ──
-    const overview = buildOverviewCard(itemName, item.shop_type, item, spriteUrl);
-    root.appendChild(overview.container);
+    const overview = buildOverviewCard(safeItemName, item.shop_type, item, spriteUrl);
+    contentRoot.appendChild(overview.container);
 
     // ── Placeholder for event card (hidden initially) ──
     let eventCard: EventCardHandle | null = null;
@@ -973,7 +1091,8 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
     spinner.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:20px;font-size:12px;color:rgba(224,224,224,0.4);';
     spinner.textContent = '\u23F3 Loading events\u2026';
     eventListSection.appendChild(spinner);
-    root.appendChild(eventListSection);
+    contentRoot.appendChild(eventListSection);
+    updateLinkedScaleFromWindow();
 
     // ── Shared state ──
     let rows: RowData[] = [];
@@ -1027,6 +1146,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         empty.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:24px;font-size:12px;color:rgba(224,224,224,0.35);';
         empty.textContent = 'No raw event history found for this item.';
         eventListSection.appendChild(empty);
+        updateLinkedScaleFromWindow();
         return;
       }
 
@@ -1069,13 +1189,13 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
 
       // Build event card (hidden initially)
       eventCard = buildEventCard(
-        itemName, item.shop_type, rows, medianMs, spriteUrl,
+        safeItemName, item.shop_type, rows, medianMs, spriteUrl,
         (index) => setActiveRow(index),
         showOverview,
       );
       eventCardEl = eventCard.container;
       eventCardEl.style.display = 'none';
-      root.insertBefore(eventCardEl, eventListSection);
+      contentRoot.insertBefore(eventCardEl, eventListSection);
 
       // Wire browse button
       overview.browseBtn.addEventListener('click', () => {
@@ -1193,11 +1313,13 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
           }
           appendMarkerIfNeeded(rows.length);
           if (activeRowIndex >= 0) setActiveRow(activeRowIndex);
+          updateLinkedScaleFromWindow();
         });
         listWrap.appendChild(moreBtn);
       }
 
       eventListSection.appendChild(listWrap);
+      updateLinkedScaleFromWindow();
     })();
   }, '520px', '80vh');
 }

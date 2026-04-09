@@ -33,7 +33,7 @@ const RESTOCK_URL_LEGACY = `${RESTOCK_ENDPOINT}?${RESTOCK_LEGACY_QUERY}`;
 // v3 key separates cache from the prior weather-inclusive payload.
 const CACHE_KEY = 'qpm.restockCache.v3';
 const REFRESH_BUDGET_KEY = 'qpm.restock.refreshBudget.v1';
-const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor']);
+const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool']);
 
 // Known item ID aliases for deduplication (legacy → canonical).
 // Scoped to "shop_type:oldId" to avoid cross-shop confusion.
@@ -526,10 +526,19 @@ function dictToItems(val: unknown): RestockItem[] | null {
 /**
  * Normalize a raw API object (camelCase or snake_case) to the RestockItem interface (snake_case).
  */
+function normalizeShopType(value: unknown): string {
+  const shopType = String(value ?? '').trim().toLowerCase();
+  if (shopType === 'seeds') return 'seed';
+  if (shopType === 'eggs') return 'egg';
+  if (shopType === 'decors') return 'decor';
+  if (shopType === 'tools') return 'tool';
+  return shopType;
+}
+
 function normalizeRestockItem(raw: Record<string, unknown>): RestockItem {
   return {
     item_id: String(raw.item_id ?? raw.itemId ?? ''),
-    shop_type: String(raw.shop_type ?? raw.shopType ?? ''),
+    shop_type: normalizeShopType(raw.shop_type ?? raw.shopType),
     current_probability: toFloat(raw.current_probability ?? raw.currentProbability),
     appearance_rate: toFloat(
       raw.appearance_rate
@@ -715,8 +724,7 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
         return safeCacheFallback(cache);
       }
       normalized = items
-        .map((item) => normalizeRestockItem(item as unknown as Record<string, unknown>))
-        .filter((item) => item.shop_type !== 'tool');
+        .map((item) => normalizeRestockItem(item as unknown as Record<string, unknown>));
     } catch (err) {
       if (force) throw err instanceof Error ? err : new Error(String(err));
       log('[RestockData] JSON parse error (main)', err);

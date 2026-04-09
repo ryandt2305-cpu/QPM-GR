@@ -32,16 +32,33 @@ function formatNumber(num: number): string {
   return num.toFixed(1);
 }
 
+function isWindowBodyVisible(root: HTMLElement | null): boolean {
+  if (!root) return false;
+  const host = root.closest('.qpm-window') as HTMLElement | null;
+  if (!host) return root.isConnected;
+  return host.isConnected && host.style.display !== 'none';
+}
+
 // ============================================================================
 // Render Function
 // ============================================================================
 
-function renderCropBoostSection(root: HTMLElement): void {
+function renderCropBoostSection(root: HTMLElement, options?: { preserveScroll?: boolean }): void {
+  const preserveScroll = options?.preserveScroll === true;
+  const previousScrollTop = preserveScroll ? root.scrollTop : 0;
+  const previousScrollLeft = preserveScroll ? root.scrollLeft : 0;
+
   root.innerHTML = '';
   root.style.cssText = `
-    padding: 20px;
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding: 20px;
     gap: 16px;
     font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   `;
@@ -160,7 +177,7 @@ function renderCropBoostSection(root: HTMLElement): void {
   toggleBtn.addEventListener('click', () => {
     showDetailedView = !showDetailedView;
     if (windowRoot) {
-      renderCropBoostSection(windowRoot);
+      renderCropBoostSection(windowRoot, { preserveScroll: true });
     }
   });
   toggleBtn.addEventListener('mouseenter', () => {
@@ -334,7 +351,7 @@ function renderCropBoostSection(root: HTMLElement): void {
 
     // Auto-refresh view immediately when dropdown changes
     if (windowRoot) {
-      renderCropBoostSection(windowRoot);
+      renderCropBoostSection(windowRoot, { preserveScroll: true });
     }
   });
 
@@ -543,6 +560,16 @@ function renderCropBoostSection(root: HTMLElement): void {
     `;
     root.appendChild(allMaxCard);
   }
+
+  if (preserveScroll) {
+    requestAnimationFrame(() => {
+      if (!root.isConnected) return;
+      const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+      const maxScrollLeft = Math.max(0, root.scrollWidth - root.clientWidth);
+      root.scrollTop = Math.min(Math.max(0, previousScrollTop), maxScrollTop);
+      root.scrollLeft = Math.min(Math.max(0, previousScrollLeft), maxScrollLeft);
+    });
+  }
 }
 
 // ============================================================================
@@ -560,13 +587,15 @@ let showDetailedView = false; // Toggle for simple/detailed view
  */
 export function renderCropBoostContent(container: HTMLElement): void {
   let renderTimeout: number | null = null;
-  renderCropBoostSection(container);
+  renderCropBoostSection(container, { preserveScroll: false });
   onAnalysisChange(() => {
     if (renderTimeout) clearTimeout(renderTimeout);
     renderTimeout = window.setTimeout(() => {
       const active = document.activeElement;
       if (active && active.tagName === 'SELECT') return;
-      if (container.isConnected) renderCropBoostSection(container);
+      if (container.isConnected && isWindowBodyVisible(container)) {
+        renderCropBoostSection(container, { preserveScroll: true });
+      }
     }, 100);
   });
 }
@@ -595,15 +624,15 @@ export function openCropBoostTrackerWindow(): void {
             }
 
             // Re-render if window is open
-            if (windowRoot) {
-              renderCropBoostSection(windowRoot);
+            if (windowRoot && isWindowBodyVisible(windowRoot)) {
+              renderCropBoostSection(windowRoot, { preserveScroll: true });
             }
           }, 100); // 100ms debounce
         });
         callbackRegistered = true;
       }
 
-      renderCropBoostSection(root);
+      renderCropBoostSection(root, { preserveScroll: false });
     },
     '650px',
     '75vh'

@@ -15,7 +15,7 @@ import {
   type InventoryItem,
 } from '../store/inventory';
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
-import { sendRoomAction } from '../websocket/api';
+import { sendRoomAction, type WebSocketSendResult } from '../websocket/api';
 import { canonicalItemId, getItemIdVariants } from '../utils/restockDataService';
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
@@ -585,18 +585,33 @@ function showCoinsConfirmModal(
   });
 }
 
-function sendPurchase(shopType: RestockShopType, itemId: string): boolean {
+function sendPurchase(shopType: RestockShopType, itemId: string): WebSocketSendResult {
   switch (shopType) {
     case 'seed':
-      return sendRoomAction('PurchaseSeed', { species: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
+      return sendRoomAction('PurchaseSeed', { species: itemId }, { throttleMs: 0, skipThrottle: true });
     case 'egg':
-      return sendRoomAction('PurchaseEgg', { eggId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
+      return sendRoomAction('PurchaseEgg', { eggId: itemId }, { throttleMs: 0, skipThrottle: true });
     case 'decor':
-      return sendRoomAction('PurchaseDecor', { decorId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
+      return sendRoomAction('PurchaseDecor', { decorId: itemId }, { throttleMs: 0, skipThrottle: true });
     case 'tool':
-      return sendRoomAction('PurchaseTool', { toolId: itemId }, { throttleMs: 0, skipThrottle: true }).ok;
+      return sendRoomAction('PurchaseTool', { toolId: itemId }, { throttleMs: 0, skipThrottle: true });
     default:
-      return false;
+      return { ok: false, reason: 'invalid_payload' };
+  }
+}
+
+function explainSendFailure(reason: WebSocketSendResult['reason'] | null): string {
+  switch (reason) {
+    case 'no_connection':
+      return 'No room connection';
+    case 'invalid_payload':
+      return 'Invalid purchase payload';
+    case 'throttled':
+      return 'Purchase request throttled';
+    case 'send_failed':
+      return 'Failed to send purchase';
+    default:
+      return 'Purchase request failed';
   }
 }
 
@@ -619,35 +634,16 @@ async function maybeAutoStoreSeeds(itemId: string, quantity: number): Promise<bo
   return sendSeedToSilo(itemId, null);
 }
 
-async function buyAllForAlert(model: AlertModel): Promise<BuyAllResult> {
-  let requested = Math.max(1, Math.floor(model.quantity));
-
-  // Coin affordability check — only when we have a confirmed balance reading
-  if (hasCoinsBaseline && model.priceCoins != null && model.priceCoins > 0) {
-    const totalCost = model.priceCoins * requested;
-    if (totalCost > currentCoinsCount) {
-      const modalResult = await showCoinsConfirmModal(
-        model.label,
-        model.priceCoins,
-        requested,
-        currentCoinsCount,
-      );
-      if (!modalResult.confirmed) {
-        return { sent: 0, confirmed: 0, storedInSilo: false, error: 'Cancelled' };
-      }
-      requested = modalResult.affordableQty;
-      if (requested <= 0) {
-        return { sent: 0, confirmed: 0, storedInSilo: false, error: 'Cannot afford any items' };
-      }
-    }
-  }
-
+async function buyAllForAlert(model: AlertModel, quantity: number): Promise<BuyAllResult> {
+  const requested = Math.max(1, Math.floor(quantity));
   const purchasedBefore = getTrackedPurchaseCount(model.shopType, model.itemId);
 
   let sent = 0;
+  let firstFailureReason: WebSocketSendResult['reason'] | null = null;
   for (let i = 0; i < requested; i++) {
-    const ok = sendPurchase(model.shopType, model.itemId);
-    if (!ok) {
+    const result = sendPurchase(model.shopType, model.itemId);
+    if (!result.ok) {
+      firstFailureReason = result.reason ?? null;
       break;
     }
     sent += 1;
@@ -657,7 +653,12 @@ async function buyAllForAlert(model: AlertModel): Promise<BuyAllResult> {
   }
 
   if (sent <= 0) {
-    return { sent: 0, confirmed: 0, storedInSilo: false, error: 'Purchase request failed' };
+    return {
+      sent: 0,
+      confirmed: 0,
+      storedInSilo: false,
+      error: explainSendFailure(firstFailureReason),
+    };
   }
 
   // Wait for the server to process and the purchases atom to update
@@ -672,6 +673,76 @@ async function buyAllForAlert(model: AlertModel): Promise<BuyAllResult> {
   }
 
   return { sent, confirmed, storedInSilo, error: null };
+}
+
+async function handleBuyAll(active: ActiveAlert): Promise<void> {
+  const buyModel: AlertModel = { ...active.model };
+  let requested = Math.max(1, Math.floor(buyModel.quantity));
+
+  setAlertBusy(active, true);
+  active.statusEl.style.color = 'rgba(200,192,255,0.72)';
+  active.statusEl.textContent = 'Buying...';
+
+  try {
+    // Only enforce affordability checks when we have a known live coin baseline.
+    if (hasCoinsBaseline && buyModel.priceCoins != null && buyModel.priceCoins > 0) {
+      const totalCost = buyModel.priceCoins * requested;
+      if (totalCost > currentCoinsCount) {
+        const modalResult = await showCoinsConfirmModal(
+          buyModel.label,
+          buyModel.priceCoins,
+          requested,
+          currentCoinsCount,
+        );
+        if (!modalResult.confirmed) {
+          active.statusEl.style.color = 'rgba(200,192,255,0.72)';
+          active.statusEl.textContent = 'Ready to buy';
+          setAlertBusy(active, false);
+          return;
+        }
+        requested = modalResult.affordableQty;
+        if (requested <= 0) {
+          active.statusEl.style.color = '#fca5a5';
+          active.statusEl.textContent = 'Cannot afford any items';
+          setAlertBusy(active, false);
+          return;
+        }
+      }
+    }
+
+    const result = await buyAllForAlert(buyModel, requested);
+    if (result.error || result.sent <= 0) {
+      active.statusEl.style.color = '#fca5a5';
+      active.statusEl.textContent = result.error ?? 'Purchase failed';
+      setAlertBusy(active, false);
+      return;
+    }
+
+    const storedNote = active.model.shopType === 'seed' && result.storedInSilo ? ' + moved to Seed Silo' : '';
+
+    if (result.confirmed >= result.sent) {
+      active.statusEl.style.color = '#86efac';
+      active.statusEl.textContent = `Purchased ${result.confirmed}${storedNote}`;
+    } else if (result.confirmed > 0) {
+      active.statusEl.style.color = '#fde68a';
+      active.statusEl.textContent = `Purchased ${result.confirmed}/${result.sent} confirmed${storedNote}`;
+    } else {
+      active.statusEl.style.color = '#fca5a5';
+      active.statusEl.textContent = `Sent ${result.sent} - awaiting confirmation`;
+      setAlertBusy(active, false);
+      return;
+    }
+
+    dismissedInStockKeys.add(active.model.key);
+    window.setTimeout(() => {
+      removeAlert(active.model.key);
+    }, ALERT_SUCCESS_HIDE_MS);
+  } catch (error) {
+    log('[ShopRestockAlerts] Buy-all failed', error);
+    active.statusEl.style.color = '#fca5a5';
+    active.statusEl.textContent = 'Purchase failed';
+    setAlertBusy(active, false);
+  }
 }
 
 function createAlert(model: AlertModel): ActiveAlert {
@@ -719,7 +790,10 @@ function createAlert(model: AlertModel): ActiveAlert {
   actions.append(buyBtn, dismissBtn);
 
   card.append(top, qtyEl, statusEl, actions);
-  card.addEventListener('click', (e) => { e.stopPropagation(); }, true);
+  // Stop events from leaking to the game canvas, but do not use capture-phase
+  // here; capture stopPropagation can block child button click handlers.
+  card.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+  card.addEventListener('click', (e) => { e.stopPropagation(); });
   root.prepend(card);
 
   const active: ActiveAlert = {
@@ -738,47 +812,7 @@ function createAlert(model: AlertModel): ActiveAlert {
   buyBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (active.busy) return;
-    const buyModel: AlertModel = { ...active.model };
-    setAlertBusy(active, true);
-    active.statusEl.style.color = 'rgba(200,192,255,0.72)';
-    active.statusEl.textContent = 'Buying...';
-    void buyAllForAlert(buyModel).then((result) => {
-      if (result.error === 'Cancelled') {
-        active.statusEl.style.color = 'rgba(200,192,255,0.72)';
-        active.statusEl.textContent = 'Ready to buy';
-        setAlertBusy(active, false);
-        return;
-      }
-      if (result.error || result.sent <= 0) {
-        active.statusEl.style.color = '#fca5a5';
-        active.statusEl.textContent = result.error ?? 'Purchase failed';
-        setAlertBusy(active, false);
-        return;
-      }
-
-      const storedNote = active.model.shopType === 'seed' && result.storedInSilo ? ' + moved to Seed Silo' : '';
-
-      if (result.confirmed >= result.sent) {
-        active.statusEl.style.color = '#86efac';
-        active.statusEl.textContent = `Purchased ${result.confirmed}${storedNote}`;
-      } else if (result.confirmed > 0) {
-        active.statusEl.style.color = '#fde68a';
-        active.statusEl.textContent = `Purchased ${result.confirmed}/${result.sent} confirmed${storedNote}`;
-      } else {
-        active.statusEl.style.color = '#fca5a5';
-        active.statusEl.textContent = `Sent ${result.sent} — awaiting confirmation`;
-      }
-
-      dismissedInStockKeys.add(active.model.key);
-      window.setTimeout(() => {
-        removeAlert(active.model.key);
-      }, ALERT_SUCCESS_HIDE_MS);
-    }).catch((error) => {
-      log('[ShopRestockAlerts] Buy-all failed', error);
-      active.statusEl.style.color = '#fca5a5';
-      active.statusEl.textContent = 'Purchase failed';
-      setAlertBusy(active, false);
-    });
+    void handleBuyAll(active);
   });
 
   activeAlerts.set(model.key, active);

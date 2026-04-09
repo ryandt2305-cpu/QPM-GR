@@ -222,14 +222,49 @@ function getPurchaseCount(category: ShopCategory, rawId: string, purchases: Shop
   if (!bucket || typeof bucket !== 'object') {
     return 0;
   }
-  const direct = bucket[rawId];
-  if (direct != null && Number.isFinite(Number(direct))) {
-    return Number(direct);
+
+  const parseCount = (value: unknown): number | null => {
+    if (value == null) return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const normalizeId = (value: string): string => value.trim().toLowerCase();
+  const id = rawId.trim();
+  const candidates = new Set<string>();
+  if (id.length > 0) {
+    candidates.add(id);
+    // Some tool IDs are observed with inconsistent trailing "s" across atoms.
+    if (id.endsWith('s') && id.length > 1) {
+      candidates.add(id.slice(0, -1));
+    } else {
+      candidates.add(`${id}s`);
+    }
   }
+
+  for (const candidate of candidates) {
+    const direct = parseCount(bucket[candidate]);
+    if (direct != null) {
+      return direct;
+    }
+  }
+
   const numericKey = Number(rawId);
   if (Number.isFinite(numericKey) && bucket[numericKey] != null && Number.isFinite(Number(bucket[numericKey]))) {
     return Number(bucket[numericKey]);
   }
+
+  if (candidates.size > 0) {
+    const normalizedCandidates = new Set<string>(Array.from(candidates).map(normalizeId));
+    for (const [bucketKey, bucketValue] of Object.entries(bucket)) {
+      if (!normalizedCandidates.has(normalizeId(bucketKey))) continue;
+      const parsed = parseCount(bucketValue);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+  }
+
   return 0;
 }
 

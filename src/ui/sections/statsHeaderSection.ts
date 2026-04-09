@@ -21,6 +21,9 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.44', date: '2026-04', notes: [
+    'fixed buy all button and dismiss button responsiveness',
+  ]},
 { version: '3.1.43', date: '2026-04', notes: [
     'shop restock alerts: fixed Buy All showing success when purchases were not server-confirmed; now verifies via purchases atom delta after sends',
     'shop restock alerts: added insufficient balance modal — shows cost breakdown and buys as many as your balance allows',

@@ -226,3 +226,42 @@ export const storage: Storage = {
     console.log(`[QPM Storage] Cleared ${cleared} storage keys`);
   }
 };
+
+/**
+ * Serialises all currently-stored QPM values to a plain object of JSON strings.
+ *
+ * When running under Tampermonkey / Violentmonkey, GM_listValues enumerates
+ * every key the script has written to the manager's private GM storage, so the
+ * export is complete regardless of the known-keys list.  When GM_listValues is
+ * unavailable the function falls back to iterating QPM_STORAGE_KEYS against
+ * whatever storage backend is active.
+ *
+ * Values are returned as JSON strings (the same format that storage.set writes)
+ * so they can be written verbatim to localStorage or forwarded to the Starweaver
+ * Mod Manager's import pipeline without any further transformation.
+ */
+export function exportAllValues(): Record<string, string> {
+  const out: Record<string, string> = {};
+
+  try {
+    if (typeof GM_listValues === 'function') {
+      for (const key of GM_listValues()) {
+        const val = storage.get(key);
+        if (val !== null) {
+          try { out[key] = JSON.stringify(val); } catch { /* skip non-serialisable */ }
+        }
+      }
+      return out;
+    }
+  } catch { /* GM_listValues unavailable */ }
+
+  // Fallback: iterate the known key list against localStorage
+  for (const key of QPM_STORAGE_KEYS) {
+    const val = storage.get(key);
+    if (val !== null) {
+      try { out[key] = JSON.stringify(val); } catch { /* skip */ }
+    }
+  }
+
+  return out;
+}

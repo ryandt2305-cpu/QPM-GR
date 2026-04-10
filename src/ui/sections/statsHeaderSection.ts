@@ -1,226 +1,393 @@
 // src/ui/sections/statsHeaderSection.ts — Dashboard stats header section
-import { type UIState } from '../panelState';
-import { btn } from '../panelHelpers';
-import { log } from '../../utils/logger';
-import { storage } from '../../utils/storage';
-import { getCropSpriteDataUrl } from '../../sprite-v2/compat';
+import { type UIState } from "../panelState";
+import { btn } from "../panelHelpers";
+import { log } from "../../utils/logger";
+import { storage } from "../../utils/storage";
+import { getCropSpriteDataUrl } from "../../sprite-v2/compat";
 import {
   fetchRestockData,
   getRestockDataSync,
   onRestockDataUpdated,
   type RestockItem,
-} from '../../utils/restockDataService';
-import { calculateMaxStrength } from '../../store/xpTracker';
-import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../../store/pets';
-import { onTurtleTimerState, setTurtleTimerEnabled, type TurtleTimerChannel, type GardenSlotEstimate } from '../../features/turtleTimer.ts';
-import type { TurtleTimerState } from '../../features/turtleTimer.ts';
-import { visibleInterval } from '../../utils/timerManager';
+} from "../../utils/restockDataService";
+import { calculateMaxStrength } from "../../store/xpTracker";
+import {
+  getActivePetInfos,
+  onActivePetInfos,
+  type ActivePetInfo,
+} from "../../store/pets";
+import {
+  onTurtleTimerState,
+  setTurtleTimerEnabled,
+  type TurtleTimerChannel,
+  type GardenSlotEstimate,
+} from "../../features/turtleTimer.ts";
+import type { TurtleTimerState } from "../../features/turtleTimer.ts";
+import { visibleInterval } from "../../utils/timerManager";
 
 // ---------------------------------------------------------------------------
 // Changelog (hardcoded — most practical for userscript)
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
-{ version: '3.1.45', date: '2026-04', notes: [
-    'shop restock alerts: notification now dismisses after buy even when purchase atom confirmation lags past the 600ms window',
-    'shop restock data: fixed duplicate "Watering Can" / "Watering Cans" entries caused by inconsistent plural ID from game API (server migration + rebuild)',
-  ]},
-{ version: '3.1.44', date: '2026-04', notes: [
-    'fixed buy all button and dismiss button responsiveness',
-  ]},
-{ version: '3.1.43', date: '2026-04', notes: [
-    'shop restock alerts: fixed Buy All showing success when purchases were not server-confirmed; now verifies via purchases atom delta after sends',
-    'shop restock alerts: added insufficient balance modal — shows cost breakdown and buys as many as your balance allows',
-    'shop restock alerts: increased send delay to 100ms to respect WS throttle; fixed throttle bypass',
-    'shop stock: fixed custom shop inventories (customRestockInventories) not being applied, matching game behaviour',
-    'shop stock: fixed currentStock incorrectly inflated when entry.remaining was present in the raw atom',
-  ]},
-{ version: '3.1.42', date: '2026-04', notes: [
-    'item shop history: improved resize behavior so the restock history/detail window remains scrollable and stable after window size changes',
-    'shop restock alerts: fixed in-stock alerts persisting after purchase by honoring purchase-limited availability and inventory/silo ownership updates',
-    'crop boost tracker: fixed window scrolling by restoring modal body scroll layout and preserving scroll position across reactive refreshes',
-  ]},
-{ version: '3.1.41', date: '2026-04', notes: [
-    'shop restock: fixed Seen time sync so history rows now reflect the latest per-item event data consistently',
-    'restock history UX: kept the View History modal flow with per-event accuracy percentages and exact probability display',
-    'prediction pipeline: switched to adaptive error-calibrated no-pity model (Supabase-driven) with improved refresh behavior',
-  ]},
-{ version: '3.1.40', date: '2026-04', notes: [
-    'Pet Optimizer now checks top 3 of both Specialist and Slot Efficiency modes before marking a pet to sell. Added buttons to the keep category to compare competitive pets easier',
-  ]},
-{ version: '3.1.39', date: '2026-04', notes: [
-    'fixed window persistence: viewport resize, un-minimize, and async openers now correctly save and restore position; scrollbar style elements cleaned up on destroy',
-  ]},
-{ version: '3.1.38', date: '2026-04', notes: [
-    'pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling — no longer jumps back to top',
-  ]},
-{ version: '3.1.37', date: '2026-04', notes: [
-    'fixed update button: cache-bust query param ensures Tampermonkey sees the latest version instead of a stale GitHub CDN response',
-  ]},
-{ version: '3.1.36', date: '2026-04', notes: [
-    'pet optimizer: added per-card Keep/Return override so manual keeps persist and can be reverted to live recommendations',
-  ]},
-{ version: '3.1.35', date: '2026-04', notes: [
-    'pet optimizer internals refactored into modular ranking and decision pipelines with no intended behavior changes',
-    'pet optimizer window internals split into focused modules for filters, rendering, actions, and sell flows',
-    'fixed optimizer cross-realm pets window tab switch dispatch and tightened ranking reason consistency',
-  ]},
-{ version: '3.1.34', date: '2026-04', notes: [
-    'rewrote garden filter to use per-tile PIXI forward-map traversal; fixes tile click and section filter accuracy',
-    'added Stats Hub garden filter: filter remaining mutations, match-all toggle, per-tile click highlight',
-    'added storage value indicator: overlay and window showing estimated total value of stored items',
-    'fixed ability tracker: crop mutation boost no longer shows inaccurate procs/hr and coins/hr values',
-    'fixed intermittent sprite rendering where pet, plant, and seed canvases could return blank fallbacks on load',
-    'added renderer recovery for stale PIXI capture and WebGL context restore to keep sprite extraction stable',
-  ]},
-{ version: '3.1.33', date: '2026-04', notes: [
-    'fixed window persistence: pet-hub now restores on reload; fixed toggle no-op during restore',
-  ]},
-{ version: '3.1.32', date: '2026-04', notes: [
-    'fixed window persistence: state now saved before render to survive render failures across reloads',
-  ]},
-{ version: '3.1.31', date: '2026-03', notes: [
-    'fixed sell pipeline: fresh atom read before each sell prevents stale cache missing favorited/locked pets',
-  ]},
-{ version: '3.1.30', date: '2026-03', notes: [
-    'added sell buttons to Pet Optimizer: per-card (💰) and per-family bulk sell with confirmation modal',
-    'added window state persistence: open panels are restored automatically after page reload',
-  ]},
-{ version: '3.1.29', date: '2026-03', notes: [
-    'fixed Journal Checker Smart Tips Fastest Path cards showing raw variant color code as text and images not loading when sprites not yet ready',
-  ]},
-{ version: '3.1.28', date: '2026-03', notes: [
-    'fixed keybind capture not detecting key presses on Opera GX',
-  ]},
-{ version: '3.1.26', date: '2026-03', notes: [
-    'fixed garden filters and sprite capture not working in Firefox / Discord Activities',
-    'fixed PIXI app not captured when inline script injection blocked by CSP',
-    'fixed tutorial and guide images not loading under strict CSP',
-    'fixed KTX2 decoder hanging when WebAssembly blocked by CSP — skips to legacy path',
-    'fixed localStorage calls failing in third-party iframe storage partitioning',
-    'fixed pet team keybind input not registering key presses',
-  ]},
-{ version: '3.1.25', date: '2026-03', notes: [
-    'fixed Garden Stats value calculations: combined mutation + Max Size potential now correct when multiple filters active',
-    'fixed max scale values for 13 species (Cabbage, Clover, Rose, Beet, Gentian, PineTree, Peach, VioletCort, Cacao, DragonFruit, and others) sourced directly from game floraSpeciesDex',
-  ]},
-{ version: '3.1.24', date: '2026-03', notes: [
-    'fixed garden filter Four-Leaf Clover and Clover (Patch) not matching — corrected PIXI view labels (plant.name + View, not Plant View)',
-  ]},
-{ version: '3.1.23', date: '2026-03', notes: [
-    'added Max Size filter to Garden Stats — shows plants where at least one slot has reached its species max scale',
-    'fixed coins/hr display for AmberGranter and ProduceScaleBoost (no longer blank between harvests)',
-    'reduced unnecessary re-renders in weather tracking, harvest reminder, turtle timer, and shop tile',
-  ]},
-{ version: '3.1.22', date: '2026-03', notes: [
-    'fixed Garden Stats species filter conflicting with Garden Filters feature (isolated via dedicated override, no config/storage contamination)',
-  ]},
-{ version: '3.1.21', date: '2026-03', notes: [
-    'fixed garden filters (all-tiles-dimmed bug, FourLeafClover matching, crop sprites now visible)',
-    'optimised timers and performance (tile node cache, remove GC alloc per frame)',
-    'changed Remaining counter in Garden stats to show fruit count instead of crop',
-    'added all missing PIXI Plant Views for Garden Filters (Date, Aloe, Cabbage, Beet, Rose, Pear, Gentian, Peach, VioletCort)',
-  ]},
-{ version: '3.1.20', date: '2026-03', notes: [
-    'pet team delete button now shows inline confirmation (fixes silent failure in Discord Activities)',
-    'pet team name input no longer loses focus while typing',
-    'garden filter now dynamically loads all crops from catalog, new plants appear automatically',
-    'four leaf clover sprite alias added',
-  ]},
-{ version: '3.1.19', date: '2026-03', notes: [
-    'fixed pet optimiser crash (Analysis Failed) caused by undefined weather type in catalog lookup',
-  ]},
-{ version: '3.1.18', date: '2026-03', notes: [
-    'added Garden & Hatch Stats to Trackers hub: mutation progress filter + hatch history with ability breakdown',
-    'pet hatching tracker now wired up and records species + abilities per hatch',
-  ]},
-{ version: '3.1.17', date: '2026-03', notes: [
-    'hopefully fixed the activity log hydration (stutters for 5-10 seconds and then its smooth)',
-    'first 5 people to send a screenshot of this to the QPM channel gets 5k bread lol',
-  ]},
-{ version: '3.1.16', date: '2026-03', notes: [
-    'added anti-afk in utility hub',
-    'fixed and sped up pet hutch swapping with pet teams',
-  ]},
-{ version: '3.1.15', date: '2026-03', notes: [
-    'Journal Scroll and window fixes (smaller counter buttons, scroll handling fixed) ***if issues persist, tell me if making the journal window bigger works***',
-    'fixed dashboard celestials not updating (was only grabbing from cache once on init)',
-  ]},
-{ version: '3.1.14', date: '2026-03', notes: [
-    'added sprite decoder for MG v114+ compressed sprites..... eeeeeee',
-    'if youre reading this hello, i hope you have a good day',
-  ]},
-{ version: '3.1.13', date: '2026-03', notes: [
-    'Pet Teams: hutch-balanced apply now pairs hutch pulls with outgoing active pets (favorited pets preferred) and reports clearer failure reasons',
-    'Activity Log: added extended native activity logging and enabled the Utility Hub Activity Log card by default (customize choices persist)',
-  ]},
-{ version: '3.1.12', date: '2026-03', notes: [
-    'fixed Bulk Favorite, added toggle in Utility',
-  ]},
-{ version: '3.1.11', date: '2026-03', notes: [
-    'removed default pets keybind',
-  ]},
-{ version: '3.1.1', date: '2026-03', notes: [
-    'Feeding: detached instant feed buttons now resolve per-pet diets/allowed food totals per active slot',
-    'Pet Optimizer: Double Harvest and Crop Refund compare/obsolete logic now ranks per ability family (Top 3 kept per family)',
-    'Pet Teams: Sell All keybind location is now in the settings gear cog inside the Pet Teams window',
-  ]},
-{ version: '3.1.09', date: '2026-03', notes: [
-    'fix feed cards',
-  ]},
-{ version: '3.1.08', date: '2026-03', notes: [
-    'slot specific diet quantity',
-  ]},
-{ version: '3.1.07', date: '2026-03', notes: [
-    'Anti-AFK',
-  ]},
-  { version: '3.1.06', date: '2026-03', notes: [
-    'Pets: Shift can now be used as a modifier key for team keybinds',
-    'Teams: added polished ability value badges with accurate Hunger Restore team-based calculations',
-    'Feeding: feed buttons now show how much selected food remains in inventory',
-    'Pet Optimizer: each ability section now includes Create Team from your top 3 pets',
-  ]},
-  { version: '3.1.05', date: '2026-03', notes: [
-    'UI: standardized emoji-safe font fallback across panel and window roots',
-    'UI: removed temporary text-repair observer workaround',
-    'Fixed icon/symbol placeholders showing as ?? in panel and feature windows',
-  ]},
-  { version: '3.1.04', date: '2026-03', notes: [
-    'Tools Hub: customizable cards, updated tool descriptions, and sprite-based icons',
-    'Dashboard: Shop Restock tile now uses the Coin UI sprite; Celestial Restocks hide rate percentages',
-    'Journal: fixed Amberlit/Ambershine variant matching for completion tracking',
-  ]},
-  { version: '3.1.03', date: '2026-03', notes: [
-    'Resize handling fixes for feature windows',
-    'Minimize/restore handling fixes',
-    'Scroll handling fixes for Pets Manager and Pet Optimizer',
-  ]},
-  { version: '3.1.0', date: '2026-03', notes: [
-    'Consolidated tabs into hub windows (Trackers, Utility, Pets)',
-    'Shop Restock rewritten with Supabase data',
-    'Dashboard: Changelog card, shop restock cards, dashboard modules',
-    'Removed Achievements tab',
-  ]},
-  { version: '3.0.66', date: '2026-03', notes: [
-    'Fix XP tracker catalog race condition',
-    'Fix garden filter mutations display',
-  ]},
-  { version: '3.0.65', date: '2026-03', notes: [
-    'XP Tracker swap button',
-    'Garden filters improvements',
-  ]},
-  { version: '3.0.64', date: '2026-02', notes: [
-    'Sprite mutations + garden filters (amberlit)',
-  ]},
+  { version: "3.1.46", date: "2026-04", notes: ["Added GMExport Bridge"] },
+  {
+    version: "3.1.45",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: notification now dismisses after buy even when purchase atom confirmation lags past the 600ms window",
+      'shop restock data: fixed duplicate "Watering Can" / "Watering Cans" entries caused by inconsistent plural ID from game API (server migration + rebuild)',
+    ],
+  },
+  {
+    version: "3.1.44",
+    date: "2026-04",
+    notes: ["fixed buy all button and dismiss button responsiveness"],
+  },
+  {
+    version: "3.1.43",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: fixed Buy All showing success when purchases were not server-confirmed; now verifies via purchases atom delta after sends",
+      "shop restock alerts: added insufficient balance modal — shows cost breakdown and buys as many as your balance allows",
+      "shop restock alerts: increased send delay to 100ms to respect WS throttle; fixed throttle bypass",
+      "shop stock: fixed custom shop inventories (customRestockInventories) not being applied, matching game behaviour",
+      "shop stock: fixed currentStock incorrectly inflated when entry.remaining was present in the raw atom",
+    ],
+  },
+  {
+    version: "3.1.42",
+    date: "2026-04",
+    notes: [
+      "item shop history: improved resize behavior so the restock history/detail window remains scrollable and stable after window size changes",
+      "shop restock alerts: fixed in-stock alerts persisting after purchase by honoring purchase-limited availability and inventory/silo ownership updates",
+      "crop boost tracker: fixed window scrolling by restoring modal body scroll layout and preserving scroll position across reactive refreshes",
+    ],
+  },
+  {
+    version: "3.1.41",
+    date: "2026-04",
+    notes: [
+      "shop restock: fixed Seen time sync so history rows now reflect the latest per-item event data consistently",
+      "restock history UX: kept the View History modal flow with per-event accuracy percentages and exact probability display",
+      "prediction pipeline: switched to adaptive error-calibrated no-pity model (Supabase-driven) with improved refresh behavior",
+    ],
+  },
+  {
+    version: "3.1.40",
+    date: "2026-04",
+    notes: [
+      "Pet Optimizer now checks top 3 of both Specialist and Slot Efficiency modes before marking a pet to sell. Added buttons to the keep category to compare competitive pets easier",
+    ],
+  },
+  {
+    version: "3.1.39",
+    date: "2026-04",
+    notes: [
+      "fixed window persistence: viewport resize, un-minimize, and async openers now correctly save and restore position; scrollbar style elements cleaned up on destroy",
+    ],
+  },
+  {
+    version: "3.1.38",
+    date: "2026-04",
+    notes: [
+      "pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling — no longer jumps back to top",
+    ],
+  },
+  {
+    version: "3.1.37",
+    date: "2026-04",
+    notes: [
+      "fixed update button: cache-bust query param ensures Tampermonkey sees the latest version instead of a stale GitHub CDN response",
+    ],
+  },
+  {
+    version: "3.1.36",
+    date: "2026-04",
+    notes: [
+      "pet optimizer: added per-card Keep/Return override so manual keeps persist and can be reverted to live recommendations",
+    ],
+  },
+  {
+    version: "3.1.35",
+    date: "2026-04",
+    notes: [
+      "pet optimizer internals refactored into modular ranking and decision pipelines with no intended behavior changes",
+      "pet optimizer window internals split into focused modules for filters, rendering, actions, and sell flows",
+      "fixed optimizer cross-realm pets window tab switch dispatch and tightened ranking reason consistency",
+    ],
+  },
+  {
+    version: "3.1.34",
+    date: "2026-04",
+    notes: [
+      "rewrote garden filter to use per-tile PIXI forward-map traversal; fixes tile click and section filter accuracy",
+      "added Stats Hub garden filter: filter remaining mutations, match-all toggle, per-tile click highlight",
+      "added storage value indicator: overlay and window showing estimated total value of stored items",
+      "fixed ability tracker: crop mutation boost no longer shows inaccurate procs/hr and coins/hr values",
+      "fixed intermittent sprite rendering where pet, plant, and seed canvases could return blank fallbacks on load",
+      "added renderer recovery for stale PIXI capture and WebGL context restore to keep sprite extraction stable",
+    ],
+  },
+  {
+    version: "3.1.33",
+    date: "2026-04",
+    notes: [
+      "fixed window persistence: pet-hub now restores on reload; fixed toggle no-op during restore",
+    ],
+  },
+  {
+    version: "3.1.32",
+    date: "2026-04",
+    notes: [
+      "fixed window persistence: state now saved before render to survive render failures across reloads",
+    ],
+  },
+  {
+    version: "3.1.31",
+    date: "2026-03",
+    notes: [
+      "fixed sell pipeline: fresh atom read before each sell prevents stale cache missing favorited/locked pets",
+    ],
+  },
+  {
+    version: "3.1.30",
+    date: "2026-03",
+    notes: [
+      "added sell buttons to Pet Optimizer: per-card (💰) and per-family bulk sell with confirmation modal",
+      "added window state persistence: open panels are restored automatically after page reload",
+    ],
+  },
+  {
+    version: "3.1.29",
+    date: "2026-03",
+    notes: [
+      "fixed Journal Checker Smart Tips Fastest Path cards showing raw variant color code as text and images not loading when sprites not yet ready",
+    ],
+  },
+  {
+    version: "3.1.28",
+    date: "2026-03",
+    notes: ["fixed keybind capture not detecting key presses on Opera GX"],
+  },
+  {
+    version: "3.1.26",
+    date: "2026-03",
+    notes: [
+      "fixed garden filters and sprite capture not working in Firefox / Discord Activities",
+      "fixed PIXI app not captured when inline script injection blocked by CSP",
+      "fixed tutorial and guide images not loading under strict CSP",
+      "fixed KTX2 decoder hanging when WebAssembly blocked by CSP — skips to legacy path",
+      "fixed localStorage calls failing in third-party iframe storage partitioning",
+      "fixed pet team keybind input not registering key presses",
+    ],
+  },
+  {
+    version: "3.1.25",
+    date: "2026-03",
+    notes: [
+      "fixed Garden Stats value calculations: combined mutation + Max Size potential now correct when multiple filters active",
+      "fixed max scale values for 13 species (Cabbage, Clover, Rose, Beet, Gentian, PineTree, Peach, VioletCort, Cacao, DragonFruit, and others) sourced directly from game floraSpeciesDex",
+    ],
+  },
+  {
+    version: "3.1.24",
+    date: "2026-03",
+    notes: [
+      "fixed garden filter Four-Leaf Clover and Clover (Patch) not matching — corrected PIXI view labels (plant.name + View, not Plant View)",
+    ],
+  },
+  {
+    version: "3.1.23",
+    date: "2026-03",
+    notes: [
+      "added Max Size filter to Garden Stats — shows plants where at least one slot has reached its species max scale",
+      "fixed coins/hr display for AmberGranter and ProduceScaleBoost (no longer blank between harvests)",
+      "reduced unnecessary re-renders in weather tracking, harvest reminder, turtle timer, and shop tile",
+    ],
+  },
+  {
+    version: "3.1.22",
+    date: "2026-03",
+    notes: [
+      "fixed Garden Stats species filter conflicting with Garden Filters feature (isolated via dedicated override, no config/storage contamination)",
+    ],
+  },
+  {
+    version: "3.1.21",
+    date: "2026-03",
+    notes: [
+      "fixed garden filters (all-tiles-dimmed bug, FourLeafClover matching, crop sprites now visible)",
+      "optimised timers and performance (tile node cache, remove GC alloc per frame)",
+      "changed Remaining counter in Garden stats to show fruit count instead of crop",
+      "added all missing PIXI Plant Views for Garden Filters (Date, Aloe, Cabbage, Beet, Rose, Pear, Gentian, Peach, VioletCort)",
+    ],
+  },
+  {
+    version: "3.1.20",
+    date: "2026-03",
+    notes: [
+      "pet team delete button now shows inline confirmation (fixes silent failure in Discord Activities)",
+      "pet team name input no longer loses focus while typing",
+      "garden filter now dynamically loads all crops from catalog, new plants appear automatically",
+      "four leaf clover sprite alias added",
+    ],
+  },
+  {
+    version: "3.1.19",
+    date: "2026-03",
+    notes: [
+      "fixed pet optimiser crash (Analysis Failed) caused by undefined weather type in catalog lookup",
+    ],
+  },
+  {
+    version: "3.1.18",
+    date: "2026-03",
+    notes: [
+      "added Garden & Hatch Stats to Trackers hub: mutation progress filter + hatch history with ability breakdown",
+      "pet hatching tracker now wired up and records species + abilities per hatch",
+    ],
+  },
+  {
+    version: "3.1.17",
+    date: "2026-03",
+    notes: [
+      "hopefully fixed the activity log hydration (stutters for 5-10 seconds and then its smooth)",
+      "first 5 people to send a screenshot of this to the QPM channel gets 5k bread lol",
+    ],
+  },
+  {
+    version: "3.1.16",
+    date: "2026-03",
+    notes: [
+      "added anti-afk in utility hub",
+      "fixed and sped up pet hutch swapping with pet teams",
+    ],
+  },
+  {
+    version: "3.1.15",
+    date: "2026-03",
+    notes: [
+      "Journal Scroll and window fixes (smaller counter buttons, scroll handling fixed) ***if issues persist, tell me if making the journal window bigger works***",
+      "fixed dashboard celestials not updating (was only grabbing from cache once on init)",
+    ],
+  },
+  {
+    version: "3.1.14",
+    date: "2026-03",
+    notes: [
+      "added sprite decoder for MG v114+ compressed sprites..... eeeeeee",
+      "if youre reading this hello, i hope you have a good day",
+    ],
+  },
+  {
+    version: "3.1.13",
+    date: "2026-03",
+    notes: [
+      "Pet Teams: hutch-balanced apply now pairs hutch pulls with outgoing active pets (favorited pets preferred) and reports clearer failure reasons",
+      "Activity Log: added extended native activity logging and enabled the Utility Hub Activity Log card by default (customize choices persist)",
+    ],
+  },
+  {
+    version: "3.1.12",
+    date: "2026-03",
+    notes: ["fixed Bulk Favorite, added toggle in Utility"],
+  },
+  {
+    version: "3.1.11",
+    date: "2026-03",
+    notes: ["removed default pets keybind"],
+  },
+  {
+    version: "3.1.1",
+    date: "2026-03",
+    notes: [
+      "Feeding: detached instant feed buttons now resolve per-pet diets/allowed food totals per active slot",
+      "Pet Optimizer: Double Harvest and Crop Refund compare/obsolete logic now ranks per ability family (Top 3 kept per family)",
+      "Pet Teams: Sell All keybind location is now in the settings gear cog inside the Pet Teams window",
+    ],
+  },
+  { version: "3.1.09", date: "2026-03", notes: ["fix feed cards"] },
+  {
+    version: "3.1.08",
+    date: "2026-03",
+    notes: ["slot specific diet quantity"],
+  },
+  { version: "3.1.07", date: "2026-03", notes: ["Anti-AFK"] },
+  {
+    version: "3.1.06",
+    date: "2026-03",
+    notes: [
+      "Pets: Shift can now be used as a modifier key for team keybinds",
+      "Teams: added polished ability value badges with accurate Hunger Restore team-based calculations",
+      "Feeding: feed buttons now show how much selected food remains in inventory",
+      "Pet Optimizer: each ability section now includes Create Team from your top 3 pets",
+    ],
+  },
+  {
+    version: "3.1.05",
+    date: "2026-03",
+    notes: [
+      "UI: standardized emoji-safe font fallback across panel and window roots",
+      "UI: removed temporary text-repair observer workaround",
+      "Fixed icon/symbol placeholders showing as ?? in panel and feature windows",
+    ],
+  },
+  {
+    version: "3.1.04",
+    date: "2026-03",
+    notes: [
+      "Tools Hub: customizable cards, updated tool descriptions, and sprite-based icons",
+      "Dashboard: Shop Restock tile now uses the Coin UI sprite; Celestial Restocks hide rate percentages",
+      "Journal: fixed Amberlit/Ambershine variant matching for completion tracking",
+    ],
+  },
+  {
+    version: "3.1.03",
+    date: "2026-03",
+    notes: [
+      "Resize handling fixes for feature windows",
+      "Minimize/restore handling fixes",
+      "Scroll handling fixes for Pets Manager and Pet Optimizer",
+    ],
+  },
+  {
+    version: "3.1.0",
+    date: "2026-03",
+    notes: [
+      "Consolidated tabs into hub windows (Trackers, Utility, Pets)",
+      "Shop Restock rewritten with Supabase data",
+      "Dashboard: Changelog card, shop restock cards, dashboard modules",
+      "Removed Achievements tab",
+    ],
+  },
+  {
+    version: "3.0.66",
+    date: "2026-03",
+    notes: [
+      "Fix XP tracker catalog race condition",
+      "Fix garden filter mutations display",
+    ],
+  },
+  {
+    version: "3.0.65",
+    date: "2026-03",
+    notes: ["XP Tracker swap button", "Garden filters improvements"],
+  },
+  {
+    version: "3.0.64",
+    date: "2026-02",
+    notes: ["Sprite mutations + garden filters (amberlit)"],
+  },
 ];
 
 // ---------------------------------------------------------------------------
 // Dashboard modules
 // ---------------------------------------------------------------------------
 
-const DASHBOARD_MODULES_KEY = 'qpm.dashboardModules';
+const DASHBOARD_MODULES_KEY = "qpm.dashboardModules";
 
-type ModuleId = 'xp-near-max' | 'turtle-timer' | 'active-pets' | 'next-restock';
+type ModuleId = "xp-near-max" | "turtle-timer" | "active-pets" | "next-restock";
 
 interface DashboardModule {
   id: ModuleId;
@@ -229,10 +396,10 @@ interface DashboardModule {
 }
 
 const ALL_MODULES: DashboardModule[] = [
-  { id: 'xp-near-max', label: 'XP Near Max', icon: '✨' },
-  { id: 'turtle-timer', label: 'Turtle Timer', icon: '🐢' },
-  { id: 'active-pets', label: 'Active Pets', icon: '🐾' },
-  { id: 'next-restock', label: 'Next Restock', icon: '🏪' },
+  { id: "xp-near-max", label: "XP Near Max", icon: "✨" },
+  { id: "turtle-timer", label: "Turtle Timer", icon: "🐢" },
+  { id: "active-pets", label: "Active Pets", icon: "🐾" },
+  { id: "next-restock", label: "Next Restock", icon: "🏪" },
 ];
 
 function loadEnabledModules(): Set<ModuleId> {
@@ -253,28 +420,28 @@ function saveEnabledModules(ids: Set<ModuleId>): void {
 // Item IDs must stay in sync with CELESTIAL_IDS in shopRestockWindow.ts.
 const CELESTIAL_ITEMS = [
   {
-    label: 'Starweaver',
-    color: 'rgba(255,215,0,0.12)',
-    accent: '#FFD700',
-    itemIds: ['StarweaverPod', 'Starweaver'],
+    label: "Starweaver",
+    color: "rgba(255,215,0,0.12)",
+    accent: "#FFD700",
+    itemIds: ["StarweaverPod", "Starweaver"],
   },
   {
-    label: 'Dawnbinder',
-    color: 'rgba(255,152,0,0.12)',
-    accent: '#FF9800',
-    itemIds: ['DawnbinderPod', 'Dawnbinder', 'DawnCelestial'],
+    label: "Dawnbinder",
+    color: "rgba(255,152,0,0.12)",
+    accent: "#FF9800",
+    itemIds: ["DawnbinderPod", "Dawnbinder", "DawnCelestial"],
   },
   {
-    label: 'Moonbinder',
-    color: 'rgba(156,39,176,0.12)',
-    accent: '#CE93D8',
-    itemIds: ['MoonbinderPod', 'Moonbinder', 'MoonCelestial'],
+    label: "Moonbinder",
+    color: "rgba(156,39,176,0.12)",
+    accent: "#CE93D8",
+    itemIds: ["MoonbinderPod", "Moonbinder", "MoonCelestial"],
   },
   {
-    label: 'Mythical Egg',
-    color: 'rgba(66,165,245,0.12)',
-    accent: '#42A5F5',
-    itemIds: ['MythicalEgg', 'MythicalEggs'],
+    label: "Mythical Egg",
+    color: "rgba(66,165,245,0.12)",
+    accent: "#42A5F5",
+    itemIds: ["MythicalEgg", "MythicalEggs"],
   },
 ] as const;
 
@@ -284,11 +451,11 @@ function getCelestialSpriteUrl(itemIds: readonly string[]): string {
     const url = getCropSpriteDataUrl(id);
     if (url) return url;
   }
-  return '';
+  return "";
 }
 
 function formatCountdown(ms: number): string {
-  if (ms <= 0) return 'Soon™';
+  if (ms <= 0) return "Soon™";
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   if (h > 0) return `${h}h ${m}m`;
@@ -298,9 +465,9 @@ function formatCountdown(ms: number): string {
 
 // ETA format matching the restock tracker: ~Xm / ~Xh / ~Xd
 function formatETA(ts: number): string {
-  if (!ts) return '—';
+  if (!ts) return "—";
   const diff = ts - Date.now();
-  if (diff <= 0) return '—'; // stale — Supabase will have a new prediction after next refresh
+  if (diff <= 0) return "—"; // stale — Supabase will have a new prediction after next refresh
   const min = Math.ceil(diff / 60_000);
   if (min < 60) return `~${min}m`;
   const hr = Math.ceil(diff / 3_600_000);
@@ -311,17 +478,17 @@ function formatETA(ts: number): string {
 
 // 7-tier color scale matching the restock tracker: green = imminent, red = far
 function etaColor(ts: number): string {
-  if (!ts) return 'rgba(224,224,224,0.4)';
+  if (!ts) return "rgba(224,224,224,0.4)";
   const diff = ts - Date.now();
-  if (diff <= 0)   return 'rgba(224,224,224,0.3)'; // stale — muted until next refresh
+  if (diff <= 0) return "rgba(224,224,224,0.3)"; // stale — muted until next refresh
   const h = diff / 3_600_000;
-  if (h < 1)        return '#22c55e';
-  if (h < 6)        return '#84cc16';
-  if (h < 24)       return '#eab308';
+  if (h < 1) return "#22c55e";
+  if (h < 6) return "#84cc16";
+  if (h < 24) return "#eab308";
   const d = diff / 86_400_000;
-  if (d < 7)        return '#f97316';
-  if (d < 14)       return '#f87171';
-  return '#ef4444';
+  if (d < 7) return "#f97316";
+  if (d < 14) return "#f87171";
+  return "#ef4444";
 }
 
 // ---------------------------------------------------------------------------
@@ -334,24 +501,26 @@ export function createStatsHeader(
   saveCfg: () => void,
   resetAllStats: () => void,
 ): HTMLElement {
-  const container = document.createElement('div');
-  container.className = 'qpm-card';
-  container.dataset.qpmSection = 'header';
-  container.style.cssText = 'background:linear-gradient(135deg,rgba(143,130,255,0.08),rgba(143,130,255,0.03));border:1px solid rgba(143,130,255,0.15);';
+  const container = document.createElement("div");
+  container.className = "qpm-card";
+  container.dataset.qpmSection = "header";
+  container.style.cssText =
+    "background:linear-gradient(135deg,rgba(143,130,255,0.08),rgba(143,130,255,0.03));border:1px solid rgba(143,130,255,0.15);";
 
   // ── Header row ──
-  const headerRow = document.createElement('div');
-  headerRow.className = 'qpm-card__header';
+  const headerRow = document.createElement("div");
+  headerRow.className = "qpm-card__header";
 
-  const headerTitle = document.createElement('div');
-  headerTitle.className = 'qpm-card__title';
-  headerTitle.textContent = 'Dashboard';
-  headerTitle.style.cssText = 'font-size:14px;font-weight:700;letter-spacing:0.3px;';
+  const headerTitle = document.createElement("div");
+  headerTitle.className = "qpm-card__title";
+  headerTitle.textContent = "Dashboard";
+  headerTitle.style.cssText =
+    "font-size:14px;font-weight:700;letter-spacing:0.3px;";
 
-  const resetButton = btn('♻ Reset Stats', resetAllStats);
-  resetButton.classList.add('qpm-button--accent');
-  resetButton.style.fontSize = '11px';
-  resetButton.title = 'Reset session stats counters';
+  const resetButton = btn("♻ Reset Stats", resetAllStats);
+  resetButton.classList.add("qpm-button--accent");
+  resetButton.style.fontSize = "11px";
+  resetButton.title = "Reset session stats counters";
 
   headerRow.append(headerTitle, resetButton);
   container.appendChild(headerRow);
@@ -374,56 +543,65 @@ export function createStatsHeader(
 // ---------------------------------------------------------------------------
 
 function buildShopRestockSection(): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = 'margin-top:14px;';
+  const section = document.createElement("div");
+  section.style.cssText = "margin-top:14px;";
 
-  const sectionTitle = document.createElement('div');
-  sectionTitle.style.cssText = 'font-size:11px;font-weight:600;color:#64b5f6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;';
-  sectionTitle.textContent = '✨ Celestial Restocks';
+  const sectionTitle = document.createElement("div");
+  sectionTitle.style.cssText =
+    "font-size:11px;font-weight:600;color:#64b5f6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;";
+  sectionTitle.textContent = "✨ Celestial Restocks";
   section.appendChild(sectionTitle);
 
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(2,1fr);gap:8px;';
+  const grid = document.createElement("div");
+  grid.style.cssText =
+    "display:grid;grid-template-columns:repeat(2,1fr);gap:8px;";
   section.appendChild(grid);
 
   // One card per celestial item — looked up by item_id, not shop_type
-  const cardEls: Array<{ nextEl: HTMLElement; subEl: HTMLElement; ts: number }> = [];
+  const cardEls: Array<{
+    nextEl: HTMLElement;
+    subEl: HTMLElement;
+    ts: number;
+  }> = [];
 
   for (const item of CELESTIAL_ITEMS) {
-    const card = document.createElement('div');
+    const card = document.createElement("div");
     card.style.cssText = [
-      'padding:8px 10px',
+      "padding:8px 10px",
       `background:${item.color}`,
       `border:1px solid ${item.accent}40`,
-      'border-radius:6px',
-      'display:flex',
-      'flex-direction:column',
-      'gap:3px',
-      'min-width:0',
-    ].join(';');
+      "border-radius:6px",
+      "display:flex",
+      "flex-direction:column",
+      "gap:3px",
+      "min-width:0",
+    ].join(";");
 
-    const nameEl = document.createElement('div');
+    const nameEl = document.createElement("div");
     nameEl.style.cssText = `font-size:10px;font-weight:700;color:${item.accent};letter-spacing:0.3px;display:flex;align-items:center;gap:3px;`;
     const spriteUrl = getCelestialSpriteUrl(item.itemIds);
     if (spriteUrl) {
-      const img = document.createElement('img');
+      const img = document.createElement("img");
       img.src = spriteUrl;
-      img.style.cssText = 'height:16px;width:auto;image-rendering:pixelated;flex-shrink:0;';
+      img.style.cssText =
+        "height:16px;width:auto;image-rendering:pixelated;flex-shrink:0;";
       nameEl.appendChild(img);
     }
     nameEl.appendChild(document.createTextNode(item.label));
 
     // ETA row: large colored countdown
-    const nextEl = document.createElement('div');
-    nextEl.style.cssText = 'font-size:15px;font-weight:700;color:rgba(224,224,224,0.4);font-variant-numeric:tabular-nums;';
-    nextEl.textContent = '—';
+    const nextEl = document.createElement("div");
+    nextEl.style.cssText =
+      "font-size:15px;font-weight:700;color:rgba(224,224,224,0.4);font-variant-numeric:tabular-nums;";
+    nextEl.textContent = "—";
 
     // Last seen row
-    const subRow = document.createElement('div');
-    subRow.style.cssText = 'display:flex;align-items:center;gap:5px;';
-    const subEl = document.createElement('span');
-    subEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    subEl.textContent = 'Loading...';
+    const subRow = document.createElement("div");
+    subRow.style.cssText = "display:flex;align-items:center;gap:5px;";
+    const subEl = document.createElement("span");
+    subEl.style.cssText =
+      "font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    subEl.textContent = "Loading...";
     subRow.append(subEl);
 
     card.append(nameEl, nextEl, subRow);
@@ -433,13 +611,18 @@ function buildShopRestockSection(): HTMLElement {
 
   // Find best matching item across aliases.
   // Preference: earliest future ETA, then newest last_seen, then first alias order.
-  const findItem = (allItems: RestockItem[], aliases: readonly string[]): RestockItem | null => {
+  const findItem = (
+    allItems: RestockItem[],
+    aliases: readonly string[],
+  ): RestockItem | null => {
     const aliasOrder = new Map<string, number>();
     aliases.forEach((alias, index) => {
       aliasOrder.set(alias.toLowerCase(), index);
     });
 
-    const candidates = allItems.filter((item) => aliasOrder.has((item.item_id ?? '').toLowerCase()));
+    const candidates = allItems.filter((item) =>
+      aliasOrder.has((item.item_id ?? "").toLowerCase()),
+    );
     if (!candidates.length) return null;
 
     const now = Date.now();
@@ -456,8 +639,12 @@ function buildShopRestockSection(): HTMLElement {
       const bLast = b.last_seen ?? 0;
       if (aLast !== bLast) return bLast - aLast;
 
-      const aOrder = aliasOrder.get((a.item_id ?? '').toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
-      const bOrder = aliasOrder.get((b.item_id ?? '').toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      const aOrder =
+        aliasOrder.get((a.item_id ?? "").toLowerCase()) ??
+        Number.MAX_SAFE_INTEGER;
+      const bOrder =
+        aliasOrder.get((b.item_id ?? "").toLowerCase()) ??
+        Number.MAX_SAFE_INTEGER;
       return aOrder - bOrder;
     });
 
@@ -473,9 +660,9 @@ function buildShopRestockSection(): HTMLElement {
 
       const found = findItem(allItems, def.itemIds);
       if (!found) {
-        nextEl.textContent = '—';
-        nextEl.style.color = 'rgba(224,224,224,0.4)';
-        subEl.textContent = 'No data yet';
+        nextEl.textContent = "—";
+        nextEl.style.color = "rgba(224,224,224,0.4)";
+        subEl.textContent = "No data yet";
         card.ts = 0;
         return;
       }
@@ -488,18 +675,22 @@ function buildShopRestockSection(): HTMLElement {
       const now = Date.now();
       subEl.textContent = found.last_seen
         ? `Last ${Math.round((now - found.last_seen) / 86_400_000)}d ago`
-        : '';
+        : "";
     });
   };
 
   // Live countdown ticker — update ETA text + color every 30s (matches restock window)
-  const stopTicker = visibleInterval('dashboard-restock-cards', () => {
-    for (const card of cardEls) {
-      if (!card.ts) continue;
-      card.nextEl.textContent = formatETA(card.ts);
-      card.nextEl.style.color = etaColor(card.ts);
-    }
-  }, 30_000);
+  const stopTicker = visibleInterval(
+    "dashboard-restock-cards",
+    () => {
+      for (const card of cardEls) {
+        if (!card.ts) continue;
+        card.nextEl.textContent = formatETA(card.ts);
+        card.nextEl.style.color = etaColor(card.ts);
+      }
+    },
+    30_000,
+  );
 
   const stopRestockSync = onRestockDataUpdated((detail) => {
     updateCards(detail.items ?? getRestockDataSync() ?? []);
@@ -519,9 +710,11 @@ function buildShopRestockSection(): HTMLElement {
   const cached = getRestockDataSync();
   if (cached) updateCards(cached);
 
-  fetchRestockData(false).then(items => updateCards(items)).catch(err => {
-    log('⚠️ [Dashboard] Failed to load restock data', err);
-  });
+  fetchRestockData(false)
+    .then((items) => updateCards(items))
+    .catch((err) => {
+      log("⚠️ [Dashboard] Failed to load restock data", err);
+    });
 
   return section;
 }
@@ -531,39 +724,41 @@ function buildShopRestockSection(): HTMLElement {
 // ---------------------------------------------------------------------------
 
 function buildChangelogCard(): HTMLElement {
-  const card = document.createElement('div');
+  const card = document.createElement("div");
   card.style.cssText = [
-    'margin-top:14px',
-    'padding:10px',
-    'background:rgba(255,255,255,0.03)',
-    'border:1px solid rgba(143,130,255,0.15)',
-    'border-radius:6px',
-  ].join(';');
+    "margin-top:14px",
+    "padding:10px",
+    "background:rgba(255,255,255,0.03)",
+    "border:1px solid rgba(143,130,255,0.15)",
+    "border-radius:6px",
+  ].join(";");
 
-  const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;';
+  const headerRow = document.createElement("div");
+  headerRow.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;";
 
-  const title = document.createElement('div');
-  title.style.cssText = 'font-size:11px;font-weight:700;color:#8f82ff;';
-  title.textContent = '📋 Changelog';
+  const title = document.createElement("div");
+  title.style.cssText = "font-size:11px;font-weight:700;color:#8f82ff;";
+  title.textContent = "📋 Changelog";
 
   const visibleEntries = CHANGELOG.slice(0, 3);
   const latest = visibleEntries[0]!;
-  const latestBadge = document.createElement('div');
-  latestBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.5);';
+  const latestBadge = document.createElement("div");
+  latestBadge.style.cssText = "font-size:10px;color:rgba(224,224,224,0.5);";
   latestBadge.textContent = `v${latest.version}`;
 
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.style.cssText = 'background:none;border:none;color:rgba(224,224,224,0.4);font-size:10px;cursor:pointer;padding:0 2px;';
-  toggleBtn.textContent = '▶';
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.style.cssText =
+    "background:none;border:none;color:rgba(224,224,224,0.4);font-size:10px;cursor:pointer;padding:0 2px;";
+  toggleBtn.textContent = "▶";
 
   headerRow.append(title, latestBadge, toggleBtn);
   card.appendChild(headerRow);
 
   // All changelog content — collapsed by default
-  const body = document.createElement('div');
-  body.style.display = 'none';
+  const body = document.createElement("div");
+  body.style.display = "none";
 
   for (let index = 0; index < visibleEntries.length; index += 1) {
     const entry = visibleEntries[index]!;
@@ -574,37 +769,42 @@ function buildChangelogCard(): HTMLElement {
   let expanded = false;
   const toggle = (): void => {
     expanded = !expanded;
-    body.style.display = expanded ? 'block' : 'none';
-    toggleBtn.textContent = expanded ? '▼' : '▶';
+    body.style.display = expanded ? "block" : "none";
+    toggleBtn.textContent = expanded ? "▼" : "▶";
   };
-  headerRow.addEventListener('click', toggle);
+  headerRow.addEventListener("click", toggle);
 
   return card;
 }
 
-function buildChangelogEntry(entry: { version: string; date: string; notes: string[] }, isLatest: boolean): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText = `margin-top:8px;padding-top:${isLatest ? '8' : '6'}px;${isLatest ? '' : 'border-top:1px solid rgba(255,255,255,0.06);'}`;
+function buildChangelogEntry(
+  entry: { version: string; date: string; notes: string[] },
+  isLatest: boolean,
+): HTMLElement {
+  const el = document.createElement("div");
+  el.style.cssText = `margin-top:8px;padding-top:${isLatest ? "8" : "6"}px;${isLatest ? "" : "border-top:1px solid rgba(255,255,255,0.06);"}`;
 
-  const versionRow = document.createElement('div');
-  versionRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
+  const versionRow = document.createElement("div");
+  versionRow.style.cssText =
+    "display:flex;align-items:center;gap:6px;margin-bottom:4px;";
 
-  const versionBadge = document.createElement('span');
-  versionBadge.style.cssText = `font-size:10px;font-weight:700;color:${isLatest ? '#8f82ff' : '#aaa'};`;
+  const versionBadge = document.createElement("span");
+  versionBadge.style.cssText = `font-size:10px;font-weight:700;color:${isLatest ? "#8f82ff" : "#aaa"};`;
   versionBadge.textContent = `v${entry.version}`;
 
-  const dateBadge = document.createElement('span');
-  dateBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);';
+  const dateBadge = document.createElement("span");
+  dateBadge.style.cssText = "font-size:10px;color:rgba(224,224,224,0.35);";
   dateBadge.textContent = entry.date;
 
   versionRow.append(versionBadge, dateBadge);
   el.appendChild(versionRow);
 
-  const list = document.createElement('ul');
-  list.style.cssText = 'margin:0;padding:0 0 0 14px;';
+  const list = document.createElement("ul");
+  list.style.cssText = "margin:0;padding:0 0 0 14px;";
   for (const note of entry.notes) {
-    const li = document.createElement('li');
-    li.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.7);margin-bottom:2px;';
+    const li = document.createElement("li");
+    li.style.cssText =
+      "font-size:11px;color:rgba(224,224,224,0.7);margin-bottom:2px;";
     li.textContent = note;
     list.appendChild(li);
   }
@@ -618,61 +818,65 @@ function buildChangelogEntry(entry: { version: string; date: string; notes: stri
 // ---------------------------------------------------------------------------
 
 function buildModulesSection(uiState: UIState): HTMLElement {
-  const section = document.createElement('div');
-  section.style.cssText = 'margin-top:14px;';
+  const section = document.createElement("div");
+  section.style.cssText = "margin-top:14px;";
 
-  const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+  const headerRow = document.createElement("div");
+  headerRow.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;";
 
-  const sectionTitle = document.createElement('div');
-  sectionTitle.style.cssText = 'font-size:11px;font-weight:600;color:rgba(224,224,224,0.6);text-transform:uppercase;letter-spacing:0.5px;';
-  sectionTitle.textContent = '⚡ Feature Modules';
+  const sectionTitle = document.createElement("div");
+  sectionTitle.style.cssText =
+    "font-size:11px;font-weight:600;color:rgba(224,224,224,0.6);text-transform:uppercase;letter-spacing:0.5px;";
+  sectionTitle.textContent = "⚡ Feature Modules";
 
-  const customizeBtn = document.createElement('button');
-  customizeBtn.type = 'button';
-  customizeBtn.textContent = '⚙ Customize';
+  const customizeBtn = document.createElement("button");
+  customizeBtn.type = "button";
+  customizeBtn.textContent = "⚙ Customize";
   customizeBtn.style.cssText = [
-    'font-size:10px',
-    'padding:2px 8px',
-    'background:rgba(143,130,255,0.1)',
-    'border:1px solid rgba(143,130,255,0.25)',
-    'border-radius:4px',
-    'color:#c8c0ff',
-    'cursor:pointer',
-  ].join(';');
+    "font-size:10px",
+    "padding:2px 8px",
+    "background:rgba(143,130,255,0.1)",
+    "border:1px solid rgba(143,130,255,0.25)",
+    "border-radius:4px",
+    "color:#c8c0ff",
+    "cursor:pointer",
+  ].join(";");
 
   headerRow.append(sectionTitle, customizeBtn);
   section.appendChild(headerRow);
 
-  const togglePanel = document.createElement('div');
+  const togglePanel = document.createElement("div");
   togglePanel.style.cssText = [
-    'background:rgba(0,0,0,0.25)',
-    'border:1px solid rgba(143,130,255,0.15)',
-    'border-radius:6px',
-    'padding:8px 10px',
-    'margin-bottom:8px',
-    'flex-wrap:wrap',
-    'gap:8px',
-  ].join(';');
-  togglePanel.style.display = 'none';
+    "background:rgba(0,0,0,0.25)",
+    "border:1px solid rgba(143,130,255,0.15)",
+    "border-radius:6px",
+    "padding:8px 10px",
+    "margin-bottom:8px",
+    "flex-wrap:wrap",
+    "gap:8px",
+  ].join(";");
+  togglePanel.style.display = "none";
   section.appendChild(togglePanel);
 
   let enabledModules = loadEnabledModules();
 
-  const moduleCards = document.createElement('div');
-  moduleCards.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;';
+  const moduleCards = document.createElement("div");
+  moduleCards.style.cssText =
+    "display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;";
   section.appendChild(moduleCards);
 
   const renderTogglePanel = (): void => {
-    togglePanel.innerHTML = '';
+    togglePanel.innerHTML = "";
     for (const mod of ALL_MODULES) {
-      const chip = document.createElement('label');
-      chip.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(224,224,224,0.7);cursor:pointer;';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
+      const chip = document.createElement("label");
+      chip.style.cssText =
+        "display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(224,224,224,0.7);cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
       cb.checked = enabledModules.has(mod.id);
-      cb.style.accentColor = '#8f82ff';
-      cb.addEventListener('change', () => {
+      cb.style.accentColor = "#8f82ff";
+      cb.addEventListener("change", () => {
         if (cb.checked) enabledModules.add(mod.id);
         else enabledModules.delete(mod.id);
         saveEnabledModules(enabledModules);
@@ -686,36 +890,39 @@ function buildModulesSection(uiState: UIState): HTMLElement {
   let moduleCleanups: Array<() => void> = [];
 
   const renderModuleCards = (): void => {
-    moduleCleanups.forEach(fn => fn());
+    moduleCleanups.forEach((fn) => fn());
     moduleCleanups = [];
-    moduleCards.innerHTML = '';
+    moduleCards.innerHTML = "";
     if (enabledModules.size === 0) {
-      const hint = document.createElement('div');
-      hint.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
-      hint.textContent = 'No modules enabled. Click ⚙ Customize to add some.';
+      const hint = document.createElement("div");
+      hint.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
+      hint.textContent = "No modules enabled. Click ⚙ Customize to add some.";
       moduleCards.appendChild(hint);
       return;
     }
     for (const modDef of ALL_MODULES) {
       if (!enabledModules.has(modDef.id)) continue;
-      moduleCards.appendChild(buildModuleCard(modDef, uiState, (cleanup) => {
-        moduleCleanups.push(cleanup);
-      }));
+      moduleCards.appendChild(
+        buildModuleCard(modDef, uiState, (cleanup) => {
+          moduleCleanups.push(cleanup);
+        }),
+      );
     }
   };
 
   const obs = new MutationObserver(() => {
     if (!section.isConnected) {
       obs.disconnect();
-      moduleCleanups.forEach(fn => fn());
+      moduleCleanups.forEach((fn) => fn());
       moduleCleanups = [];
     }
   });
   obs.observe(document.body, { childList: true, subtree: true });
 
-  customizeBtn.addEventListener('click', () => {
-    const showing = togglePanel.style.display !== 'none';
-    togglePanel.style.display = showing ? 'none' : 'flex';
+  customizeBtn.addEventListener("click", () => {
+    const showing = togglePanel.style.display !== "none";
+    togglePanel.style.display = showing ? "none" : "flex";
     if (!showing) renderTogglePanel();
   });
 
@@ -725,32 +932,38 @@ function buildModulesSection(uiState: UIState): HTMLElement {
 
 // ─── Compact helpers ──────────────────────────────────────────────────────────
 
-function makeChannelRow(icon: string, label: string): { el: HTMLElement; val: HTMLElement } {
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;';
-  const labelEl = document.createElement('span');
-  labelEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.4);white-space:nowrap;';
+function makeChannelRow(
+  icon: string,
+  label: string,
+): { el: HTMLElement; val: HTMLElement } {
+  const row = document.createElement("div");
+  row.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;gap:4px;";
+  const labelEl = document.createElement("span");
+  labelEl.style.cssText =
+    "font-size:11px;color:rgba(224,224,224,0.4);white-space:nowrap;";
   labelEl.textContent = `${icon} ${label}`;
-  const val = document.createElement('span');
-  val.style.cssText = 'font-size:12px;font-weight:600;color:#e0e0e0;';
-  val.textContent = '—';
+  const val = document.createElement("span");
+  val.style.cssText = "font-size:12px;font-weight:600;color:#e0e0e0;";
+  val.textContent = "—";
   row.append(labelEl, val);
   return { el: row, val };
 }
 
 function makeBar(pct: number, color: string): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'flex:1;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;min-width:30px;';
-  const fill = document.createElement('div');
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "flex:1;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;min-width:30px;";
+  const fill = document.createElement("div");
   fill.style.cssText = `height:100%;width:${Math.max(0, Math.min(100, pct))}%;background:${color};border-radius:3px;transition:width 0.4s;`;
   wrap.appendChild(fill);
   return wrap;
 }
 
 function hungerColor(pct: number): string {
-  if (pct >= 75) return '#4caf50';
-  if (pct >= 40) return '#ff9800';
-  return '#f44336';
+  if (pct >= 75) return "#4caf50";
+  if (pct >= 40) return "#ff9800";
+  return "#f44336";
 }
 
 // ─── Module card dispatcher ───────────────────────────────────────────────────
@@ -760,35 +973,39 @@ function buildModuleCard(
   _uiState: UIState,
   onCleanup: (fn: () => void) => void,
 ): HTMLElement {
-  const card = document.createElement('div');
+  const card = document.createElement("div");
   card.style.cssText = [
-    'padding:8px 10px',
-    'background:rgba(255,255,255,0.04)',
-    'border:1px solid rgba(143,130,255,0.12)',
-    'border-radius:6px',
-    'display:flex',
-    'flex-direction:column',
-    'gap:5px',
-    'overflow:hidden',
-  ].join(';');
+    "padding:8px 10px",
+    "background:rgba(255,255,255,0.04)",
+    "border:1px solid rgba(143,130,255,0.12)",
+    "border-radius:6px",
+    "display:flex",
+    "flex-direction:column",
+    "gap:5px",
+    "overflow:hidden",
+  ].join(";");
 
   const cleanups: Array<() => void> = [];
-  const reg = (fn: () => void): void => { cleanups.push(fn); };
+  const reg = (fn: () => void): void => {
+    cleanups.push(fn);
+  };
 
-  const titleRow = document.createElement('div');
-  titleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:18px;';
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;';
+  const titleRow = document.createElement("div");
+  titleRow.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:18px;";
+  const titleEl = document.createElement("div");
+  titleEl.style.cssText =
+    "font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;";
   titleEl.textContent = `${mod.icon} ${mod.label}`;
   titleRow.appendChild(titleEl);
   card.appendChild(titleRow);
 
-  if (mod.id === 'turtle-timer') buildTurtleTimerModule(card, titleRow, reg);
-  else if (mod.id === 'active-pets') buildActivePetsModule(card, titleRow, reg);
-  else if (mod.id === 'xp-near-max') buildXpNearMaxModule(card, reg);
-  else if (mod.id === 'next-restock') buildNextRestockModule(card, reg);
+  if (mod.id === "turtle-timer") buildTurtleTimerModule(card, titleRow, reg);
+  else if (mod.id === "active-pets") buildActivePetsModule(card, titleRow, reg);
+  else if (mod.id === "xp-near-max") buildXpNearMaxModule(card, reg);
+  else if (mod.id === "next-restock") buildNextRestockModule(card, reg);
 
-  onCleanup(() => cleanups.forEach(fn => fn()));
+  onCleanup(() => cleanups.forEach((fn) => fn()));
   return card;
 }
 
@@ -799,20 +1016,25 @@ function buildTurtleTimerModule(
   titleRow: HTMLElement,
   reg: (fn: () => void) => void,
 ): void {
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.textContent = '...';
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.textContent = "...";
   toggleBtn.style.cssText = [
-    'font-size:10px', 'padding:1px 8px', 'border-radius:3px', 'cursor:pointer',
-    'border:1px solid rgba(143,130,255,0.3)', 'background:rgba(143,130,255,0.08)',
-    'color:rgba(224,224,224,0.4)', 'flex-shrink:0',
-  ].join(';');
+    "font-size:10px",
+    "padding:1px 8px",
+    "border-radius:3px",
+    "cursor:pointer",
+    "border:1px solid rgba(143,130,255,0.3)",
+    "background:rgba(143,130,255,0.08)",
+    "color:rgba(224,224,224,0.4)",
+    "flex-shrink:0",
+  ].join(";");
   titleRow.appendChild(toggleBtn);
 
-  const plantRow = makeChannelRow('🌱', 'Plant');
-  const eggRow   = makeChannelRow('🥚', 'Egg');
-  const footerEl = document.createElement('div');
-  footerEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);';
+  const plantRow = makeChannelRow("🌱", "Plant");
+  const eggRow = makeChannelRow("🥚", "Egg");
+  const footerEl = document.createElement("div");
+  footerEl.style.cssText = "font-size:10px;color:rgba(224,224,224,0.3);";
   card.append(plantRow.el, eggRow.el, footerEl);
 
   let currentEnabled = false;
@@ -821,40 +1043,63 @@ function buildTurtleTimerModule(
   let eggEndTime: number | null = null;
   let eggRate = 1;
 
-  toggleBtn.addEventListener('click', () => setTurtleTimerEnabled(!currentEnabled));
+  toggleBtn.addEventListener("click", () =>
+    setTurtleTimerEnabled(!currentEnabled),
+  );
 
   const tick = (): void => {
     const now = Date.now();
     if (plantEndTime != null) {
       const adj = Math.max(0, plantEndTime - now) / Math.max(0.01, plantRate);
-      plantRow.val.textContent = adj > 0 ? formatCountdown(adj) : 'Ready';
-    } else { plantRow.val.textContent = '—'; }
+      plantRow.val.textContent = adj > 0 ? formatCountdown(adj) : "Ready";
+    } else {
+      plantRow.val.textContent = "—";
+    }
     if (eggEndTime != null) {
       const adj = Math.max(0, eggEndTime - now) / Math.max(0.01, eggRate);
-      eggRow.val.textContent = adj > 0 ? formatCountdown(adj) : 'Ready';
-    } else { eggRow.val.textContent = '—'; }
+      eggRow.val.textContent = adj > 0 ? formatCountdown(adj) : "Ready";
+    } else {
+      eggRow.val.textContent = "—";
+    }
   };
 
-  reg(onTurtleTimerState((snap) => {
-    currentEnabled = snap.enabled;
-    toggleBtn.textContent = snap.enabled ? 'ON' : 'OFF';
-    toggleBtn.style.color = snap.enabled ? '#4caf50' : 'rgba(224,224,224,0.4)';
-    toggleBtn.style.borderColor = snap.enabled ? 'rgba(76,175,80,0.4)' : 'rgba(143,130,255,0.3)';
-    if (!snap.enabled) {
-      plantEndTime = eggEndTime = null;
-      plantRow.val.textContent = eggRow.val.textContent = 'Off';
-      footerEl.textContent = 'Disabled'; return;
-    }
-    const getEnd = (ch: TurtleTimerChannel): number | null =>
-      (ch.focusSlot as (GardenSlotEstimate & { remainingMs: number | null; endTime?: number }) | null)?.endTime ?? null;
-    plantEndTime = getEnd(snap.plant); plantRate = snap.plant.effectiveRate ?? 1;
-    eggEndTime   = getEnd(snap.egg);   eggRate   = snap.egg.effectiveRate ?? 1;
-    footerEl.textContent = snap.availableTurtles > 0
-      ? `${snap.availableTurtles} turtle${snap.availableTurtles !== 1 ? 's' : ''} active`
-      : 'No turtles available';
-    tick();
-  }));
-  reg(visibleInterval('dashboard-turtle-module', tick, 1000));
+  reg(
+    onTurtleTimerState((snap) => {
+      currentEnabled = snap.enabled;
+      toggleBtn.textContent = snap.enabled ? "ON" : "OFF";
+      toggleBtn.style.color = snap.enabled
+        ? "#4caf50"
+        : "rgba(224,224,224,0.4)";
+      toggleBtn.style.borderColor = snap.enabled
+        ? "rgba(76,175,80,0.4)"
+        : "rgba(143,130,255,0.3)";
+      if (!snap.enabled) {
+        plantEndTime = eggEndTime = null;
+        plantRow.val.textContent = eggRow.val.textContent = "Off";
+        footerEl.textContent = "Disabled";
+        return;
+      }
+      const getEnd = (ch: TurtleTimerChannel): number | null =>
+        (
+          ch.focusSlot as
+            | (GardenSlotEstimate & {
+                remainingMs: number | null;
+                endTime?: number;
+              })
+            | null
+        )?.endTime ?? null;
+      plantEndTime = getEnd(snap.plant);
+      plantRate = snap.plant.effectiveRate ?? 1;
+      eggEndTime = getEnd(snap.egg);
+      eggRate = snap.egg.effectiveRate ?? 1;
+      footerEl.textContent =
+        snap.availableTurtles > 0
+          ? `${snap.availableTurtles} turtle${snap.availableTurtles !== 1 ? "s" : ""} active`
+          : "No turtles available";
+      tick();
+    }),
+  );
+  reg(visibleInterval("dashboard-turtle-module", tick, 1000));
 }
 
 // ─── Active Pets module ───────────────────────────────────────────────────────
@@ -864,58 +1109,83 @@ function buildActivePetsModule(
   titleRow: HTMLElement,
   reg: (fn: () => void) => void,
 ): void {
-  const feedAllBtn = document.createElement('button');
-  feedAllBtn.type = 'button';
-  feedAllBtn.textContent = '🍖 All';
+  const feedAllBtn = document.createElement("button");
+  feedAllBtn.type = "button";
+  feedAllBtn.textContent = "🍖 All";
   feedAllBtn.style.cssText = [
-    'font-size:10px', 'padding:1px 6px', 'border-radius:3px', 'cursor:pointer',
-    'border:1px solid rgba(143,130,255,0.3)', 'background:rgba(143,130,255,0.08)',
-    'color:#c8c0ff', 'flex-shrink:0',
-  ].join(';');
+    "font-size:10px",
+    "padding:1px 6px",
+    "border-radius:3px",
+    "cursor:pointer",
+    "border:1px solid rgba(143,130,255,0.3)",
+    "background:rgba(143,130,255,0.08)",
+    "color:#c8c0ff",
+    "flex-shrink:0",
+  ].join(";");
   titleRow.appendChild(feedAllBtn);
 
-  feedAllBtn.addEventListener('click', async () => {
-    feedAllBtn.disabled = true; feedAllBtn.textContent = '⏳';
+  feedAllBtn.addEventListener("click", async () => {
+    feedAllBtn.disabled = true;
+    feedAllBtn.textContent = "⏳";
     try {
-      const { feedAllPetsInstantly } = await import('../../features/instantFeed');
+      const { feedAllPetsInstantly } =
+        await import("../../features/instantFeed");
       await feedAllPetsInstantly(100, false);
-    } catch (err) { log('⚠️ Feed all failed', err); }
-    finally { feedAllBtn.disabled = false; feedAllBtn.textContent = '🍖 All'; }
+    } catch (err) {
+      log("⚠️ Feed all failed", err);
+    } finally {
+      feedAllBtn.disabled = false;
+      feedAllBtn.textContent = "🍖 All";
+    }
   });
 
-  const listEl = document.createElement('div');
-  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "display:flex;flex-direction:column;gap:4px;";
   card.appendChild(listEl);
 
   const render = (pets: ActivePetInfo[]): void => {
-    listEl.innerHTML = '';
+    listEl.innerHTML = "";
     if (!pets.length) {
-      const e = document.createElement('div');
-      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
-      e.textContent = 'No active pets'; listEl.appendChild(e); return;
+      const e = document.createElement("div");
+      e.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
+      e.textContent = "No active pets";
+      listEl.appendChild(e);
+      return;
     }
     for (const pet of pets.slice(0, 3)) {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
-      const nameEl = document.createElement('span');
-      nameEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      nameEl.textContent = pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:5px;";
+      const nameEl = document.createElement("span");
+      nameEl.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      nameEl.textContent =
+        pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
       const pct = pet.hungerPct ?? 0;
       const bar = makeBar(pct, hungerColor(pct));
-      const pctEl = document.createElement('span');
+      const pctEl = document.createElement("span");
       pctEl.style.cssText = `font-size:10px;color:${hungerColor(pct)};min-width:28px;text-align:right;`;
       pctEl.textContent = `${Math.round(pct)}%`;
-      const feedBtn = document.createElement('button');
-      feedBtn.type = 'button'; feedBtn.textContent = '🍖'; feedBtn.title = 'Feed';
-      feedBtn.style.cssText = 'font-size:11px;padding:0 4px;border-radius:3px;cursor:pointer;border:1px solid rgba(143,130,255,0.2);background:rgba(143,130,255,0.06);flex-shrink:0;line-height:1.5;';
+      const feedBtn = document.createElement("button");
+      feedBtn.type = "button";
+      feedBtn.textContent = "🍖";
+      feedBtn.title = "Feed";
+      feedBtn.style.cssText =
+        "font-size:11px;padding:0 4px;border-radius:3px;cursor:pointer;border:1px solid rgba(143,130,255,0.2);background:rgba(143,130,255,0.06);flex-shrink:0;line-height:1.5;";
       const idx = pet.slotIndex;
-      feedBtn.addEventListener('click', async () => {
-        feedBtn.disabled = true; feedBtn.textContent = '⏳';
+      feedBtn.addEventListener("click", async () => {
+        feedBtn.disabled = true;
+        feedBtn.textContent = "⏳";
         try {
-          const { feedPetInstantly } = await import('../../features/instantFeed');
+          const { feedPetInstantly } =
+            await import("../../features/instantFeed");
           await feedPetInstantly(idx, false);
-        } catch (err) { log('⚠️ Feed failed', err); }
-        finally { feedBtn.disabled = false; feedBtn.textContent = '🍖'; }
+        } catch (err) {
+          log("⚠️ Feed failed", err);
+        } finally {
+          feedBtn.disabled = false;
+          feedBtn.textContent = "🍖";
+        }
       });
       row.append(nameEl, bar, pctEl, feedBtn);
       listEl.appendChild(row);
@@ -931,40 +1201,50 @@ function buildXpNearMaxModule(
   card: HTMLElement,
   reg: (fn: () => void) => void,
 ): void {
-  const listEl = document.createElement('div');
-  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "display:flex;flex-direction:column;gap:4px;";
   card.appendChild(listEl);
 
   const render = (pets: ActivePetInfo[]): void => {
-    listEl.innerHTML = '';
+    listEl.innerHTML = "";
     // Compute pct-to-max for each pet; sort closest-to-max first
     type PetWithPct = { pet: ActivePetInfo; pct: number; str: number };
-    const withPct = pets.reduce<PetWithPct[]>((acc, p) => {
-      if (p.strength === null) return acc;
-      const maxStr = p.targetScale !== null && p.species !== null
-        ? calculateMaxStrength(p.targetScale, p.species)
-        : null;
-      const pct = maxStr !== null && maxStr > 0
-        ? Math.min(100, Math.round((p.strength / maxStr) * 100))
-        : null;
-      if (pct !== null) acc.push({ pet: p, pct, str: p.strength });
-      return acc;
-    }, []).sort((a, b) => b.pct - a.pct);
+    const withPct = pets
+      .reduce<PetWithPct[]>((acc, p) => {
+        if (p.strength === null) return acc;
+        const maxStr =
+          p.targetScale !== null && p.species !== null
+            ? calculateMaxStrength(p.targetScale, p.species)
+            : null;
+        const pct =
+          maxStr !== null && maxStr > 0
+            ? Math.min(100, Math.round((p.strength / maxStr) * 100))
+            : null;
+        if (pct !== null) acc.push({ pet: p, pct, str: p.strength });
+        return acc;
+      }, [])
+      .sort((a, b) => b.pct - a.pct);
 
     if (!withPct.length) {
-      const e = document.createElement('div');
-      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
-      e.textContent = 'No XP data'; listEl.appendChild(e); return;
+      const e = document.createElement("div");
+      e.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
+      e.textContent = "No XP data";
+      listEl.appendChild(e);
+      return;
     }
     for (const { pet, pct, str } of withPct.slice(0, 3)) {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
-      const nameEl = document.createElement('span');
-      nameEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      nameEl.textContent = pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
-      const clr = pct >= 95 ? '#8f82ff' : pct >= 80 ? '#ff9800' : 'rgba(255,255,255,0.5)';
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:5px;";
+      const nameEl = document.createElement("span");
+      nameEl.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      nameEl.textContent =
+        pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+      const clr =
+        pct >= 95 ? "#8f82ff" : pct >= 80 ? "#ff9800" : "rgba(255,255,255,0.5)";
       const bar = makeBar(pct, clr);
-      const pctEl = document.createElement('span');
+      const pctEl = document.createElement("span");
       pctEl.style.cssText = `font-size:10px;color:${clr};min-width:30px;text-align:right;white-space:nowrap;`;
       pctEl.textContent = `${pct}% (${Math.round(str)})`;
       row.append(nameEl, bar, pctEl);
@@ -982,55 +1262,75 @@ function buildNextRestockModule(
   reg: (fn: () => void) => void,
 ): void {
   const SHOP_ICONS: Record<string, string> = {
-    'seed': '🌱', 'egg': '🥚', 'decor': '🏡', 'weather': '🌤',
+    seed: "🌱",
+    egg: "🥚",
+    decor: "🏡",
+    weather: "🌤",
   };
   const SHOP_LABELS: Record<string, string> = {
-    'seed': 'Seeds', 'egg': 'Eggs', 'decor': 'Decor', 'weather': 'Weather',
+    seed: "Seeds",
+    egg: "Eggs",
+    decor: "Decor",
+    weather: "Weather",
   };
-  const SHOP_ORDER = ['seed', 'egg', 'decor', 'weather'];
+  const SHOP_ORDER = ["seed", "egg", "decor", "weather"];
 
-  const listEl = document.createElement('div');
-  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "display:flex;flex-direction:column;gap:4px;";
   card.appendChild(listEl);
 
   const shopSlots = new Map<string, { tsEl: HTMLElement; ts: number }>();
 
   const buildRows = (items: RestockItem[]): void => {
-    listEl.innerHTML = '';
+    listEl.innerHTML = "";
     shopSlots.clear();
     const now = Date.now();
     const byShop = new Map<string, RestockItem>();
     for (const it of items) {
       if (!it.shop_type || !it.estimated_next_timestamp) continue;
       const ex = byShop.get(it.shop_type);
-      if (!ex || it.estimated_next_timestamp < (ex.estimated_next_timestamp ?? Infinity)) {
+      if (
+        !ex ||
+        it.estimated_next_timestamp < (ex.estimated_next_timestamp ?? Infinity)
+      ) {
         byShop.set(it.shop_type, it);
       }
     }
     if (!byShop.size) {
-      const e = document.createElement('div');
-      e.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;';
-      e.textContent = 'No data'; listEl.appendChild(e); return;
+      const e = document.createElement("div");
+      e.style.cssText =
+        "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
+      e.textContent = "No data";
+      listEl.appendChild(e);
+      return;
     }
     for (const shopKey of SHOP_ORDER) {
       const it = byShop.get(shopKey);
       if (!it) continue;
       const ts = it.estimated_next_timestamp ?? 0;
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:5px;';
-      const iconEl = document.createElement('span');
-      iconEl.style.cssText = 'font-size:12px;flex-shrink:0;';
-      iconEl.textContent = SHOP_ICONS[shopKey] ?? '🏪';
-      const nameEl = document.createElement('span');
-      nameEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.6);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      nameEl.textContent = (it.item_id ?? shopKey).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      const prob = it.current_probability ?? (it as RestockItem & { appearance_rate?: number }).appearance_rate ?? 0;
-      const probEl = document.createElement('span');
-      probEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.4);flex-shrink:0;';
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:5px;";
+      const iconEl = document.createElement("span");
+      iconEl.style.cssText = "font-size:12px;flex-shrink:0;";
+      iconEl.textContent = SHOP_ICONS[shopKey] ?? "🏪";
+      const nameEl = document.createElement("span");
+      nameEl.style.cssText =
+        "font-size:10px;color:rgba(224,224,224,0.6);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      nameEl.textContent = (it.item_id ?? shopKey)
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      const prob =
+        it.current_probability ??
+        (it as RestockItem & { appearance_rate?: number }).appearance_rate ??
+        0;
+      const probEl = document.createElement("span");
+      probEl.style.cssText =
+        "font-size:10px;color:rgba(224,224,224,0.4);flex-shrink:0;";
       probEl.textContent = `${Math.round(prob * 100)}%`;
-      const tsEl = document.createElement('span');
-      tsEl.style.cssText = 'font-size:10px;color:#8f82ff;min-width:44px;text-align:right;flex-shrink:0;';
-      tsEl.textContent = ts > now ? formatCountdown(ts - now) : 'Soon™';
+      const tsEl = document.createElement("span");
+      tsEl.style.cssText =
+        "font-size:10px;color:#8f82ff;min-width:44px;text-align:right;flex-shrink:0;";
+      tsEl.textContent = ts > now ? formatCountdown(ts - now) : "Soon™";
       shopSlots.set(shopKey, { tsEl, ts });
       row.append(iconEl, nameEl, probEl, tsEl);
       listEl.appendChild(row);
@@ -1038,12 +1338,24 @@ function buildNextRestockModule(
   };
 
   buildRows(getRestockDataSync() ?? []);
-  void fetchRestockData().then(items => { if (items) buildRows(items); }).catch(() => { /* no-op */ });
+  void fetchRestockData()
+    .then((items) => {
+      if (items) buildRows(items);
+    })
+    .catch(() => {
+      /* no-op */
+    });
 
-  reg(visibleInterval('dashboard-restock-module', () => {
-    const now = Date.now();
-    for (const { tsEl, ts } of shopSlots.values()) {
-      tsEl.textContent = ts > now ? formatCountdown(ts - now) : 'Soon™';
-    }
-  }, 1000));
+  reg(
+    visibleInterval(
+      "dashboard-restock-module",
+      () => {
+        const now = Date.now();
+        for (const { tsEl, ts } of shopSlots.values()) {
+          tsEl.textContent = ts > now ? formatCountdown(ts - now) : "Soon™";
+        }
+      },
+      1000,
+    ),
+  );
 }

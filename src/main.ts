@@ -96,6 +96,7 @@ import { startStorageValueOverlay, stopStorageValueOverlay } from './ui/storageV
 import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/textureSwapper';
 import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 import { startShopRestockAlerts } from './ui/shopRestockAlerts';
+import { initGmExportBridge } from './utils/gmExportBridge';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1797,6 +1798,10 @@ async function initialize(): Promise<void> {
   // Delays 2 seconds, then pre-renders sprites in background batches
   scheduleWarmup(2000);
 }
+
+// Register the Starweaver Mod Manager GM-export bridge before initialisation so
+// it is available as early as possible, independent of async init timing.
+initGmExportBridge();
 
 // Initialize when script loads
 initialize().catch(error => {

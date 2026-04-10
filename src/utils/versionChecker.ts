@@ -1,12 +1,13 @@
-import { visibleInterval } from './timerManager';
+import { visibleInterval } from "./timerManager";
 
-const CURRENT_VERSION = '3.1.45'; // This should match package.json version
-export const GITHUB_URL = 'https://github.com/ryandt2305-cpu/QPM-GR';
-export const UPDATE_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
+const CURRENT_VERSION = "3.1.46"; // This should match package.json version
+export const GITHUB_URL = "https://github.com/ryandt2305-cpu/QPM-GR";
+export const UPDATE_URL =
+  "https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js";
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 type GmXhr = (input: {
-  method: 'GET';
+  method: "GET";
   url: string;
   headers?: Record<string, string>;
   onload: (response: { responseText: string; status: number }) => void;
@@ -24,14 +25,16 @@ const fetchText = async (url: string): Promise<string> => {
   if (gmXhr) {
     return new Promise((resolve, reject) => {
       gmXhr({
-        method: 'GET',
+        method: "GET",
         url,
-        headers: { 'Cache-Control': 'no-cache' },
+        headers: { "Cache-Control": "no-cache" },
         onload: (response) => {
           if (response.status >= 200 && response.status < 300) {
             resolve(response.responseText);
           } else {
-            reject(new Error(`GM request failed with status ${response.status}`));
+            reject(
+              new Error(`GM request failed with status ${response.status}`),
+            );
           }
         },
         onerror: (error) => reject(error),
@@ -39,12 +42,12 @@ const fetchText = async (url: string): Promise<string> => {
     });
   }
 
-  const res = await fetch(url, { cache: 'no-cache' });
+  const res = await fetch(url, { cache: "no-cache" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 };
 
-export type VersionStatus = 'current' | 'outdated' | 'checking' | 'error';
+export type VersionStatus = "current" | "outdated" | "checking" | "error";
 
 export interface VersionInfo {
   current: string;
@@ -57,7 +60,7 @@ export interface VersionInfo {
 let cached: VersionInfo = {
   current: CURRENT_VERSION,
   latest: null,
-  status: 'checking',
+  status: "checking",
   updateUrl: UPDATE_URL,
   checkedAt: null,
 };
@@ -71,13 +74,14 @@ function emit(): void {
     try {
       cb(cached);
     } catch (error) {
-      console.error('[QPM] Version listener error', error);
+      console.error("[QPM] Version listener error", error);
     }
   });
 }
 
 function compareSemver(a: string, b: string): number {
-  const toNums = (v: string) => v.split('.').map((p) => Number.parseInt(p, 10) || 0);
+  const toNums = (v: string) =>
+    v.split(".").map((p) => Number.parseInt(p, 10) || 0);
   const aa = toNums(a);
   const bb = toNums(b);
   const len = Math.max(aa.length, bb.length);
@@ -95,10 +99,12 @@ async function fetchRemoteVersion(): Promise<string | null> {
     const text = await fetchText(UPDATE_URL);
     const headerMatch = text.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
     if (headerMatch?.[1]) return headerMatch[1];
-    const constMatch = text.match(/const\s+CURRENT_VERSION\s*=\s*['"]([0-9.]+)['"]/);
+    const constMatch = text.match(
+      /const\s+CURRENT_VERSION\s*=\s*['"]([0-9.]+)['"]/,
+    );
     if (constMatch?.[1]) return constMatch[1];
   } catch (error) {
-    console.error('[QPM] Version fetch failed', error);
+    console.error("[QPM] Version fetch failed", error);
   }
   return null;
 }
@@ -113,7 +119,9 @@ export function getVersionInfo(): VersionInfo {
 /**
  * Register callback for version changes
  */
-export function onVersionChange(callback: (info: VersionInfo) => void): () => void {
+export function onVersionChange(
+  callback: (info: VersionInfo) => void,
+): () => void {
   listeners.add(callback);
   callback(getVersionInfo());
   return () => listeners.delete(callback);
@@ -123,7 +131,11 @@ export function startVersionChecker(): void {
   if (started) return;
   started = true;
   void checkForUpdates(true);
-  timerCleanup = visibleInterval('version-checker', () => void checkForUpdates(false), CHECK_INTERVAL_MS);
+  timerCleanup = visibleInterval(
+    "version-checker",
+    () => void checkForUpdates(false),
+    CHECK_INTERVAL_MS,
+  );
 }
 
 /**
@@ -137,7 +149,7 @@ export function getCurrentVersion(): string {
  * Check for updates and update cached status
  */
 export async function checkForUpdates(_force = false): Promise<VersionInfo> {
-  cached = { ...cached, status: 'checking' };
+  cached = { ...cached, status: "checking" };
   emit();
 
   const latest = await fetchRemoteVersion();
@@ -147,7 +159,7 @@ export async function checkForUpdates(_force = false): Promise<VersionInfo> {
     cached = {
       ...cached,
       latest: cached.latest,
-      status: 'error',
+      status: "error",
       checkedAt: now,
     };
     emit();
@@ -155,7 +167,7 @@ export async function checkForUpdates(_force = false): Promise<VersionInfo> {
   }
 
   const cmp = compareSemver(latest, CURRENT_VERSION);
-  const status: VersionStatus = cmp > 0 ? 'outdated' : 'current';
+  const status: VersionStatus = cmp > 0 ? "outdated" : "current";
   cached = {
     current: CURRENT_VERSION,
     latest,

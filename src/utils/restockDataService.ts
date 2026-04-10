@@ -30,8 +30,8 @@ const RESTOCK_LEGACY_QUERY = `select=${RESTOCK_LEGACY_COLUMNS.join(',')}`;
 const RESTOCK_URL = `${RESTOCK_ENDPOINT}?${RESTOCK_QUERY}`;
 const RESTOCK_URL_LEGACY = `${RESTOCK_ENDPOINT}?${RESTOCK_LEGACY_QUERY}`;
 
-// v3 key separates cache from the prior weather-inclusive payload.
-const CACHE_KEY = 'qpm.restockCache.v3';
+// v4 key forces a fresh fetch after the WateringCans/WateringCan DB dedup migration.
+const CACHE_KEY = 'qpm.restockCache.v4';
 const REFRESH_BUDGET_KEY = 'qpm.restock.refreshBudget.v1';
 const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool']);
 

@@ -21,6 +21,10 @@ import { visibleInterval } from '../../utils/timerManager';
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+{ version: '3.1.45', date: '2026-04', notes: [
+    'shop restock alerts: notification now dismisses after buy even when purchase atom confirmation lags past the 600ms window',
+    'shop restock data: fixed duplicate "Watering Can" / "Watering Cans" entries caused by inconsistent plural ID from game API (server migration + rebuild)',
+  ]},
 { version: '3.1.44', date: '2026-04', notes: [
     'fixed buy all button and dismiss button responsiveness',
   ]},

@@ -727,10 +727,10 @@ async function handleBuyAll(active: ActiveAlert): Promise<void> {
       active.statusEl.style.color = '#fde68a';
       active.statusEl.textContent = `Purchased ${result.confirmed}/${result.sent} confirmed${storedNote}`;
     } else {
-      active.statusEl.style.color = '#fca5a5';
-      active.statusEl.textContent = `Sent ${result.sent} - awaiting confirmation`;
-      setAlertBusy(active, false);
-      return;
+      // Atom update lagged past the confirmation window — trust the WS ok result.
+      // dismissedInStockKeys is cleared on stock-out so the alert will return next cycle if needed.
+      active.statusEl.style.color = '#fde68a';
+      active.statusEl.textContent = `Sent ${result.sent} — awaiting server`;
     }
 
     dismissedInStockKeys.add(active.model.key);

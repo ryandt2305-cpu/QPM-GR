@@ -30,6 +30,18 @@ import { visibleInterval } from "../../utils/timerManager";
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  {
+    version: "3.1.47",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: added item sprites to alert cards",
+      "shop restock alerts: compact card layout, quantity and status on one row",
+      "shop restock alerts: fixed CropCleanser and WateringCan cap checks by reading from the correct tool inventory source",
+      "shop restock alerts: purchases now stop immediately if the connection is lost",
+      "shop stock: added purchase count fallback from player data atom for more accurate remaining stock",
+      "internal: split 4 large files into focused modules (shopRestockAlerts, shopRestockWindow, restockDataService, shopStock)",
+    ],
+  },
   { version: "3.1.46", date: "2026-04", notes: ["Added GMExport Bridge"] },
   {
     version: "3.1.45",

@@ -3,6 +3,33 @@
 
 import { storage } from './storage';
 import { log } from './logger';
+import {
+  canonicalItemId,
+  getItemIdVariants,
+  deduplicateItems,
+  normalizeRestockItem,
+  extractItemsArray,
+} from './restockParser';
+import type {
+  RestockItem,
+  RestockRefreshBudgetState,
+  RestockDataUpdatedDetail,
+  FetchStatus,
+  CacheEntry,
+  RefreshBudgetEntry,
+  GmXhr,
+  FetchTextResult,
+} from './restockTypes';
+
+// Re-export parser utilities and types so existing callers work unchanged.
+export { canonicalItemId, getItemIdVariants } from './restockParser';
+export type {
+  RestockItem,
+  RestockRefreshBudgetState,
+  RestockDataUpdatedDetail,
+  FetchStatus,
+  GmXhr,
+} from './restockTypes';
 
 const RESTOCK_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_predictions';
 export const RESTOCK_ANON_KEY =
@@ -35,161 +62,15 @@ const CACHE_KEY = 'qpm.restockCache.v4';
 const REFRESH_BUDGET_KEY = 'qpm.restock.refreshBudget.v1';
 const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool']);
 
-// Known item ID aliases for deduplication (legacy → canonical).
-// Scoped to "shop_type:oldId" to avoid cross-shop confusion.
-const ITEM_ID_ALIASES: Record<string, string> = {
-  'seed:Dawnbinder': 'DawnbinderPod',
-  'seed:DawnCelestial': 'DawnbinderPod',
-  'seed:Moonbinder': 'MoonbinderPod',
-  'seed:MoonCelestial': 'MoonbinderPod',
-  'seed:Starweaver': 'StarweaverPod',
-};
-
-/** Resolve canonical item_id for known aliases within a shop_type. */
-export function canonicalItemId(shopType: string, itemId: string): string {
-  return ITEM_ID_ALIASES[`${shopType}:${itemId}`] ?? itemId;
-}
-
-/** Get all known item_id variants for a (shopType, itemId) pair. */
-export function getItemIdVariants(shopType: string, itemId: string): string[] {
-  const canonical = canonicalItemId(shopType, itemId);
-  const variants = new Set<string>([itemId, canonical]);
-  for (const [key, target] of Object.entries(ITEM_ID_ALIASES)) {
-    if (target === canonical) {
-      const alias = key.split(':')[1];
-      if (alias && key.startsWith(`${shopType}:`)) variants.add(alias);
-    }
-  }
-  return Array.from(variants);
-}
-
-function numOrNegInf(value: number | null | undefined): number {
-  return value == null || !Number.isFinite(value) ? Number.NEGATIVE_INFINITY : value;
-}
-
-function pickPreferredRow(a: RestockItem, b: RestockItem): RestockItem {
-  const aLast = numOrNegInf(a.last_seen);
-  const bLast = numOrNegInf(b.last_seen);
-  if (aLast !== bLast) return bLast > aLast ? b : a;
-
-  const aOcc = numOrNegInf(a.total_occurrences);
-  const bOcc = numOrNegInf(b.total_occurrences);
-  if (aOcc !== bOcc) return bOcc > aOcc ? b : a;
-
-  return b;
-}
-
-function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): RestockItem {
-  const preferred = pickPreferredRow(existing, incoming);
-  const fallback = preferred === existing ? incoming : existing;
-  const mergedLastSeen = Math.max(numOrNegInf(existing.last_seen), numOrNegInf(incoming.last_seen));
-  const mergedAlgorithmUpdatedAt = Math.max(
-    numOrNegInf(existing.algorithm_updated_at),
-    numOrNegInf(incoming.algorithm_updated_at),
-  );
-
-  return {
-    item_id: preferred.item_id,
-    shop_type: preferred.shop_type,
-    current_probability: preferred.current_probability ?? fallback.current_probability ?? null,
-    appearance_rate: preferred.appearance_rate ?? fallback.appearance_rate ?? null,
-    estimated_next_timestamp: preferred.estimated_next_timestamp ?? fallback.estimated_next_timestamp ?? null,
-    median_interval_ms: preferred.median_interval_ms ?? fallback.median_interval_ms ?? null,
-    last_seen: Number.isFinite(mergedLastSeen) ? mergedLastSeen : null,
-    average_quantity: preferred.average_quantity ?? fallback.average_quantity ?? null,
-    total_quantity: Math.max(numOrNegInf(existing.total_quantity), numOrNegInf(incoming.total_quantity)),
-    total_occurrences: Math.max(numOrNegInf(existing.total_occurrences), numOrNegInf(incoming.total_occurrences)),
-    algorithm_version: preferred.algorithm_version ?? fallback.algorithm_version ?? null,
-    algorithm_updated_at: Number.isFinite(mergedAlgorithmUpdatedAt) ? mergedAlgorithmUpdatedAt : null,
-  };
-}
-
-/** Merge duplicate items (same canonical ID + shop_type), preserving freshest last_seen data. */
-function deduplicateItems(items: RestockItem[]): RestockItem[] {
-  const map = new Map<string, RestockItem>();
-  for (const item of items) {
-    const canonical = canonicalItemId(item.shop_type, item.item_id);
-    const key = `${item.shop_type}:${canonical}`;
-    const normalized = canonical !== item.item_id ? { ...item, item_id: canonical } : item;
-    const existing = map.get(key);
-    map.set(key, existing ? mergeDuplicateItemRows(existing, normalized) : normalized);
-  }
-  return Array.from(map.values()).map((row) => ({
-    ...row,
-    total_quantity: Number.isFinite(row.total_quantity ?? NaN) ? row.total_quantity : null,
-    total_occurrences: Number.isFinite(row.total_occurrences ?? NaN) ? row.total_occurrences : null,
-  }));
-}
-
 export const RESTOCK_REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const RESTOCK_REFRESH_MAX = 5;
 export const RESTOCK_DATA_UPDATED_EVENT = 'qpm:restock-data-updated';
 
-// Keys to search when unwrapping the API response envelope.
-const ENVELOPE_KEYS = ['items', 'data', 'rows', 'results'] as const;
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
 
-export interface RestockItem {
-  item_id: string;
-  shop_type: string;
-  current_probability: number | null;
-  appearance_rate: number | null;
-  estimated_next_timestamp: number | null;
-  median_interval_ms: number | null;
-  last_seen: number | null;
-  average_quantity: number | null;
-  total_quantity: number | null;
-  total_occurrences: number | null;
-  algorithm_version: string | null;
-  algorithm_updated_at: number | null;
-}
-
-export interface RestockRefreshBudgetState {
-  max: number;
-  used: number;
-  remaining: number;
-  windowStartedAt: number;
-  resetAt: number;
-  blocked: boolean;
-  windowMs: number;
-}
-
-export interface RestockDataUpdatedDetail {
-  fetchedAt: number;
-  count: number;
-  items?: RestockItem[];
-}
-
-export type FetchStatus = 'idle' | 'fetching' | 'ok' | 'error';
-
-interface CacheEntry {
-  data: RestockItem[];
-  fetchedAt: number;
-}
-
-interface RefreshBudgetEntry {
-  used: number;
-  windowStartedAt: number;
-}
-
-export type GmXhr = (details: {
-  method: 'GET' | 'POST';
-  url: string;
-  data?: string;
-  headers?: Record<string, string>;
-  onload?: (res: { status: number; responseText: string }) => void;
-  onerror?: (err: unknown) => void;
-  ontimeout?: () => void;
-  timeout?: number;
-}) => void;
-
-interface FetchTextResult {
-  ok: boolean;
-  status: number;
-  text: string | null;
-  error: string | null;
-}
-
-function resolveGmXhr(): GmXhr | null {
+export function resolveGmXhr(): GmXhr | null {
   if (typeof GM_xmlhttpRequest === 'function') return GM_xmlhttpRequest as unknown as GmXhr;
   const gm = (globalThis as { GM?: { xmlHttpRequest?: GmXhr } }).GM;
   if (typeof gm?.xmlHttpRequest === 'function') return gm.xmlHttpRequest.bind(gm) as GmXhr;
@@ -315,71 +196,41 @@ async function webGet(
     const name = err instanceof Error ? err.name : '';
     const message = toErrorText(err);
     if (name === 'AbortError') {
-      return {
-        ok: false,
-        status: 0,
-        text: null,
-        error: `Timeout after ${timeoutMs}ms`,
-      };
+      return { ok: false, status: 0, text: null, error: `Timeout after ${timeoutMs}ms` };
     }
-    return {
-      ok: false,
-      status: 0,
-      text: null,
-      error: `Fetch error: ${message}`,
-    };
+    return { ok: false, status: 0, text: null, error: `Fetch error: ${message}` };
   } finally {
     globalThis.clearTimeout(timer);
   }
 }
 
-/** Convert a raw Supabase timestamp value to Unix ms regardless of format. */
-function toMs(v: unknown): number | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string' && v) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-    const d = new Date(v).getTime();
-    if (Number.isFinite(d)) return d;
-  }
-  return null;
-}
-
-/** Same as toMs but for duration/interval columns (ms). */
-function toMsDuration(v: unknown): number | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string') {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-/** Safely parse a float from a raw value (probability, rate, quantity). */
-function toFloat(v: unknown): number | null {
-  if (v === null || v === undefined) return null;
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
-  return Number.isFinite(n) ? n : null;
-}
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
 
 let fetchingPromise: Promise<RestockItem[]> | null = null;
 let fetchingIsForce = false;
 let weatherDisabledLogged = false;
 let invalidConfigLogged = false;
 
+// ---------------------------------------------------------------------------
+// Event emission
+// ---------------------------------------------------------------------------
+
 function emitRestockDataUpdated(detail: RestockDataUpdatedDetail): void {
   if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
   window.dispatchEvent(new CustomEvent<RestockDataUpdatedDetail>(RESTOCK_DATA_UPDATED_EVENT, { detail }));
 }
+
+// ---------------------------------------------------------------------------
+// Cache management
+// ---------------------------------------------------------------------------
 
 function sanitizeItems(items: RestockItem[]): RestockItem[] {
   const filtered = items.filter((item) => !!item.item_id && ALLOWED_SHOP_TYPES.has(item.shop_type));
   return deduplicateItems(filtered);
 }
 
-/** Load cache from storage (may be stale). */
 function readCache(): CacheEntry | null {
   const cached = storage.get<CacheEntry | null>(CACHE_KEY, null);
   if (!cached || !Array.isArray(cached.data)) return null;
@@ -401,18 +252,11 @@ function readRefreshBudgetRaw(): RefreshBudgetEntry | null {
 function normalizeRefreshBudget(now: number): { entry: RefreshBudgetEntry; changed: boolean } {
   const raw = readRefreshBudgetRaw();
   if (!raw || raw.windowStartedAt <= 0 || now - raw.windowStartedAt >= RESTOCK_REFRESH_WINDOW_MS) {
-    return {
-      entry: { used: 0, windowStartedAt: now },
-      changed: true,
-    };
+    return { entry: { used: 0, windowStartedAt: now }, changed: true };
   }
-
   const clampedUsed = Math.min(RESTOCK_REFRESH_MAX, Math.max(0, raw.used));
   return {
-    entry: {
-      used: clampedUsed,
-      windowStartedAt: raw.windowStartedAt,
-    },
+    entry: { used: clampedUsed, windowStartedAt: raw.windowStartedAt },
     changed: clampedUsed !== raw.used,
   };
 }
@@ -474,150 +318,20 @@ export function getItemProbability(item: RestockItem): number | null {
   return item.current_probability ?? item.appearance_rate ?? null;
 }
 
-// Fields present on any legitimate RestockItem row (snake_case and camelCase variants).
-const RESTOCK_ITEM_FIELDS = new Set([
-  'item_id',
-  'itemId',
-  'shop_type',
-  'shopType',
-  'estimated_next_timestamp',
-  'estimatedNextTimestamp',
-  'current_probability',
-  'currentProbability',
-  'appearance_rate',
-  'appearanceRate',
-  'base_rate',
-  'baseRate',
-  'median_interval_ms',
-  'medianIntervalMs',
-  'expected_interval_ms',
-  'expectedIntervalMs',
-  'averageIntervalMs',
-  'last_seen',
-  'lastSeen',
-  'average_quantity',
-  'averageQuantity',
-  'total_quantity',
-  'totalQuantity',
-  'total_occurrences',
-  'totalOccurrences',
-  'algorithm_version',
-  'algorithmVersion',
-  'algorithm_updated_at_ms',
-  'algorithmUpdatedAtMs',
-]);
-
-/** Return true if value looks like a RestockItem (has at least one known field). */
-function looksLikeRestockItem(v: unknown): boolean {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
-  return Object.keys(v as object).some((k) => RESTOCK_ITEM_FIELDS.has(k));
-}
-
-/**
- * Try extracting an array of RestockItems from a dict.
- * Filters out any non-object or non-RestockItem-like values (e.g. numeric metadata).
- */
-function dictToItems(val: unknown): RestockItem[] | null {
-  if (!val || typeof val !== 'object' || Array.isArray(val)) return null;
-  const items = Object.values(val as Record<string, unknown>).filter(looksLikeRestockItem);
-  return items.length > 0 ? (items as RestockItem[]) : null;
-}
-
-/**
- * Normalize a raw API object (camelCase or snake_case) to the RestockItem interface (snake_case).
- */
-function normalizeShopType(value: unknown): string {
-  const shopType = String(value ?? '').trim().toLowerCase();
-  if (shopType === 'seeds') return 'seed';
-  if (shopType === 'eggs') return 'egg';
-  if (shopType === 'decors') return 'decor';
-  if (shopType === 'tools') return 'tool';
-  return shopType;
-}
-
-function normalizeRestockItem(raw: Record<string, unknown>): RestockItem {
-  return {
-    item_id: String(raw.item_id ?? raw.itemId ?? ''),
-    shop_type: normalizeShopType(raw.shop_type ?? raw.shopType),
-    current_probability: toFloat(raw.current_probability ?? raw.currentProbability),
-    appearance_rate: toFloat(
-      raw.appearance_rate
-      ?? raw.appearanceRate
-      ?? raw.base_rate
-      ?? raw.baseRate
-    ),
-    estimated_next_timestamp: toMs(raw.estimated_next_timestamp ?? raw.estimatedNextTimestamp),
-    median_interval_ms: toMsDuration(
-      raw.median_interval_ms
-      ?? raw.medianIntervalMs
-      ?? raw.expected_interval_ms
-      ?? raw.expectedIntervalMs
-      ?? raw.averageIntervalMs
-    ),
-    last_seen: toMs(raw.last_seen ?? raw.lastSeen),
-    average_quantity: toFloat(raw.average_quantity ?? raw.averageQuantity),
-    total_quantity: toFloat(raw.total_quantity ?? raw.totalQuantity),
-    total_occurrences: toFloat(raw.total_occurrences ?? raw.totalOccurrences),
-    algorithm_version: typeof (raw.algorithm_version ?? raw.algorithmVersion) === 'string'
-      ? String(raw.algorithm_version ?? raw.algorithmVersion)
-      : null,
-    algorithm_updated_at: toMs(raw.algorithm_updated_at_ms ?? raw.algorithmUpdatedAtMs),
-  };
-}
-
-// Extra sub-keys to try when doing a nested pass.
-const NESTED_KEYS = [...ENVELOPE_KEYS, 'list', 'records', 'entries'] as const;
-
-/**
- * Walk a parsed JSON value looking for the first array of restock items.
- */
-function extractItemsArray(raw: unknown): RestockItem[] | null {
-  if (Array.isArray(raw)) return raw as RestockItem[];
-
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const obj = raw as Record<string, unknown>;
-
-  // First pass: check each envelope key at the top level - both array and dict formats.
-  for (const key of ENVELOPE_KEYS) {
-    const val = obj[key];
-    if (Array.isArray(val)) return val as RestockItem[];
-    const fromDict = dictToItems(val);
-    if (fromDict) return fromDict;
-  }
-
-  // Second pass: one level deeper.
-  for (const key of ENVELOPE_KEYS) {
-    const val = obj[key];
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
-      const nested = val as Record<string, unknown>;
-      for (const nk of NESTED_KEYS) {
-        const nval = nested[nk];
-        if (Array.isArray(nval)) return nval as RestockItem[];
-        const fromDict = dictToItems(nval);
-        if (fromDict) return fromDict;
-      }
-    }
-  }
-
-  // Last resort: treat the entire top-level object as a dict of items.
-  const fromRoot = dictToItems(obj);
-  if (fromRoot) return fromRoot;
-
-  return null;
-}
-
-/** Safe cache fallback - only returns the cached array, never a wrapped object. */
+/** Safe cache fallback — only returns the cached array, never a wrapped object. */
 function safeCacheFallback(cache: CacheEntry | null): RestockItem[] {
   return Array.isArray(cache?.data) ? sanitizeItems(cache.data) : [];
 }
 
-function withCacheBust(url: string, force: boolean): string {
-  if (force) {
-    // PostgREST treats unknown query params as filters and returns HTTP 400.
-    // Keep cache-busting header-only for force refresh.
-  }
+function withCacheBust(url: string, _force: boolean): string {
+  // PostgREST treats unknown query params as filters and returns HTTP 400.
+  // Keep cache-busting header-only for force refresh.
   return url;
 }
+
+// ---------------------------------------------------------------------------
+// Main fetch
+// ---------------------------------------------------------------------------
 
 /**
  * Fetch restock data from Supabase.
@@ -758,6 +472,10 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
     fetchingIsForce = false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Sync reads
+// ---------------------------------------------------------------------------
 
 /** Get stale-or-miss cached data synchronously (for dashboard use). */
 export function getRestockDataSync(): RestockItem[] | null {

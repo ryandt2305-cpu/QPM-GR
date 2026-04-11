@@ -33,6 +33,9 @@ export interface WebSocketSendResult {
 
 interface RoomConnection {
   sendMessage: (payload: unknown) => void;
+  ws?: WebSocket | null;
+  socket?: WebSocket | null;
+  currentWebSocket?: WebSocket | null;
 }
 
 interface PageWithRoomConnection extends Window {
@@ -70,6 +73,22 @@ function getRoomConnection(): RoomConnection | null {
 
 export function hasRoomConnection(): boolean {
   return getRoomConnection() !== null;
+}
+
+function getRoomSocket(connection: RoomConnection | null): WebSocket | null {
+  if (!connection) return null;
+  return connection.ws ?? connection.socket ?? connection.currentWebSocket ?? null;
+}
+
+export function isRoomSocketOpen(): boolean {
+  const connection = getRoomConnection();
+  if (!connection) return false;
+  const socket = getRoomSocket(connection);
+  if (!socket) {
+    // Some builds hide the socket field on the room connection; treat as unknown/open.
+    return true;
+  }
+  return socket.readyState === WebSocket.OPEN;
 }
 
 function getScopePath(): string[] {

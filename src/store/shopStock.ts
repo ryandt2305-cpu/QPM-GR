@@ -1,25 +1,33 @@
 // src/store/shopStock.ts
 // Normalized view of shop atom data and restock timers.
 
-import { readAtomValue, subscribeAtomValue } from '../core/atomRegistry';
-import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
+import { readAtomValue as readRegistryAtomValue, subscribeAtomValue } from '../core/atomRegistry';
+import { getAtomByLabel, readAtomValue as readJotaiAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
 import type {
-  ShopInventoryEntry,
-  ShopCategorySnapshot,
   ShopsAtomSnapshot,
   ShopPurchasesAtomSnapshot,
 } from '../types/gameAtoms';
 import { SHOP_CATEGORIES, type ShopCategory } from '../types/shops';
+import {
+  ATOM_KEY_BY_CATEGORY,
+  SHOP_PURCHASE_KEYS,
+  buildCategoryState,
+  extractCustomInventories,
+  extractMyDataShopPurchases,
+  hasPurchaseBucket,
+  type CustomInventoryMap,
+  type ShopPurchaseKey,
+  type ShopStockItem,
+  type ShopStockCategoryState,
+  type ShopStockState,
+} from './shopStockParsers';
+
+// Re-export types so existing importers of shopStock.ts continue to work.
+export type { ShopStockItem, ShopStockCategoryState, ShopStockState } from './shopStockParsers';
 
 const MY_USER_SLOT_ATOM_LABEL = 'myUserSlotAtom';
-
-const ATOM_KEY_BY_CATEGORY: Record<ShopCategory, 'seed' | 'egg' | 'tool' | 'decor'> = {
-  seeds: 'seed',
-  eggs: 'egg',
-  tools: 'tool',
-  decor: 'decor',
-};
+const MY_DATA_ATOM_LABEL = 'myDataAtom';
 
 const ITEM_TYPE_BY_CATEGORY: Record<ShopCategory, 'Seed' | 'Egg' | 'Tool' | 'Decor'> = {
   seeds: 'Seed',
@@ -28,50 +36,16 @@ const ITEM_TYPE_BY_CATEGORY: Record<ShopCategory, 'Seed' | 'Egg' | 'Tool' | 'Dec
   decor: 'Decor',
 };
 
-export interface ShopStockItem {
-  category: ShopCategory;
-  id: string;
-  label: string;
-  orderIndex: number;
-  initialStock: number | null;
-  currentStock: number | null;
-  remaining: number | null;
-  purchased: number;
-  canSpawn: boolean;
-  isAvailable: boolean;
-  priceCoins: number | null;
-  priceCredits: number | null;
-  quantityPerPurchase: number;
-  raw: ShopInventoryEntry;
-}
-
-export interface ShopStockCategoryState {
-  category: ShopCategory;
-  secondsUntilRestock: number | null;
-  nextRestockAt: number | null;
-  restockIntervalMs: number | null;
-  items: ShopStockItem[];
-  availableCount: number;
-  signature: string;
-  updatedAt: number;
-  raw: ShopCategorySnapshot | null;
-}
-
-export interface ShopStockState {
-  updatedAt: number;
-  categories: Record<ShopCategory, ShopStockCategoryState>;
-}
-
-type CustomInventoryMap = Record<string, { items: ShopInventoryEntry[] } | null> | null;
-
 const listeners = new Set<(state: ShopStockState) => void>();
 let shopsSnapshot: ShopsAtomSnapshot | null = null;
 let purchasesSnapshot: ShopPurchasesAtomSnapshot | null = null;
+let myDataPurchasesSnapshot: ShopPurchasesAtomSnapshot | null = null;
 let customInventories: CustomInventoryMap = null;
 let cachedState: ShopStockState = createEmptyState();
 let startPromise: Promise<void> | null = null;
 let shopsUnsubscribe: (() => void) | null = null;
 let purchasesUnsubscribe: (() => void) | null = null;
+let myDataPurchasesUnsubscribe: (() => void) | null = null;
 let customInventoriesUnsubscribe: (() => void) | null = null;
 
 function createEmptyState(): ShopStockState {
@@ -103,296 +77,41 @@ function notifyState(): void {
   }
 }
 
-function toNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === 'string') {
-    const match = value.match(/-?\d+(?:\.\d+)?/);
-    if (match) {
-      const parsed = Number(match[0]);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-  return null;
-}
-
-function toPositiveInteger(value: unknown): number | null {
-  const numeric = toNumber(value);
-  if (numeric == null) {
-    return null;
-  }
-  const rounded = Math.round(numeric);
-  return rounded > 0 ? rounded : null;
-}
-
-function deriveItemId(category: ShopCategory, entry: ShopInventoryEntry): string | null {
-  switch (category) {
-    case 'seeds':
-      return entry.species != null ? String(entry.species) : entry.id != null ? String(entry.id) : null;
-    case 'eggs':
-      return entry.eggId != null ? String(entry.eggId) : entry.id != null ? String(entry.id) : null;
-    case 'tools':
-      return entry.toolId != null ? String(entry.toolId) : entry.id != null ? String(entry.id) : null;
-    case 'decor':
-      return entry.decorId != null ? String(entry.decorId) : entry.id != null ? String(entry.id) : null;
-    default:
-      return entry.id != null ? String(entry.id) : null;
-  }
-}
-
-function deriveItemLabel(entry: ShopInventoryEntry): string {
-  const label =
-    entry.name ??
-    entry.displayName ??
-    entry.species ??
-    entry.petSpecies ??
-    entry.toolId ??
-    entry.decorId ??
-    entry.eggId ??
-    entry.id ??
-    'Item';
-  return String(label).trim();
-}
-
-function extractInitialStock(entry: ShopInventoryEntry): number | null {
-  const candidates = [
-    entry.initialStock,
-    entry.stock,
-    entry.availableStock,
-    entry.quantity,
-    entry.count,
-    entry.amount,
-  ];
-  for (const candidate of candidates) {
-    const numeric = toPositiveInteger(candidate);
-    if (numeric != null) {
-      return numeric;
-    }
-  }
-  if (entry.initialStock === 0) {
-    return 0;
-  }
-  return null;
-}
-
-function extractQuantityPerPurchase(entry: ShopInventoryEntry): number {
-  const candidates = [
-    entry.quantityPerPurchase,
-    entry.bundleSize,
-    entry.quantityPerClick,
-    entry.quantity,
-  ];
-  for (const candidate of candidates) {
-    const numeric = toPositiveInteger(candidate);
-    if (numeric != null) {
-      return numeric;
-    }
-  }
-  return 1;
-}
-
-function extractPrice(entry: ShopInventoryEntry): { coins: number | null; credits: number | null } {
-  const coinsCandidates = [entry.priceCoins, entry.coins, entry.price, entry.cost];
-  const creditsCandidates = [entry.priceCredits, entry.credits, entry.creditCost];
-  let coins: number | null = null;
-  let credits: number | null = null;
-  for (const candidate of coinsCandidates) {
-    const numeric = toPositiveInteger(candidate);
-    if (numeric != null) {
-      coins = numeric;
-      break;
-    }
-  }
-  for (const candidate of creditsCandidates) {
-    const numeric = toPositiveInteger(candidate);
-    if (numeric != null) {
-      credits = numeric;
-      break;
-    }
-  }
-  return { coins, credits };
-}
-
-function getPurchaseCount(category: ShopCategory, rawId: string, purchases: ShopPurchasesAtomSnapshot | null): number {
-  const key = ATOM_KEY_BY_CATEGORY[category];
-  const bucket = purchases?.[key]?.purchases;
-  if (!bucket || typeof bucket !== 'object') {
-    return 0;
-  }
-
-  const parseCount = (value: unknown): number | null => {
-    if (value == null) return null;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : null;
-  };
-
-  const normalizeId = (value: string): string => value.trim().toLowerCase();
-  const id = rawId.trim();
-  const candidates = new Set<string>();
-  if (id.length > 0) {
-    candidates.add(id);
-    // Some tool IDs are observed with inconsistent trailing "s" across atoms.
-    if (id.endsWith('s') && id.length > 1) {
-      candidates.add(id.slice(0, -1));
-    } else {
-      candidates.add(`${id}s`);
-    }
-  }
-
-  for (const candidate of candidates) {
-    const direct = parseCount(bucket[candidate]);
-    if (direct != null) {
-      return direct;
-    }
-  }
-
-  const numericKey = Number(rawId);
-  if (Number.isFinite(numericKey) && bucket[numericKey] != null && Number.isFinite(Number(bucket[numericKey]))) {
-    return Number(bucket[numericKey]);
-  }
-
-  if (candidates.size > 0) {
-    const normalizedCandidates = new Set<string>(Array.from(candidates).map(normalizeId));
-    for (const [bucketKey, bucketValue] of Object.entries(bucket)) {
-      if (!normalizedCandidates.has(normalizeId(bucketKey))) continue;
-      const parsed = parseCount(bucketValue);
-      if (parsed != null) {
-        return parsed;
-      }
-    }
-  }
-
-  return 0;
-}
-
-function computeRemaining(initialStock: number | null, purchased: number, canSpawn: boolean): number | null {
-  if (initialStock == null) {
-    return canSpawn ? null : 0;
-  }
-  const bought = Number.isFinite(purchased) ? Math.max(0, Math.round(purchased)) : 0;
-  const remaining = Math.max(0, initialStock - bought);
-  return canSpawn ? remaining : 0;
-}
-
-function extractCustomInventories(slotValue: unknown): CustomInventoryMap {
-  if (!slotValue || typeof slotValue !== 'object') return null;
-  const slot = slotValue as Record<string, unknown>;
-  const custom = slot.customRestockInventories;
-  if (!custom || typeof custom !== 'object') return null;
-  return custom as CustomInventoryMap;
-}
-
-function normalizeEntry(
-  category: ShopCategory,
-  entry: ShopInventoryEntry,
-  purchases: ShopPurchasesAtomSnapshot | null,
-  orderIndex: number,
-): ShopStockItem | null {
-  if (!entry || typeof entry !== 'object') {
+function getEffectivePurchasesSnapshot(): ShopPurchasesAtomSnapshot | null {
+  if (!purchasesSnapshot && !myDataPurchasesSnapshot) {
     return null;
   }
 
-  const id = deriveItemId(category, entry);
-  if (!id) {
-    return null;
-  }
-
-  const label = deriveItemLabel(entry);
-  const initialStock = extractInitialStock(entry);
-  const currentStock = toPositiveInteger(entry.stock ?? entry.availableStock);
-  const quantityPerPurchase = extractQuantityPerPurchase(entry);
-  const { coins: priceCoins, credits: priceCredits } = extractPrice(entry);
-  // NOTE: canSpawnHere was removed from the game in Nov 2025 update
-  // Treat all items as spawnable (default true for backward compatibility)
-  const canSpawn = entry.canSpawnHere !== false;
-  const purchased = getPurchaseCount(category, String(id), purchases);
-  let remaining = computeRemaining(initialStock, purchased, canSpawn);
-
-  if (currentStock != null) {
-    // Prefer the live stock snapshot when available; purchases data can lag restocks.
-    remaining = currentStock;
-  }
-
-  let isAvailable = false;
-  if (!canSpawn) {
-    isAvailable = false;
-  } else if (currentStock != null) {
-    isAvailable = currentStock > 0;
-  } else if (remaining != null) {
-    isAvailable = remaining > 0;
-  } else {
-    isAvailable = true;
-  }
-
-  return {
-    category,
-    id: String(id),
-    label,
-    orderIndex,
-    initialStock,
-    currentStock,
-    remaining,
-    purchased,
-    canSpawn,
-    isAvailable,
-    priceCoins,
-    priceCredits,
-    quantityPerPurchase,
-    raw: entry,
-  };
-}
-
-function normalizeCategory(
-  category: ShopCategory,
-  snapshot: ShopCategorySnapshot | null,
-  purchases: ShopPurchasesAtomSnapshot | null,
-): ShopStockCategoryState {
-  const now = Date.now();
-  const atomKey = ATOM_KEY_BY_CATEGORY[category];
-  const customCategoryInventory = customInventories?.[atomKey];
-  const inventory: ShopInventoryEntry[] = Array.isArray(customCategoryInventory?.items)
-    ? (customCategoryInventory!.items as ShopInventoryEntry[])
-    : Array.isArray(snapshot?.inventory) ? snapshot!.inventory : [];
-  const items: ShopStockItem[] = [];
-  inventory.forEach((entry, index) => {
-    const normalized = normalizeEntry(category, entry, purchases, index);
-    if (normalized) {
-      items.push(normalized);
+  const merged: ShopPurchasesAtomSnapshot = {};
+  let hasAny = false;
+  for (const key of SHOP_PURCHASE_KEYS) {
+    const typedKey = key as ShopPurchaseKey;
+    const primaryHas = hasPurchaseBucket(purchasesSnapshot, typedKey);
+    const fallbackHas = hasPurchaseBucket(myDataPurchasesSnapshot, typedKey);
+    if (primaryHas && purchasesSnapshot) {
+      merged[key] = purchasesSnapshot[key] ?? null;
+      hasAny = true;
+      continue;
     }
-  });
-
-  const availableCount = items.filter((item) => item.isAvailable).length;
-  const signature = items
-    .map((item) => `${item.id}:${item.remaining ?? 'x'}:${item.currentStock ?? 'x'}:${item.purchased}`)
-    .join('|');
-
-  const secondsUntilRestock = typeof snapshot?.secondsUntilRestock === 'number' ? snapshot!.secondsUntilRestock! : null;
-  const nextRestockAt = typeof snapshot?.nextRestockAt === 'number' ? snapshot!.nextRestockAt! : null;
-  const restockIntervalMs = typeof snapshot?.restockIntervalMs === 'number' ? snapshot!.restockIntervalMs! : null;
-
-  return {
-    category,
-    secondsUntilRestock,
-    nextRestockAt,
-    restockIntervalMs,
-    items,
-    availableCount,
-    signature,
-    updatedAt: now,
-    raw: snapshot ?? null,
-  };
+    if (fallbackHas && myDataPurchasesSnapshot) {
+      merged[key] = myDataPurchasesSnapshot[key] ?? null;
+      hasAny = true;
+      continue;
+    }
+    merged[key] = null;
+  }
+  return hasAny ? merged : null;
 }
 
 function rebuildState(): void {
   const now = Date.now();
   const categories = Object.create(null) as Record<ShopCategory, ShopStockCategoryState>;
+  const effectivePurchases = getEffectivePurchasesSnapshot();
   for (const category of SHOP_CATEGORIES) {
     const atomKey = ATOM_KEY_BY_CATEGORY[category];
     const snapshot = shopsSnapshot?.[atomKey] ?? null;
-    categories[category] = normalizeCategory(category, snapshot, purchasesSnapshot);
+    const customInventory = customInventories?.[atomKey] ?? null;
+    categories[category] = buildCategoryState(category, snapshot, effectivePurchases, customInventory);
   }
   cachedState = { updatedAt: now, categories };
   notifyState();
@@ -404,17 +123,28 @@ export async function startShopStockStore(): Promise<void> {
   }
   startPromise = (async () => {
     try {
-      shopsSnapshot = await readAtomValue('shops');
+      shopsSnapshot = await readRegistryAtomValue('shops');
     } catch (error) {
       log('⚠️ Failed to read shops atom initially', error);
       shopsSnapshot = null;
     }
 
     try {
-      purchasesSnapshot = await readAtomValue('shopPurchases');
+      purchasesSnapshot = await readRegistryAtomValue('shopPurchases');
     } catch (error) {
       log('⚠️ Failed to read shop purchases atom initially', error);
       purchasesSnapshot = null;
+    }
+
+    const myDataAtomRef = getAtomByLabel(MY_DATA_ATOM_LABEL);
+    if (myDataAtomRef) {
+      try {
+        const myDataValue = await readJotaiAtomValue<unknown>(myDataAtomRef);
+        myDataPurchasesSnapshot = extractMyDataShopPurchases(myDataValue);
+      } catch (error) {
+        log('⚠️ Failed to read myDataAtom shop purchases initially', error);
+        myDataPurchasesSnapshot = null;
+      }
     }
 
     rebuildState();
@@ -435,6 +165,17 @@ export async function startShopStockStore(): Promise<void> {
       });
     } catch (error) {
       log('⚠️ Failed to subscribe to shop purchases atom', error);
+    }
+
+    if (myDataAtomRef) {
+      try {
+        myDataPurchasesUnsubscribe = await subscribeAtom<unknown>(myDataAtomRef, (value) => {
+          myDataPurchasesSnapshot = extractMyDataShopPurchases(value);
+          rebuildState();
+        });
+      } catch (error) {
+        log('⚠️ Failed to subscribe to myDataAtom shop purchases', error);
+      }
     }
 
     const myUserSlotAtomRef = getAtomByLabel(MY_USER_SLOT_ATOM_LABEL);
@@ -463,14 +204,19 @@ export function stopShopStockStore(): void {
     purchasesUnsubscribe?.();
   } catch {}
   try {
+    myDataPurchasesUnsubscribe?.();
+  } catch {}
+  try {
     customInventoriesUnsubscribe?.();
   } catch {}
   shopsUnsubscribe = null;
   purchasesUnsubscribe = null;
+  myDataPurchasesUnsubscribe = null;
   customInventoriesUnsubscribe = null;
   startPromise = null;
   shopsSnapshot = null;
   purchasesSnapshot = null;
+  myDataPurchasesSnapshot = null;
   customInventories = null;
   cachedState = createEmptyState();
 }

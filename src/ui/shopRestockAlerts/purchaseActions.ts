@@ -33,6 +33,7 @@ import {
   captureOwnershipBaseline,
   clearPendingOwnershipConfirmation,
   schedulePendingStaleNotice,
+  scheduleMaxConfirmationTimeout,
   processPendingOwnershipConfirmations,
   debugLog,
   debugLogError,
@@ -496,6 +497,7 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
       confirmed: 0,
       staleNoticeTimerId: null,
       staleNoticeShown: false,
+      maxTimeoutTimerId: null,
       autoStoreInFlight: false,
       autoStoreFinalMoveRequested: false,
       autoStoreStorageId: autoStoreTarget?.storageId ?? null,
@@ -518,6 +520,7 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
     active.statusEl.textContent = `Requested ${result.sent} - waiting for inventory confirmation`;
     setAlertBusy(active, false);
     schedulePendingStaleNotice(active.model.key);
+    scheduleMaxConfirmationTimeout(active.model.key);
     processPendingOwnershipConfirmations();
   } catch (error) {
     log('[ShopRestockAlerts] Buy-all failed', error);

@@ -16,6 +16,8 @@ export const BUY_SEND_DELAY_MS          = 100;
 export const BUY_ACTION_THROTTLE_MS     = 80;
 export const OWNERSHIP_BASELINE_WAIT_MS = 1_500;
 export const OWNERSHIP_STALE_NOTICE_MS  = 10_000;
+export const OWNERSHIP_MAX_CONFIRMATION_MS = 45_000;
+export const SOCKET_BIND_POLL_MS           = 500;
 export const MY_DATA_ATOM_LABEL             = 'myDataAtom';
 export const MY_TOOL_INVENTORY_ATOM_LABEL   = 'myToolInventoryAtom';
 export const SEED_SILO_STORAGE_ID     = 'seedsilo';
@@ -83,6 +85,7 @@ export interface PendingOwnershipConfirmation {
   confirmed: number;
   staleNoticeTimerId: number | null;
   staleNoticeShown: boolean;
+  maxTimeoutTimerId: number | null;
   autoStoreInFlight: boolean;
   autoStoreFinalMoveRequested: boolean;
   autoStoreStorageId: string | null;

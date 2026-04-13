@@ -31,6 +31,14 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.48",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: added 45s hard timeout for stuck purchase confirmations",
+      "shop restock alerts: socket close now immediately fails pending purchases so they can be retried",
+    ],
+  },
+  {
     version: "3.1.47",
     date: "2026-04",
     notes: [

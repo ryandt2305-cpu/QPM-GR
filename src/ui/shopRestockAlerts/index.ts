@@ -7,12 +7,14 @@ import { onSpritesReady } from '../../sprite-v2/compat';
 import { getShopStockState, onShopStock, startShopStockStore } from '../../store/shopStock';
 import { onInventoryChange, startInventoryStore } from '../../store/inventory';
 import { getAtomByLabel, subscribeAtom } from '../../core/jotaiBridge';
+import { pageWindow } from '../../core/pageContext';
 import {
   DISMISSED_CYCLES_KEY,
   ALERT_STYLE_ID,
   MY_DATA_ATOM_LABEL,
   MY_TOOL_INVENTORY_ATOM_LABEL,
   TRACKED_UPDATED_EVENT,
+  SOCKET_BIND_POLL_MS,
 } from './types';
 import {
   alertState,
@@ -28,6 +30,7 @@ import {
 } from './alertState';
 import {
   clearPendingOwnershipConfirmation,
+  failAllPendingConfirmations,
   debugLog,
   handleInventorySnapshot,
   handleMyDataSnapshot,
@@ -35,6 +38,43 @@ import {
 } from './ownershipTracker';
 import { processShopStock, loadDismissedCycles } from './stockProcessor';
 import { applyAlertSprite, removeAlert } from './alertDom';
+
+// ---------------------------------------------------------------------------
+// Socket close detection
+// ---------------------------------------------------------------------------
+
+interface PageWithRoomConnection extends Window {
+  MagicCircle_RoomConnection?: { ws?: WebSocket; socket?: WebSocket; currentWebSocket?: WebSocket };
+}
+
+let boundSocket: WebSocket | null = null;
+
+function getAlertRoomSocket(): WebSocket | null {
+  const connection = (pageWindow as PageWithRoomConnection).MagicCircle_RoomConnection;
+  if (!connection) return null;
+  return connection.ws ?? connection.socket ?? connection.currentWebSocket ?? null;
+}
+
+function handleAlertSocketClose(): void {
+  if (pendingOwnershipConfirmations.size === 0) return;
+  debugLog('Socket close detected — failing all pending confirmations');
+  failAllPendingConfirmations('Connection lost \u2014 retry purchase');
+}
+
+function bindAlertSocketIfNeeded(): void {
+  const socket = getAlertRoomSocket();
+  if (!socket || socket === boundSocket) return;
+  detachAlertSocketListener();
+  boundSocket = socket;
+  boundSocket.addEventListener('close', handleAlertSocketClose);
+  debugLog('Bound alert socket close listener');
+}
+
+function detachAlertSocketListener(): void {
+  if (!boundSocket) return;
+  boundSocket.removeEventListener('close', handleAlertSocketClose);
+  boundSocket = null;
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -125,6 +165,9 @@ export function startShopRestockAlerts(): void {
       processShopStock(getShopStockState());
     };
     window.addEventListener(TRACKED_UPDATED_EVENT, alertState.trackedChangedHandler as EventListener);
+
+    bindAlertSocketIfNeeded();
+    alertState.socketPollTimer = window.setInterval(bindAlertSocketIfNeeded, SOCKET_BIND_POLL_MS);
   } catch (error) {
     alertState.started = false;
     log('[ShopRestockAlerts] start failed', error);
@@ -150,6 +193,11 @@ export function stopShopRestockAlerts(): void {
     window.removeEventListener(TRACKED_UPDATED_EVENT, alertState.trackedChangedHandler as EventListener);
     alertState.trackedChangedHandler = null;
   }
+  if (alertState.socketPollTimer != null) {
+    clearInterval(alertState.socketPollTimer);
+    alertState.socketPollTimer = null;
+  }
+  detachAlertSocketListener();
 
   dismissedInStockKeys.clear();
   dismissedCyclesByKey.clear();

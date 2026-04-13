@@ -9,6 +9,7 @@ import {
   ALERT_SUCCESS_HIDE_MS,
   OWNERSHIP_BASELINE_WAIT_MS,
   OWNERSHIP_STALE_NOTICE_MS,
+  OWNERSHIP_MAX_CONFIRMATION_MS,
   SEED_SILO_STORAGE_ID,
   DECOR_SHED_STORAGE_ID,
   type RestockShopType,
@@ -383,6 +384,7 @@ export function clearPendingOwnershipConfirmation(key: string): void {
     storedInTargetStorage: pending.storedInTargetStorage,
   });
   if (pending.staleNoticeTimerId != null) window.clearTimeout(pending.staleNoticeTimerId);
+  if (pending.maxTimeoutTimerId != null) window.clearTimeout(pending.maxTimeoutTimerId);
   pendingOwnershipConfirmations.delete(key);
 }
 
@@ -409,6 +411,44 @@ export function schedulePendingStaleNotice(key: string): void {
       currentDelta: readOwnershipDelta(key, latest.baseline),
     });
   }, OWNERSHIP_STALE_NOTICE_MS);
+}
+
+export function failPendingConfirmation(key: string, reason: string): void {
+  const pending = pendingOwnershipConfirmations.get(key);
+  if (!pending) return;
+  debugLog('Failing pending confirmation', { key, reason, sent: pending.sent, confirmed: pending.confirmed });
+  clearPendingOwnershipConfirmation(key);
+  const active = activeAlerts.get(key);
+  if (!active) return;
+  setAlertPendingConfirmation(active, false);
+  active.statusEl.style.color = '#fca5a5';
+  active.statusEl.textContent = reason;
+  window.setTimeout(() => {
+    const current = activeAlerts.get(key);
+    if (!current) return;
+    if (current.busy || current.pendingConfirmation) return;
+    current.statusEl.style.color = 'rgba(200,192,255,0.72)';
+    current.statusEl.textContent = 'Ready to buy';
+  }, 4_000);
+}
+
+export function scheduleMaxConfirmationTimeout(key: string): void {
+  const pending = pendingOwnershipConfirmations.get(key);
+  if (!pending) return;
+  if (pending.maxTimeoutTimerId != null) window.clearTimeout(pending.maxTimeoutTimerId);
+  pending.maxTimeoutTimerId = window.setTimeout(() => {
+    const latest = pendingOwnershipConfirmations.get(key);
+    if (!latest) return;
+    latest.maxTimeoutTimerId = null;
+    failPendingConfirmation(key, `Purchase timed out (${latest.confirmed}/${latest.sent} confirmed)`);
+  }, OWNERSHIP_MAX_CONFIRMATION_MS);
+}
+
+export function failAllPendingConfirmations(reason: string): void {
+  if (pendingOwnershipConfirmations.size === 0) return;
+  for (const key of Array.from(pendingOwnershipConfirmations.keys())) {
+    failPendingConfirmation(key, reason);
+  }
 }
 
 export function processPendingOwnershipConfirmations(): void {

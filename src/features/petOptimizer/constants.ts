@@ -75,6 +75,16 @@ export const TIME_FAMILY_KEYS = new Set([
   'hungerboost',
 ]);
 
+// Abilities whose value is exclusively tied to the egg-hatching outcome (not continuous play).
+// These should only support each other, never continuous/per-hour anchors.
+// Mirrored from HATCH_TRIO_FAMILY_KEYS in petCompareEngine.ts.
+export const HATCH_TRIO_BROAD_ROLE_KEYS = new Set([
+  'petmutationboost',
+  'petageboost',
+  'pethatchsizeboost',
+  'doublehatch',
+]);
+
 export const RAINBOW_TIME_UPLIFT_BASE: Record<'early' | 'mid' | 'late', number> = {
   early: 3,
   mid: 6,

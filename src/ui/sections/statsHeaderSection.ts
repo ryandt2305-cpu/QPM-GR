@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.49",
+    date: "2026-04",
+    notes: [
+      "pet optimizer: fix Max Strength Boost (hatch-trio) incorrectly boosting XP Boost slot-efficiency scores via support-family bonus",
+    ],
+  },
+  {
     version: "3.1.48",
     date: "2026-04",
     notes: [

@@ -1,5 +1,6 @@
 import {
   GRANTER_ANCHOR_PENALTY_CAP,
+  HATCH_TRIO_BROAD_ROLE_KEYS,
   SLOT_BONUS_CAP,
   SLOT_SUPPORT_WEIGHTS,
 } from '../constants';
@@ -87,6 +88,15 @@ function buildSupportCandidatesByBroadRole(
     if (entry.family.broadRoleFamilyKey === anchor.family.broadRoleFamilyKey) continue;
     if (anchorIsColorGranter && isMutationGranterFamily(entry.family.broadRoleFamilyKey)) continue;
     if (anchorIsColorGranter && entry.family.broadRoleFamilyKey === 'produceeater') continue;
+
+    // Hatch-trio abilities (pethatchsizeboost, petmutationboost, petageboost, doublehatch) only
+    // support each other — they must not boost continuous/per-hour anchors (e.g. petxpboost) and
+    // vice versa. Without this guard, Max Strength Boost II (tier 2) trivially passes
+    // isMeaningfulSupportFamily and inflates XP Boost slot-efficiency scores.
+    const anchorIsHatchTrio = HATCH_TRIO_BROAD_ROLE_KEYS.has(anchor.family.broadRoleFamilyKey);
+    const entryIsHatchTrio = HATCH_TRIO_BROAD_ROLE_KEYS.has(entry.family.broadRoleFamilyKey);
+    if (anchorIsHatchTrio !== entryIsHatchTrio) continue;
+
     if (!isMeaningfulSupportFamily(entry.family, entry.adjustedStanding)) continue;
 
     const existing = bestByBroadRole.get(entry.family.broadRoleFamilyKey);

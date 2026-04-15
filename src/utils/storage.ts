@@ -89,6 +89,8 @@ const QPM_STORAGE_KEYS = [
   'qpm.restock.dismissedCycles.v1',
   'qpm.restock.detailWindows.v1',
   'qpm.restock.detailScale.v1',
+  'qpm.restock.soundConfig.v1',
+  'qpm.restock.customSounds.v1',
   'qpm.dashboardModules',
 
   // Pet Optimizer

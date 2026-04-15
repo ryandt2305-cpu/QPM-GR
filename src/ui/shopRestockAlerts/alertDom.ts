@@ -20,6 +20,8 @@ import {
 import { debugLog, toCanonicalKey, clearPendingOwnershipConfirmation } from './ownershipTracker';
 import { handleBuyAll } from './purchaseActions';
 import { markDismissedCycle } from './stockProcessor';
+import { getSoundConfig, getCustomSounds, DEFAULT_LOOP_INTERVAL_MS } from './soundConfig';
+import { playSound, playCustomSound, startLoop, stopLoop, isLooping, isBuiltinSound } from './soundEngine';
 
 // ---------------------------------------------------------------------------
 // Sprite resolution
@@ -142,6 +144,8 @@ export function ensureAlertStyles(): void {
     '.qpm-restock-alert__close{border:none;background:none;color:rgba(229,231,235,0.7);font-size:16px;line-height:1;cursor:pointer;padding:0 2px;}',
     '.qpm-restock-alert__close:hover{color:#ffffff;}',
     '.qpm-restock-alert__btn:disabled,.qpm-restock-alert__close:disabled{opacity:0.55;cursor:default;}',
+    '.qpm-restock-alert__mute{border:none;background:none;color:rgba(229,231,235,0.6);font-size:14px;line-height:1;cursor:pointer;padding:2px 4px;border-radius:4px;flex-shrink:0;}',
+    '.qpm-restock-alert__mute:hover{color:#fff;background:rgba(255,255,255,0.08);}',
   ].join('');
   document.head.appendChild(style);
 }
@@ -166,6 +170,7 @@ export function removeAlertRootIfEmpty(): void {
 
 export function removeAlert(key: string): void {
   clearPendingOwnershipConfirmation(key);
+  stopLoop(key);
   const active = activeAlerts.get(key);
   if (!active) return;
   debugLog('Removing alert', {
@@ -196,6 +201,8 @@ export function setAlertBusy(active: ActiveAlert, busy: boolean): void {
   active.buyBtn.disabled = busy || active.pendingConfirmation;
   active.dismissBtn.disabled = busy;
   active.closeBtn.disabled = busy;
+  // Stop looping sound when purchase starts
+  if (busy) stopLoop(active.model.key);
 }
 
 export function setAlertPendingConfirmation(active: ActiveAlert, pending: boolean): void {
@@ -209,6 +216,16 @@ export function setAlertPendingConfirmation(active: ActiveAlert, pending: boolea
 export function updateAlertQuantity(active: ActiveAlert, quantity: number): void {
   active.model.quantity = quantity;
   active.qtyEl.textContent = `${quantity} available`;
+}
+
+// ---------------------------------------------------------------------------
+// Mute button icon helper
+// ---------------------------------------------------------------------------
+
+function updateMuteButtonIcon(btn: HTMLButtonElement, itemKey: string): void {
+  const looping = isLooping(itemKey);
+  btn.textContent = looping ? '\uD83D\uDD0A' : '\uD83D\uDD07'; // 🔊 / 🔇
+  btn.title = looping ? 'Mute sound' : 'Unmute sound';
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +293,15 @@ export function createAlert(model: AlertModel): ActiveAlert {
   dismissBtn.type = 'button';
   dismissBtn.className = 'qpm-restock-alert__btn qpm-restock-alert__btn--ghost';
   dismissBtn.textContent = 'Dismiss';
-  actions.append(buyBtn, dismissBtn);
+  // Mute button (only shown when sound config exists)
+  const soundCfg = getSoundConfig(model.key);
+  const muteBtn = document.createElement('button');
+  muteBtn.type = 'button';
+  muteBtn.className = 'qpm-restock-alert__mute';
+  muteBtn.title = 'Mute sound';
+  muteBtn.style.display = soundCfg ? '' : 'none';
+
+  actions.append(buyBtn, muteBtn, dismissBtn);
 
   card.append(top, qtyRow, actions);
   card.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
@@ -294,10 +319,45 @@ export function createAlert(model: AlertModel): ActiveAlert {
     buyBtn,
     dismissBtn,
     closeBtn,
+    muteBtn,
     busy: false,
     pendingConfirmation: false,
   };
   applyAlertSprite(active, model);
+
+  // Trigger sound on alert creation
+  if (soundCfg) {
+    const isCustom = !isBuiltinSound(soundCfg.soundId);
+    const customDataUrl = isCustom ? getCustomSounds()[soundCfg.soundId]?.dataUrl : undefined;
+
+    // Play immediately
+    if (isCustom && customDataUrl) {
+      void playCustomSound(customDataUrl, soundCfg.volume);
+    } else {
+      void playSound(soundCfg.soundId, soundCfg.volume);
+    }
+
+    // Start loop if configured
+    if (soundCfg.mode === 'loop') {
+      startLoop(model.key, soundCfg.soundId, soundCfg.volume, isCustom, customDataUrl, soundCfg.intervalMs ?? DEFAULT_LOOP_INTERVAL_MS);
+    }
+  }
+  updateMuteButtonIcon(muteBtn, model.key);
+
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isLooping(model.key)) {
+      stopLoop(model.key);
+    } else {
+      const cfg = getSoundConfig(model.key);
+      if (cfg && cfg.mode === 'loop') {
+        const custom = !isBuiltinSound(cfg.soundId);
+        const dataUrl = custom ? getCustomSounds()[cfg.soundId]?.dataUrl : undefined;
+        startLoop(model.key, cfg.soundId, cfg.volume, custom, dataUrl, cfg.intervalMs ?? DEFAULT_LOOP_INTERVAL_MS);
+      }
+    }
+    updateMuteButtonIcon(muteBtn, model.key);
+  });
 
   dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); dismissAlertForCurrentStock(model.key, model.stockCycleId); });
   closeBtn.addEventListener('click',   (e) => { e.stopPropagation(); dismissAlertForCurrentStock(model.key, model.stockCycleId); });

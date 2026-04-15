@@ -1,6 +1,6 @@
 import type { TurtleTimerState, TurtleTimerChannel } from '../features/turtleTimer.ts';
 import type { UIState } from './panelState';
-import { GROWTH_MINUTES_PER_PROC, formatDurationPretty, formatRatePretty, formatHungerPretty, createEditablePetValue, formatPercentPretty, formatFeedsPerHour, formatMinutesWithUnit, formatMinutesPerHour, formatCompletionTime } from './panelHelpers';
+import { formatDurationPretty, formatRatePretty, formatHungerPretty, createEditablePetValue, formatPercentPretty, formatFeedsPerHour, formatMinutesWithUnit, formatMinutesPerHour, formatCompletionTime } from './panelHelpers';
 import { renderCompactPetSprite } from '../utils/petCardRenderer';
 
 export interface TurtleTimerUIConfig {
@@ -56,12 +56,7 @@ export function computeTimingSpread(channel: TurtleTimerChannel): {
   let varianceMinutes = 0;
 
   for (const entry of channel.contributions) {
-    const abilityKind = entry.ability as 'plant' | 'egg';
-    const minutesPerProc = GROWTH_MINUTES_PER_PROC[abilityKind];
-    if (!Number.isFinite(minutesPerProc)) {
-      continue;
-    }
-    const reductionPerProc = minutesPerProc * (entry.baseScore / 100);
+    const reductionPerProc = entry.reductionPerProc;
     if (!Number.isFinite(reductionPerProc) || reductionPerProc <= 0) {
       continue;
     }

@@ -42,11 +42,6 @@ export interface CardOptions {
 
 export const FOCUS_KEY_SEPARATOR = '::';
 
-export const GROWTH_MINUTES_PER_PROC: Record<'plant' | 'egg', number> = {
-  plant: 5,
-  egg: 10,
-};
-
 // ---- Functions ----
 
 export function escapeHtml(s: string): string {

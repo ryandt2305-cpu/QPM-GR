@@ -616,7 +616,7 @@ function getAbilityMetric(
     return `${getTriggerLabel(def)} ${triggerChance.toFixed(1)}%`;
   }
 
-  const effectPerHour = computeEffectPerHour(def, stats);
+  const effectPerHour = computeEffectPerHour(def, stats, strength);
   if (def.effectUnit === 'coins' && effectPerHour > 0) {
     return `~${formatCoinsAbbreviated(Math.round(effectPerHour))} $/hr`;
   }
@@ -815,7 +815,7 @@ function buildHoverPanel(pet: PooledPet, panel: HTMLElement): void {
       if (observed?.procsPerHour != null && def && !isEventTriggeredAbility(def)) {
         const stats = computeAbilityStats(def, pet.strength ?? null);
         if (stats) {
-          const eph = computeEffectPerHour(def, { ...stats, procsPerHour: observed.procsPerHour });
+          const eph = computeEffectPerHour(def, { ...stats, procsPerHour: observed.procsPerHour }, pet.strength);
           if (def.effectUnit === 'coins' && eph > 0) {
             metric = `~${formatCoinsAbbreviated(Math.round(eph))} $/hr`;
           } else if (stats.procsPerHour > 0) {
@@ -955,7 +955,7 @@ function computePetAbilityStatsForCompare(
 
   const impactPerHour = valuePerProc > 0
     ? valuePerProc * stats.procsPerHour
-    : computeEffectPerHour(def, stats);
+    : computeEffectPerHour(def, stats, str);
   const expectedValuePerTrigger = valuePerProc > 0 ? (triggerChancePercent / 100) * valuePerProc : 0;
 
   return {

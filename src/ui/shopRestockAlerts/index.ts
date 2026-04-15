@@ -38,6 +38,7 @@ import {
 } from './ownershipTracker';
 import { processShopStock, loadDismissedCycles } from './stockProcessor';
 import { applyAlertSprite, removeAlert } from './alertDom';
+import { stopAllLoops } from './soundEngine';
 
 // ---------------------------------------------------------------------------
 // Socket close detection
@@ -198,6 +199,7 @@ export function stopShopRestockAlerts(): void {
     alertState.socketPollTimer = null;
   }
   detachAlertSocketListener();
+  stopAllLoops();
 
   dismissedInStockKeys.clear();
   dismissedCyclesByKey.clear();

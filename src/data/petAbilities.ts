@@ -924,12 +924,19 @@ export function computeAbilityStats(definition: AbilityDefinition, strength: num
   };
 }
 
-export function computeEffectPerHour(definition: AbilityDefinition, stats: AbilityStats): number {
+export function computeEffectPerHour(
+  definition: AbilityDefinition,
+  stats: AbilityStats,
+  strength: number | null | undefined = undefined,
+): number {
   const effect = definition.effectValuePerProc ?? 0;
   if (!Number.isFinite(effect) || effect === 0) {
     return 0;
   }
-  return stats.procsPerHour * effect;
+  const strengthScale = strength != null && Number.isFinite(strength)
+    ? Math.max(0, strength) / 100
+    : 1;
+  return stats.procsPerHour * effect * strengthScale;
 }
 
 export const abilityDefinitions = ABILITY_DEFINITIONS;

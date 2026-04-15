@@ -51,10 +51,11 @@ export interface ActiveAlert {
   iconImg: HTMLImageElement;
   iconFallbackEl: HTMLSpanElement;
   qtyEl: HTMLSpanElement;
-  statusEl: HTMLDivElement;
+  statusEl: HTMLSpanElement;
   buyBtn: HTMLButtonElement;
   dismissBtn: HTMLButtonElement;
   closeBtn: HTMLButtonElement;
+  muteBtn?: HTMLButtonElement;
   busy: boolean;
   pendingConfirmation: boolean;
 }

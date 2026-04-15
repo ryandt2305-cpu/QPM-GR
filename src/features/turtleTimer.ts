@@ -7,6 +7,7 @@ import { GardenSnapshot, GardenState, getGardenSnapshot, onGardenSnapshot } from
 import { ActivePetInfo, getActivePetInfos, onActivePetInfos, startPetInfoStore } from '../store/pets';
 import { pageWindow } from '../core/pageContext';
 import { startGrowSlotIndexTracker } from '../store/growSlotIndex';
+import { getAbilityDefinition, computeAbilityStats, type AbilityDefinition } from '../data/petAbilities';
 
 declare global {
   interface Window {
@@ -124,27 +125,42 @@ interface TurtleResolvedConfig {
   eggFocusTargetSlotIndex: number | null;
 }
 
-interface AbilityConfig {
-  kind: TurtleAbilityKind;
-  patterns: readonly string[];
-  minutesPerBase: number;
-  procOdds: number;
+const GROWTH_ABILITY_PATTERNS = [
+  { kind: 'plant' as const, patterns: ['plantgrowthboost'] },
+  { kind: 'egg' as const, patterns: ['egggrowthboost'] },
+] as const;
+
+interface ResolvedGrowthAbility {
+  kind: 'plant' | 'egg';
+  abilityId: string;
+  baseProbability: number;
+  effectMinutesPerProc: number;
 }
 
-const ABILITY_CONFIGS: readonly AbilityConfig[] = [
-  {
-    kind: 'plant',
-    patterns: ['plantgrowthboost'],
-    minutesPerBase: 5,
-    procOdds: 0.27,
-  },
-  {
-    kind: 'egg',
-    patterns: ['egggrowthboost'],
-    minutesPerBase: 9, // Average of 7, 9, 11 for all three tiers
-    procOdds: 0.24,
-  },
-];
+function resolveGrowthAbility(rawAbility: string, normalizedAbility: string): ResolvedGrowthAbility | null {
+  let matchedKind: 'plant' | 'egg' | null = null;
+  for (const group of GROWTH_ABILITY_PATTERNS) {
+    if (group.patterns.some((pattern) => normalizedAbility.includes(pattern))) {
+      matchedKind = group.kind;
+      break;
+    }
+  }
+  if (!matchedKind) return null;
+
+  const def = getAbilityDefinition(rawAbility);
+  if (!def) return null;
+
+  const baseProbability = def.baseProbability ?? 0;
+  const effectMinutesPerProc = def.effectValuePerProc ?? 0;
+  if (baseProbability <= 0 || effectMinutesPerProc <= 0) return null;
+
+  return {
+    kind: matchedKind,
+    abilityId: def.id,
+    baseProbability,
+    effectMinutesPerProc,
+  };
+}
 
 const SUPPORT_PATTERNS: Record<TurtleSupportKind, readonly string[]> = {
   restore: ['hungerrestore'],
@@ -249,6 +265,7 @@ export interface TurtleContribution {
   baseScore: number;
   rateContribution: number;
   perHourReduction: number;
+  reductionPerProc: number;
   missingStats: boolean;
 }
 
@@ -865,24 +882,28 @@ function resolveTurtlePetStats(pet: ActivePetInfo): TurtlePetStats {
 
 function computeContribution(
   pet: ActivePetInfo,
-  abilityCfg: AbilityConfig,
+  resolved: ResolvedGrowthAbility,
   abilityNames: string[],
 ): TurtleContribution {
-  const stats = resolveTurtlePetStats(pet);
-  const { xp, targetScale, baseScore, missingStats } = stats;
+  const petStats = resolveTurtlePetStats(pet);
+  const { xp, targetScale, baseScore, missingStats } = petStats;
 
-  const rateContribution =
-    baseScore > 0
-      ? (baseScore / 100) *
-        abilityCfg.minutesPerBase *
-        60 *
-        (1 - Math.pow(1 - (abilityCfg.procOdds * baseScore) / 100, 1 / 60))
-      : 0;
+  // Use the catalog-sourced ability definition to compute stats via the linear model
+  const def = getAbilityDefinition(resolved.abilityId);
+  const strengthValue = baseScore > 0 ? baseScore : null;
+  const abilityStats = def ? computeAbilityStats(def, strengthValue) : null;
 
-  const perHourReduction = rateContribution * 60;
+  // Strength-scaled effect: minutes removed per proc
+  const strengthScale = baseScore > 0 ? baseScore / 100 : 0;
+  const reductionPerProc = resolved.effectMinutesPerProc * strengthScale;
+
+  // procsPerHour from the linear model (p / 60 / 100 per second × 3600 seconds)
+  const procsPerHour = abilityStats ? abilityStats.procsPerHour : 0;
+  const perHourReduction = procsPerHour * reductionPerProc;
+  const rateContribution = perHourReduction / 60; // per-minute rate for compatibility
 
   return {
-    ability: abilityCfg.kind,
+    ability: resolved.kind,
     abilityNames,
     slotIndex: pet.slotIndex,
     name: pet.name,
@@ -894,6 +915,7 @@ function computeContribution(
     baseScore,
     rateContribution,
     perHourReduction,
+    reductionPerProc,
     missingStats,
   };
 }
@@ -1079,15 +1101,20 @@ function recompute(): void {
 
     let matchedReductionAbility = false;
 
-    for (const abilityCfg of ABILITY_CONFIGS) {
-      const matches = abilities
-        .filter(({ normalized }) => abilityCfg.patterns.some((pattern) => normalized.includes(pattern)))
-        .map(({ raw }) => raw);
-
-      if (matches.length === 0) {
-        continue;
+    // Resolve growth abilities per-pet using catalog definitions
+    const resolvedByKind = new Map<'plant' | 'egg', { resolved: ResolvedGrowthAbility; names: string[] }>();
+    for (const { raw, normalized } of abilities) {
+      const resolved = resolveGrowthAbility(raw, normalized);
+      if (!resolved) continue;
+      const existing = resolvedByKind.get(resolved.kind);
+      if (existing) {
+        existing.names.push(raw);
+      } else {
+        resolvedByKind.set(resolved.kind, { resolved, names: [raw] });
       }
+    }
 
+    for (const [kind, { resolved, names }] of resolvedByKind) {
       matchedReductionAbility = true;
       availableKeys.add(petKey);
 
@@ -1096,7 +1123,7 @@ function recompute(): void {
         continue;
       }
 
-      const contribution = computeContribution(pet, abilityCfg, matches);
+      const contribution = computeContribution(pet, resolved, names);
       if (contribution.missingStats) {
         missingStatKeys.add(petKey);
       }
@@ -1104,7 +1131,7 @@ function recompute(): void {
         continue;
       }
 
-      if (abilityCfg.kind === 'plant') {
+      if (kind === 'plant') {
         plantContributions.push(contribution);
       } else {
         eggContributions.push(contribution);

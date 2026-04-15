@@ -31,6 +31,18 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.50",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: per-item sound alerts with built-in/custom sounds, once or loop mode, and configurable repeat speed",
+      "shop restock alerts: fixed buy-all using canonical item names for reliable ownership tracking",
+      "pet optimizer: seed finder now treats each tier independently",
+      "turtle timer: fixed growth abilities using hardcoded Tier II values for all tiers — Cow was ~1.9x overestimated",
+      "turtle timer: switched from geometric to game-accurate linear probability model",
+      "ability stats: effect-per-hour now correctly scales by pet strength",
+    ],
+  },
+  {
     version: "3.1.49",
     date: "2026-04",
     notes: [

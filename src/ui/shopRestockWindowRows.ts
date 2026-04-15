@@ -20,6 +20,8 @@ import {
 } from './shopRestockWindowFormatters';
 import { getItemProbability } from '../utils/restockDataService';
 import { isCelestial } from './shopRestockWindowMeta';
+import { getSoundConfig } from './shopRestockAlerts/soundConfig';
+import { showSoundPopover } from './shopRestockAlerts/soundPopover';
 import type { RestockItem } from '../utils/restockDataService';
 
 export type EtaRef = { el: HTMLElement; ts: number };
@@ -134,6 +136,31 @@ export function buildPredRow(
     opts.openDetail(item, getItemName(item.item_id, item.shop_type));
   });
   metrics.appendChild(detailBtn);
+
+  // Sound config button
+  const hasSoundCfg = getSoundConfig(key) !== null;
+  const soundBtn = document.createElement('button');
+  soundBtn.type = 'button';
+  soundBtn.textContent = hasSoundCfg ? '\uD83D\uDD14' : '\uD83D\uDD15'; // 🔔 / 🔕
+  soundBtn.title = hasSoundCfg ? 'Sound alert configured' : 'Configure sound alert';
+  soundBtn.style.cssText = [
+    'background:none', 'border:none', 'cursor:pointer',
+    'font-size:14px', 'padding:2px 4px',
+    `opacity:${hasSoundCfg ? '0.9' : '0.45'}`,
+    'border-radius:4px', 'line-height:1', 'flex-shrink:0',
+  ].join(';');
+  soundBtn.addEventListener('mouseenter', () => { soundBtn.style.opacity = '1'; });
+  soundBtn.addEventListener('mouseleave', () => { soundBtn.style.opacity = hasSoundCfg ? '0.9' : '0.45'; });
+  soundBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSoundPopover(soundBtn, key, () => {
+      // Update icon after save/clear
+      const nowHasCfg = getSoundConfig(key) !== null;
+      soundBtn.textContent = nowHasCfg ? '\uD83D\uDD14' : '\uD83D\uDD15';
+      soundBtn.style.opacity = nowHasCfg ? '0.9' : '0.45';
+    });
+  });
+  metrics.appendChild(soundBtn);
 
   if (!hasData) {
     const dash = document.createElement('div');

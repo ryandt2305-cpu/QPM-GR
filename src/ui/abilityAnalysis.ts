@@ -269,7 +269,7 @@ export function analyzeActivePetAbilities(infos: ActivePetInfo[]): AbilityAnalys
       }
 
       const effectPerHour =
-        effectPerProc != null && procsPerHour > 0 ? procsPerHour * effectPerProc : computeEffectPerHour(definition, stats);
+        effectPerProc != null && procsPerHour > 0 ? procsPerHour * effectPerProc : computeEffectPerHour(definition, stats, info.strength);
 
       const lastProcAt = observation?.lastProcAt ?? (history?.lastPerformedAt ?? null);
       const sampleCount = observation?.sampleCount ?? 0;

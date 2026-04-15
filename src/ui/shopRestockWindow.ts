@@ -3,6 +3,7 @@
 
 import { toggleWindow } from './modalWindow';
 import { openItemRestockDetail } from './itemRestockDetailWindow';
+import { hideSoundPopover } from './shopRestockAlerts/soundPopover';
 import { log } from '../utils/logger';
 import {
   fetchRestockData,
@@ -607,6 +608,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
         historyChunkRaf = null;
       }
       saveUiState();
+      hideSoundPopover();
       stopTicker();
       stopSpritesReady();
       stopRestockDataUpdates();

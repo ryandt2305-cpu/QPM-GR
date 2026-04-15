@@ -38,7 +38,8 @@ function normalizeInventoryItem(raw: any): InventoryItem | null {
   if (!raw || typeof raw !== 'object') return null;
 
   // UUID fields take priority. Species/name are fallbacks for seeds that have no UUID.
-  const fallbackId = raw.id ?? raw.itemId ?? raw.species ?? raw.name ?? raw.displayName;
+  // Stackable items (eggs, tools, decor) only carry type-specific IDs (eggId/toolId/decorId).
+  const fallbackId = raw.id ?? raw.itemId ?? raw.species ?? raw.eggId ?? raw.toolId ?? raw.decorId ?? raw.name ?? raw.displayName;
   const id = String(fallbackId ?? '').trim();
   if (!id) return null;
 

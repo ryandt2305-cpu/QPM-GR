@@ -136,6 +136,16 @@ const CONTINUOUS_MODIFIER_PARAM_KEYS = new Set([
   'eggGrowthTimeReductionMinutes',
 ]);
 const OPTIMIZER_HIDDEN_FAMILY_KEYS = new Set(['dawnsustain', 'dawnbinderboost']);
+
+/**
+ * Abilities whose tiers represent functionally distinct roles (different seed pools)
+ * rather than the same effect at different strengths.
+ * When an ability is in this set, its exactFamilyKey preserves the tier suffix
+ * so each tier competes independently in the optimizer.
+ */
+const TIER_INDEPENDENT_FAMILY_IDS = new Set([
+  'SeedFinderI', 'SeedFinderII', 'SeedFinderIII', 'SeedFinderIV',
+]);
 const OPTIMIZER_BROAD_ROLE_LABELS: Record<string, string> = {
   coinfinder: 'Coin Finder',
   egggrowthboost: 'Egg Growth Boost',
@@ -450,17 +460,22 @@ export function getAbilityFamilyKey(abilityId: string): string {
 }
 
 function stripOptimizerAbilityFamilySuffix(value: string): string {
+  if (TIER_INDEPENDENT_FAMILY_IDS.has(value)) {
+    return value.replace(/_NEW$/i, '');
+  }
   return value
     .replace(/_NEW$/i, '')
     .replace(/(I{1,3}|IV)$/i, '');
 }
 
-function normalizeOptimizerFamilyLabel(value: string): string {
-  return value
-    .trim()
-    .replace(/\s+(?:IV|III|II|I)$/i, '')
-    .replace(/\s+[1-4]$/i, '')
-    .trim();
+function normalizeOptimizerFamilyLabel(value: string, preserveTier = false): string {
+  let result = value.trim();
+  if (!preserveTier) {
+    result = result
+      .replace(/\s+(?:IV|III|II|I)$/i, '')
+      .replace(/\s+[1-4]$/i, '');
+  }
+  return result.trim();
 }
 
 function resolveOptimizerBroadRoleFamilyLabel(
@@ -485,8 +500,9 @@ export function getOptimizerAbilityFamilyInfo(
   const exactFamilyKey = stripOptimizerAbilityFamilySuffix(normalizedAbilityId).trim().toLowerCase();
   if (!exactFamilyKey) return null;
 
+  const preserveTier = TIER_INDEPENDENT_FAMILY_IDS.has(normalizedAbilityId);
   const exactFamilyLabelSource = definition?.name ?? fallback ?? normalizedAbilityId;
-  const exactFamilyLabel = normalizeOptimizerFamilyLabel(exactFamilyLabelSource)
+  const exactFamilyLabel = normalizeOptimizerFamilyLabel(exactFamilyLabelSource, preserveTier)
     || exactFamilyLabelSource
     || normalizedAbilityId;
   const broadRoleFamilyKeyRaw = getAbilityFamilyKey(normalizedAbilityId).trim();
@@ -576,7 +592,7 @@ export function buildPetCompareProfile(
           impactPerHour = valuePerTrigger;
         }
       } else if (stats) {
-        impactPerHour = computeEffectPerHour(definition, stats);
+        impactPerHour = computeEffectPerHour(definition, stats, strength);
       }
     }
 

@@ -6,6 +6,7 @@ import { log } from '../utils/logger';
 import { sendRoomAction, type WebSocketSendResult } from '../websocket/api';
 import { getMapSnapshot, getGardenSnapshot } from './gardenBridge';
 import { getActivePetInfos } from '../store/pets';
+import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 
 function sendAction(type: 'StorePet' | 'PlacePet' | 'ToggleFavoriteItem' | 'ToggleLockItem' | 'SellPet', payload: Record<string, unknown>): WebSocketSendResult {
   const sent = sendRoomAction(type, payload, { throttleMs: 90 });
@@ -72,6 +73,96 @@ export const PLACE_PET_DEFAULTS = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// User slot index resolution (player's garden slot in multiplayer)
+// ---------------------------------------------------------------------------
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Derive userSlotIdx from an active pet's known position on the map.
+ * Returns null when there are no active pets or the map data isn't available.
+ */
+function deriveSlotIdxFromActivePets(): number | null {
+  const map = getMapSnapshot();
+  if (!map?.cols) return null;
+
+  const activePets = getActivePetInfos();
+  for (const pet of activePets) {
+    if (pet.position?.x == null || pet.position?.y == null) continue;
+    const globalIdx = pet.position.x + pet.position.y * map.cols;
+    const bw = map.globalTileIdxToBoardwalk?.[globalIdx];
+    if (bw != null) return bw.userSlotIdx;
+    const dirt = map.globalTileIdxToDirtTile?.[globalIdx];
+    if (dirt != null) return dirt.userSlotIdx;
+  }
+  return null;
+}
+
+/**
+ * Resolve the player's userSlotIdx (their garden position in the room).
+ *
+ * Strategy order:
+ * 1. `myUserSlotIdxAtom` — direct Jotai atom (game's canonical source)
+ * 2. `playerAtom.id` + `stateAtom.child.data.userSlots` — manual findIndex
+ * 3. Derive from active pet positions on the map (existing fallback)
+ */
+export async function resolveMyUserSlotIdx(): Promise<number | null> {
+  // Strategy 1: direct atom
+  try {
+    const atom = getAtomByLabel('myUserSlotIdxAtom');
+    if (atom) {
+      const value = await readAtomValue<unknown>(atom);
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        return value;
+      }
+    }
+  } catch {
+    // atom not available — continue
+  }
+
+  // Strategy 2: compute from playerAtom + stateAtom.child.data.userSlots
+  try {
+    const playerAtom = getAtomByLabel('playerAtom');
+    const stateAtom = getAtomByLabel('stateAtom');
+    if (playerAtom && stateAtom) {
+      const player = await readAtomValue<unknown>(playerAtom);
+      const state = await readAtomValue<unknown>(stateAtom);
+
+      let playerId: string | null = null;
+      if (isRecord(player)) {
+        for (const key of ['id', 'playerId', 'userId'] as const) {
+          const v = (player as Record<string, unknown>)[key];
+          if (typeof v === 'string' && v.trim().length > 0) {
+            playerId = v.trim();
+            break;
+          }
+        }
+      }
+
+      if (playerId && isRecord(state)) {
+        const child = (state as Record<string, unknown>).child;
+        const data = isRecord(child) ? (child as Record<string, unknown>).data : undefined;
+        const userSlots = isRecord(data) ? (data as Record<string, unknown>).userSlots : undefined;
+
+        if (Array.isArray(userSlots)) {
+          const idx = userSlots.findIndex(
+            (slot) => isRecord(slot) && String((slot as Record<string, unknown>).playerId ?? '').trim() === playerId,
+          );
+          if (idx >= 0) return idx;
+        }
+      }
+    }
+  } catch {
+    // atom read failed — continue
+  }
+
+  // Strategy 3: derive from active pet positions
+  return deriveSlotIdxFromActivePets();
+}
+
+// ---------------------------------------------------------------------------
 // Empty tile discovery for PlacePet
 // ---------------------------------------------------------------------------
 
@@ -89,9 +180,15 @@ export interface PlacePetTile {
  *
  * @param excludePositions - additional positions to skip (format "x,y"),
  *   used when placing multiple pets in a single batch.
+ * @param userSlotIdx - pre-resolved player slot index. When provided and non-null,
+ *   only tiles belonging to this slot are returned. When null/undefined, falls back
+ *   to deriving from active pet positions (backward compat).
  * @returns a valid tile or null if none found.
  */
-export function findEmptyGardenTile(excludePositions?: Set<string>): PlacePetTile | null {
+export function findEmptyGardenTile(
+  excludePositions?: Set<string>,
+  userSlotIdx?: number | null,
+): PlacePetTile | null {
   const map = getMapSnapshot();
   const garden = getGardenSnapshot();
   if (!map || !garden || !map.cols || !map.rows) return null;
@@ -105,16 +202,8 @@ export function findEmptyGardenTile(excludePositions?: Set<string>): PlacePetTil
     }
   }
 
-  // Determine the player's userSlotIdx from an active pet's known position
-  let mySlotIdx: number | null = null;
-  for (const pet of activePets) {
-    if (pet.position?.x == null || pet.position?.y == null) continue;
-    const globalIdx = pet.position.x + pet.position.y * map.cols;
-    const bw = map.globalTileIdxToBoardwalk?.[globalIdx];
-    if (bw != null) { mySlotIdx = bw.userSlotIdx; break; }
-    const dirt = map.globalTileIdxToDirtTile?.[globalIdx];
-    if (dirt != null) { mySlotIdx = dirt.userSlotIdx; break; }
-  }
+  // Use provided userSlotIdx, or derive from active pet positions (backward compat)
+  const mySlotIdx: number | null = userSlotIdx ?? deriveSlotIdxFromActivePets();
 
   // Scan boardwalk tiles first (natural pet placement area)
   const bwEntries = map.globalTileIdxToBoardwalk;

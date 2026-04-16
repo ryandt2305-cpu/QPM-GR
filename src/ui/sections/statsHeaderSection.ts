@@ -1,6 +1,6 @@
 // src/ui/sections/statsHeaderSection.ts — Dashboard stats header section
 import { type UIState } from "../panelState";
-import { btn } from "../panelHelpers";
+import { btn, showToast } from "../panelHelpers";
 import { log } from "../../utils/logger";
 import { storage } from "../../utils/storage";
 import { getCropSpriteDataUrl } from "../../sprite-v2/compat";
@@ -30,6 +30,14 @@ import { visibleInterval } from "../../utils/timerManager";
 // ---------------------------------------------------------------------------
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
+  {
+    version: "3.1.56",
+    date: "2026-04",
+    notes: [
+      "Pet Teams: fix PlacePet failures in multiplayer rooms — tiles are now resolved from the correct player slot instead of another user's garden",
+      "Pet Teams: pre-validate team pet IDs before apply — missing/sold pets report clear errors instead of silent timeouts",
+    ],
+  },
   {
     version: "3.1.55",
     date: "2026-04",
@@ -619,7 +627,9 @@ export function createStatsHeader(
   const changelogCard = buildChangelogCard();
   container.appendChild(changelogCard);
 
-  // Feature modules were removed from Dashboard to keep the surface minimal.
+  // ── Settings backup/restore ──
+  const settingsRow = buildSettingsRow();
+  container.appendChild(settingsRow);
 
   return container;
 }
@@ -897,6 +907,180 @@ function buildChangelogEntry(
   el.appendChild(list);
 
   return el;
+}
+
+// ---------------------------------------------------------------------------
+// Settings backup/restore row
+// ---------------------------------------------------------------------------
+
+function settingsBtn(label: string, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  b.style.cssText = [
+    "font-size:10px",
+    "padding:3px 10px",
+    "border-radius:4px",
+    "cursor:pointer",
+    "border:1px solid rgba(143,130,255,0.3)",
+    "background:rgba(143,130,255,0.08)",
+    "color:#c8c0ff",
+    "white-space:nowrap",
+  ].join(";");
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function buildSettingsRow(): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText =
+    "margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid rgba(143,130,255,0.15);border-radius:6px;";
+
+  const topRow = document.createElement("div");
+  topRow.style.cssText =
+    "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+
+  const label = document.createElement("span");
+  label.style.cssText =
+    "font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.4px;margin-right:auto;";
+  label.textContent = "Settings";
+
+  const exportBtn = settingsBtn("Export", async () => {
+    try {
+      const { downloadBackup } = await import("../../services/backupService");
+      downloadBackup();
+      showToast("Settings exported");
+    } catch (err) {
+      log("Export failed", err);
+      showToast("Export failed");
+    }
+  });
+
+  const importBtn = settingsBtn("Import", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.style.display = "none";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) return;
+      if (!confirm("This will replace all QPM settings with the imported file. An auto-backup will be created first.\n\nContinue?")) return;
+      try {
+        const { importFromFile } = await import("../../services/backupService");
+        const result = await importFromFile(file);
+        if (result.ok) {
+          showToast(`Imported ${result.keysWritten} keys. Reload recommended.`);
+          if (result.warnings.length) log("Import warnings:", result.warnings);
+        } else {
+          showToast(`Import failed: ${result.warnings[0] ?? "unknown error"}`);
+        }
+      } catch (err) {
+        log("Import failed", err);
+        showToast("Import failed");
+      }
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+
+  const backupBtn = settingsBtn("Backup", async () => {
+    try {
+      const { saveNamedBackup } = await import("../../services/backupService");
+      const stamp = new Date().toISOString().slice(0, 10);
+      const meta = saveNamedBackup(`manual-${stamp}`);
+      showToast(`Backup saved (${meta.keyCount} keys)`);
+      renderRestorePicker();
+    } catch (err) {
+      log("Backup failed", err);
+      showToast("Backup failed");
+    }
+  });
+
+  const restoreBtn = settingsBtn("Restore", () => {
+    const showing = pickerEl.style.display !== "none";
+    pickerEl.style.display = showing ? "none" : "block";
+    if (!showing) renderRestorePicker();
+  });
+
+  topRow.append(label, exportBtn, importBtn, backupBtn, restoreBtn);
+  wrapper.appendChild(topRow);
+
+  // Inline restore picker (hidden by default)
+  const pickerEl = document.createElement("div");
+  pickerEl.style.cssText = "display:none;margin-top:8px;";
+  wrapper.appendChild(pickerEl);
+
+  const renderRestorePicker = async (): Promise<void> => {
+    pickerEl.innerHTML = "";
+    try {
+      const { listBackups, restoreNamedBackup, deleteNamedBackup } =
+        await import("../../services/backupService");
+      const backups = listBackups();
+
+      if (!backups.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText =
+          "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;padding:4px 0;";
+        empty.textContent = "No backups saved yet.";
+        pickerEl.appendChild(empty);
+        return;
+      }
+
+      for (const meta of [...backups].reverse()) {
+        const row = document.createElement("div");
+        row.style.cssText =
+          "display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);";
+
+        const info = document.createElement("div");
+        info.style.cssText = "flex:1;min-width:0;";
+
+        const nameEl = document.createElement("div");
+        nameEl.style.cssText =
+          "font-size:11px;color:rgba(224,224,224,0.75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        nameEl.textContent = meta.name;
+
+        const detailEl = document.createElement("div");
+        detailEl.style.cssText = "font-size:10px;color:rgba(224,224,224,0.35);";
+        const date = new Date(meta.createdAt);
+        const sizeKb = (meta.sizeBytes / 1024).toFixed(1);
+        detailEl.textContent = `v${meta.appVersion} | ${date.toLocaleDateString()} ${date.toLocaleTimeString()} | ${meta.keyCount} keys | ${sizeKb} KB`;
+
+        info.append(nameEl, detailEl);
+
+        const restBtn = settingsBtn("Restore", () => {
+          if (!confirm(`Restore backup "${meta.name}"?\n\nThis will replace all current settings. An auto-backup will be created first.`)) return;
+          const result = restoreNamedBackup(meta.name);
+          if (result.ok) {
+            showToast(`Restored ${result.keysWritten} keys. Reload recommended.`);
+          } else {
+            showToast(`Restore failed: ${result.warnings[0] ?? "unknown error"}`);
+          }
+          renderRestorePicker();
+        });
+
+        const delBtn = settingsBtn("Delete", () => {
+          if (!confirm(`Delete backup "${meta.name}"?`)) return;
+          deleteNamedBackup(meta.name);
+          showToast("Backup deleted");
+          renderRestorePicker();
+        });
+        delBtn.style.color = "#f44336";
+        delBtn.style.borderColor = "rgba(244,67,54,0.3)";
+
+        row.append(info, restBtn, delBtn);
+        pickerEl.appendChild(row);
+      }
+    } catch (err) {
+      log("Failed to load backups", err);
+      const errEl = document.createElement("div");
+      errEl.style.cssText = "font-size:11px;color:#f44336;";
+      errEl.textContent = "Failed to load backups";
+      pickerEl.appendChild(errEl);
+    }
+  };
+
+  return wrapper;
 }
 
 // ---------------------------------------------------------------------------

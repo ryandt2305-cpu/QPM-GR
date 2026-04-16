@@ -10,7 +10,7 @@ import { delay } from '../utils/scheduling';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from './xpTracker';
 import type { PetTeam, PetTeamsConfig, PetFeedPolicy, PooledPet } from '../types/petTeams';
 import { sendRoomAction, type WebSocketSendFailureReason } from '../websocket/api';
-import { findEmptyGardenTile, PLACE_PET_DEFAULTS } from '../features/petTeamActions';
+import { findEmptyGardenTile, PLACE_PET_DEFAULTS, resolveMyUserSlotIdx } from '../features/petTeamActions';
 import { normalizeSpeciesKey } from '../utils/helpers';
 
 const CONFIG_KEY = 'qpm.petTeams.config.v1';
@@ -812,6 +812,23 @@ export interface ApplyTeamResult {
   errorSummary?: string;
 }
 
+/**
+ * Locate a pet across all known locations.
+ * Returns 'active' | 'inventory' | 'hutch' | null.
+ */
+async function locatePet(petId: string): Promise<'active' | 'inventory' | 'hutch' | null> {
+  const activeIds = new Set(getActiveSlotIds());
+  if (activeIds.has(petId)) return 'active';
+
+  const inventory = await readInventorySnapshot();
+  if (inventory.ids.has(petId)) return 'inventory';
+
+  const hutch = await readHutchSnapshot();
+  if (hutch.ids.has(petId)) return 'hutch';
+
+  return null;
+}
+
 let applyQueue: Promise<void> = Promise.resolve();
 
 function enqueueApply<T>(task: () => Promise<T>): Promise<T> {
@@ -850,6 +867,39 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     incrementReasonCount(reasonCounts, reason);
   };
 
+  // Resolve player's garden slot index once — used by all PlacePet calls.
+  const resolvedSlotIdx = await resolveMyUserSlotIdx();
+
+  // Pre-validate: check that all target pets are locatable somewhere.
+  const validTargetIds: string[] = [];
+  for (const targetId of targetIds) {
+    if (currentSet.has(targetId)) {
+      validTargetIds.push(targetId);
+      continue;
+    }
+    const location = await locatePet(targetId);
+    if (location) {
+      validTargetIds.push(targetId);
+    } else {
+      pushError('missing_source_pet', 'Pet not found in active/inventory/hutch: ' + targetId);
+    }
+  }
+
+  if (validTargetIds.length === 0) {
+    const errorSummary = buildErrorSummary(reasonCounts);
+    return {
+      applied: 0,
+      errors,
+      ...(Object.keys(reasonCounts).length > 0 ? { reasonCounts } : {}),
+      ...(errorSummary ? { errorSummary } : {}),
+    };
+  }
+
+  // Replace targetIds/targetSet with validated versions for the rest of the function.
+  // (targetIds is used by closures below, so we reassign in-place isn't possible
+  //  — instead shadow with const and update targetSet.)
+  const validTargetSet = new Set(validTargetIds);
+
   const sendRetrieveFromHutch = (itemId: string, toInventoryIndex: number | null, skipThrottle = false) => {
     const payload: Record<string, unknown> = {
       itemId,
@@ -877,7 +927,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   const claimedPositions = new Set<string>();
 
   const sendPlaceFromInventory = (itemId: string, skipThrottle = false) => {
-    const tile = findEmptyGardenTile(claimedPositions);
+    const tile = findEmptyGardenTile(claimedPositions, resolvedSlotIdx);
     const position = tile?.position ?? PLACE_PET_DEFAULTS.position;
     const tileType = tile?.tileType ?? PLACE_PET_DEFAULTS.tileType;
     const localTileIndex = tile?.localTileIndex ?? PLACE_PET_DEFAULTS.localTileIndex;
@@ -999,7 +1049,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
 
     const activeSet = new Set(getActiveSlotIds());
     const inventory = await readInventorySnapshot();
-    const candidate = inventory.petIds.find((id) => !activeSet.has(id) && !targetSet.has(id));
+    const candidate = inventory.petIds.find((id) => !activeSet.has(id) && !validTargetSet.has(id));
     if (candidate) {
       await putInventoryPetInHutchWithConfirm(candidate, false);
       await delay(APPLY_STEP_DELAY_MS);
@@ -1040,9 +1090,9 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   const applyTeamFastHutchPath = async (): Promise<boolean> => {
     const modeledActive = getActiveSlotIds();
     const modeledActiveSet = new Set(modeledActive);
-    const pendingTargets = targetIds.filter((id) => !modeledActiveSet.has(id));
+    const pendingTargets = validTargetIds.filter((id) => !modeledActiveSet.has(id));
     if (pendingTargets.length === 0) {
-      return modeledActive.every((id) => targetSet.has(id));
+      return modeledActive.every((id) => validTargetSet.has(id));
     }
 
     const inventory = await readInventorySnapshot();
@@ -1079,7 +1129,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
         continue;
       }
 
-      const outgoingIndex = modeledActive.findIndex((id) => !targetSet.has(id));
+      const outgoingIndex = modeledActive.findIndex((id) => !validTargetSet.has(id));
       if (outgoingIndex >= 0) {
         const outgoing = modeledActive[outgoingIndex];
         if (!outgoing) {
@@ -1129,12 +1179,15 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       return false;
     }
 
-    return waitForActiveTeamMatch(targetIds, FAST_PATH_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
+    return waitForActiveTeamMatch(validTargetIds, FAST_PATH_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
   };
 
   const applyTeamRepairPass = async (): Promise<void> => {
+    // Reset claimed positions — fast path tiles are stale after failure.
+    claimedPositions.clear();
+
     let activeNow = getActiveSlotIds();
-    let pendingTargets = targetIds.filter((id) => !activeNow.includes(id));
+    let pendingTargets = validTargetIds.filter((id) => !activeNow.includes(id));
 
     for (const targetId of pendingTargets) {
       activeNow = getActiveSlotIds();
@@ -1142,16 +1195,31 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
         continue;
       }
 
-      const hutch = await readHutchSnapshot();
-      if (hutch.ids.has(targetId)) {
+      // Verify pet is locatable before attempting placement
+      const location = await locatePet(targetId);
+      if (!location) {
+        pushError('missing_source_pet', 'Pet not found during repair: ' + targetId);
+        await delay(APPLY_STEP_DELAY_MS);
+        continue;
+      }
+
+      if (location === 'active') {
+        // Already active — skip
+        continue;
+      }
+
+      if (location === 'hutch') {
         const retrieved = await retrieveFromHutchWithConfirm(targetId);
         if (!retrieved) {
           await delay(APPLY_STEP_DELAY_MS);
           continue;
         }
+      } else if (location !== 'inventory') {
+        // Unknown location — already handled as missing_source_pet above
+        continue;
       }
 
-      const outgoing = getActiveSlotIds().find((id) => !targetSet.has(id)) ?? null;
+      const outgoing = getActiveSlotIds().find((id) => !validTargetSet.has(id)) ?? null;
       if (outgoing) {
         const swapped = await swapIntoActiveWithConfirm(targetId, outgoing);
         if (swapped) {
@@ -1173,7 +1241,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     }
 
     activeNow = getActiveSlotIds();
-    const leftovers = activeNow.filter((id) => !targetSet.has(id));
+    const leftovers = activeNow.filter((id) => !validTargetSet.has(id));
     for (const extraId of leftovers) {
       const pickup = sendPickupPet(extraId, false);
       if (!pickup.ok) {
@@ -1194,7 +1262,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       applied++;
       await delay(APPLY_STEP_DELAY_MS);
     }
-    await waitForActiveTeamMatch(targetIds, REPAIR_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
+    await waitForActiveTeamMatch(validTargetIds, REPAIR_SETTLE_TIMEOUT_MS, FAST_SETTLE_POLL_INTERVAL_MS);
   };
 
   const fastSettled = await applyTeamFastHutchPath();

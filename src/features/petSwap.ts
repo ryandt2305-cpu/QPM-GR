@@ -3,7 +3,7 @@ import { getActivePetInfos } from '../store/pets';
 import { log } from '../utils/logger';
 import { delay } from '../utils/scheduling';
 import { hasRoomConnection, sendRoomAction } from '../websocket/api';
-import { findEmptyGardenTile, PLACE_PET_DEFAULTS } from './petTeamActions';
+import { findEmptyGardenTile, PLACE_PET_DEFAULTS, resolveMyUserSlotIdx } from './petTeamActions';
 
 export type SwapPetFailureReason =
   | 'missing_connection'
@@ -213,7 +213,8 @@ export async function placePetIntoActiveSlot(
     }
   }
 
-  const tile = findEmptyGardenTile();
+  const resolvedSlotIdx = await resolveMyUserSlotIdx();
+  const tile = findEmptyGardenTile(undefined, resolvedSlotIdx);
   const placeSent = sendAction('PlacePet', {
     itemId,
     position: tile?.position ?? PLACE_PET_DEFAULTS.position,

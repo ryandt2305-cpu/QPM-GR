@@ -136,7 +136,77 @@ const QPM_STORAGE_KEYS = [
 
   // Action Guard (Locker)
   'qpm.locker.config.v1',
+
+  // Crop Boost / Size Indicator
+  'cropBoostTracker:config',
+  'cropSizeIndicator:config',
+
+  // Journal
+  'journal:notes',
+
+  // Pet Hutch keybind
+  'petHutch:keybind',
+
+  // Public Rooms
+  'publicRooms:refreshInterval',
+  'player-inspector:journal-expanded',
+
+  // Pet Hub
+  'petHub:ariesImportOnce.v1',
+
+  // Pets Window tab
+  'qpm.petsWindow.activeTab',
+
+  // Section collapse state
+  'qpm.sectionCollapsed',
+
+  // Legacy UI state
+  'quinoa-ui-panel-size',
+  'quinoa-mutation-reminder-config',
+
+  // Turtle Timer
+  'qpm-turtle-manual-overrides',
+  'qpm-turtle-completion-log',
+
+  // Garden Filters
+  'qpm.gardenFilters.v1',
+
+  // Texture Debug
+  'qpm.textureSwaps.debugLogs',
+
+  // Restock cache / tracked
+  'qpm.restockCache.v4',
+  'qpm.ariedam.gamedata',
+  'qpm.restock.tracked',
+  'qpm.restock.ui.v1',
+
+  // Hub visible cards
+  'qpm.utilityHub.visibleCards',
+  'qpm.toolsHub.visibleCards',
+  'qpm.trackersHub.visibleTrackers',
+
+  // Stats Hub
+  'qpm.statsHub.filters.v1',
+
+  // Turtle Timer tab
+  'qpm.turtleTimer.activeTab',
+
+  // Backups
+  'qpm.backups.v1',
+
+  // Debug globals opt-in
+  'qpm.debug.globals.v1',
 ];
+
+/**
+ * Dynamic key prefixes for window position/size/state keys that are generated at runtime.
+ * These are NOT in QPM_STORAGE_KEYS because the suffixes are per-window-id.
+ */
+const QPM_DYNAMIC_KEY_PREFIXES = [
+  'qpm-window-pos-',
+  'qpm-window-size-',
+  'qpm-window-state-',
+] as const;
 
 export const storage: Storage = {
   get<T = any>(key: string, fallback: T = null as T): T {
@@ -269,5 +339,37 @@ export function exportAllValues(): Record<string, string> {
     }
   }
 
+  // Also capture dynamic-prefix keys (window positions, sizes, state)
+  try {
+    const allLocalKeys = Object.keys(localStorage);
+    for (const key of allLocalKeys) {
+      if (key in out) continue;
+      if (QPM_DYNAMIC_KEY_PREFIXES.some(p => key.startsWith(p))) {
+        const val = storage.get(key);
+        if (val !== null) {
+          try { out[key] = JSON.stringify(val); } catch { /* skip */ }
+        }
+      }
+    }
+  } catch { /* localStorage unavailable */ }
+
   return out;
+}
+
+/**
+ * Writes key→value pairs into storage. Values must already be JSON strings.
+ * Returns the number of keys written. Callers control whether to clear() first.
+ */
+export function importAllValues(data: Record<string, string>): number {
+  let count = 0;
+  for (const [key, jsonStr] of Object.entries(data)) {
+    try {
+      const parsed = JSON.parse(jsonStr);
+      storage.set(key, parsed);
+      count++;
+    } catch {
+      // Skip malformed entries
+    }
+  }
+  return count;
 }

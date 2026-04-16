@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.54",
+    date: "2026-04",
+    notes: [
+      "locker: new Action Guard feature — block harvests, egg hatches, and decor pickups by plant, mutation, egg type, or decor; per-crop sell protection; custom plant+mutation combo rules with multi-mutation AND logic; inventory reserve; sell-all-pets protections",
+    ],
+  },
+  {
     version: "3.1.53",
     date: "2026-04",
     notes: [

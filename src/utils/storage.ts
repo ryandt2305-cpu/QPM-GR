@@ -133,6 +133,9 @@ const QPM_STORAGE_KEYS = [
 
   // Texture Manipulator
   'qpm.textureSwaps.v1',
+
+  // Action Guard (Locker)
+  'qpm.locker.config.v1',
 ];
 
 export const storage: Storage = {

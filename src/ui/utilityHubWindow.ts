@@ -9,6 +9,7 @@ const VISIBLE_CARDS_KEY = 'qpm.utilityHub.visibleCards';
 const ACTIVITY_LOG_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.activityLogDefault.v1';
 const AUTO_RECONNECT_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.autoReconnectDefault.v1';
 const CONTROLLER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.controllerDefault.v1';
+const LOCKER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.lockerDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -59,6 +60,13 @@ const FEATURE_DEFS = [
     icon: '🎮',
     desc: 'Gamepad support: analog cursor, D-pad snap, rebindable buttons, pet slot cycling',
     windowTitle: '🎮 Controller Settings',
+  },
+  {
+    key: 'locker',
+    label: 'Locker',
+    icon: '🛡️',
+    desc: 'Block game actions: inventory reserve, egg locks, harvest & pickup locks',
+    windowTitle: '🛡️ Locker',
   },
 ] as const;
 
@@ -115,6 +123,18 @@ function loadVisibleCards(): FeatureKey[] {
     storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
   }
 
+  const lockerMigrated = storage.get<boolean>(LOCKER_DEFAULT_MIGRATION_KEY, false);
+  if (!lockerMigrated && !selected.includes('locker')) {
+    const next: FeatureKey[] = [...selected, 'locker'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!lockerMigrated) {
+    storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
+  }
+
   return selected;
 }
 
@@ -151,6 +171,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
           const { createControllerSection } = await import('./sections/controllerSection');
           // poller/cursor are null when opened from hub (feature may not be running)
           windowRoot.appendChild(createControllerSection(null, null));
+        } else if (feat.key === 'locker') {
+          const { createLockerSection } = await import('./sections/lockerSection');
+          windowRoot.appendChild(createLockerSection());
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -455,6 +478,7 @@ function renderUtilityHub(root: HTMLElement): void {
       storage.set(ACTIVITY_LOG_DEFAULT_MIGRATION_KEY, true);
       storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
       storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
+      storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

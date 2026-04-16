@@ -97,6 +97,7 @@ import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/text
 import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 import { startShopRestockAlerts } from './ui/shopRestockAlerts';
 import { initGmExportBridge } from './utils/gmExportBridge';
+import { startLocker } from './features/locker/index';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1653,6 +1654,10 @@ async function initialize(): Promise<void> {
     selectedMutations: cfg.harvestReminder.selectedMutations,
   });
   configureTurtleTimer(cfg.turtleTimer);
+  await yieldToBrowser();
+
+  // Phase 7b: Action guard
+  startLocker();
   await yieldToBrowser();
 
   // Phase 8: Non-critical features (can load after UI is visible)

@@ -24,7 +24,8 @@ export type WebSocketSendFailureReason =
   | 'no_connection'
   | 'invalid_payload'
   | 'throttled'
-  | 'send_failed';
+  | 'send_failed'
+  | 'locker_blocked';
 
 export interface WebSocketSendResult {
   ok: boolean;
@@ -62,6 +63,12 @@ type PurchaseSeedPayload = { species: string };
 type PurchaseEggPayload = { eggId: string };
 type PurchaseToolPayload = { toolId: string };
 type PurchaseDecorPayload = { decorId: string };
+
+type SendPreflightFn = (type: string, payload: Record<string, unknown>) => { ok: boolean; reason?: string };
+let sendPreflightFn: SendPreflightFn | null = null;
+
+export function registerSendPreflight(fn: SendPreflightFn): void { sendPreflightFn = fn; }
+export function clearSendPreflight(): void { sendPreflightFn = null; }
 
 const DEFAULT_SCOPE_PATH = ['Room', 'Quinoa'] as const;
 const DEFAULT_THROTTLE_MS = 100;
@@ -210,6 +217,11 @@ export function sendRoomAction(
 ): WebSocketSendResult {
   if (!validatePayload(type, payload)) {
     return { ok: false, reason: 'invalid_payload' };
+  }
+
+  if (sendPreflightFn) {
+    const check = sendPreflightFn(type, payload);
+    if (!check.ok) return { ok: false, reason: 'locker_blocked' };
   }
 
   const connection = getRoomConnection();

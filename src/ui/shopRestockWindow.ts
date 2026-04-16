@@ -427,7 +427,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
     for (const item of pinned) {
       const key = `${item.shop_type}:${item.item_id}`;
       const { row, etaRef } = buildPredRow(item, key, {
-        onUnpin: (k) => { trackedItems.delete(k); persistTrackedAndRender(false); },
+        onUnpin: (k) => { trackedItems.delete(k); persistTrackedAndRender(true); },
         openDetail: openItemRestockDetail,
       });
       frag.appendChild(row);
@@ -588,7 +588,6 @@ function renderShopRestockWindow(root: HTMLElement): void {
     const tbody = document.createElement('tbody');
     table.appendChild(tbody);
     tableWrap.appendChild(table);
-    tableWrap.scrollTop = historyScrollTop;
 
     let idx = 0;
     const appendChunk = (): void => {
@@ -604,12 +603,12 @@ function renderShopRestockWindow(root: HTMLElement): void {
         frag.appendChild(row);
       }
       tbody.appendChild(frag);
+      tableWrap.scrollTop = historyScrollTop;
       if (idx < filtered.length) {
         historyChunkRaf = requestAnimationFrame(appendChunk);
         return;
       }
       historyChunkRaf = null;
-      tableWrap.scrollTop = historyScrollTop;
     };
     appendChunk();
   }

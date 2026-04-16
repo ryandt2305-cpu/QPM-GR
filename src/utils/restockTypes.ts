@@ -15,6 +15,12 @@ export interface RestockItem {
   total_occurrences: number | null;
   algorithm_version: string | null;
   algorithm_updated_at: number | null;
+  // Model internals (from extended restock_predictions view)
+  recent_intervals_ms: number[] | null;
+  empirical_weight: number | null;
+  empirical_probability: number | null;
+  fallback_rate: number | null;
+  baseline_interval_ms: number | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -94,4 +100,14 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'algorithmVersion',
   'algorithm_updated_at_ms',
   'algorithmUpdatedAtMs',
+  'recent_intervals_ms',
+  'recentIntervalsMs',
+  'empirical_weight',
+  'empiricalWeight',
+  'empirical_probability',
+  'empiricalProbability',
+  'fallback_rate',
+  'fallbackRate',
+  'baseline_interval_ms',
+  'baselineIntervalMs',
 ]);

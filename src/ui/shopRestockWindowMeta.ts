@@ -219,6 +219,11 @@ export function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
       total_occurrences: 0,
       algorithm_version: null,
       algorithm_updated_at: null,
+      recent_intervals_ms: null,
+      empirical_weight: null,
+      empirical_probability: null,
+      fallback_rate: null,
+      baseline_interval_ms: null,
     });
   }
   return merged;

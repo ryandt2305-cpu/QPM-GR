@@ -2,7 +2,7 @@
 // Per-item restock history with overview card + navigable event accuracy cards.
 
 import { openWindow, destroyWindow, registerWindowOpener } from './modalWindow';
-import { fetchItemEvents } from '../utils/itemEventService';
+import { fetchItemEvents, fetchAlgorithmHistory, type AlgorithmVersionEntry } from '../utils/itemEventService';
 import type { RestockItem } from '../utils/restockDataService';
 import {
   canonicalItemId,
@@ -14,6 +14,14 @@ import {
 import { getPetSpriteCanvas, getCropSpriteCanvas } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { storage } from '../utils/storage';
+import {
+  getAccuracyWindows,
+  computeAccuracyScore,
+  computeEventAccuracy as computeEventAccuracyNew,
+  getConfidenceInterval,
+  type EventAccuracy,
+  type EventStatus,
+} from '../utils/restockAccuracy';
 
 const INITIAL_ROWS = 5;
 const DETAIL_WINDOW_REGISTRY_KEY = 'qpm.restock.detailWindows.v1';
@@ -87,6 +95,11 @@ function makeFallbackDetailItem(shopType: DetailShopType, itemId: string): Resto
     total_occurrences: null,
     algorithm_version: null,
     algorithm_updated_at: null,
+    recent_intervals_ms: null,
+    empirical_weight: null,
+    empirical_probability: null,
+    fallback_rate: null,
+    baseline_interval_ms: null,
   };
 }
 
@@ -215,7 +228,7 @@ function fmtCountdown(ts: number | null): string {
   return `~${fmtDuration(diff)}`;
 }
 
-// ── Accuracy tier (adaptive) ─────────────────────────────────────────────────
+// ── Accuracy tier (adaptive, using restockAccuracy module) ───────────────────
 
 type Tier = 'good' | 'warn' | 'bad' | 'none';
 
@@ -228,52 +241,23 @@ const TIER_COLOR: Record<Tier, string> = {
 
 interface Accuracy { tier: Tier; color: string; pill: string }
 
-/**
- * Adaptive accuracy tier based on median interval.
- * Good = within max(20min, 10% of median).
- * Warn = within max(2h, 30% of median).
- * Bad  = beyond that.
- */
-function getAccuracyWindows(medianMs: number | null): { goodMs: number; warnMs: number; scoreScaleMs: number } {
-  const hasMedian = medianMs != null && Number.isFinite(medianMs) && medianMs > 0;
-  const base = hasMedian ? medianMs : null;
-  const goodMs = base != null
-    ? Math.min(60 * 60_000, Math.max(10 * 60_000, base * 0.05))
-    : 20 * 60_000;
-  const warnMs = base != null
-    ? Math.min(8 * 3_600_000, Math.max(45 * 60_000, base * 0.18))
-    : 2 * 3_600_000;
-  const scoreScaleMs = base != null
-    ? Math.min(12 * 3_600_000, Math.max(30 * 60_000, base * 0.12))
-    : 45 * 60_000;
-  return { goodMs, warnMs, scoreScaleMs };
-}
-
-/**
- * Non-linear accuracy score.
- * Uses a cubic decay so large misses (for example multi-day drift) drop quickly.
- */
-function computeAccuracyScore(errorMs: number, medianMs: number | null): number {
-  const absError = Math.abs(errorMs);
-  const { scoreScaleMs } = getAccuracyWindows(medianMs);
-  const ratio = scoreScaleMs > 0 ? absError / scoreScaleMs : 0;
-  const score = 100 / (1 + Math.pow(ratio, 3.2));
-  return Math.max(0, Math.min(100, score));
-}
-
-function getAccuracy(errorMs: number | null, medianMs: number | null): Accuracy {
+function getAccuracy(
+  errorMs: number | null,
+  medianMs: number | null,
+  intervals?: number[] | null,
+): Accuracy {
   if (errorMs === null) {
     return { tier: 'none', color: TIER_COLOR.none, pill: '' };
   }
   const absError = Math.abs(errorMs);
-  const { goodMs, warnMs } = getAccuracyWindows(medianMs);
+  const windows = getAccuracyWindows(medianMs, intervals);
 
-  if (absError <= goodMs) {
+  if (absError <= windows.goodMs) {
     return { tier: 'good', color: TIER_COLOR.good, pill: '\u2713 on time' };
   }
   const dir   = errorMs < 0 ? 'early' : 'late';
   const label = `${fmtDuration(errorMs)} ${dir}`;
-  if (absError <= warnMs) {
+  if (absError <= windows.warnMs) {
     return { tier: 'warn', color: TIER_COLOR.warn, pill: label };
   }
   return { tier: 'bad', color: TIER_COLOR.bad, pill: label };
@@ -286,6 +270,7 @@ interface RowData {
   quantity:  number | null;
   gapMs:     number | null;
   errorMs:   number | null;
+  predicted_next_ms: number | null;
 }
 
 function normalizeEpochMs(value: number | null | undefined): number | null {
@@ -302,18 +287,58 @@ function sortEventsNewestFirst<T extends { timestamp: number }>(events: readonly
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
-function getAlgorithmMarkerInsertIndex(rows: RowData[], updatedAtMs: number | null): number {
-  if (updatedAtMs == null || !Number.isFinite(updatedAtMs)) return -1;
-  for (let i = 0; i < rows.length; i++) {
-    // rows are newest -> oldest; insert marker before first row that is at/older than update time
-    if (rows[i]!.timestamp <= updatedAtMs) return i;
-  }
-  return rows.length;
+// ── Algorithm update markers ──────────────────────────────────────────────
+
+interface AlgorithmMarkerSlot {
+  timestampMs: number;
+  label: string;
+  insertIdx: number;
+  context: MarkerPositionContext;
+  inserted: boolean;
 }
 
 type MarkerPositionContext = 'between' | 'after-latest' | 'before-oldest';
 
-function makeAlgorithmUpdateMarker(updatedAtMs: number, context: MarkerPositionContext): HTMLElement {
+function buildAlgorithmMarkerSlots(
+  rows: RowData[],
+  dbUpdatedAtMs: number | null,
+  history: AlgorithmVersionEntry[],
+): AlgorithmMarkerSlot[] {
+  // Collect unique timestamps — prefer history entries, fall back to single DB value.
+  const seen = new Set<number>();
+  const entries: { timestampMs: number; label: string }[] = [];
+
+  for (const h of history) {
+    if (!Number.isFinite(h.updated_at_ms) || seen.has(h.updated_at_ms)) continue;
+    seen.add(h.updated_at_ms);
+    entries.push({
+      timestampMs: h.updated_at_ms,
+      label: `Estimation algorithm updated \u2014 ${fmtAbsoluteWithZone(h.updated_at_ms)}`,
+    });
+  }
+
+  // Fall back to single DB value if history was empty / RPC unavailable.
+  if (entries.length === 0 && dbUpdatedAtMs != null && Number.isFinite(dbUpdatedAtMs)) {
+    entries.push({
+      timestampMs: dbUpdatedAtMs,
+      label: `Estimation algorithm updated \u2014 ${fmtAbsoluteWithZone(dbUpdatedAtMs)}`,
+    });
+  }
+
+  return entries.map((e) => {
+    const insertIdx = (() => {
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i]!.timestamp <= e.timestampMs) return i;
+      }
+      return rows.length;
+    })();
+    const context: MarkerPositionContext =
+      insertIdx <= 0 ? 'after-latest' : insertIdx >= rows.length ? 'before-oldest' : 'between';
+    return { ...e, insertIdx, context, inserted: false };
+  });
+}
+
+function makeAlgorithmUpdateMarkerEl(slot: AlgorithmMarkerSlot): HTMLElement {
   const marker = document.createElement('div');
   marker.style.cssText = [
     'display:flex',
@@ -331,14 +356,13 @@ function makeAlgorithmUpdateMarker(updatedAtMs: number, context: MarkerPositionC
     'overflow:hidden',
     'text-overflow:ellipsis',
   ].join(';');
-  const suffix = context === 'after-latest'
+  const suffix = slot.context === 'after-latest'
     ? ' (after latest listed restock)'
-    : context === 'before-oldest'
+    : slot.context === 'before-oldest'
       ? ' (before oldest listed restock)'
       : '';
-  marker.textContent = `Estimation algorithm updated - ${fmtAbsoluteWithZone(updatedAtMs)}${suffix}`;
-  // Keep an absolute UTC reference for auditability across timezones.
-  marker.title = `Updated at ${new Date(updatedAtMs).toISOString()}`;
+  marker.textContent = `${slot.label}${suffix}`;
+  marker.title = `Updated at ${new Date(slot.timestampMs).toISOString()}`;
   return marker;
 }
 
@@ -395,46 +419,33 @@ const SHOP_LABELS: Record<string, string> = {
   seed: 'Seeds', egg: 'Eggs', decor: 'Decor', tool: 'Tools',
 };
 
-type EventStatus = 'accurate' | 'early' | 'late' | 'first';
-
-interface EventAccuracy {
-  score: number;
-  status: EventStatus;
-  diffMs: number;
-  estimatedTs: number | null;
-  actualTs: number;
-}
-
-function computeEventAccuracy(
+/** Thin wrapper: compute accuracy for a RowData using the new module. */
+function computeRowEventAccuracy(
   row: RowData,
   prevRow: RowData | null,
   medianMs: number | null,
+  intervals?: number[] | null,
 ): EventAccuracy {
-  if (!prevRow || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
-    return { score: 0, status: 'first', diffMs: 0, estimatedTs: null, actualTs: row.timestamp };
-  }
-  const estimatedTs = prevRow.timestamp + medianMs;
-  const diffMs = row.timestamp - estimatedTs;
-  const absDiff = Math.abs(diffMs);
-  const score = computeAccuracyScore(diffMs, medianMs);
-
-  const { goodMs } = getAccuracyWindows(medianMs);
-  let status: EventStatus;
-  if (absDiff <= goodMs) {
-    status = 'accurate';
-  } else if (diffMs < 0) {
-    status = 'early';
-  } else {
-    status = 'late';
-  }
-  return { score, status, diffMs, estimatedTs, actualTs: row.timestamp };
+  return computeEventAccuracyNew(row, prevRow, medianMs, intervals);
 }
 
-function getRowAccuracyPercent(row: RowData, medianMs: number | null): number | null {
-  if (row.errorMs === null || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
-    return null;
+function getRowAccuracyPercent(
+  row: RowData,
+  medianMs: number | null,
+  intervals?: number[] | null,
+): number | null {
+  if (row.errorMs === null && row.predicted_next_ms == null) return null;
+  if (medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
+    if (row.predicted_next_ms == null) return null;
   }
-  return computeAccuracyScore(row.errorMs, medianMs);
+  // Use server prediction if available, else fall back to errorMs
+  const windows = getAccuracyWindows(medianMs, intervals);
+  if (row.predicted_next_ms != null && Number.isFinite(row.predicted_next_ms)) {
+    const errorMs = row.timestamp - row.predicted_next_ms;
+    return computeAccuracyScore(errorMs, windows);
+  }
+  if (row.errorMs === null) return null;
+  return computeAccuracyScore(row.errorMs, windows);
 }
 
 const STATUS_CONFIG: Record<EventStatus, { icon: string; label: string; color: string; bg: string }> = {
@@ -553,7 +564,14 @@ function buildOverviewCard(
   const eventCountChip = makeChip(String(item.total_occurrences ?? 0), 'Sightings');
   statsRow.appendChild(eventCountChip);
   if (item.median_interval_ms != null) {
-    statsRow.appendChild(makeChip(fmtDuration(item.median_interval_ms), 'Median', '#a78bfa'));
+    let medianLabel = 'Median';
+    if (item.recent_intervals_ms && item.recent_intervals_ms.length >= 5) {
+      const ci = getConfidenceInterval(item.recent_intervals_ms, 0.80);
+      if (ci) {
+        medianLabel = `Median (80%: ${fmtDuration(ci[0])}\u2013${fmtDuration(ci[1])})`;
+      }
+    }
+    statsRow.appendChild(makeChip(fmtDuration(item.median_interval_ms), medianLabel, '#a78bfa'));
   }
   if (item.average_quantity != null && item.average_quantity > 0) {
     const qty = item.average_quantity >= 10
@@ -627,6 +645,133 @@ function buildOverviewCard(
     barTrack.appendChild(barFill);
     probRow.appendChild(barTrack);
     infoSection.appendChild(probRow);
+  }
+
+  // Prediction decomposition (collapsible)
+  if (item.empirical_weight != null) {
+    const decompRow = document.createElement('div');
+    decompRow.style.cssText = 'margin-top:8px;';
+
+    const decompToggle = document.createElement('button');
+    decompToggle.type = 'button';
+    decompToggle.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:6px', 'width:100%',
+      'background:none', 'border:none', 'cursor:pointer', 'padding:0',
+      'font-size:11px', 'font-weight:600', 'color:rgba(232,224,255,0.5)',
+      'text-transform:uppercase', 'letter-spacing:0.3px',
+    ].join(';');
+    decompToggle.textContent = '\u25B6 Prediction Details';
+
+    const decompContent = document.createElement('div');
+    decompContent.style.cssText = 'display:none;margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(143,130,255,0.04);border:1px solid rgba(143,130,255,0.10);';
+    let decompOpen = false;
+    decompToggle.addEventListener('click', () => {
+      decompOpen = !decompOpen;
+      decompContent.style.display = decompOpen ? '' : 'none';
+      decompToggle.textContent = `${decompOpen ? '\u25BC' : '\u25B6'} Prediction Details`;
+    });
+
+    const decompGrid = document.createElement('div');
+    decompGrid.style.cssText = 'display:grid;grid-template-columns:1fr auto;gap:3px 12px;font-size:12px;';
+
+    const addDecompLine = (label: string, value: string, color = '#e8e0ff'): void => {
+      const lbl = document.createElement('span');
+      lbl.style.cssText = 'color:rgba(232,224,255,0.5);';
+      lbl.textContent = label;
+      const val = document.createElement('span');
+      val.style.cssText = `font-weight:600;color:${color};text-align:right;font-variant-numeric:tabular-nums;`;
+      val.textContent = value;
+      decompGrid.append(lbl, val);
+    };
+
+    if (item.fallback_rate != null) {
+      const ratePct = (item.fallback_rate * 100).toFixed(2);
+      const oneIn = item.fallback_rate > 0 ? Math.round(1 / item.fallback_rate) : 0;
+      addDecompLine('Base rate', `${ratePct}%${oneIn > 0 ? ` (1 in ~${oneIn})` : ''}`);
+    }
+    if (item.empirical_probability != null) {
+      addDecompLine('Empirical', `${(item.empirical_probability * 100).toFixed(2)}% conditional`);
+    }
+    if (item.empirical_weight != null) {
+      addDecompLine('Blend weight', `${Math.round(item.empirical_weight * 100)}% empirical`);
+    }
+    if (prob != null) {
+      addDecompLine('Final probability', fmtPercent(prob), '#a78bfa');
+    }
+
+    decompContent.appendChild(decompGrid);
+    decompRow.append(decompToggle, decompContent);
+    infoSection.appendChild(decompRow);
+  }
+
+  // Interval distribution histogram
+  if (item.recent_intervals_ms && item.recent_intervals_ms.length >= 2) {
+    const histRow = document.createElement('div');
+    histRow.style.cssText = 'margin-top:8px;';
+
+    const histLabel = document.createElement('div');
+    histLabel.style.cssText = 'font-size:11px;font-weight:600;color:rgba(232,224,255,0.5);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:6px;';
+    histLabel.textContent = 'Interval Distribution';
+    histRow.appendChild(histLabel);
+
+    const intervals = item.recent_intervals_ms;
+    const bucketCount = Math.min(12, Math.max(5, Math.ceil(intervals.length / 3)));
+    const minVal = Math.min(...intervals);
+    const maxVal = Math.max(...intervals);
+    const range = maxVal - minVal;
+
+    if (range > 0) {
+      const bucketSize = range / bucketCount;
+      const buckets = new Array<number>(bucketCount).fill(0);
+      for (const val of intervals) {
+        const idx = Math.min(Math.floor((val - minVal) / bucketSize), bucketCount - 1);
+        buckets[idx] = (buckets[idx] ?? 0) + 1;
+      }
+      const maxBucket = Math.max(...buckets);
+
+      const histContainer = document.createElement('div');
+      histContainer.style.cssText = 'display:flex;align-items:flex-end;gap:2px;height:32px;padding:0 2px;';
+
+      const medianVal = item.median_interval_ms ?? 0;
+      const medianBucket = range > 0 ? Math.min(Math.floor((medianVal - minVal) / bucketSize), bucketCount - 1) : -1;
+
+      for (let i = 0; i < bucketCount; i++) {
+        const bar = document.createElement('div');
+        const heightPct = maxBucket > 0 ? Math.max(4, Math.round((buckets[i]! / maxBucket) * 100)) : 4;
+        const isMedian = i === medianBucket;
+        bar.style.cssText = [
+          'flex:1',
+          `height:${heightPct}%`,
+          'border-radius:2px 2px 0 0',
+          `background:${isMedian ? '#a78bfa' : 'rgba(143,130,255,0.25)'}`,
+          'transition:height 0.2s',
+          'min-width:4px',
+        ].join(';');
+        const bucketStart = minVal + i * bucketSize;
+        const bucketEnd = bucketStart + bucketSize;
+        bar.title = `${fmtDuration(bucketStart)}\u2013${fmtDuration(bucketEnd)}: ${buckets[i]!} interval${buckets[i] !== 1 ? 's' : ''}${isMedian ? ' (median)' : ''}`;
+        histContainer.appendChild(bar);
+      }
+
+      histRow.appendChild(histContainer);
+
+      // Range labels
+      const rangeRow = document.createElement('div');
+      rangeRow.style.cssText = 'display:flex;justify-content:space-between;font-size:9px;color:rgba(232,224,255,0.3);margin-top:2px;';
+      const minLabel = document.createElement('span');
+      minLabel.textContent = fmtDuration(minVal);
+      const maxLabel = document.createElement('span');
+      maxLabel.textContent = fmtDuration(maxVal);
+      rangeRow.append(minLabel, maxLabel);
+      histRow.appendChild(rangeRow);
+    } else {
+      const uniformNote = document.createElement('div');
+      uniformNote.style.cssText = 'font-size:11px;color:rgba(232,224,255,0.3);';
+      uniformNote.textContent = `All ${intervals.length} intervals: ${fmtDuration(minVal)}`;
+      histRow.appendChild(uniformNote);
+    }
+
+    infoSection.appendChild(histRow);
   }
 
   // Overall accuracy (filled in after events load)
@@ -713,6 +858,7 @@ function buildEventCard(
   shopType: string,
   rows: RowData[],
   medianMs: number | null,
+  intervals: number[] | null,
   spriteUrl: string | null,
   onNavigate: (index: number) => void,
   onBack: () => void,
@@ -755,7 +901,7 @@ function buildEventCard(
   const timeSection = document.createElement('div');
   timeSection.style.cssText = 'padding:0 16px 12px;display:flex;flex-direction:column;gap:8px;';
 
-  const makeTimeBox = (labelText: string, iconChar: string, color: string, bgColor: string): { box: HTMLElement; valueEl: HTMLElement } => {
+  const makeTimeBox = (labelText: string, iconChar: string, color: string, bgColor: string): { box: HTMLElement; valueEl: HTMLElement; labelEl: HTMLElement } => {
     const box = document.createElement('div');
     box.style.cssText = `border-radius:8px;border:1px solid ${color}30;background:${bgColor};padding:10px 12px;`;
     const topRow = document.createElement('div');
@@ -770,7 +916,7 @@ function buildEventCard(
     const valueEl = document.createElement('div');
     valueEl.style.cssText = 'font-size:13px;font-weight:600;color:#e8e0ff;font-variant-numeric:tabular-nums;';
     box.append(topRow, valueEl);
-    return { box, valueEl };
+    return { box, valueEl, labelEl: lbl };
   };
 
   const estimated = makeTimeBox('Estimated Restock', '\u{1F52E}', '#a78bfa', 'rgba(143,130,255,0.06)');
@@ -855,7 +1001,7 @@ function buildEventCard(
     currentIndex = index;
     const row = rows[index]!;
     const prevRow = index + 1 < rows.length ? rows[index + 1]! : null;
-    const acc = computeEventAccuracy(row, prevRow, medianMs);
+    const acc = computeRowEventAccuracy(row, prevRow, medianMs, intervals);
     const cfg = STATUS_CONFIG[acc.status];
 
     statusIcon.textContent = cfg.icon;
@@ -870,11 +1016,15 @@ function buildEventCard(
     }
 
     if (acc.status === 'first') {
+      estimated.labelEl.textContent = 'Estimated Restock';
       estimated.valueEl.textContent = '\u2014';
       estimated.valueEl.style.color = 'rgba(232,224,255,0.3)';
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
       actual.valueEl.style.color = '#e8e0ff';
     } else {
+      estimated.labelEl.textContent = acc.usedServerPrediction
+        ? 'Server Prediction'
+        : 'Median Estimate';
       estimated.valueEl.textContent = acc.estimatedTs != null ? fmtTimestamp(acc.estimatedTs) : '\u2014';
       estimated.valueEl.style.color = '#e8e0ff';
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
@@ -908,9 +1058,15 @@ function buildEventCard(
 
 // ── Row element ──────────────────────────────────────────────────────────────
 
-function makeRowEl(row: RowData, index: number, medianMs: number | null, onClick: (i: number) => void): HTMLElement {
-  const { color, pill } = getAccuracy(row.errorMs, medianMs);
-  const rowAccuracy = getRowAccuracyPercent(row, medianMs);
+function makeRowEl(
+  row: RowData,
+  index: number,
+  medianMs: number | null,
+  intervals: number[] | null,
+  onClick: (i: number) => void,
+): HTMLElement {
+  const { color, pill } = getAccuracy(row.errorMs, medianMs, intervals);
+  const rowAccuracy = getRowAccuracyPercent(row, medianMs, intervals);
 
   const el = document.createElement('div');
   el.style.cssText = [
@@ -1073,6 +1229,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
 
     const spriteUrl = getItemSpriteUrl(item.shop_type, item.item_id);
     const medianMs = item.median_interval_ms;
+    const itemIntervals = item.recent_intervals_ms ?? null;
     const algorithmUpdatedAtMs = normalizeEpochMs(item.algorithm_updated_at);
 
     // ── Overview card (shown immediately with RestockItem data) ──
@@ -1128,13 +1285,17 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
       setActiveRow(index);
     }
 
-    // ── Fetch events ──
+    // ── Fetch events + algorithm history ──
     void (async () => {
       let events: Awaited<ReturnType<typeof fetchItemEvents>> = [];
+      let algoHistory: AlgorithmVersionEntry[] = [];
       try {
-        events = await fetchItemEvents(item.shop_type, item.item_id);
+        [events, algoHistory] = await Promise.all([
+          fetchItemEvents(item.shop_type, item.item_id).catch(() => [] as Awaited<ReturnType<typeof fetchItemEvents>>),
+          fetchAlgorithmHistory().catch(() => [] as AlgorithmVersionEntry[]),
+        ]);
       } catch {
-        /* network error — events stays [] */
+        /* network error — both stay [] */
       }
 
       if (!eventListSection.contains(spinner)) return; // window closed
@@ -1156,7 +1317,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
           if (ts == null) return null;
           return { ...ev, timestamp: ts };
         })
-        .filter((ev): ev is { timestamp: number; quantity: number | null } => ev !== null);
+        .filter((ev): ev is { timestamp: number; quantity: number | null; predicted_next_ms: number | null } => ev !== null);
       const orderedEvents = sortEventsNewestFirst(normalizedEvents);
       overview.setEventCount(orderedEvents.length);
 
@@ -1164,7 +1325,13 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         const prev    = i + 1 < orderedEvents.length ? orderedEvents[i + 1]! : null;
         const gapMs   = prev !== null ? ev.timestamp - prev.timestamp : null;
         const errorMs = (gapMs !== null && medianMs != null) ? gapMs - medianMs : null;
-        return { timestamp: ev.timestamp, quantity: ev.quantity, gapMs, errorMs };
+        return {
+          timestamp: ev.timestamp,
+          quantity: ev.quantity,
+          gapMs,
+          errorMs,
+          predicted_next_ms: ev.predicted_next_ms ?? null,
+        };
       });
 
       const latestEventTs = rows[0]?.timestamp ?? null;
@@ -1176,20 +1343,25 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         overview.setLastSeen(item.last_seen ?? latestEventTs);
       }
 
-      // Compute overall accuracy
+      // Compute overall accuracy using new module
       const withComparison = rows.filter((_, i) => i + 1 < rows.length);
-      if (withComparison.length > 0 && medianMs != null && medianMs > 0) {
-        const scores = withComparison.map((row, i) => {
-          const prevRow = rows[i + 1]!;
-          return computeEventAccuracy(row, prevRow, medianMs).score;
-        });
-        const avgScore = scores.reduce((s, v) => s + v, 0) / scores.length;
-        overview.setOverallAccuracy(avgScore);
+      if (withComparison.length > 0) {
+        const scores = withComparison
+          .map((row, i) => {
+            const prevRow = rows[i + 1]!;
+            return computeRowEventAccuracy(row, prevRow, medianMs, itemIntervals);
+          })
+          .filter((acc) => acc.status !== 'first')
+          .map((acc) => acc.score);
+        if (scores.length > 0) {
+          const avgScore = scores.reduce((s, v) => s + v, 0) / scores.length;
+          overview.setOverallAccuracy(avgScore);
+        }
       }
 
       // Build event card (hidden initially)
       eventCard = buildEventCard(
-        safeItemName, item.shop_type, rows, medianMs, spriteUrl,
+        safeItemName, item.shop_type, rows, medianMs, itemIntervals, spriteUrl,
         (index) => setActiveRow(index),
         showOverview,
       );
@@ -1266,27 +1438,24 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
       };
 
       let renderedCount = 0;
-      const markerInsertIndex = getAlgorithmMarkerInsertIndex(rows, algorithmUpdatedAtMs);
-      const markerContext: MarkerPositionContext =
-        markerInsertIndex <= 0 ? 'after-latest' : markerInsertIndex >= rows.length ? 'before-oldest' : 'between';
-      let markerInserted = false;
+      const markerSlots = buildAlgorithmMarkerSlots(rows, algorithmUpdatedAtMs, algoHistory);
 
-      const appendMarkerIfNeeded = (beforeIndex: number): void => {
-        if (markerInserted || markerInsertIndex < 0 || beforeIndex !== markerInsertIndex || algorithmUpdatedAtMs == null) return;
-        listWrap.appendChild(
-          makeAlgorithmUpdateMarker(algorithmUpdatedAtMs, markerContext),
-        );
-        markerInserted = true;
+      const appendMarkersIfNeeded = (beforeIndex: number): void => {
+        for (const slot of markerSlots) {
+          if (slot.inserted || slot.insertIdx !== beforeIndex) continue;
+          listWrap.appendChild(makeAlgorithmUpdateMarkerEl(slot));
+          slot.inserted = true;
+        }
       };
 
       for (let i = 0; i < Math.min(INITIAL_ROWS, rows.length); i++) {
-        appendMarkerIfNeeded(i);
-        const rowEl = makeRowEl(rows[i]!, i, medianMs, handleRowClick);
+        appendMarkersIfNeeded(i);
+        const rowEl = makeRowEl(rows[i]!, i, medianMs, itemIntervals, handleRowClick);
         rowElements[i] = rowEl;
         listWrap.appendChild(rowEl);
         renderedCount++;
       }
-      appendMarkerIfNeeded(renderedCount);
+      appendMarkersIfNeeded(renderedCount);
 
       if (rows.length > INITIAL_ROWS) {
         const remaining = rows.length - INITIAL_ROWS;
@@ -1306,12 +1475,12 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         moreBtn.addEventListener('click', () => {
           moreBtn.remove();
           for (let i = renderedCount; i < rows.length; i++) {
-            appendMarkerIfNeeded(i);
-            const rowEl = makeRowEl(rows[i]!, i, medianMs, handleRowClick);
+            appendMarkersIfNeeded(i);
+            const rowEl = makeRowEl(rows[i]!, i, medianMs, itemIntervals, handleRowClick);
             rowElements[i] = rowEl;
             listWrap.appendChild(rowEl);
           }
-          appendMarkerIfNeeded(rows.length);
+          appendMarkersIfNeeded(rows.length);
           if (activeRowIndex >= 0) setActiveRow(activeRowIndex);
           updateLinkedScaleFromWindow();
         });

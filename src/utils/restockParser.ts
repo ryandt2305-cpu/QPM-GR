@@ -109,6 +109,11 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     total_occurrences: Math.max(numOrNegInf(existing.total_occurrences), numOrNegInf(incoming.total_occurrences)),
     algorithm_version: preferred.algorithm_version ?? fallback.algorithm_version ?? null,
     algorithm_updated_at: Number.isFinite(mergedAlgorithmUpdatedAt) ? mergedAlgorithmUpdatedAt : null,
+    recent_intervals_ms: preferred.recent_intervals_ms ?? fallback.recent_intervals_ms ?? null,
+    empirical_weight: preferred.empirical_weight ?? fallback.empirical_weight ?? null,
+    empirical_probability: preferred.empirical_probability ?? fallback.empirical_probability ?? null,
+    fallback_rate: preferred.fallback_rate ?? fallback.fallback_rate ?? null,
+    baseline_interval_ms: preferred.baseline_interval_ms ?? fallback.baseline_interval_ms ?? null,
   };
 }
 
@@ -145,6 +150,17 @@ function normalizeShopType(value: unknown): string {
 /**
  * Normalize a raw API object (camelCase or snake_case) to the RestockItem interface (snake_case).
  */
+function toNumberArray(v: unknown): number[] | null {
+  if (v == null) return null;
+  if (!Array.isArray(v)) return null;
+  const result: number[] = [];
+  for (const item of v) {
+    const n = typeof item === 'number' ? item : Number(item);
+    if (Number.isFinite(n)) result.push(n);
+  }
+  return result.length > 0 ? result : null;
+}
+
 export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem {
   return {
     item_id: String(raw.item_id ?? raw.itemId ?? ''),
@@ -172,6 +188,11 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
       ? String(raw.algorithm_version ?? raw.algorithmVersion)
       : null,
     algorithm_updated_at: toMs(raw.algorithm_updated_at_ms ?? raw.algorithmUpdatedAtMs),
+    recent_intervals_ms: toNumberArray(raw.recent_intervals_ms ?? raw.recentIntervalsMs),
+    empirical_weight: toFloat(raw.empirical_weight ?? raw.empiricalWeight),
+    empirical_probability: toFloat(raw.empirical_probability ?? raw.empiricalProbability),
+    fallback_rate: toFloat(raw.fallback_rate ?? raw.fallbackRate),
+    baseline_interval_ms: toMsDuration(raw.baseline_interval_ms ?? raw.baselineIntervalMs),
   };
 }
 

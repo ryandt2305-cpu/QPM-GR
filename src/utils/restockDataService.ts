@@ -34,6 +34,7 @@ export type {
 const RESTOCK_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_predictions';
 export const RESTOCK_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqdXZyeWpncmpjaGJoaml4d3poIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxMDYyODMsImV4cCI6MjA4NTY4MjI4M30.MqQCBG-UMR4HYJU44Tz2orHUj9gMgJTMJtxpb_MHeps';
+// Base columns — known to exist in the live restock_predictions view.
 const RESTOCK_COLUMNS = [
   'item_id',
   'shop_type',
@@ -49,13 +50,22 @@ const RESTOCK_COLUMNS = [
   'algorithm_version',
   'algorithm_updated_at_ms',
 ] as const;
-const RESTOCK_LEGACY_COLUMNS = RESTOCK_COLUMNS.filter(
-  (c) => c !== 'algorithm_version' && c !== 'algorithm_updated_at_ms',
-);
+// Extended columns added by the 20260416000003 migration (prediction logging).
+// Requested as a secondary enrichment when the server supports them.
+const RESTOCK_EXTENDED_COLUMNS = [
+  ...RESTOCK_COLUMNS,
+  'recent_intervals_ms',
+  'empirical_weight',
+  'empirical_probability',
+  'fallback_rate',
+  'baseline_interval_ms',
+] as const;
 const RESTOCK_QUERY = `select=${RESTOCK_COLUMNS.join(',')}`;
-const RESTOCK_LEGACY_QUERY = `select=${RESTOCK_LEGACY_COLUMNS.join(',')}`;
+const RESTOCK_EXTENDED_QUERY = `select=${RESTOCK_EXTENDED_COLUMNS.join(',')}`;
 const RESTOCK_URL = `${RESTOCK_ENDPOINT}?${RESTOCK_QUERY}`;
-const RESTOCK_URL_LEGACY = `${RESTOCK_ENDPOINT}?${RESTOCK_LEGACY_QUERY}`;
+const RESTOCK_URL_EXTENDED = `${RESTOCK_ENDPOINT}?${RESTOCK_EXTENDED_QUERY}`;
+// Track whether the server supports extended columns (auto-detected on first success).
+let serverSupportsExtended: boolean | null = null;
 
 // v4 key forces a fresh fetch after the WateringCans/WateringCan DB dedup migration.
 const CACHE_KEY = 'qpm.restockCache.v4';
@@ -407,16 +417,27 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
       return { text: null, errors };
     };
 
-    const primaryUrl = withCacheBust(reqConfig.url, force);
-    const primary = await requestText(primaryUrl);
-    let mainText = primary.text;
-    const fetchErrors = [...primary.errors];
+    // Try extended columns first if we know the server supports them.
+    // Otherwise use the base URL — never probe speculatively (avoids 400s).
+    let mainText: string | null = null;
+    const fetchErrors: string[] = [];
+
+    if (serverSupportsExtended === true) {
+      const extUrl = withCacheBust(RESTOCK_URL_EXTENDED, force);
+      const ext = await requestText(extUrl);
+      mainText = ext.text;
+      if (!mainText) {
+        // Server may have reverted — fall back to base and reset flag.
+        serverSupportsExtended = null;
+        fetchErrors.push(...ext.errors);
+      }
+    }
+
     if (!mainText) {
-      // Compatibility fallback for older DB views that don't yet expose new metadata columns.
-      const legacyUrl = withCacheBust(RESTOCK_URL_LEGACY, force);
-      const legacy = await requestText(legacyUrl);
-      mainText = legacy.text;
-      fetchErrors.push(...legacy.errors);
+      const baseUrl = withCacheBust(reqConfig.url, force);
+      const base = await requestText(baseUrl);
+      mainText = base.text;
+      fetchErrors.push(...base.errors);
     }
 
     if (!mainText) {
@@ -446,6 +467,13 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
     }
 
     normalized = sanitizeItems(normalized);
+
+    // Auto-detect extended column support from response data.
+    if (serverSupportsExtended === null) {
+      serverSupportsExtended = normalized.some(
+        (item) => item.recent_intervals_ms != null || item.empirical_weight != null,
+      );
+    }
 
     if (force) {
       tryConsumeRestockRefresh();

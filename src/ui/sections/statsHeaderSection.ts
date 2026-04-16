@@ -31,6 +31,17 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.53",
+    date: "2026-04",
+    notes: [
+      "shop restock: fixed item list scrolling to the top when pinning or unpinning an item",
+      "shop restock: item detail window shows accuracy against the server's actual prediction",
+      "shop restock: restored celestial micro-gap noise filter — short intervals no longer skew celestial predictions",
+      "shop restock: accuracy scoring now scales with item rarity instead of loose metrics",
+      "shop restock: updated the algorithm to my new ADAPTIVE-V5 (more individualised item estimations, stronger dynamic/adaptive estimations, stronger learning off past restocks",
+    ],
+  },
+  {
     version: "3.1.52",
     date: "2026-04",
     notes: [

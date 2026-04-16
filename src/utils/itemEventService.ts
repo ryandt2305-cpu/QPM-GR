@@ -12,10 +12,12 @@ import {
 
 const EVENTS_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_events';
 const EVENTS_RPC_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/rpc/get_item_restock_events';
+const ALGO_HISTORY_RPC_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/rpc/get_algorithm_version_history';
 
 export interface ItemEvent {
   timestamp: number;
   quantity: number | null;
+  predicted_next_ms: number | null;
 }
 
 interface VariantItemEvent extends ItemEvent {
@@ -109,8 +111,8 @@ function writeItemEventCache(cacheKey: string, events: ItemEvent[], now = Date.n
 }
 
 function getEventMergeWindowMs(shopType: string): number {
-  const cycleMs = SHOP_RESTOCK_CYCLE_MS[shopType];
-  if (!Number.isFinite(cycleMs) || cycleMs <= 0) return 0;
+  const cycleMs = SHOP_RESTOCK_CYCLE_MS[shopType] as number | undefined;
+  if (cycleMs == null || !Number.isFinite(cycleMs) || cycleMs <= 0) return 0;
   return Math.floor(cycleMs * EVENT_DEDUP_FACTOR);
 }
 
@@ -164,7 +166,11 @@ function mergeAndDeduplicateVariantEvents(
     if (deduped.length >= limit) break;
   }
 
-  return deduped.slice(0, limit).map(({ timestamp, quantity }) => ({ timestamp, quantity }));
+  return deduped.slice(0, limit).map(({ timestamp, quantity, predicted_next_ms }) => ({
+    timestamp,
+    quantity,
+    predicted_next_ms: predicted_next_ms ?? null,
+  }));
 }
 
 /**
@@ -203,9 +209,12 @@ async function fetchEventsViaRpc(
       if (!Number.isFinite(ts)) return null;
       const q = r.quantity;
       const qty = q == null ? null : Number(q);
+      const rawPred = r.predicted_next_ms;
+      const pred = rawPred == null ? null : Number(rawPred);
       return {
         timestamp: ts,
         quantity: Number.isFinite(qty) ? qty : null,
+        predicted_next_ms: pred != null && Number.isFinite(pred) ? pred : null,
       };
     })
     .filter((row): row is ItemEvent => row !== null)
@@ -223,12 +232,12 @@ async function fetchEventsForId(
   const containsParam = encodeURIComponent(JSON.stringify([{ itemId: targetId }]));
   const url = `${EVENTS_ENDPOINT}?shop_type=eq.${encodeURIComponent(shopType)}&items=cs.${containsParam}&select=timestamp,items&order=timestamp.desc&limit=${limit}`;
 
-  const text = await gmGet(gm, url, RESTOCK_ANON_KEY, EVENTS_TIMEOUT_MS);
-  if (!text) return [];
+  const result = await gmGet(gm, url, RESTOCK_ANON_KEY, EVENTS_TIMEOUT_MS);
+  if (!result.ok || !result.text) return [];
 
   let rows: unknown[];
   try {
-    rows = JSON.parse(text);
+    rows = JSON.parse(result.text);
     if (!Array.isArray(rows)) return [];
   } catch {
     return [];
@@ -253,7 +262,7 @@ async function fetchEventsForId(
         qty = parsed !== null && Number.isFinite(parsed) ? parsed : null;
       }
     }
-    return { timestamp: ts, quantity: qty, sourceId: targetId };
+    return { timestamp: ts, quantity: qty, predicted_next_ms: null, sourceId: targetId };
   }).filter((e) => Number.isFinite(e.timestamp));
 }
 
@@ -318,4 +327,58 @@ export async function fetchItemEvents(
   } finally {
     inflightItemEventFetches.delete(cacheKey);
   }
+}
+
+// ── Algorithm version history ───────────────────────────────────────────────
+
+export interface AlgorithmVersionEntry {
+  algorithm_version: string;
+  updated_at_ms: number;
+  notes: string | null;
+}
+
+let algoHistoryCache: { fetchedAt: number; entries: AlgorithmVersionEntry[] } | null = null;
+const ALGO_HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
+
+/**
+ * Fetch algorithm version history from the server.
+ * Returns entries sorted oldest → newest, or an empty array if the RPC
+ * doesn't exist yet (pre-migration).
+ */
+export async function fetchAlgorithmHistory(): Promise<AlgorithmVersionEntry[]> {
+  const now = Date.now();
+  if (algoHistoryCache && now - algoHistoryCache.fetchedAt < ALGO_HISTORY_CACHE_TTL_MS) {
+    return algoHistoryCache.entries;
+  }
+
+  const gm = resolveGmXhr();
+  if (!gm) return algoHistoryCache?.entries ?? [];
+
+  const text = await gmPost(gm, ALGO_HISTORY_RPC_ENDPOINT, RESTOCK_ANON_KEY, {}, EVENTS_TIMEOUT_MS);
+  if (!text) return algoHistoryCache?.entries ?? [];
+
+  let rows: unknown;
+  try {
+    rows = JSON.parse(text);
+  } catch {
+    return algoHistoryCache?.entries ?? [];
+  }
+  if (!Array.isArray(rows)) return algoHistoryCache?.entries ?? [];
+
+  const entries: AlgorithmVersionEntry[] = rows
+    .map((row): AlgorithmVersionEntry | null => {
+      const r = row as Record<string, unknown>;
+      const version = typeof r.algorithm_version === 'string' ? r.algorithm_version : null;
+      const ts = typeof r.updated_at_ms === 'number' ? r.updated_at_ms : Number(r.updated_at_ms);
+      if (!version || !Number.isFinite(ts)) return null;
+      return {
+        algorithm_version: version,
+        updated_at_ms: ts,
+        notes: typeof r.notes === 'string' ? r.notes : null,
+      };
+    })
+    .filter((e): e is AlgorithmVersionEntry => e !== null);
+
+  algoHistoryCache = { fetchedAt: now, entries };
+  return entries;
 }

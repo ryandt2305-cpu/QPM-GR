@@ -23,6 +23,7 @@ interface WindowState {
   minimizeBtn: HTMLElement;
   closeBtn: HTMLElement;
   isMinimized: boolean;
+  maxWidth: string;
   maxHeight: string;
   restoreWidth: string | null;
   restoreHeight: string | null;
@@ -276,6 +277,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     minimizeBtn,
     closeBtn,
     isMinimized: false,
+    maxWidth: windowMaxWidth,
     maxHeight: windowMaxHeight,
     restoreWidth: null,
     restoreHeight: null,
@@ -777,6 +779,64 @@ export function destroyWindow(id: string): void {
  */
 export function destroyAllWindows(): void {
   windows.forEach((w) => destroyWindow(w.id));
+}
+
+/**
+ * Reset all window sizes and positions to defaults.
+ * Clears persisted size/position for every window and restores open windows
+ * to CSS auto-sizing within their original maxWidth/maxHeight constraints.
+ */
+export function resetAllWindowLayouts(): void {
+  // Clear stored sizes and positions from storage
+  const prefixes = [WINDOW_SIZE_KEY, WINDOW_POSITION_KEY];
+
+  try {
+    if (typeof GM_listValues === 'function' && typeof GM_deleteValue === 'function') {
+      for (const key of GM_listValues()) {
+        if (prefixes.some(p => key.startsWith(p))) {
+          GM_deleteValue(key);
+        }
+      }
+    }
+  } catch { /* GM_listValues unavailable */ }
+
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (prefixes.some(p => key.startsWith(p))) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch { /* localStorage unavailable */ }
+
+  // Reset currently open windows to their original constraints
+  windows.forEach((w) => {
+    if (w.isMinimized) {
+      w.isMinimized = false;
+      restoreWindowFromMinimize(w);
+    }
+    w.el.style.width = '';
+    w.el.style.height = '';
+    w.el.style.maxWidth = w.maxWidth;
+    w.el.style.maxHeight = w.maxHeight;
+
+    // Re-center on screen
+    w.el.style.left = '50%';
+    w.el.style.top = '50%';
+    w.el.style.transform = 'translate(-50%, -50%)';
+    w.el.style.right = 'auto';
+    w.el.style.bottom = 'auto';
+
+    requestAnimationFrame(() => {
+      const rect = w.el.getBoundingClientRect();
+      w.el.style.transform = '';
+      w.el.style.left = 'auto';
+      w.el.style.right = `${window.innerWidth - rect.right}px`;
+      w.el.style.top = `${rect.top}px`;
+      saveWindowPosition(w.id, w.el);
+    });
+  });
+
+  log('[Window] All window layouts reset to defaults');
 }
 
 // ─── Window persistence ───────────────────────────────────────────────────────

@@ -31,10 +31,18 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.55",
+    date: "2026-04",
+    notes: [
+      "Locker: in classic QPM fashion; refactor lol",
+      "Dashboard: Reset Windows button replaces legacy Reset Stats",
+    ],
+  },
+  {
     version: "3.1.54",
     date: "2026-04",
     notes: [
-      "locker: new Action Guard feature — block harvests, egg hatches, and decor pickups by plant, mutation, egg type, or decor; per-crop sell protection; custom plant+mutation combo rules with multi-mutation AND logic; inventory reserve; sell-all-pets protections",
+      "locker: new Action Guard feature - block harvests, egg hatches, and decor pickups by plant, mutation, egg type, or decor; per-crop sell protection; custom plant+mutation combo rules with multi-mutation AND logic; inventory reserve; sell-all-pets protections",
     ],
   },
   {
@@ -43,7 +51,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     notes: [
       "shop restock: fixed item list scrolling to the top when pinning or unpinning an item",
       "shop restock: item detail window shows accuracy against the server's actual prediction",
-      "shop restock: restored celestial micro-gap noise filter — short intervals no longer skew celestial predictions",
+      "shop restock: restored celestial micro-gap noise filter - short intervals no longer skew celestial predictions",
       "shop restock: accuracy scoring now scales with item rarity instead of loose metrics",
       "shop restock: updated the algorithm to my new ADAPTIVE-V5 (more individualised item estimations, stronger dynamic/adaptive estimations, stronger learning off past restocks",
     ],
@@ -61,7 +69,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     notes: [
       "pet picker: fixed modal resizing when hovering different pets by locking window height",
       "shop restock: pinned section now scrolls and has a draggable divider so many pinned items no longer push the items list off screen",
-      "pet teams: fixed PlacePet failing when applying a team with more pets than currently active — now finds a real empty garden tile instead of using invalid hardcoded coordinates",
+      "pet teams: fixed PlacePet failing when applying a team with more pets than currently active - now finds a real empty garden tile instead of using invalid hardcoded coordinates",
     ],
   },
   {
@@ -71,7 +79,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
       "shop restock alerts: per-item sound alerts with built-in/custom sounds, once or loop mode, and configurable repeat speed",
       "shop restock alerts: fixed buy-all using canonical item names for reliable ownership tracking",
       "pet optimizer: seed finder now treats each tier independently",
-      "turtle timer: fixed growth abilities using hardcoded Tier II values for all tiers — Cow was ~1.9x overestimated",
+      "turtle timer: fixed growth abilities using hardcoded Tier II values for all tiers - Cow was ~1.9x overestimated",
       "turtle timer: switched from geometric to game-accurate linear probability model",
       "ability stats: effect-per-hour now correctly scales by pet strength",
     ],
@@ -122,7 +130,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     date: "2026-04",
     notes: [
       "shop restock alerts: fixed Buy All showing success when purchases were not server-confirmed; now verifies via purchases atom delta after sends",
-      "shop restock alerts: added insufficient balance modal — shows cost breakdown and buys as many as your balance allows",
+      "shop restock alerts: added insufficient balance modal - shows cost breakdown and buys as many as your balance allows",
       "shop restock alerts: increased send delay to 100ms to respect WS throttle; fixed throttle bypass",
       "shop stock: fixed custom shop inventories (customRestockInventories) not being applied, matching game behaviour",
       "shop stock: fixed currentStock incorrectly inflated when entry.remaining was present in the raw atom",
@@ -164,7 +172,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     version: "3.1.38",
     date: "2026-04",
     notes: [
-      "pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling — no longer jumps back to top",
+      "pet optimizer: scroll position is now preserved when marking a pet as Keep/Return or selling - no longer jumps back to top",
     ],
   },
   {
@@ -250,7 +258,7 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
       "fixed garden filters and sprite capture not working in Firefox / Discord Activities",
       "fixed PIXI app not captured when inline script injection blocked by CSP",
       "fixed tutorial and guide images not loading under strict CSP",
-      "fixed KTX2 decoder hanging when WebAssembly blocked by CSP — skips to legacy path",
+      "fixed KTX2 decoder hanging when WebAssembly blocked by CSP - skips to legacy path",
       "fixed localStorage calls failing in third-party iframe storage partitioning",
       "fixed pet team keybind input not registering key presses",
     ],
@@ -267,14 +275,14 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     version: "3.1.24",
     date: "2026-03",
     notes: [
-      "fixed garden filter Four-Leaf Clover and Clover (Patch) not matching — corrected PIXI view labels (plant.name + View, not Plant View)",
+      "fixed garden filter Four-Leaf Clover and Clover (Patch) not matching - corrected PIXI view labels (plant.name + View, not Plant View)",
     ],
   },
   {
     version: "3.1.23",
     date: "2026-03",
     notes: [
-      "added Max Size filter to Garden Stats — shows plants where at least one slot has reached its species max scale",
+      "added Max Size filter to Garden Stats - shows plants where at least one slot has reached its species max scale",
       "fixed coins/hr display for AmberGranter and ProduceScaleBoost (no longer blank between harvests)",
       "reduced unnecessary re-renders in weather tracking, harvest reminder, turtle timer, and shop tile",
     ],
@@ -572,7 +580,6 @@ export function createStatsHeader(
   uiState: UIState,
   cfg: any,
   saveCfg: () => void,
-  resetAllStats: () => void,
 ): HTMLElement {
   const container = document.createElement("div");
   container.className = "qpm-card";
@@ -590,12 +597,18 @@ export function createStatsHeader(
   headerTitle.style.cssText =
     "font-size:14px;font-weight:700;letter-spacing:0.3px;";
 
-  const resetButton = btn("♻ Reset Stats", resetAllStats);
-  resetButton.classList.add("qpm-button--accent");
-  resetButton.style.fontSize = "11px";
-  resetButton.title = "Reset session stats counters";
+  const resetWinBtn = btn("Reset Windows", () => {
+    import("../modalWindow").then(({ resetAllWindowLayouts }) => {
+      resetAllWindowLayouts();
+      resetWinBtn.textContent = "Done!";
+      setTimeout(() => { resetWinBtn.textContent = "Reset Windows"; }, 1500);
+    });
+  });
+  resetWinBtn.classList.add("qpm-button--accent");
+  resetWinBtn.style.fontSize = "11px";
+  resetWinBtn.title = "Reset all window sizes and positions to defaults";
 
-  headerRow.append(headerTitle, resetButton);
+  headerRow.append(headerTitle, resetWinBtn);
   container.appendChild(headerRow);
 
   // ── Shop Restock summary ──

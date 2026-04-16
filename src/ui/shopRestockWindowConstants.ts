@@ -36,6 +36,8 @@ export const RARITY_COLORS: Record<string, string> = {
   celestial: '#FF00FF',
 };
 
+export const RARITY_ORDER = ['celestial', 'divine', 'mythical', 'mythic', 'legendary', 'rare', 'uncommon', 'common'] as const;
+
 export const RARITY_GLOW: Record<string, string> = {
   legendary: '0 0 8px rgba(255,199,52,0.3)',
   mythic:    '0 0 10px rgba(153,68,167,0.4)',

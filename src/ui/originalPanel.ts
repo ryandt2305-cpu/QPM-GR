@@ -2,7 +2,7 @@
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 import { getWeatherSnapshot } from '../store/weatherHub';
-import { resetStats } from '../store/stats';
+
 import { startVersionChecker, onVersionChange, getCurrentVersion, type VersionInfo, type VersionStatus } from '../utils/versionChecker';
 import { yieldToBrowser } from '../utils/scheduling';
 import { ensurePanelStyles } from './panelStyles';
@@ -188,7 +188,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   panel.append(titleBar, content, resizeHandle);
 
   // Create UI sections
-  const statsHeader = createStatsHeader(uiState, cfg, saveCfg, resetAllStats);
+  const statsHeader = createStatsHeader(uiState, cfg, saveCfg);
   await yieldToBrowser();
 
   const notificationsSection = createNotificationSection(uiState);
@@ -908,11 +908,7 @@ function refreshHeaderStats(): void {
   uiState.headerWeather.textContent = weatherParts.join(' • ');
 }
 
-function resetAllStats(): void {
-  resetStats();
-  refreshHeaderStats();
-  showToast('Stats reset');
-}
+
 
 /**
  * Render function for the reminders modal window

@@ -252,7 +252,8 @@ dist/
 ### Build Commands
 
 ```bash
-npm run build                # Full build (recommended)
+npm run build                # Full build: sync-version + bundle + userscript (recommended)
+npm run sync-version         # Sync version from CHANGELOG[0] to other files
 npm run build:bundle         # Vite IIFE output only
 npm run build:userscript     # Wrap bundle → dist/QPM.user.js
 npm run dev                  # Watch mode
@@ -261,15 +262,9 @@ npm run typecheck            # (if available) Type-check without building
 
 ### Version Sync Procedure
 
-Every release must update **all three** of these files or the build will fail:
+Only update the changelog — bump `CHANGELOG[0]` version + notes in `src/ui/sections/statsHeaderSection.ts`.
 
-| File | What to update |
-|------|----------------|
-| `package.json` | `"version": "X.Y.Z"` |
-| `src/utils/versionChecker.ts` | `CURRENT_VERSION = 'X.Y.Z'` |
-| `src/ui/sections/statsHeaderSection.ts` | `CHANGELOG[0]` — version string + notes |
-
-Run `npm run build:userscript` to verify. The script checks all three and fails with a diff if they disagree.
+`npm run build` automatically syncs the version to `package.json`, `src/utils/versionChecker.ts`, and `scripts/build-userscript.js` via `scripts/sync-version.js`. The build still validates all files match and fails on mismatch as a safety net.
 
 ### Storage Keys
 

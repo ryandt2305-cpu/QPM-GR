@@ -10,6 +10,7 @@ import { delay } from '../utils/scheduling';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from './xpTracker';
 import type { PetTeam, PetTeamsConfig, PetFeedPolicy, PooledPet } from '../types/petTeams';
 import { sendRoomAction, type WebSocketSendFailureReason } from '../websocket/api';
+import { findEmptyGardenTile, PLACE_PET_DEFAULTS } from '../features/petTeamActions';
 import { normalizeSpeciesKey } from '../utils/helpers';
 
 const CONFIG_KEY = 'qpm.petTeams.config.v1';
@@ -871,17 +872,26 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
     );
 
-  const sendPlaceFromInventory = (itemId: string, skipThrottle = false) =>
-    sendRoomAction(
+  // Track positions claimed during this apply to avoid placing two pets on the
+  // same tile when the fast path fires multiple PlacePet messages at once.
+  const claimedPositions = new Set<string>();
+
+  const sendPlaceFromInventory = (itemId: string, skipThrottle = false) => {
+    const tile = findEmptyGardenTile(claimedPositions);
+    const position = tile?.position ?? PLACE_PET_DEFAULTS.position;
+    const tileType = tile?.tileType ?? PLACE_PET_DEFAULTS.tileType;
+    const localTileIndex = tile?.localTileIndex ?? PLACE_PET_DEFAULTS.localTileIndex;
+
+    if (tile) {
+      claimedPositions.add(`${position.x},${position.y}`);
+    }
+
+    return sendRoomAction(
       'PlacePet',
-      {
-        itemId,
-        position: { x: 0, y: 0 },
-        tileType: 'Boardwalk',
-        localTileIndex: 64,
-      },
+      { itemId, position, tileType, localTileIndex },
       skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
     );
+  };
 
   const sendPickupPet = (petId: string, skipThrottle = false) =>
     sendRoomAction(

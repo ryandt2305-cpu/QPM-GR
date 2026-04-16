@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.51",
+    date: "2026-04",
+    notes: [
+      "pet picker: fixed modal resizing when hovering different pets by locking window height",
+      "shop restock: pinned section now scrolls and has a draggable divider so many pinned items no longer push the items list off screen",
+      "pet teams: fixed PlacePet failing when applying a team with more pets than currently active — now finds a real empty garden tile instead of using invalid hardcoded coordinates",
+    ],
+  },
+  {
     version: "3.1.50",
     date: "2026-04",
     notes: [

@@ -131,6 +131,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
       sortColumn,
       sortDirection,
       historyScrollTop,
+      pinnedHeight,
     });
   };
   let saveUiTimer: number | null = null;
@@ -235,7 +236,10 @@ function renderShopRestockWindow(root: HTMLElement): void {
   predHeaderRow.append(predTitle, predChevron);
 
   const predBody = document.createElement('div');
-  predBody.style.cssText = 'padding:6px 10px 8px;display:flex;flex-direction:column;gap:2px;';
+  const DEFAULT_PINNED_MAX = 'min(240px,35vh)';
+  let pinnedHeight = persistedUi.pinnedHeight;
+  const pinnedMaxHeight = pinnedHeight !== null ? `${pinnedHeight}px` : DEFAULT_PINNED_MAX;
+  predBody.style.cssText = `padding:6px 10px 8px;display:flex;flex-direction:column;gap:2px;max-height:${pinnedMaxHeight};overflow-y:auto;`;
 
   let predCollapsed = persistedUi.predCollapsed;
   predBody.style.display = predCollapsed ? 'none' : '';
@@ -244,14 +248,56 @@ function renderShopRestockWindow(root: HTMLElement): void {
     predCollapsed = !predCollapsed;
     predBody.style.display = predCollapsed ? 'none' : '';
     predChevron.textContent = predCollapsed ? '>' : 'v';
+    divider.style.display = predCollapsed ? 'none' : '';
     scheduleSaveUiState();
   });
   predSection.append(predHeaderRow, predBody);
   body.appendChild(predSection);
 
+  // -- Resizable divider between Pinned and Items --
+  const MIN_PINNED = 40;
+  const MIN_HIST = 60;
+  const divider = document.createElement('div');
+  divider.style.cssText = [
+    'flex-shrink:0', 'height:6px', 'cursor:row-resize', 'user-select:none',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'background:rgba(143,130,255,0.08)', 'transition:background 0.12s',
+  ].join(';');
+  divider.title = 'Drag to resize';
+  const grip = document.createElement('div');
+  grip.style.cssText = 'width:32px;height:2px;border-radius:1px;background:rgba(143,130,255,0.35);';
+  divider.appendChild(grip);
+  divider.style.display = predCollapsed ? 'none' : '';
+  divider.addEventListener('mouseenter', () => { divider.style.background = 'rgba(143,130,255,0.18)'; });
+  divider.addEventListener('mouseleave', () => { divider.style.background = 'rgba(143,130,255,0.08)'; });
+
+  divider.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = predBody.getBoundingClientRect().height;
+    const bodyRect = body.getBoundingClientRect();
+    const maxPinned = bodyRect.height - MIN_HIST;
+
+    const onMove = (ev: MouseEvent): void => {
+      const delta = ev.clientY - startY;
+      const clamped = Math.max(MIN_PINNED, Math.min(maxPinned, startHeight + delta));
+      predBody.style.maxHeight = `${clamped}px`;
+      pinnedHeight = clamped;
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      scheduleSaveUiState();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  body.appendChild(divider);
+
   // -- History section --
   const histSection = document.createElement('div');
-  histSection.style.cssText = 'flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;';
+  histSection.style.cssText = `flex:1;display:flex;flex-direction:column;min-height:${MIN_HIST}px;overflow:hidden;`; // synced with MIN_HIST
 
   const histHeader = document.createElement('div');
   histHeader.style.cssText = [

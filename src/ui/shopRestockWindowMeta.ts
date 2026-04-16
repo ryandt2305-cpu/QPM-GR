@@ -32,6 +32,7 @@ export interface ShopRestockUiState {
   sortColumn: SortColumn;
   sortDirection: SortDirection;
   historyScrollTop: number;
+  pinnedHeight: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +255,9 @@ export function loadUiState(): ShopRestockUiState {
   const historyScrollTop = Number.isFinite(saved?.historyScrollTop)
     ? Math.max(0, Math.floor(saved!.historyScrollTop!))
     : 0;
+  const pinnedHeight = Number.isFinite(saved?.pinnedHeight) && (saved!.pinnedHeight as number) > 0
+    ? Math.floor(saved!.pinnedHeight as number)
+    : null;
   return {
     filter: typeof saved?.filter === 'string' ? saved.filter : 'all',
     search: typeof saved?.search === 'string' ? saved.search : '',
@@ -261,6 +265,7 @@ export function loadUiState(): ShopRestockUiState {
     sortColumn,
     sortDirection,
     historyScrollTop,
+    pinnedHeight,
   };
 }
 

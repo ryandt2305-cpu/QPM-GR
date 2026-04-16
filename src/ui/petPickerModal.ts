@@ -137,7 +137,7 @@ const STYLES = `
   border: 1px solid rgba(143,130,255,0.45);
   border-radius: 10px;
   width: min(1020px, 97vw);
-  max-height: min(620px, 92vh);
+  height: min(620px, 92vh);
   display: flex; flex-direction: column;
   font-family: inherit;
   box-shadow: 0 8px 32px rgba(0,0,0,0.6);

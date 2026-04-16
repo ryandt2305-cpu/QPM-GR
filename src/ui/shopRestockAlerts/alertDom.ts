@@ -8,6 +8,8 @@ import { canonicalItemId } from '../../utils/restockDataService';
 import {
   ALERT_ROOT_ID,
   ALERT_STYLE_ID,
+  ALERT_ENTER_MS,
+  ALERT_EXIT_MS,
   type RestockShopType,
   type AlertModel,
   type ActiveAlert,
@@ -124,7 +126,7 @@ export function ensureAlertStyles(): void {
   const style = document.createElement('style');
   style.id = ALERT_STYLE_ID;
   style.textContent = [
-    '#qpm-restock-alert-root{position:fixed;top:18px;right:18px;z-index:2147483600;display:flex;flex-direction:column;gap:10px;max-width:min(88vw,360px);max-height:90vh;overflow-y:auto;pointer-events:none;}',
+    '#qpm-restock-alert-root{position:fixed;top:18px;right:18px;z-index:2147483600;display:flex;flex-direction:column;gap:10px;max-width:min(88vw,360px);max-height:90vh;overflow:visible;pointer-events:none;}',
     '.qpm-restock-alert{pointer-events:auto;border:1px solid rgba(143,130,255,0.35);border-radius:12px;background:rgba(18,20,28,0.96);backdrop-filter:blur(2px);box-shadow:0 8px 22px rgba(0,0,0,0.35);padding:10px 12px;display:flex;flex-direction:column;gap:8px;}',
     '.qpm-restock-alert__top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}',
     '.qpm-restock-alert__identity{display:flex;align-items:center;gap:10px;min-width:0;flex:1;}',
@@ -146,6 +148,10 @@ export function ensureAlertStyles(): void {
     '.qpm-restock-alert__btn:disabled,.qpm-restock-alert__close:disabled{opacity:0.55;cursor:default;}',
     '.qpm-restock-alert__mute{border:none;background:none;color:rgba(229,231,235,0.6);font-size:14px;line-height:1;cursor:pointer;padding:2px 4px;border-radius:4px;flex-shrink:0;}',
     '.qpm-restock-alert__mute:hover{color:#fff;background:rgba(255,255,255,0.08);}',
+    `@keyframes qpm-alert-enter{0%{opacity:0;transform:translateY(-100%)}70%{opacity:1;transform:translateY(6px)}85%{transform:translateY(-2px)}100%{transform:translateY(0)}}`,
+    `@keyframes qpm-alert-exit{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(-100%)}}`,
+    `.qpm-restock-alert{animation:qpm-alert-enter ${ALERT_ENTER_MS}ms cubic-bezier(0.22,1,0.36,1) both;will-change:transform,opacity;}`,
+    `.qpm-restock-alert--exit{animation:qpm-alert-exit ${ALERT_EXIT_MS}ms cubic-bezier(0.55,0,1,0.45) both;pointer-events:none;}`,
   ].join('');
   document.head.appendChild(style);
 }
@@ -181,9 +187,15 @@ export function removeAlert(key: string): void {
     stockCycleId: active.model.stockCycleId,
   });
   setAlertPendingConfirmation(active, false);
-  active.root.remove();
+  // Remove from map immediately so duplicate removals are no-ops
   activeAlerts.delete(key);
-  removeAlertRootIfEmpty();
+  // Animate out, then remove DOM
+  const card = active.root;
+  card.classList.add('qpm-restock-alert--exit');
+  const cleanup = (): void => { card.remove(); removeAlertRootIfEmpty(); };
+  card.addEventListener('animationend', cleanup, { once: true });
+  // Safety fallback if animationend never fires (e.g. display:none, detached)
+  window.setTimeout(cleanup, ALERT_EXIT_MS + 50);
 }
 
 export function dismissAlertForCurrentStock(key: string, stockCycleId: string | null): void {

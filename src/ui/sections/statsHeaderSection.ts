@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.52",
+    date: "2026-04",
+    notes: [
+      "shop restock alerts: alerts now slide in from the top of the screen with a subtle bounce and slide back out on dismiss",
+    ],
+  },
+  {
     version: "3.1.51",
     date: "2026-04",
     notes: [

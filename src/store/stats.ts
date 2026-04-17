@@ -2,8 +2,6 @@
 import { storage } from '../utils/storage';
 import { startWeatherHub, onWeatherSnapshot, getWeatherSnapshot, type WeatherSnapshot } from './weatherHub';
 import { visibleInterval } from '../utils/timerManager';
-import type { WeatherPreset } from '../features/weatherUtils';
-
 export type ShopCategoryKey = 'seeds' | 'eggs' | 'tools' | 'decor';
 
 interface FeedEntry {
@@ -27,13 +25,9 @@ export interface StatsSnapshot {
     sessionStart: number;
   };
   weather: {
-    totalSwaps: number;
-    swapsByState: Record<'weather' | 'noweather', number>;
-    presetUsage: Record<'weather' | 'noweather', Record<WeatherPreset, number>>;
     cooldownBlocks: number;
     timeByKind: Record<string, number>;
     activeKind: string;
-    lastSwapAt: number | null;
   };
   shop: {
     totalPurchases: number;
@@ -128,16 +122,9 @@ function createDefaultState(now: number): StatsState {
       sessionStart: now,
     },
     weather: {
-      totalSwaps: 0,
-      swapsByState: { weather: 0, noweather: 0 },
-      presetUsage: {
-        weather: { primary: 0, alternate: 0 },
-        noweather: { primary: 0, alternate: 0 },
-      },
       cooldownBlocks: 0,
       timeByKind: {},
       activeKind: 'unknown',
-      lastSwapAt: null,
       lastSnapshotAt: now,
     },
     shop: {
@@ -225,25 +212,9 @@ function hydrateState(): StatsState {
 
   // Weather
   if (stored.weather) {
-    base.weather.totalSwaps = Number(stored.weather.totalSwaps ?? 0);
     base.weather.cooldownBlocks = Number(stored.weather.cooldownBlocks ?? 0);
     base.weather.activeKind = stored.weather.activeKind ?? base.weather.activeKind;
-    base.weather.lastSwapAt = stored.weather.lastSwapAt ?? null;
     base.weather.lastSnapshotAt = stored.weather.lastSnapshotAt ?? now;
-
-    if (stored.weather.swapsByState) {
-      base.weather.swapsByState.weather = Number(stored.weather.swapsByState.weather ?? 0);
-      base.weather.swapsByState.noweather = Number(stored.weather.swapsByState.noweather ?? 0);
-    }
-
-    if (stored.weather.presetUsage) {
-      for (const stateKey of ['weather', 'noweather'] as const) {
-        const presetRow = stored.weather.presetUsage[stateKey];
-        if (!presetRow) continue;
-        base.weather.presetUsage[stateKey].primary = Number(presetRow.primary ?? 0);
-        base.weather.presetUsage[stateKey].alternate = Number(presetRow.alternate ?? 0);
-      }
-    }
 
     if (stored.weather.timeByKind && typeof stored.weather.timeByKind === 'object') {
       for (const [kind, value] of Object.entries(stored.weather.timeByKind)) {
@@ -382,16 +353,9 @@ function emitSnapshot(): void {
       sessionStart: state.feed.sessionStart,
     },
     weather: {
-      totalSwaps: state.weather.totalSwaps,
-      swapsByState: { ...state.weather.swapsByState },
-      presetUsage: {
-        weather: { ...state.weather.presetUsage.weather },
-        noweather: { ...state.weather.presetUsage.noweather },
-      },
       cooldownBlocks: state.weather.cooldownBlocks,
       timeByKind: { ...state.weather.timeByKind },
       activeKind: state.weather.activeKind,
-      lastSwapAt: state.weather.lastSwapAt,
     },
     shop: {
       totalPurchases: state.shop.totalPurchases,
@@ -544,16 +508,9 @@ export function getStatsSnapshot(): StatsSnapshot {
       sessionStart: state.feed.sessionStart,
     },
     weather: {
-      totalSwaps: state.weather.totalSwaps,
-      swapsByState: { ...state.weather.swapsByState },
-      presetUsage: {
-        weather: { ...state.weather.presetUsage.weather },
-        noweather: { ...state.weather.presetUsage.noweather },
-      },
       cooldownBlocks: state.weather.cooldownBlocks,
       timeByKind: { ...state.weather.timeByKind },
       activeKind: state.weather.activeKind,
-      lastSwapAt: state.weather.lastSwapAt,
     },
     shop: {
       totalPurchases: state.shop.totalPurchases,
@@ -627,15 +584,6 @@ export function recordFeedManual(timestamp = Date.now()): void {
   state.feed.manualFeeds += 1;
   state.feed.totalFeeds += 1;
   state.feed.lastFeedAt = timestamp;
-  commitState();
-}
-
-export function recordWeatherSwap(stateType: 'weather' | 'noweather', preset: WeatherPreset, triggeredAt: number): void {
-  ensureInitialized();
-  state.weather.totalSwaps += 1;
-  state.weather.swapsByState[stateType] += 1;
-  state.weather.presetUsage[stateType][preset] += 1;
-  state.weather.lastSwapAt = triggeredAt;
   commitState();
 }
 

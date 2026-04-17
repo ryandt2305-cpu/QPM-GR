@@ -21,8 +21,6 @@ export interface EventAccuracy {
   diffMs: number;
   estimatedTs: number | null;
   actualTs: number;
-  /** Whether the accuracy was measured against a server prediction snapshot. */
-  usedServerPrediction: boolean;
 }
 
 // ── Accuracy windows ─────────────────────────────────────────────────────────
@@ -90,15 +88,13 @@ export function computeAccuracyScore(errorMs: number, windows: AccuracyWindows):
 
 interface RowLike {
   timestamp: number;
-  predicted_next_ms?: number | null;
 }
 
 /**
  * Compute accuracy for a single restock event.
  *
- * Uses the server's prediction snapshot (`predicted_next_ms`) when available
- * — this measures the actual Bayesian model's accuracy. Falls back to
- * `prevRow.timestamp + medianMs` for legacy events without snapshots.
+ * Uses interval-based accuracy: compares `prevRow.timestamp + medianMs`
+ * (the expected gap) against the actual event timestamp.
  */
 export function computeEventAccuracy(
   row: RowLike,
@@ -108,30 +104,7 @@ export function computeEventAccuracy(
 ): EventAccuracy {
   const windows = getAccuracyWindows(medianMs, intervals);
 
-  // If the event has a server-side prediction snapshot, use it
-  if (row.predicted_next_ms != null && Number.isFinite(row.predicted_next_ms)) {
-    const diffMs = row.timestamp - row.predicted_next_ms;
-    const score = computeAccuracyScore(diffMs, windows);
-    const absDiff = Math.abs(diffMs);
-    let status: EventStatus;
-    if (absDiff <= windows.goodMs) {
-      status = 'accurate';
-    } else if (diffMs < 0) {
-      status = 'early';
-    } else {
-      status = 'late';
-    }
-    return {
-      score,
-      status,
-      diffMs,
-      estimatedTs: row.predicted_next_ms,
-      actualTs: row.timestamp,
-      usedServerPrediction: true,
-    };
-  }
-
-  // Fallback: prev + median (for events before prediction logging)
+  // No previous event to compare against → first event
   if (!prevRow || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
     return {
       score: 0,
@@ -139,10 +112,10 @@ export function computeEventAccuracy(
       diffMs: 0,
       estimatedTs: null,
       actualTs: row.timestamp,
-      usedServerPrediction: false,
     };
   }
 
+  // Interval-based accuracy: actual gap vs expected gap (median)
   const estimatedTs = prevRow.timestamp + medianMs;
   const diffMs = row.timestamp - estimatedTs;
   const score = computeAccuracyScore(diffMs, windows);
@@ -161,7 +134,6 @@ export function computeEventAccuracy(
     diffMs,
     estimatedTs,
     actualTs: row.timestamp,
-    usedServerPrediction: false,
   };
 }
 

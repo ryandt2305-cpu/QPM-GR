@@ -110,7 +110,13 @@ function writeItemEventCache(cacheKey: string, events: ItemEvent[], now = Date.n
   }
 }
 
-function getEventMergeWindowMs(shopType: string): number {
+const WEATHER_LOCKED_EGGS = new Set(['SnowEgg', 'DawnEgg']);
+
+function getEventMergeWindowMs(shopType: string, itemId?: string): number {
+  // Weather-locked eggs restock every 5 min during their weather, not every 15 min
+  if (shopType === 'egg' && itemId && WEATHER_LOCKED_EGGS.has(itemId)) {
+    return Math.floor(300_000 * EVENT_DEDUP_FACTOR); // 4.5 min
+  }
   const cycleMs = SHOP_RESTOCK_CYCLE_MS[shopType] as number | undefined;
   if (cycleMs == null || !Number.isFinite(cycleMs) || cycleMs <= 0) return 0;
   return Math.floor(cycleMs * EVENT_DEDUP_FACTOR);
@@ -140,7 +146,7 @@ function mergeAndDeduplicateVariantEvents(
 ): ItemEvent[] {
   if (events.length === 0) return [];
 
-  const mergeWindowMs = getEventMergeWindowMs(shopType);
+  const mergeWindowMs = getEventMergeWindowMs(shopType, canonicalId);
   const sorted = events
     .filter((ev) => Number.isFinite(ev.timestamp))
     .sort((a, b) => b.timestamp - a.timestamp);

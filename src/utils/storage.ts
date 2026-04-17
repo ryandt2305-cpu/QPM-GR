@@ -19,7 +19,6 @@ const QPM_STORAGE_KEYS = [
   'qpm.shopRestocks.v1',
   'qpm.shopRestockConfig.v1',
   'qpm.shopRestocks.migration',
-  'qpm.shopQuadModalSpike.v1',
 
   // XP Tracker
   'qpm.xpTrackerProcs.v1',
@@ -191,9 +190,6 @@ const QPM_STORAGE_KEYS = [
   // Turtle Timer tab
   'qpm.turtleTimer.activeTab',
 
-  // Backups
-  'qpm.backups.v1',
-
   // Debug globals opt-in
   'qpm.debug.globals.v1',
 ];
@@ -304,13 +300,30 @@ export const storage: Storage = {
 };
 
 /**
+ * Returns true if `key` is a recognised QPM storage key.
+ * Matches: anything in QPM_STORAGE_KEYS, or prefixed with qpm. / quinoa,
+ * or a dynamic window-position/size/state key.
+ */
+function isQpmKey(key: string): boolean {
+  if (QPM_STORAGE_KEYS.includes(key)) return true;
+  if (key.startsWith('qpm.') || key.startsWith('quinoa')) return true;
+  if (QPM_DYNAMIC_KEY_PREFIXES.some(p => key.startsWith(p))) return true;
+  return false;
+}
+
+/**
+ * Returns true if `key` is a dynamic window layout key (position, size, state).
+ * These are ephemeral UI state and should not be included in exports.
+ */
+function isDynamicWindowKey(key: string): boolean {
+  return QPM_DYNAMIC_KEY_PREFIXES.some(p => key.startsWith(p));
+}
+
+/**
  * Serialises all currently-stored QPM values to a plain object of JSON strings.
  *
- * When running under Tampermonkey / Violentmonkey, GM_listValues enumerates
- * every key the script has written to the manager's private GM storage, so the
- * export is complete regardless of the known-keys list.  When GM_listValues is
- * unavailable the function falls back to iterating QPM_STORAGE_KEYS against
- * whatever storage backend is active.
+ * Only exports keys in QPM_STORAGE_KEYS or matching known QPM prefixes (qpm.*, quinoa*).
+ * Excludes dynamic window layout keys (position/size/state) — those are ephemeral UI state.
  *
  * Values are returned as JSON strings (the same format that storage.set writes)
  * so they can be written verbatim to localStorage or forwarded to the Starweaver
@@ -322,6 +335,7 @@ export function exportAllValues(): Record<string, string> {
   try {
     if (typeof GM_listValues === 'function') {
       for (const key of GM_listValues()) {
+        if (!isQpmKey(key) || isDynamicWindowKey(key)) continue;
         const val = storage.get(key);
         if (val !== null) {
           try { out[key] = JSON.stringify(val); } catch { /* skip non-serialisable */ }
@@ -338,20 +352,6 @@ export function exportAllValues(): Record<string, string> {
       try { out[key] = JSON.stringify(val); } catch { /* skip */ }
     }
   }
-
-  // Also capture dynamic-prefix keys (window positions, sizes, state)
-  try {
-    const allLocalKeys = Object.keys(localStorage);
-    for (const key of allLocalKeys) {
-      if (key in out) continue;
-      if (QPM_DYNAMIC_KEY_PREFIXES.some(p => key.startsWith(p))) {
-        const val = storage.get(key);
-        if (val !== null) {
-          try { out[key] = JSON.stringify(val); } catch { /* skip */ }
-        }
-      }
-    }
-  } catch { /* localStorage unavailable */ }
 
   return out;
 }

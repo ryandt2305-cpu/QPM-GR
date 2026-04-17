@@ -63,6 +63,8 @@ export const SEARCH_DEBOUNCE_MS = 140;
 export const UI_STATE_SAVE_DEBOUNCE_MS = 180;
 export const HISTORY_CHUNK_SIZE = 40;
 
+export const WEATHER_LOCKED_EGG_IDS = new Set(['SnowEgg', 'DawnEgg']);
+
 export const CELESTIAL_IDS = new Set([
   'Starweaver', 'StarweaverPod',
   'Moonbinder', 'MoonbinderPod', 'MoonCelestial',

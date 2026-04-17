@@ -16,7 +16,6 @@ import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { storage } from '../utils/storage';
 import {
   getAccuracyWindows,
-  computeAccuracyScore,
   computeEventAccuracy as computeEventAccuracyNew,
   getConfidenceInterval,
   type EventAccuracy,
@@ -239,29 +238,6 @@ const TIER_COLOR: Record<Tier, string> = {
   none: 'rgba(143,130,255,0.22)',
 };
 
-interface Accuracy { tier: Tier; color: string; pill: string }
-
-function getAccuracy(
-  errorMs: number | null,
-  medianMs: number | null,
-  intervals?: number[] | null,
-): Accuracy {
-  if (errorMs === null) {
-    return { tier: 'none', color: TIER_COLOR.none, pill: '' };
-  }
-  const absError = Math.abs(errorMs);
-  const windows = getAccuracyWindows(medianMs, intervals);
-
-  if (absError <= windows.goodMs) {
-    return { tier: 'good', color: TIER_COLOR.good, pill: '\u2713 on time' };
-  }
-  const dir   = errorMs < 0 ? 'early' : 'late';
-  const label = `${fmtDuration(errorMs)} ${dir}`;
-  if (absError <= windows.warnMs) {
-    return { tier: 'warn', color: TIER_COLOR.warn, pill: label };
-  }
-  return { tier: 'bad', color: TIER_COLOR.bad, pill: label };
-}
 
 // ── Row data ─────────────────────────────────────────────────────────────────
 
@@ -270,7 +246,6 @@ interface RowData {
   quantity:  number | null;
   gapMs:     number | null;
   errorMs:   number | null;
-  predicted_next_ms: number | null;
 }
 
 function normalizeEpochMs(value: number | null | undefined): number | null {
@@ -325,7 +300,7 @@ function buildAlgorithmMarkerSlots(
     });
   }
 
-  return entries.map((e) => {
+  const slots = entries.map((e) => {
     const insertIdx = (() => {
       for (let i = 0; i < rows.length; i++) {
         if (rows[i]!.timestamp <= e.timestampMs) return i;
@@ -336,6 +311,16 @@ function buildAlgorithmMarkerSlots(
       insertIdx <= 0 ? 'after-latest' : insertIdx >= rows.length ? 'before-oldest' : 'between';
     return { ...e, insertIdx, context, inserted: false };
   });
+
+  // Collapse entries at the same insertIdx — keep only the newest per position.
+  const byIdx = new Map<number, AlgorithmMarkerSlot>();
+  for (const slot of slots) {
+    const existing = byIdx.get(slot.insertIdx);
+    if (!existing || slot.timestampMs > existing.timestampMs) {
+      byIdx.set(slot.insertIdx, slot);
+    }
+  }
+  return Array.from(byIdx.values());
 }
 
 function makeAlgorithmUpdateMarkerEl(slot: AlgorithmMarkerSlot): HTMLElement {
@@ -429,24 +414,6 @@ function computeRowEventAccuracy(
   return computeEventAccuracyNew(row, prevRow, medianMs, intervals);
 }
 
-function getRowAccuracyPercent(
-  row: RowData,
-  medianMs: number | null,
-  intervals?: number[] | null,
-): number | null {
-  if (row.errorMs === null && row.predicted_next_ms == null) return null;
-  if (medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
-    if (row.predicted_next_ms == null) return null;
-  }
-  // Use server prediction if available, else fall back to errorMs
-  const windows = getAccuracyWindows(medianMs, intervals);
-  if (row.predicted_next_ms != null && Number.isFinite(row.predicted_next_ms)) {
-    const errorMs = row.timestamp - row.predicted_next_ms;
-    return computeAccuracyScore(errorMs, windows);
-  }
-  if (row.errorMs === null) return null;
-  return computeAccuracyScore(row.errorMs, windows);
-}
 
 const STATUS_CONFIG: Record<EventStatus, { icon: string; label: string; color: string; bg: string }> = {
   accurate: { icon: '\u2713', label: 'Accurate',    color: '#4ade80', bg: 'rgba(74,222,128,0.10)' },
@@ -1022,9 +989,7 @@ function buildEventCard(
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
       actual.valueEl.style.color = '#e8e0ff';
     } else {
-      estimated.labelEl.textContent = acc.usedServerPrediction
-        ? 'Server Prediction'
-        : 'Median Estimate';
+      estimated.labelEl.textContent = 'Median Estimate';
       estimated.valueEl.textContent = acc.estimatedTs != null ? fmtTimestamp(acc.estimatedTs) : '\u2014';
       estimated.valueEl.style.color = '#e8e0ff';
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
@@ -1060,13 +1025,24 @@ function buildEventCard(
 
 function makeRowEl(
   row: RowData,
+  prevRow: RowData | null,
   index: number,
   medianMs: number | null,
   intervals: number[] | null,
   onClick: (i: number) => void,
 ): HTMLElement {
-  const { color, pill } = getAccuracy(row.errorMs, medianMs, intervals);
-  const rowAccuracy = getRowAccuracyPercent(row, medianMs, intervals);
+  const acc = computeRowEventAccuracy(row, prevRow, medianMs, intervals);
+  const { color, pill } = acc.status === 'first'
+    ? { color: TIER_COLOR.none, pill: '' }
+    : acc.status === 'accurate'
+      ? { color: TIER_COLOR.good, pill: '\u2713 on time' }
+      : {
+          color: Math.abs(acc.diffMs) <= getAccuracyWindows(medianMs, intervals).warnMs
+            ? TIER_COLOR.warn
+            : TIER_COLOR.bad,
+          pill: `${fmtDuration(acc.diffMs)} ${acc.diffMs < 0 ? 'early' : 'late'}`,
+        };
+  const rowAccuracy = acc.status === 'first' ? null : acc.score;
 
   const el = document.createElement('div');
   el.style.cssText = [
@@ -1315,9 +1291,9 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         .map((ev) => {
           const ts = normalizeEpochMs(ev.timestamp);
           if (ts == null) return null;
-          return { ...ev, timestamp: ts };
+          return { timestamp: ts, quantity: ev.quantity };
         })
-        .filter((ev): ev is { timestamp: number; quantity: number | null; predicted_next_ms: number | null } => ev !== null);
+        .filter((ev): ev is { timestamp: number; quantity: number | null } => ev !== null);
       const orderedEvents = sortEventsNewestFirst(normalizedEvents);
       overview.setEventCount(orderedEvents.length);
 
@@ -1330,7 +1306,6 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
           quantity: ev.quantity,
           gapMs,
           errorMs,
-          predicted_next_ms: ev.predicted_next_ms ?? null,
         };
       });
 
@@ -1450,7 +1425,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
 
       for (let i = 0; i < Math.min(INITIAL_ROWS, rows.length); i++) {
         appendMarkersIfNeeded(i);
-        const rowEl = makeRowEl(rows[i]!, i, medianMs, itemIntervals, handleRowClick);
+        const rowEl = makeRowEl(rows[i]!, i + 1 < rows.length ? rows[i + 1]! : null, i, medianMs, itemIntervals, handleRowClick);
         rowElements[i] = rowEl;
         listWrap.appendChild(rowEl);
         renderedCount++;
@@ -1476,7 +1451,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
           moreBtn.remove();
           for (let i = renderedCount; i < rows.length; i++) {
             appendMarkersIfNeeded(i);
-            const rowEl = makeRowEl(rows[i]!, i, medianMs, itemIntervals, handleRowClick);
+            const rowEl = makeRowEl(rows[i]!, i + 1 < rows.length ? rows[i + 1]! : null, i, medianMs, itemIntervals, handleRowClick);
             rowElements[i] = rowEl;
             listWrap.appendChild(rowEl);
           }

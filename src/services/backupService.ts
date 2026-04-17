@@ -1,4 +1,4 @@
-// src/services/backupService.ts — Settings backup/restore service
+// src/services/backupService.ts — Settings export/import service
 //
 // No side effects on import. No init step required.
 
@@ -14,17 +14,9 @@ export interface BackupEnvelope {
   _version: 1;
   appVersion: string;
   createdAt: string;
-  name?: string;
+  name?: string | undefined;
   keyCount: number;
   data: Record<string, string>;
-}
-
-export interface BackupMeta {
-  name: string;
-  appVersion: string;
-  createdAt: string;
-  keyCount: number;
-  sizeBytes: number;
 }
 
 export interface ImportResult {
@@ -45,14 +37,6 @@ interface ValidationFailure {
 }
 
 type ValidationResult = ValidationSuccess | ValidationFailure;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const BACKUP_REGISTRY_KEY = 'qpm.backups.v1';
-const BACKUP_DATA_PREFIX = 'qpm.backup.data.';
-const MAX_NAMED_BACKUPS = 3;
 
 // ---------------------------------------------------------------------------
 // Snapshot / Validate
@@ -149,7 +133,7 @@ export function downloadBackup(): void {
 // Import from file
 // ---------------------------------------------------------------------------
 
-/** Import settings from a JSON file. Auto-backs up before destructive clear. */
+/** Import settings from a JSON file. Clears existing settings before writing. */
 export async function importFromFile(file: File): Promise<ImportResult> {
   const text = await file.text();
 
@@ -167,167 +151,9 @@ export async function importFromFile(file: File): Promise<ImportResult> {
 
   const { envelope, warnings } = result;
 
-  // Preserve existing backups through the clear
-  const preservedRegistry = loadRegistry();
-  const preservedBackupData: Array<{ key: string; value: string }> = [];
-  for (const meta of preservedRegistry) {
-    const dataKey = BACKUP_DATA_PREFIX + meta.name;
-    const raw = storage.get<string | null>(dataKey, null);
-    if (raw !== null) {
-      preservedBackupData.push({ key: dataKey, value: JSON.stringify(raw) });
-    }
-  }
-
-  // Auto-backup current state
-  try {
-    saveNamedBackupInternal('pre-import-auto', preservedRegistry);
-  } catch { /* best effort */ }
-
-  // Re-read registry after auto-backup (it may have added/evicted entries)
-  const updatedRegistry = loadRegistry();
-  const updatedBackupData: Array<{ key: string; value: string }> = [];
-  for (const meta of updatedRegistry) {
-    const dataKey = BACKUP_DATA_PREFIX + meta.name;
-    const raw = storage.get<string | null>(dataKey, null);
-    if (raw !== null) {
-      updatedBackupData.push({ key: dataKey, value: JSON.stringify(raw) });
-    }
-  }
-
   // Clear and write imported data
   storage.clear();
   const keysWritten = importAllValues(envelope.data);
 
-  // Restore backup registry + data
-  storage.set(BACKUP_REGISTRY_KEY, updatedRegistry);
-  for (const { key, value } of updatedBackupData) {
-    try {
-      storage.set(key, JSON.parse(value));
-    } catch { /* skip */ }
-  }
-
   return { ok: true, keysWritten, warnings };
-}
-
-// ---------------------------------------------------------------------------
-// Named backups (in-storage)
-// ---------------------------------------------------------------------------
-
-function loadRegistry(): BackupMeta[] {
-  return storage.get<BackupMeta[]>(BACKUP_REGISTRY_KEY, []);
-}
-
-function saveRegistry(registry: BackupMeta[]): void {
-  storage.set(BACKUP_REGISTRY_KEY, registry);
-}
-
-function saveNamedBackupInternal(name: string, existingRegistry?: BackupMeta[]): BackupMeta {
-  const snapshot = createSnapshot(name);
-  const json = JSON.stringify(snapshot);
-
-  const meta: BackupMeta = {
-    name,
-    appVersion: snapshot.appVersion,
-    createdAt: snapshot.createdAt,
-    keyCount: snapshot.keyCount,
-    sizeBytes: json.length,
-  };
-
-  const registry = existingRegistry ?? loadRegistry();
-
-  // Remove existing backup with same name
-  const filtered = registry.filter(b => b.name !== name);
-
-  // Enforce max backups — evict oldest non-auto first, then oldest auto
-  while (filtered.length >= MAX_NAMED_BACKUPS) {
-    const nonAutoIdx = filtered.findIndex(b => !b.name.endsWith('-auto'));
-    const evictIdx = nonAutoIdx >= 0 ? nonAutoIdx : 0;
-    const evicted = filtered.splice(evictIdx, 1)[0];
-    if (evicted) storage.remove(BACKUP_DATA_PREFIX + evicted.name);
-  }
-
-  filtered.push(meta);
-  saveRegistry(filtered);
-  storage.set(BACKUP_DATA_PREFIX + name, snapshot);
-
-  return meta;
-}
-
-/** Save a named in-storage backup. Max 3 total; oldest evicted. */
-export function saveNamedBackup(name: string): BackupMeta {
-  return saveNamedBackupInternal(name);
-}
-
-/** Restore from a named in-storage backup. Auto-backs up before destructive clear. */
-export function restoreNamedBackup(name: string): ImportResult {
-  const registry = loadRegistry();
-  const meta = registry.find(b => b.name === name);
-  if (!meta) {
-    return { ok: false, keysWritten: 0, warnings: [`Backup "${name}" not found`] };
-  }
-
-  const snapshot = storage.get<BackupEnvelope | null>(BACKUP_DATA_PREFIX + name, null);
-  if (!snapshot?.data) {
-    return { ok: false, keysWritten: 0, warnings: [`Backup "${name}" data is missing or corrupt`] };
-  }
-
-  const warnings: string[] = [];
-  const currentVer = getCurrentVersion();
-  if (snapshot.appVersion !== currentVer) {
-    warnings.push(`Backup from v${snapshot.appVersion}, current is v${currentVer}`);
-  }
-
-  // Capture all backup data into memory before clear
-  const preservedRegistry = loadRegistry();
-  const preservedBackupData: Array<{ key: string; value: string }> = [];
-  for (const m of preservedRegistry) {
-    const dataKey = BACKUP_DATA_PREFIX + m.name;
-    const raw = storage.get<unknown>(dataKey, null);
-    if (raw !== null) {
-      preservedBackupData.push({ key: dataKey, value: JSON.stringify(raw) });
-    }
-  }
-
-  // Auto-backup current state
-  try {
-    saveNamedBackupInternal('pre-restore-auto', preservedRegistry);
-  } catch { /* best effort */ }
-
-  // Re-read after auto-backup
-  const updatedRegistry = loadRegistry();
-  const updatedBackupData: Array<{ key: string; value: string }> = [];
-  for (const m of updatedRegistry) {
-    const dataKey = BACKUP_DATA_PREFIX + m.name;
-    const raw = storage.get<unknown>(dataKey, null);
-    if (raw !== null) {
-      updatedBackupData.push({ key: dataKey, value: JSON.stringify(raw) });
-    }
-  }
-
-  // Clear and restore
-  storage.clear();
-  const keysWritten = importAllValues(snapshot.data);
-
-  // Restore backup registry + data
-  storage.set(BACKUP_REGISTRY_KEY, updatedRegistry);
-  for (const { key, value } of updatedBackupData) {
-    try {
-      storage.set(key, JSON.parse(value));
-    } catch { /* skip */ }
-  }
-
-  return { ok: true, keysWritten, warnings };
-}
-
-/** Delete a named backup. */
-export function deleteNamedBackup(name: string): void {
-  const registry = loadRegistry();
-  const filtered = registry.filter(b => b.name !== name);
-  saveRegistry(filtered);
-  storage.remove(BACKUP_DATA_PREFIX + name);
-}
-
-/** List all named backups. */
-export function listBackups(): BackupMeta[] {
-  return loadRegistry();
 }

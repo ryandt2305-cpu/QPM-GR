@@ -21,6 +21,9 @@ export interface RestockItem {
   empirical_probability: number | null;
   fallback_rate: number | null;
   baseline_interval_ms: number | null;
+  // EMA + weather stratification (v7+)
+  ema_interval_ms: number | null;
+  weather_intervals: Record<string, number[]> | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -110,4 +113,8 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'fallbackRate',
   'baseline_interval_ms',
   'baselineIntervalMs',
+  'ema_interval_ms',
+  'emaIntervalMs',
+  'weather_intervals',
+  'weatherIntervals',
 ]);

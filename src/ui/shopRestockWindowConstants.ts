@@ -1,6 +1,8 @@
 // src/ui/shopRestockWindowConstants.ts
 // Static data constants for the Shop Restock window.
 
+import type { DetailedWeather } from '../utils/weatherDetection';
+
 // Time-limited seasonal items -- hidden from history after expiry.
 // Key: "shopType:itemId"  Value: expiry timestamp (ms UTC)
 // Items permanently hidden from the list (stale/bad data entries).
@@ -64,6 +66,15 @@ export const UI_STATE_SAVE_DEBOUNCE_MS = 180;
 export const HISTORY_CHUNK_SIZE = 40;
 
 export const WEATHER_LOCKED_EGG_IDS = new Set(['SnowEgg', 'DawnEgg']);
+
+export const WEATHER_LOCK_MAP: Record<string, DetailedWeather> = {
+  'SnowEgg': 'snow',
+  'DawnEgg': 'dawn',
+};
+
+export function getRequiredWeather(itemId: string): DetailedWeather | null {
+  return WEATHER_LOCK_MAP[itemId] ?? null;
+}
 
 export const CELESTIAL_IDS = new Set([
   'Starweaver', 'StarweaverPod',

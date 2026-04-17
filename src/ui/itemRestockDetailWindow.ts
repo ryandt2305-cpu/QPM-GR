@@ -21,6 +21,7 @@ import {
   type EventAccuracy,
   type EventStatus,
 } from '../utils/restockAccuracy';
+import { getWeatherSnapshot } from '../store/weatherHub';
 
 const INITIAL_ROWS = 5;
 const DETAIL_WINDOW_REGISTRY_KEY = 'qpm.restock.detailWindows.v1';
@@ -99,7 +100,31 @@ function makeFallbackDetailItem(shopType: DetailShopType, itemId: string): Resto
     empirical_probability: null,
     fallback_rate: null,
     baseline_interval_ms: null,
+    ema_interval_ms: null,
+    weather_intervals: null,
   };
+}
+
+function computeWeatherConditionalMedian(
+  item: RestockItem,
+): { median: number; weather: string } | null {
+  const wi = item.weather_intervals;
+  if (!wi || typeof wi !== 'object') return null;
+  const currentWeather = getWeatherSnapshot().kind;
+  if (!currentWeather || currentWeather === 'unknown') return null;
+  // Try exact match, then title-case variant
+  const bucket =
+    wi[currentWeather] ??
+    wi[currentWeather.charAt(0).toUpperCase() + currentWeather.slice(1)] ??
+    null;
+  if (!Array.isArray(bucket) || bucket.length < 3) return null;
+  const sorted = bucket.filter((v) => typeof v === 'number' && v > 0).sort((a, b) => a - b);
+  if (sorted.length < 3) return null;
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1]! + sorted[mid]!) / 2)
+    : sorted[mid]!;
+  return { median, weather: currentWeather };
 }
 
 function resolveDetailRestockItem(
@@ -538,7 +563,20 @@ function buildOverviewCard(
         medianLabel = `Median (80%: ${fmtDuration(ci[0])}\u2013${fmtDuration(ci[1])})`;
       }
     }
+    // Weather-conditional median when >= 3 intervals for current weather
+    const weatherEta = computeWeatherConditionalMedian(item);
+    if (weatherEta) {
+      medianLabel += ` | ~${fmtDuration(weatherEta.median)} during ${weatherEta.weather}`;
+    }
     statsRow.appendChild(makeChip(fmtDuration(item.median_interval_ms), medianLabel, '#a78bfa'));
+  }
+  if (item.ema_interval_ms != null && item.median_interval_ms != null) {
+    const trendPct = Math.round(((item.ema_interval_ms - item.median_interval_ms) / item.median_interval_ms) * 100);
+    if (Math.abs(trendPct) >= 5) {
+      const trendLabel = trendPct > 0 ? `+${trendPct}% trend` : `${trendPct}% trend`;
+      const trendColor = trendPct > 0 ? 'rgba(251,191,36,0.85)' : 'rgba(74,222,128,0.85)';
+      statsRow.appendChild(makeChip(fmtDuration(item.ema_interval_ms), `EMA (${trendLabel})`, trendColor));
+    }
   }
   if (item.average_quantity != null && item.average_quantity > 0) {
     const qty = item.average_quantity >= 10

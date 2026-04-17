@@ -83,7 +83,7 @@ export function getEligibleData(): EligibleData {
           }
         }
       } else if (objType === 'egg') {
-        const eggId = t.eggType ?? t.species;
+        const eggId = t.eggId ?? t.eggType ?? t.species;
         if (typeof eggId === 'string' && eggId.length > 0) eggs.add(eggId);
       } else if (objType === 'decor') {
         const decorId = t.decorId ?? t.species;

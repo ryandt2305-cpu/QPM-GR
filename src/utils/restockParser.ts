@@ -114,6 +114,8 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     empirical_probability: preferred.empirical_probability ?? fallback.empirical_probability ?? null,
     fallback_rate: preferred.fallback_rate ?? fallback.fallback_rate ?? null,
     baseline_interval_ms: preferred.baseline_interval_ms ?? fallback.baseline_interval_ms ?? null,
+    ema_interval_ms: preferred.ema_interval_ms ?? fallback.ema_interval_ms ?? null,
+    weather_intervals: preferred.weather_intervals ?? fallback.weather_intervals ?? null,
   };
 }
 
@@ -161,6 +163,21 @@ function toNumberArray(v: unknown): number[] | null {
   return result.length > 0 ? result : null;
 }
 
+function parseWeatherIntervals(v: unknown): Record<string, number[]> | null {
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const result: Record<string, number[]> = {};
+  let hasAny = false;
+  for (const [key, val] of Object.entries(v as Record<string, unknown>)) {
+    if (!key || typeof key !== 'string') continue;
+    const arr = toNumberArray(val);
+    if (arr && arr.length > 0) {
+      result[key] = arr;
+      hasAny = true;
+    }
+  }
+  return hasAny ? result : null;
+}
+
 export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem {
   return {
     item_id: String(raw.item_id ?? raw.itemId ?? ''),
@@ -193,6 +210,8 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
     empirical_probability: toFloat(raw.empirical_probability ?? raw.empiricalProbability),
     fallback_rate: toFloat(raw.fallback_rate ?? raw.fallbackRate),
     baseline_interval_ms: toMsDuration(raw.baseline_interval_ms ?? raw.baselineIntervalMs),
+    ema_interval_ms: toMsDuration(raw.ema_interval_ms ?? raw.emaIntervalMs),
+    weather_intervals: parseWeatherIntervals(raw.weather_intervals ?? raw.weatherIntervals),
   };
 }
 

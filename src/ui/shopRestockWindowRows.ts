@@ -22,9 +22,35 @@ import { getItemProbability } from '../utils/restockDataService';
 import { isCelestial } from './shopRestockWindowMeta';
 import { getSoundConfig } from './shopRestockAlerts/soundConfig';
 import { showSoundPopover } from './shopRestockAlerts/soundPopover';
+import { getRequiredWeather } from './shopRestockWindowConstants';
+import { getWeatherSnapshot, onWeatherSnapshot } from '../store/weatherHub';
 import type { RestockItem } from '../utils/restockDataService';
 
 export type EtaRef = { el: HTMLElement; ts: number };
+
+// ---------------------------------------------------------------------------
+// Weather availability badge
+// ---------------------------------------------------------------------------
+
+export function makeWeatherBadge(itemId: string): { el: HTMLElement; cleanup: () => void } | null {
+  const required = getRequiredWeather(itemId);
+  if (!required) return null;
+
+  const badge = document.createElement('span');
+  badge.style.cssText = 'font-size:9px;padding:1px 6px;border-radius:8px;white-space:nowrap;font-weight:600;letter-spacing:0.3px;';
+
+  const update = (snapshot: { kind: string }): void => {
+    const active = snapshot.kind === required;
+    badge.textContent = active ? `${required} ACTIVE` : `${required} only`;
+    badge.style.color = active ? '#4ade80' : 'rgba(232,224,255,0.4)';
+    badge.style.background = active ? 'rgba(74,222,128,0.12)' : 'rgba(143,130,255,0.06)';
+    badge.style.border = `1px solid ${active ? 'rgba(74,222,128,0.3)' : 'rgba(143,130,255,0.15)'}`;
+  };
+
+  update(getWeatherSnapshot());
+  const unsub = onWeatherSnapshot(update, false);
+  return { el: badge, cleanup: unsub };
+}
 
 // ---------------------------------------------------------------------------
 // Icon wrap element (shared between pred + hist rows)
@@ -63,12 +89,13 @@ export function buildPredRow(
     onUnpin(key: string): void;
     openDetail(item: RestockItem, name: string): void;
   },
-): { row: HTMLElement; etaRef: EtaRef } {
+): { row: HTMLElement; etaRef: EtaRef; cleanups: Array<() => void> } {
   const ts       = item.estimated_next_timestamp ?? 0;
   const hasData  = (item.total_occurrences ?? 0) >= 2 && ts > 0;
   const rate     = getItemProbability(item);
   const rarity   = getItemRarity(item.item_id, item.shop_type);
   const cel      = isCelestial(item.item_id);
+  const rowCleanups: Array<() => void> = [];
 
   const row = document.createElement('div');
   row.style.cssText = [
@@ -97,10 +124,19 @@ export function buildPredRow(
   const textBlock = document.createElement('div');
   textBlock.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0;';
 
+  const nameLine = document.createElement('div');
+  nameLine.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;';
   const nameEl = document.createElement('div');
   nameEl.style.cssText = `font-size:14px;font-weight:700;color:${rarityColor(rarity)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
   nameEl.textContent = getItemName(item.item_id, item.shop_type);
-  textBlock.appendChild(nameEl);
+  nameLine.appendChild(nameEl);
+
+  const weatherBadge = makeWeatherBadge(item.item_id);
+  if (weatherBadge) {
+    nameLine.appendChild(weatherBadge.el);
+    rowCleanups.push(weatherBadge.cleanup);
+  }
+  textBlock.appendChild(nameLine);
 
   const subEl = document.createElement('div');
   subEl.style.cssText = 'font-size:12px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
@@ -169,7 +205,7 @@ export function buildPredRow(
     metrics.appendChild(dash);
     row.addEventListener('click', () => { opts.onUnpin(key); });
     row.appendChild(metrics);
-    return { row, etaRef: { el: document.createElement('span'), ts: 0 } };
+    return { row, etaRef: { el: document.createElement('span'), ts: 0 }, cleanups: rowCleanups };
   }
 
   const etaLabel = formatETA(ts);
@@ -205,7 +241,7 @@ export function buildPredRow(
 
   row.appendChild(metrics);
   row.addEventListener('click', () => { opts.onUnpin(key); });
-  return { row, etaRef: { el: etaEl, ts } };
+  return { row, etaRef: { el: etaEl, ts }, cleanups: rowCleanups };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +255,11 @@ export function buildHistRow(
     onPin(key: string): void;
     openDetail(item: RestockItem, name: string): void;
   },
-): { row: HTMLElement } {
+): { row: HTMLElement; cleanups: Array<() => void> } {
   const rarity = getItemRarity(item.item_id, item.shop_type);
   const price  = getItemPrice(item.item_id, item.shop_type);
   const cel    = isCelestial(item.item_id);
+  const histCleanups: Array<() => void> = [];
 
   const tr = document.createElement('tr');
   tr.className = 'qpm-sr-tr';
@@ -238,10 +275,19 @@ export function buildHistRow(
 
   const itemInfo = document.createElement('div');
   itemInfo.style.cssText = 'display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;';
+  const histNameLine = document.createElement('div');
+  histNameLine.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;';
   const nameEl = document.createElement('div');
   nameEl.style.cssText = `font-weight:700;font-size:14px;color:${rarityColor(rarity)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;`;
   nameEl.textContent = getItemName(item.item_id, item.shop_type);
-  itemInfo.appendChild(nameEl);
+  histNameLine.appendChild(nameEl);
+
+  const histWeatherBadge = makeWeatherBadge(item.item_id);
+  if (histWeatherBadge) {
+    histNameLine.appendChild(histWeatherBadge.el);
+    histCleanups.push(histWeatherBadge.cleanup);
+  }
+  itemInfo.appendChild(histNameLine);
 
   if (price > 0) {
     const priceRow = document.createElement('div');
@@ -304,5 +350,93 @@ export function buildHistRow(
   tr.append(itemTd, qtyTd, lastTd, detailTd);
   tr.addEventListener('click', () => { opts.onPin(key); });
 
-  return { row: tr };
+  return { row: tr, cleanups: histCleanups };
+}
+
+// ---------------------------------------------------------------------------
+// Hot row (compact prediction row for "Hot Right Now")
+// ---------------------------------------------------------------------------
+
+export function buildHotRow(
+  item: RestockItem,
+  score: number,
+  opts: {
+    onPin(key: string): void;
+    openDetail(item: RestockItem, name: string): void;
+  },
+): { row: HTMLElement; etaRef: EtaRef; cleanups: Array<() => void> } {
+  const ts       = item.estimated_next_timestamp ?? 0;
+  const rate     = getItemProbability(item);
+  const rarity   = getItemRarity(item.item_id, item.shop_type);
+  const key      = `${item.shop_type}:${item.item_id}`;
+  const hotCleanups: Array<() => void> = [];
+
+  const row = document.createElement('div');
+  row.style.cssText = [
+    'display:flex', 'align-items:center', 'gap:10px',
+    'padding:6px 10px', 'min-height:40px',
+    'background:rgba(255,165,0,0.03)',
+    'border:1px solid rgba(255,165,0,0.10)',
+    'border-radius:8px', 'cursor:pointer',
+    'transition:transform 0.12s, background 0.12s',
+  ].join(';');
+  row.title = 'Click to pin';
+  row.addEventListener('mouseenter', () => {
+    row.style.transform  = 'scale(1.01)';
+    row.style.background = 'rgba(255,165,0,0.07)';
+  });
+  row.addEventListener('mouseleave', () => {
+    row.style.transform  = '';
+    row.style.background = 'rgba(255,165,0,0.03)';
+  });
+
+  // Icon (36px)
+  row.appendChild(makeIconWrap(item, 36));
+
+  // Name + rate inline
+  const textBlock = document.createElement('div');
+  textBlock.style.cssText = 'display:flex;align-items:center;gap:8px;flex:1;min-width:0;';
+
+  const hotNameEl = document.createElement('div');
+  hotNameEl.style.cssText = `font-size:13px;font-weight:700;color:${rarityColor(rarity)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+  hotNameEl.textContent = getItemName(item.item_id, item.shop_type);
+  textBlock.appendChild(hotNameEl);
+
+  const hotWeatherBadge = makeWeatherBadge(item.item_id);
+  if (hotWeatherBadge) {
+    textBlock.appendChild(hotWeatherBadge.el);
+    hotCleanups.push(hotWeatherBadge.cleanup);
+  }
+
+  if (rate != null) {
+    const ratePill = document.createElement('span');
+    ratePill.style.cssText = `font-size:10px;padding:1px 5px;border-radius:6px;font-weight:700;color:${rateColor(rate)};background:rgba(143,130,255,0.08);white-space:nowrap;flex-shrink:0;`;
+    ratePill.textContent = ratePercent(rate);
+    textBlock.appendChild(ratePill);
+  }
+  row.appendChild(textBlock);
+
+  // ETA
+  const etaEl = document.createElement('div');
+  etaEl.style.cssText = `font-size:15px;font-weight:700;color:${etaColor(ts)};font-variant-numeric:tabular-nums;white-space:nowrap;flex-shrink:0;min-width:54px;text-align:right;`;
+  etaEl.textContent = ts > 0 ? formatETA(ts) : '--';
+  row.appendChild(etaEl);
+
+  // Detail button
+  const detailBtn = document.createElement('button');
+  detailBtn.type = 'button';
+  detailBtn.textContent = '\uD83D\uDCCA';
+  detailBtn.title = 'View restock history';
+  detailBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:13px;padding:2px 3px;opacity:0.6;border-radius:4px;line-height:1;flex-shrink:0;';
+  detailBtn.addEventListener('mouseenter', () => { detailBtn.style.opacity = '1'; });
+  detailBtn.addEventListener('mouseleave', () => { detailBtn.style.opacity = '0.6'; });
+  detailBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    opts.openDetail(item, getItemName(item.item_id, item.shop_type));
+  });
+  row.appendChild(detailBtn);
+
+  row.addEventListener('click', () => { opts.onPin(key); });
+
+  return { row, etaRef: { el: etaEl, ts }, cleanups: hotCleanups };
 }

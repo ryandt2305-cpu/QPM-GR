@@ -31,6 +31,18 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.58",
+    date: "2026-04",
+    notes: [
+      "Restock: fixed inflated probabilities for seasonal/rare items (Rose, Clover, etc. were showing 40%+ instead of ~2%)",
+      "Restock: estimation model now adapts to data volume — high-data items rely more on observed rates, low-data items use stronger priors",
+      "Restock: EMA trend tracking — item detail shows whether restock intervals are speeding up or slowing down",
+      "Restock: weather-specific interval tracking — detail view shows conditional ETAs during matching weather",
+      "Restock: weather badge on Snow/Dawn eggs shows whether required weather is currently active",
+      "Locker: fixed eggs not being detected in the garden",
+    ],
+  },
+  {
     version: "3.1.57",
     date: "2026-04",
     notes: [

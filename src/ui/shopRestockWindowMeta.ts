@@ -29,6 +29,7 @@ export interface ShopRestockUiState {
   filter: string;
   search: string;
   predCollapsed: boolean;
+  hotCollapsed: boolean;
   sortColumn: SortColumn;
   sortDirection: SortDirection;
   historyScrollTop: number;
@@ -224,6 +225,8 @@ export function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
       empirical_probability: null,
       fallback_rate: null,
       baseline_interval_ms: null,
+      ema_interval_ms: null,
+      weather_intervals: null,
     });
   }
   return merged;
@@ -267,6 +270,7 @@ export function loadUiState(): ShopRestockUiState {
     filter: typeof saved?.filter === 'string' ? saved.filter : 'all',
     search: typeof saved?.search === 'string' ? saved.search : '',
     predCollapsed: !!saved?.predCollapsed,
+    hotCollapsed: !!saved?.hotCollapsed,
     sortColumn,
     sortDirection,
     historyScrollTop,

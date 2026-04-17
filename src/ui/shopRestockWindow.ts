@@ -47,6 +47,7 @@ import {
 import {
   buildPredRow,
   buildHistRow,
+  // buildHotRow,  // disabled: Hot Right Now section
   type EtaRef,
 } from './shopRestockWindowRows';
 
@@ -128,6 +129,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
       filter: currentFilter,
       search: searchInput.value.trim(),
       predCollapsed,
+      hotCollapsed: false,
       sortColumn,
       sortDirection,
       historyScrollTop,
@@ -216,6 +218,11 @@ function renderShopRestockWindow(root: HTMLElement): void {
   const body = document.createElement('div');
   body.style.cssText = 'flex:1;overflow-y:auto;min-height:0;display:flex;flex-direction:column;';
   root.appendChild(body);
+
+  // -- "Hot Right Now" section (disabled — common items dominate, not useful yet) --
+  // const hotSection = …  (kept in code for future re-enablement)
+
+  const hotEtaRefs: EtaRef[] = [];
 
   // -- Predictions section --
   const predSection = document.createElement('div');
@@ -398,9 +405,22 @@ function renderShopRestockWindow(root: HTMLElement): void {
   // ETA DOM refs for live countdown
   let histEtaRefs: EtaRef[] = [];
   let predEtaRefs: EtaRef[] = [];
+  // Per-render cleanups for weather badges etc.
+  let predCleanups: Array<() => void> = [];
+  let histCleanups: Array<() => void> = [];
+
+  const flushPredCleanups = (): void => {
+    for (const fn of predCleanups) fn();
+    predCleanups = [];
+  };
+  const flushHistCleanups = (): void => {
+    for (const fn of histCleanups) fn();
+    histCleanups = [];
+  };
 
   // -- Render predictions --
   function renderPredictions(): void {
+    flushPredCleanups();
     predBody.innerHTML = '';
     predEtaRefs = [];
     const frag = document.createDocumentFragment();
@@ -426,12 +446,13 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
     for (const item of pinned) {
       const key = `${item.shop_type}:${item.item_id}`;
-      const { row, etaRef } = buildPredRow(item, key, {
+      const { row, etaRef, cleanups } = buildPredRow(item, key, {
         onUnpin: (k) => { trackedItems.delete(k); persistTrackedAndRender(true); },
         openDetail: openItemRestockDetail,
       });
       frag.appendChild(row);
       predEtaRefs.push(etaRef);
+      predCleanups.push(...cleanups);
     }
 
     const hint = document.createElement('div');
@@ -464,6 +485,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
       cancelAnimationFrame(historyChunkRaf);
       historyChunkRaf = null;
     }
+    flushHistCleanups();
     const renderToken = ++historyRenderToken;
     const previousScrollTop = tableWrap.scrollTop;
     if (tableWrap.childElementCount > 0 || previousScrollTop > 0) {
@@ -596,11 +618,12 @@ function renderShopRestockWindow(root: HTMLElement): void {
       for (let i = 0; i < HISTORY_CHUNK_SIZE && idx < filtered.length; i++, idx++) {
         const item = filtered[idx]!;
         const key = `${item.shop_type}:${item.item_id}`;
-        const { row } = buildHistRow(item, key, {
+        const { row, cleanups: rowCleanups } = buildHistRow(item, key, {
           onPin: (k) => { trackedItems.add(k); persistTrackedAndRender(true); },
           openDetail: openItemRestockDetail,
         });
         frag.appendChild(row);
+        histCleanups.push(...rowCleanups);
       }
       tbody.appendChild(frag);
       tableWrap.scrollTop = historyScrollTop;
@@ -622,6 +645,10 @@ function renderShopRestockWindow(root: HTMLElement): void {
   // -- Live ETA countdown (30s -- ~Xm/~Xh granularity is fine) --
   const stopTicker = visibleInterval('shop-restock-countdown', () => {
     if (!isWindowVisible()) return;
+    for (const ref of hotEtaRefs) {
+      ref.el.textContent = formatETA(ref.ts);
+      ref.el.style.color  = etaColor(ref.ts);
+    }
     for (const ref of predEtaRefs) {
       ref.el.textContent = formatETA(ref.ts);
       ref.el.style.color  = etaColor(ref.ts);
@@ -654,6 +681,8 @@ function renderShopRestockWindow(root: HTMLElement): void {
       }
       saveUiState();
       hideSoundPopover();
+      flushPredCleanups();
+      flushHistCleanups();
       stopTicker();
       stopSpritesReady();
       stopRestockDataUpdates();

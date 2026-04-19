@@ -25,6 +25,23 @@ export function buildPlantsPanel(config: LockerConfig, eligible: EligibleData): 
   const panel = document.createElement('div');
   panel.style.cssText = 'display:flex;flex-direction:column;gap:10px';
 
+  // Insta-Harvest card — skip hold-to-harvest delay for Rainbow/Gold plants
+  const { root: instaRoot, body: instaBody } = createCard('Insta-Harvest', { collapsible: true });
+  instaBody.appendChild(makeHint('Skip the hold-to-harvest delay for Rainbow and Gold plants.'));
+  const instaGrid = makeGrid();
+  instaGrid.appendChild(makeMutationTile(
+    'Rainbow',
+    () => getLockerConfig().instaHarvestRainbow,
+    () => { updateLockerConfig({ instaHarvestRainbow: !getLockerConfig().instaHarvestRainbow }); },
+  ));
+  instaGrid.appendChild(makeMutationTile(
+    'Gold',
+    () => getLockerConfig().instaHarvestGold,
+    () => { updateLockerConfig({ instaHarvestGold: !getLockerConfig().instaHarvestGold }); },
+  ));
+  instaBody.appendChild(instaGrid);
+  panel.appendChild(instaRoot);
+
   const blockAllCb = makeBlockAllCheckbox('Block All', config.harvestLock, (v) => {
     updateLockerConfig({ harvestLock: v });
   });

@@ -3,6 +3,7 @@
 
 import { registerSendPreflight, clearSendPreflight } from '../../websocket/api';
 import { lockerPreflight, startNativeHook, stopNativeHook } from './guard';
+import { startInstaHarvest, stopInstaHarvest } from './instaHarvest';
 
 let running = false;
 
@@ -11,6 +12,7 @@ export function startLocker(): void {
   running = true;
   registerSendPreflight(lockerPreflight);
   startNativeHook();
+  startInstaHarvest();
 }
 
 export function stopLocker(): void {
@@ -18,6 +20,7 @@ export function stopLocker(): void {
   running = false;
   clearSendPreflight();
   stopNativeHook();
+  stopInstaHarvest();
 }
 
 export function isLockerRunning(): boolean {

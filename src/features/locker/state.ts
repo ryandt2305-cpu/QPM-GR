@@ -19,6 +19,8 @@ const DEFAULT_CONFIG: LockerConfig = {
   sellAllCropsLock: false,
   cropSellLocks: {},
   customRules: [],
+  instaHarvestRainbow: false,
+  instaHarvestGold: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,6 +98,8 @@ function sanitizeConfig(raw: unknown): LockerConfig {
     sellAllCropsLock: toBoolean(raw.sellAllCropsLock, DEFAULT_CONFIG.sellAllCropsLock),
     cropSellLocks: sanitizeBooleanMap(raw.cropSellLocks),
     customRules: sanitizeCustomRules(raw.customRules),
+    instaHarvestRainbow: toBoolean(raw.instaHarvestRainbow, DEFAULT_CONFIG.instaHarvestRainbow),
+    instaHarvestGold: toBoolean(raw.instaHarvestGold, DEFAULT_CONFIG.instaHarvestGold),
   };
 }
 

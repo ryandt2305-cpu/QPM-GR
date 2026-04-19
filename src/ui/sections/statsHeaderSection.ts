@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.59",
+    date: "2026-04",
+    notes: [
+      "Locker: added Insta-Harvest for Rainbow and Gold plants (skips the hold-to-harvest delay)",
+    ],
+  },
+  {
     version: "3.1.58",
     date: "2026-04",
     notes: [

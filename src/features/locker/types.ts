@@ -24,6 +24,8 @@ export interface LockerConfig {
   sellAllCropsLock: boolean;
   cropSellLocks: Record<string, boolean>; // per-crop sell protection (blocks SellAllCrops)
   customRules: CustomRule[];     // plant+mutation combo rules
+  instaHarvestRainbow: boolean;  // skip hold-to-harvest for Rainbow plants
+  instaHarvestGold: boolean;     // skip hold-to-harvest for Gold plants
 }
 
 export interface GuardResult {

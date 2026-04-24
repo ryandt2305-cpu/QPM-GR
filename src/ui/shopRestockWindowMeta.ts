@@ -20,7 +20,7 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface ItemMeta { name: string; rarity: string; price: number; spriteUrl?: string | null }
+export interface ItemMeta { name: string; rarity: string; price: number; priceMagicDust?: number; spriteUrl?: string | null }
 
 export type SortColumn = 'item' | 'qty' | 'last' | null;
 export type SortDirection = 'asc' | 'desc';
@@ -130,10 +130,12 @@ export function buildItemMetaCache(gameData: Record<string, unknown>): void {
   let toolOrder = 0;
   for (const [itemId, itemData] of Object.entries((gameData.items ?? {}) as Record<string, Record<string, unknown>>)) {
     const key = `tool:${itemId}`;
+    const dustPrice = Number(itemData?.magicDustPrice);
     itemMetaCache.set(key, {
       name: (typeof itemData?.name === 'string' && itemData.name.trim()) ? itemData.name : itemId,
       rarity: String(itemData?.rarity ?? 'common').toLowerCase(),
       price: Number.isFinite(itemData?.coinPrice as number) ? itemData.coinPrice as number : 0,
+      ...(Number.isFinite(dustPrice) && dustPrice > 0 ? { priceMagicDust: dustPrice } : {}),
       spriteUrl: typeof itemData?.sprite === 'string' ? itemData.sprite : null,
     });
     itemCatalogOrder.set(key, toolOrder++);

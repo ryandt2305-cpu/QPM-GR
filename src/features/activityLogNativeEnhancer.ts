@@ -1736,7 +1736,7 @@ function saveSummaryDebugPreference(): void {
 }
 
 function loadEnabledPreference(): boolean {
-  return Boolean(storage.get<boolean>(ACTIVITY_LOG_ENABLED_STORAGE_KEY, true));
+  return Boolean(storage.get<boolean>(ACTIVITY_LOG_ENABLED_STORAGE_KEY, false));
 }
 
 function saveEnabledPreference(): void {

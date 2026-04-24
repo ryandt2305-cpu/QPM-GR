@@ -125,9 +125,9 @@ function computePetSellPrice(pet: Record<string, unknown>): number {
   if (!maturitySellPrice) return 0;
 
   const xp = typeof pet.xp === 'number' ? pet.xp : 0;
-  const targetScale = typeof pet.targetScale === 'number' ? pet.targetScale : 1;
+  const targetScale = Number.isFinite(pet.targetScale) ? (pet.targetScale as number) : 1;
   const maxScale = getPetMaxScale(species) ?? 2;
-  const hoursToMature = getPetHoursToMature(species) ?? 12;
+  const hoursToMature = Math.max(getPetHoursToMature(species) ?? 12, 0.001);
   const scale = computeGamePetScale(xp, targetScale, maxScale, hoursToMature);
   const mutations = Array.isArray(pet.mutations) ? (pet.mutations as string[]) : [];
   const { totalMultiplier } = computeMutationMultiplier(mutations);

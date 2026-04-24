@@ -57,8 +57,8 @@ function findAbilityColorSwitchBlock(bundleText: string): string | null {
       const block = extractBalancedBlock(bundleText, braceAfterSwitch);
       if (!block) continue;
 
-      const hasLegacyColorObjects = block.includes('bg:"') || block.includes("bg:'");
-      const hasDirectColorReturns = /return\s*(['"])(#|rgb\(|rgba\(|hsl\(|linear-gradient\()/i.test(block);
+      const hasLegacyColorObjects = block.includes('bg:"') || block.includes("bg:'") || block.includes('bg:\x60');
+      const hasDirectColorReturns = /return\s*(['"\x60])(#|rgb\(|rgba\(|hsl\(|linear-gradient\()/i.test(block);
 
       if (block.includes(ABILITY_COLOR_ANCHOR) && (hasLegacyColorObjects || hasDirectColorReturns)) {
         return block;
@@ -75,10 +75,10 @@ function findAbilityColorSwitchBlock(bundleText: string): string | null {
 function parseAbilityColorsFromSwitch(switchBlock: string): Record<string, RuntimeAbilityColor> | null {
   const colors: Record<string, RuntimeAbilityColor> = {};
   const pending: string[] = [];
-  const tokenRe = /case\s*(['"])([^'"]+)\1\s*:|default\s*:|return\s*\{/g;
+  const tokenRe = /case\s*(['"\x60])([^'"\x60]+)\1\s*:|default\s*:|return\s*\{/g;
 
   const findProp = (segment: string, prop: 'bg' | 'hover'): string | null => {
-    const propRe = new RegExp(`${prop}\\s*:\\s*(['"])([\\s\\S]*?)\\1`);
+    const propRe = new RegExp(`${prop}\\s*:\\s*(['"\\x60])([\\s\\S]*?)\\1`);
     const propMatch = segment.match(propRe);
     const value = propMatch?.[2];
     return typeof value === 'string' ? value : null;
@@ -145,7 +145,7 @@ function isSupportedColorValue(value: string): boolean {
 function parseAbilityColorsFromSimpleSwitch(switchBlock: string): Record<string, RuntimeAbilityColor> | null {
   const colors: Record<string, RuntimeAbilityColor> = {};
   const pending: string[] = [];
-  const tokenRe = /case\s*(['"])([^'"]+)\1\s*:|default\s*:|return\s*(['"])([^'"]+)\3/g;
+  const tokenRe = /case\s*(['"\x60])([^'"\x60]+)\1\s*:|default\s*:|return\s*(['"\x60])([^'"\x60]+)\3/g;
 
   let match: RegExpExecArray | null;
   while ((match = tokenRe.exec(switchBlock)) !== null) {

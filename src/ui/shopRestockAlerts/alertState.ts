@@ -45,4 +45,6 @@ export const alertState = {
   hasToolInventoryBaseline: false,
   currentCoinsCount: 0,
   hasCoinsBaseline: false,
+  /** Incremented every time a socket close or socket replacement is detected. */
+  socketCloseGeneration: 0,
 };

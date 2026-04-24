@@ -23,6 +23,7 @@ export interface ItemCatalogEntry {
   name?: string;
   coinPrice: number;
   creditPrice: number;
+  magicDustPrice?: number;
   rarity?: string;
   description?: string;
   [key: string]: unknown;
@@ -74,6 +75,7 @@ export interface EggCatalogEntry {
   secondsToHatch: number;
   coinPrice?: number;
   creditPrice?: number;
+  magicDustPrice?: number;
   [key: string]: unknown;
 }
 

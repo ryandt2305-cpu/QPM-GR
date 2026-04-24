@@ -57,17 +57,33 @@ function getAlertRoomSocket(): WebSocket | null {
 }
 
 function handleAlertSocketClose(): void {
-  if (pendingOwnershipConfirmations.size === 0) return;
-  debugLog('Socket close detected — failing all pending confirmations');
+  alertState.socketCloseGeneration++;
+  if (pendingOwnershipConfirmations.size === 0) {
+    debugLog('Socket close detected (no pending confirmations)', { generation: alertState.socketCloseGeneration });
+    return;
+  }
+  debugLog('Socket close detected — failing all pending confirmations', { generation: alertState.socketCloseGeneration });
   failAllPendingConfirmations('Connection lost \u2014 retry purchase');
 }
 
 function bindAlertSocketIfNeeded(): void {
   const socket = getAlertRoomSocket();
   if (!socket || socket === boundSocket) return;
+  const hadPreviousSocket = boundSocket !== null;
   detachAlertSocketListener();
   boundSocket = socket;
   boundSocket.addEventListener('close', handleAlertSocketClose);
+  if (hadPreviousSocket) {
+    // Socket was replaced — the old connection is gone.  Increment generation
+    // so any in-flight buy flow detects the disconnect, and fail any pending
+    // confirmations that the close-event handler may have missed (the old
+    // socket's 'close' event can fire after we've already detached).
+    alertState.socketCloseGeneration++;
+    debugLog('Socket replaced — failing pending confirmations', { generation: alertState.socketCloseGeneration });
+    if (pendingOwnershipConfirmations.size > 0) {
+      failAllPendingConfirmations('Connection lost \u2014 retry purchase');
+    }
+  }
   debugLog('Bound alert socket close listener');
 }
 

@@ -31,6 +31,16 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.60",
+    date: "2026-04",
+    notes: [
+      "Fixed storage value overlays showing 'InfinityT' for non-finite numbers",
+      "Fixed ability badge colors not matching game UI (updated all fallback colors to verified game values)",
+      "Fixed shop alerts staying stuck on 'Requested' after a server disconnect during buy-all",
+      "Activity log now defaults to off for new installs (toggle it on in settings if needed)",
+    ],
+  },
+  {
     version: "3.1.59",
     date: "2026-04",
     notes: [

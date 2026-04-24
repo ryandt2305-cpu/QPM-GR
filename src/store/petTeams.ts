@@ -426,7 +426,7 @@ export async function getAllPooledPets(): Promise<PooledPet[]> {
 const INVENTORY_ATOM_LABEL = 'myInventoryAtom';
 const HUTCH_ATOM_LABEL = 'myPetHutchPetItemsAtom';
 const PET_HUTCH_STORAGE_ID = 'PetHutch';
-const HUTCH_MAX_ITEMS = 25;
+const DEFAULT_HUTCH_CAPACITY = 25;
 const HUTCH_RETRIEVE_TIMEOUT_MS = 3500;
 const STORE_TIMEOUT_MS = 3000;
 const PLACE_TIMEOUT_MS = 3000;
@@ -530,6 +530,7 @@ interface InventorySnapshot {
 interface HutchSnapshot {
   ids: Set<string>;
   count: number;
+  hutchMax: number;
   freeIndex: number | null;
 }
 
@@ -587,7 +588,7 @@ async function readHutchSnapshot(): Promise<HutchSnapshot> {
   const ids = new Set<string>();
   const atom = getAtomByLabel(HUTCH_ATOM_LABEL);
   if (!atom) {
-    return { ids, count: 0, freeIndex: 0 };
+    return { ids, count: 0, hutchMax: DEFAULT_HUTCH_CAPACITY, freeIndex: 0 };
   }
 
   try {
@@ -624,24 +625,27 @@ async function readHutchSnapshot(): Promise<HutchSnapshot> {
       }
     }
 
+    // Derive effective max from the atom array length (reflects upgraded capacity).
+    const effectiveMax = Math.max(items.length, occupied, DEFAULT_HUTCH_CAPACITY);
+
     let freeIndex: number | null = null;
     if (hasStorageIndexes) {
-      for (let idx = 0; idx < HUTCH_MAX_ITEMS; idx++) {
+      for (let idx = 0; idx < effectiveMax; idx++) {
         if (!usedStorageIndexes.has(idx)) {
           freeIndex = idx;
           break;
         }
       }
     } else if (firstArrayHole != null) {
-      freeIndex = firstArrayHole < HUTCH_MAX_ITEMS ? firstArrayHole : null;
-    } else if (occupied < HUTCH_MAX_ITEMS) {
+      freeIndex = firstArrayHole < effectiveMax ? firstArrayHole : null;
+    } else if (occupied < effectiveMax) {
       freeIndex = occupied;
     }
 
-    return { ids, count: occupied, freeIndex };
+    return { ids, count: occupied, hutchMax: effectiveMax, freeIndex };
   } catch (error) {
     log('[petTeams] hutch snapshot read failed', error);
-    return { ids, count: 0, freeIndex: null };
+    return { ids, count: 0, hutchMax: DEFAULT_HUTCH_CAPACITY, freeIndex: null };
   }
 }
 
@@ -1003,7 +1007,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     reportErrors: boolean,
   ): Promise<boolean> => {
     const hutch = await readHutchSnapshot();
-    if (hutch.count >= HUTCH_MAX_ITEMS && hutch.freeIndex == null) {
+    if (hutch.count >= hutch.hutchMax && hutch.freeIndex == null) {
       if (reportErrors) {
         pushError('hutch_store_failed_or_full', 'Pet Hutch is full while storing ' + petId);
       }
@@ -1115,7 +1119,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       fastOpsSent++;
       modeledHutchIds.delete(targetId);
       modeledHutchCount = Math.max(0, modeledHutchCount - 1);
-      if (modeledHutchCount < HUTCH_MAX_ITEMS && modeledHutchIndex == null) {
+      if (modeledHutchCount < hutch.hutchMax && modeledHutchIndex == null) {
         modeledHutchIndex = modeledHutchCount;
       }
       if (typeof modeledInventoryIndex === 'number') {
@@ -1158,7 +1162,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     }
 
     for (const displacedId of displacedPets) {
-      if (modeledHutchCount >= HUTCH_MAX_ITEMS && modeledHutchIndex == null) {
+      if (modeledHutchCount >= hutch.hutchMax && modeledHutchIndex == null) {
         continue;
       }
       const store = sendPutItemInStorage(displacedId, modeledHutchIndex, true);
@@ -1166,11 +1170,11 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
         continue;
       }
       fastOpsSent++;
-      modeledHutchCount = Math.min(HUTCH_MAX_ITEMS, modeledHutchCount + 1);
+      modeledHutchCount = Math.min(hutch.hutchMax, modeledHutchCount + 1);
       if (typeof modeledHutchIndex === 'number') {
         const next = modeledHutchIndex + 1;
-        modeledHutchIndex = next < HUTCH_MAX_ITEMS ? next : null;
-      } else if (modeledHutchCount < HUTCH_MAX_ITEMS) {
+        modeledHutchIndex = next < hutch.hutchMax ? next : null;
+      } else if (modeledHutchCount < hutch.hutchMax) {
         modeledHutchIndex = modeledHutchCount;
       }
     }

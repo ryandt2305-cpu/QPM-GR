@@ -41,6 +41,7 @@ export interface ShopStockItem {
   isAvailable: boolean;
   priceCoins: number | null;
   priceCredits: number | null;
+  priceMagicDust: number | null;
   quantityPerPurchase: number;
   raw: ShopInventoryEntry;
 }
@@ -167,11 +168,13 @@ export function extractQuantityPerPurchase(entry: ShopInventoryEntry): number {
   return 1;
 }
 
-export function extractPrice(entry: ShopInventoryEntry): { coins: number | null; credits: number | null } {
+export function extractPrice(entry: ShopInventoryEntry): { coins: number | null; credits: number | null; magicDust: number | null } {
   const coinsCandidates = [entry.priceCoins, entry.coins, entry.price, entry.cost];
   const creditsCandidates = [entry.priceCredits, entry.credits, entry.creditCost];
+  const dustCandidates = [entry.priceMagicDust, entry.magicDustPrice, entry.dustPrice, entry.priceDust];
   let coins: number | null = null;
   let credits: number | null = null;
+  let magicDust: number | null = null;
   for (const candidate of coinsCandidates) {
     const numeric = toPositiveInteger(candidate);
     if (numeric != null) {
@@ -186,7 +189,14 @@ export function extractPrice(entry: ShopInventoryEntry): { coins: number | null;
       break;
     }
   }
-  return { coins, credits };
+  for (const candidate of dustCandidates) {
+    const numeric = toPositiveInteger(candidate);
+    if (numeric != null) {
+      magicDust = numeric;
+      break;
+    }
+  }
+  return { coins, credits, magicDust };
 }
 
 export function getPurchaseCount(
@@ -342,7 +352,7 @@ export function normalizeEntry(
   const initialStock = extractInitialStock(entry);
   const currentStock = toNonNegativeInteger(entry.stock ?? entry.availableStock);
   const quantityPerPurchase = extractQuantityPerPurchase(entry);
-  const { coins: priceCoins, credits: priceCredits } = extractPrice(entry);
+  const { coins: priceCoins, credits: priceCredits, magicDust: priceMagicDust } = extractPrice(entry);
   // NOTE: canSpawnHere was removed from the game in Nov 2025 update
   // Treat all items as spawnable (default true for backward compatibility)
   const canSpawn = entry.canSpawnHere !== false;
@@ -378,6 +388,7 @@ export function normalizeEntry(
     isAvailable,
     priceCoins,
     priceCredits,
+    priceMagicDust,
     quantityPerPurchase,
     raw: entry,
   };

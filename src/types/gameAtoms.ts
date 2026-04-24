@@ -14,7 +14,7 @@ export interface ShopInventoryEntry {
   price?: number;
   priceCoins?: number;
   priceCredits?: number;
-  currency?: 'coins' | 'credits';
+  currency?: 'coins' | 'credits' | 'magicDust';
   stock?: number;
   initialStock?: number;
   /** @deprecated Removed in game update. Kept for backward compatibility. All items can now spawn. */

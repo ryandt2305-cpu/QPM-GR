@@ -13,6 +13,7 @@ interface ShopItemEntry {
   count: number;
   coins: number;
   credits: number;
+  magicDust: number;
   lastPurchasedAt: number;
 }
 
@@ -33,6 +34,7 @@ export interface StatsSnapshot {
     totalPurchases: number;
     totalSpentCoins: number;
     totalSpentCredits: number;
+    totalSpentMagicDust: number;
     purchasesByCategory: Record<ShopCategoryKey, number>;
     items: Record<string, ShopItemEntry>;
     history: Array<{
@@ -41,6 +43,7 @@ export interface StatsSnapshot {
       count: number;
       coins: number;
       credits: number;
+      magicDust: number;
       timestamp: number;
       success: boolean;
       failureReason?: string;
@@ -51,6 +54,7 @@ export interface StatsSnapshot {
       count: number;
       coins: number;
       credits: number;
+      magicDust: number;
       timestamp: number;
     } | null;
     totalFailures: number;
@@ -131,6 +135,7 @@ function createDefaultState(now: number): StatsState {
       totalPurchases: 0,
       totalSpentCoins: 0,
       totalSpentCredits: 0,
+      totalSpentMagicDust: 0,
       purchasesByCategory: {
         seeds: 0,
         eggs: 0,
@@ -228,6 +233,7 @@ function hydrateState(): StatsState {
     base.shop.totalPurchases = Number(stored.shop.totalPurchases ?? 0);
     base.shop.totalSpentCoins = Number(stored.shop.totalSpentCoins ?? 0);
     base.shop.totalSpentCredits = Number(stored.shop.totalSpentCredits ?? 0);
+    base.shop.totalSpentMagicDust = Number((stored.shop as Record<string, unknown>).totalSpentMagicDust ?? 0);
     if (stored.shop.purchasesByCategory) {
       for (const key of ['seeds', 'eggs', 'tools', 'decor'] as ShopCategoryKey[]) {
         const value = stored.shop.purchasesByCategory[key];
@@ -242,6 +248,7 @@ function hydrateState(): StatsState {
           count: Number(snapshot.count ?? 0),
           coins: Number(snapshot.coins ?? 0),
           credits: Number(snapshot.credits ?? 0),
+          magicDust: Number((snapshot as unknown as Record<string, unknown>).magicDust ?? 0),
           lastPurchasedAt: snapshot.lastPurchasedAt ?? now,
         };
       }
@@ -254,6 +261,7 @@ function hydrateState(): StatsState {
           count: Number(row.count ?? 0),
           coins: Number(row.coins ?? 0),
           credits: Number(row.credits ?? 0),
+          magicDust: Number(row.magicDust ?? 0),
           timestamp: row.timestamp ?? now,
           success: row.success ?? true, // backward compatibility: assume old entries were successful
           failureReason: row.failureReason,
@@ -278,6 +286,7 @@ function hydrateState(): StatsState {
         count: Number(stored.shop.lastPurchase.count ?? 0),
         coins: Number(stored.shop.lastPurchase.coins ?? 0),
         credits: Number(stored.shop.lastPurchase.credits ?? 0),
+        magicDust: Number((stored.shop.lastPurchase as Record<string, unknown>).magicDust ?? 0),
         timestamp: stored.shop.lastPurchase.timestamp ?? now,
       };
     }
@@ -361,6 +370,7 @@ function emitSnapshot(): void {
       totalPurchases: state.shop.totalPurchases,
       totalSpentCoins: state.shop.totalSpentCoins,
       totalSpentCredits: state.shop.totalSpentCredits,
+      totalSpentMagicDust: state.shop.totalSpentMagicDust,
       purchasesByCategory: { ...state.shop.purchasesByCategory },
       items: Object.fromEntries(
         Object.entries(state.shop.items).map(([key, value]) => [key, { ...value }])
@@ -516,6 +526,7 @@ export function getStatsSnapshot(): StatsSnapshot {
       totalPurchases: state.shop.totalPurchases,
       totalSpentCoins: state.shop.totalSpentCoins,
       totalSpentCredits: state.shop.totalSpentCredits,
+      totalSpentMagicDust: state.shop.totalSpentMagicDust,
       purchasesByCategory: { ...state.shop.purchasesByCategory },
       items: Object.fromEntries(
         Object.entries(state.shop.items).map(([key, value]) => [key, { ...value }])
@@ -599,17 +610,20 @@ export function recordShopPurchase(
   count: number,
   coins: number,
   credits: number,
+  magicDust = 0,
   timestamp = Date.now(),
 ): void {
   ensureInitialized();
   const safeCount = Math.max(0, Math.round(count));
   const safeCoins = Math.max(0, Math.round(coins));
   const safeCredits = Math.max(0, Math.round(credits));
+  const safeDust = Math.max(0, Math.round(magicDust));
   const label = itemName || 'Unknown Item';
 
   state.shop.totalPurchases += safeCount;
   state.shop.totalSpentCoins += safeCoins;
   state.shop.totalSpentCredits += safeCredits;
+  state.shop.totalSpentMagicDust += safeDust;
   state.shop.purchasesByCategory[category] = (state.shop.purchasesByCategory[category] ?? 0) + safeCount;
 
   if (!state.shop.items[label]) {
@@ -617,6 +631,7 @@ export function recordShopPurchase(
       count: 0,
       coins: 0,
       credits: 0,
+      magicDust: 0,
       lastPurchasedAt: timestamp,
     };
   }
@@ -625,6 +640,7 @@ export function recordShopPurchase(
   entry.count += safeCount;
   entry.coins += safeCoins;
   entry.credits += safeCredits;
+  entry.magicDust += safeDust;
   entry.lastPurchasedAt = timestamp;
 
   pruneShopItems();
@@ -635,6 +651,7 @@ export function recordShopPurchase(
     count: safeCount,
     coins: safeCoins,
     credits: safeCredits,
+    magicDust: safeDust,
     timestamp,
   };
 
@@ -644,6 +661,7 @@ export function recordShopPurchase(
     count: safeCount,
     coins: safeCoins,
     credits: safeCredits,
+    magicDust: safeDust,
     timestamp,
     success: true,
   });
@@ -672,6 +690,7 @@ export function recordShopFailure(
     count: 0,
     coins: 0,
     credits: 0,
+    magicDust: 0,
     timestamp,
     success: false,
     failureReason: reason,

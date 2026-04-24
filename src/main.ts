@@ -1397,6 +1397,10 @@ async function initialize(): Promise<void> {
   initializeMutationValueTracking();
   const { initHatchStatsStore } = await import('./store/hatchStatsStore');
   initHatchStatsStore();
+  const { initEconomyTracker } = await import('./store/economyTracker');
+  initEconomyTracker().catch((error) => {
+    log('Economy tracker init failed', error);
+  });
   await yieldToBrowser();
   const { startPetHatchingTracker } = await import('./store/petHatchingTracker');
   await startPetHatchingTracker().catch((error) => {

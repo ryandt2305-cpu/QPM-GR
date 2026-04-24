@@ -27,6 +27,9 @@ type AtomDescriptorMap = {
   toolShop: AtomDescriptor<ShopCategorySnapshot | null>;
   decorShop: AtomDescriptor<ShopCategorySnapshot | null>;
   shopPurchases: AtomDescriptor<ShopPurchasesAtomSnapshot | null>;
+  coinsBalance: AtomDescriptor<number>;
+  creditsBalance: AtomDescriptor<number>;
+  magicDustBalance: AtomDescriptor<number>;
 };
 
 const ATOM_DESCRIPTORS: AtomDescriptorMap = {
@@ -40,6 +43,9 @@ const ATOM_DESCRIPTORS: AtomDescriptorMap = {
   toolShop: { label: 'shopsAtom', path: 'tool' },
   decorShop: { label: 'shopsAtom', path: 'decor' },
   shopPurchases: { label: 'myShopPurchasesAtom' },
+  coinsBalance: { label: 'myCoinsCountAtom', fallback: 0 },
+  creditsBalance: { label: 'creditsBalanceAtom', fallback: 0 },
+  magicDustBalance: { label: 'myMagicDustCountAtom', fallback: 0 },
 };
 
 export type AtomRegistryKey = keyof AtomDescriptorMap;
@@ -52,6 +58,9 @@ type AtomValueMap = {
   toolShop: ShopCategorySnapshot | null;
   decorShop: ShopCategorySnapshot | null;
   shopPurchases: ShopPurchasesAtomSnapshot | null;
+  coinsBalance: number;
+  creditsBalance: number;
+  magicDustBalance: number;
 };
 
 type RegistryValue<K extends AtomRegistryKey> = AtomValueMap[K] | null;

@@ -138,50 +138,85 @@ export function getAbilityColor(abilityName: string): { base: string; glow: stri
     return { base: runtimeColor.base, glow: runtimeColor.glow, text: '#FFF' };
   }
   
-  // Rainbow and Gold special abilities
-  if (name.includes('rainbowgranter') || name.includes('rainbow')) return { base: 'linear-gradient(135deg, #FF0000 0%, #FF7F00 16.67%, #FFFF00 33.33%, #00FF00 50%, #0000FF 66.67%, #4B0082 83.33%, #9400D3 100%)', glow: 'rgba(124,77,255,0.7)', text: '#FFF' };
-  if (name.includes('goldgranter') || name.includes('golden') || name === 'gold') return { base: 'linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)', glow: 'rgba(255,215,0,0.75)', text: '#000' };
-  
-  // Coin abilities
-  if (name.includes('coinfinder')) return { base: '#FFD700', glow: 'rgba(255,215,0,0.65)', text: '#000' };
-  
-  // Produce/Crop abilities
-  if (name.includes('produceeater') || name.includes('cropeater')) return { base: '#FF5722', glow: 'rgba(255,87,34,0.6)', text: '#FFF' };
-  if (name.includes('producerefund') || name.includes('croprefund')) return { base: '#FF5722', glow: 'rgba(255,87,34,0.6)', text: '#FFF' };
-  if (name.includes('producescaleboost') || name.includes('cropsize')) return { base: '#4CAF50', glow: 'rgba(76,175,80,0.6)', text: '#FFF' };
-  if (name.includes('producemutation') || name.includes('cropmutation')) return { base: '#E91E63', glow: 'rgba(233,30,99,0.6)', text: '#FFF' };
-  
-  // Seed abilities
-  if (name.includes('seedfinder')) return { base: '#FF9800', glow: 'rgba(255,152,0,0.6)', text: '#FFF' };
-  
-  // Egg abilities
-  if (name.includes('egggrowth')) return { base: '#9C27B0', glow: 'rgba(156,39,176,0.6)', text: '#FFF' };
-  
-  // Pet abilities
-  if (name.includes('petrefund')) return { base: '#00BCD4', glow: 'rgba(0,188,212,0.6)', text: '#FFF' };
-  if (name.includes('petmutation')) return { base: '#E91E63', glow: 'rgba(233,30,99,0.6)', text: '#FFF' };
-  if (name.includes('petageboost') || name.includes('maxstrength') || name.includes('strengthboost')) return { base: '#673AB7', glow: 'rgba(103,58,183,0.6)', text: '#FFF' };
-  if (name.includes('pethatchsizeboost') || name.includes('hatchxp')) return { base: '#7C4DFF', glow: 'rgba(124,77,255,0.65)', text: '#FFF' };
-  
-  // Sell abilities
-  if (name.includes('sellboost')) return { base: '#F44336', glow: 'rgba(244,67,54,0.6)', text: '#FFF' };
-  
-  // Hunger abilities
-  if (name.includes('hunger')) return { base: '#EC407A', glow: 'rgba(236,64,122,0.6)', text: '#FFF' };
-  
-  // XP abilities
-  if (name.includes('xpboost')) return { base: '#2196F3', glow: 'rgba(33,150,243,0.6)', text: '#FFF' };
-  
-  // Plant/Produce Growth abilities
-  if (name.includes('plantgrowth') || name.includes('producegrowth')) return { base: '#26A69A', glow: 'rgba(38,166,154,0.6)', text: '#FFF' };
-  
-  // Weather/Special abilities
-  if (name.includes('raindance')) return { base: '#2196F3', glow: 'rgba(33,150,243,0.6)', text: '#FFF' };
-  if (name.includes('doublehatch')) return { base: '#5C6BC0', glow: 'rgba(92,107,192,0.6)', text: '#FFF' };
-  if (name.includes('doubleharvest')) return { base: '#1976D2', glow: 'rgba(25,118,210,0.6)', text: '#FFF' };
-  if (name.includes('frostgranter') || name.includes('snowgranter')) return { base: '#6EC8FF', glow: 'rgba(110,200,255,0.6)', text: '#FFF' };
-  if (name.includes('dawnlitgranter')) return { base: '#A77CFF', glow: 'rgba(167,124,255,0.6)', text: '#FFF' };
-  if (name.includes('amberlitgranter')) return { base: '#FF9C52', glow: 'rgba(255,156,82,0.62)', text: '#FFF' };
+  // Kissers
+  if (name.includes('moonkisser')) return { base: '#FAA623', glow: 'rgba(250,166,35,0.6)', text: '#FFF' };
+  if (name.includes('dawnkisser')) return { base: '#A25CF2', glow: 'rgba(162,92,242,0.6)', text: '#FFF' };
+
+  // Rainbow and Gold granters
+  if (name.includes('rainbowgranter') || name.includes('rainbow')) return { base: 'linear-gradient(45deg, #C80000, #C87800, #A0AA1E, #3CAA3C, #32AAAA, #2896B4, #145AB4, #461E96)', glow: 'rgba(124,77,255,0.7)', text: '#FFF' };
+  if (name.includes('goldgranter') || name.includes('golden') || name === 'gold') return { base: 'linear-gradient(135deg, #DCC846 0%, #D2AF05 40%, #D2B937 70%, #C8AF1E 100%)', glow: 'rgba(220,200,70,0.75)', text: '#000' };
+
+  // Produce/Crop Scale: #228B22
+  if (name.includes('producescaleboost') || name.includes('cropsize') || name.includes('snowycropsize')) return { base: '#228B22', glow: 'rgba(34,139,34,0.6)', text: '#FFF' };
+
+  // Plant Growth: #008080
+  if (name.includes('plantgrowth') || name.includes('producegrowth')) return { base: '#008080', glow: 'rgba(0,128,128,0.6)', text: '#FFF' };
+
+  // Egg Growth: #B45AF0
+  if (name.includes('egggrowth')) return { base: '#B45AF0', glow: 'rgba(180,90,240,0.6)', text: '#FFF' };
+
+  // Pet Age Boost: #9370DB
+  if (name.includes('petageboost') || name.includes('maxstrength') || name.includes('strengthboost')) return { base: '#9370DB', glow: 'rgba(147,112,219,0.6)', text: '#FFF' };
+
+  // Pet Hatch Size Boost: #800080
+  if (name.includes('pethatchsizeboost') || name.includes('hatchxp')) return { base: '#800080', glow: 'rgba(128,0,128,0.6)', text: '#FFF' };
+
+  // Pet XP Boost: #1E90FF
+  if (name.includes('xpboost')) return { base: '#1E90FF', glow: 'rgba(30,144,255,0.6)', text: '#FFF' };
+
+  // Hunger Restore: #FF69B4 (check before generic hunger)
+  if (name.includes('hungerrestore')) return { base: '#FF69B4', glow: 'rgba(255,105,180,0.6)', text: '#FFF' };
+
+  // Hunger Boost: #FF1493
+  if (name.includes('hunger')) return { base: '#FF1493', glow: 'rgba(255,20,147,0.6)', text: '#FFF' };
+
+  // Sell Boost: #DC143C
+  if (name.includes('sellboost')) return { base: '#DC143C', glow: 'rgba(220,20,60,0.6)', text: '#FFF' };
+
+  // Coin Finder: #B49600
+  if (name.includes('coinfinder')) return { base: '#B49600', glow: 'rgba(180,150,0,0.65)', text: '#FFF' };
+
+  // Produce Mutation Boost + Dawn/Amber weather boosts: #8C0F46
+  if (name.includes('producemutation') || name.includes('cropmutation') || name.includes('dawnboost') || name.includes('ambermoonboost')) return { base: '#8C0F46', glow: 'rgba(140,15,70,0.6)', text: '#FFF' };
+
+  // Double Harvest: #0078B4
+  if (name.includes('doubleharvest')) return { base: '#0078B4', glow: 'rgba(0,120,180,0.6)', text: '#FFF' };
+
+  // Double Hatch: #3C5AB4
+  if (name.includes('doublehatch')) return { base: '#3C5AB4', glow: 'rgba(60,90,180,0.6)', text: '#FFF' };
+
+  // Produce Eater: #FF4500
+  if (name.includes('produceeater') || name.includes('cropeater')) return { base: '#FF4500', glow: 'rgba(255,69,0,0.6)', text: '#FFF' };
+
+  // Produce Refund: #FF6347
+  if (name.includes('producerefund') || name.includes('croprefund')) return { base: '#FF6347', glow: 'rgba(255,99,71,0.6)', text: '#FFF' };
+
+  // Pet Mutation Boost: #A03264
+  if (name.includes('petmutation')) return { base: '#A03264', glow: 'rgba(160,50,100,0.6)', text: '#FFF' };
+
+  // Pet Refund: #005078
+  if (name.includes('petrefund')) return { base: '#005078', glow: 'rgba(0,80,120,0.6)', text: '#FFF' };
+
+  // Copycat: #FF8C00
+  if (name.includes('copycat')) return { base: '#FF8C00', glow: 'rgba(255,140,0,0.6)', text: '#FFF' };
+
+  // Seed Finder: #A86626
+  if (name.includes('seedfinder')) return { base: '#A86626', glow: 'rgba(168,102,38,0.6)', text: '#FFF' };
+
+  // Rain Dance: #4CCCCC
+  if (name.includes('raindance')) return { base: '#4CCCCC', glow: 'rgba(76,204,204,0.6)', text: '#FFF' };
+
+  // Snow Granter: #90B8CC
+  if (name.includes('snowgranter')) return { base: '#90B8CC', glow: 'rgba(144,184,204,0.6)', text: '#FFF' };
+
+  // Frost Granter: #94A0CC
+  if (name.includes('frostgranter')) return { base: '#94A0CC', glow: 'rgba(148,160,204,0.6)', text: '#FFF' };
+
+  // Dawnlit Granter: #C47CB4
+  if (name.includes('dawnlitgranter')) return { base: '#C47CB4', glow: 'rgba(196,124,180,0.6)', text: '#FFF' };
+
+  // Amberlit Granter: #CC9060
+  if (name.includes('amberlitgranter')) return { base: '#CC9060', glow: 'rgba(204,144,96,0.6)', text: '#FFF' };
   
   // Default: deterministic dynamic color so new/unknown abilities are not all gray.
   const source = name || 'ability';

@@ -3,7 +3,14 @@
 
 import { pageWindow, readSharedGlobal } from '../../core/pageContext';
 
-const MAIN_BUNDLE_PATTERN = /main-[^/]+\.js(\?|$)/;
+// Ordered by priority: try main bundle first (prod), then code-split game chunks (beta).
+const BUNDLE_PATTERNS = [
+  /main-[^/]+\.js(\?|$)/,
+  /QuinoaView-[^/]+\.js(\?|$)/,
+  /ScrollableView-[^/]+\.js(\?|$)/,
+];
+
+const BUNDLE_CONTENT_ANCHOR = 'ProduceScaleBoost';
 
 let bundleCache: string | null = null;
 let bundleFetchInFlight: Promise<string | null> | null = null;
@@ -17,31 +24,51 @@ function shouldDebug(): boolean {
 }
 
 /**
+ * Find candidate bundle URLs from scripts and performance entries.
+ * Returns URLs in priority order: main-*.js first, then game-specific chunks.
+ */
+function findBundleCandidateUrls(): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  const addUrl = (src: string): void => {
+    if (src && !seen.has(src)) {
+      seen.add(src);
+      urls.push(src);
+    }
+  };
+
+  for (const pattern of BUNDLE_PATTERNS) {
+    try {
+      for (const script of pageWindow.document?.scripts || []) {
+        const src = script?.src ? String(script.src) : '';
+        if (pattern.test(src)) addUrl(src);
+      }
+    } catch {
+      // Ignore.
+    }
+
+    try {
+      const entries = pageWindow.performance?.getEntriesByType?.('resource') || [];
+      for (const entry of entries) {
+        const name = (entry as PerformanceResourceTiming)?.name
+          ? String((entry as PerformanceResourceTiming).name)
+          : '';
+        if (pattern.test(name)) addUrl(name);
+      }
+    } catch {
+      // Ignore.
+    }
+  }
+
+  return urls;
+}
+
+/**
  * Find main bundle URL from scripts or performance entries.
  */
 export function findMainBundleUrl(): string | null {
-  try {
-    for (const script of pageWindow.document?.scripts || []) {
-      const src = script?.src ? String(script.src) : '';
-      if (MAIN_BUNDLE_PATTERN.test(src)) return src;
-    }
-  } catch {
-    // Ignore and continue fallback.
-  }
-
-  try {
-    const entries = pageWindow.performance?.getEntriesByType?.('resource') || [];
-    for (const entry of entries) {
-      const name = (entry as PerformanceResourceTiming)?.name
-        ? String((entry as PerformanceResourceTiming).name)
-        : '';
-      if (MAIN_BUNDLE_PATTERN.test(name)) return name;
-    }
-  } catch {
-    // Ignore.
-  }
-
-  return null;
+  return findBundleCandidateUrls()[0] ?? null;
 }
 
 /**
@@ -115,43 +142,52 @@ export function extractBalancedObjectLiteral(text: string, anchorIndex: number):
 }
 
 /**
- * Fetch main bundle text (single in-flight + positive cache).
+ * Fetch bundle text containing ability color data.
+ * Tries candidate URLs in priority order; caches the first that contains the anchor.
  */
 export async function fetchMainBundle(): Promise<string | null> {
   if (bundleCache) return bundleCache;
   if (bundleFetchInFlight) return bundleFetchInFlight;
 
   bundleFetchInFlight = (async () => {
-    const url = findMainBundleUrl();
-    if (!url) {
-      if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] main bundle URL not found');
+    const urls = findBundleCandidateUrls();
+    if (!urls.length) {
+      if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] no bundle candidate URLs found');
       return null;
     }
 
-    try {
-      const fetchFn = typeof pageWindow.fetch === 'function'
-        ? pageWindow.fetch.bind(pageWindow)
-        : fetch;
-      const res = await fetchFn(url, { credentials: 'include' });
-      if (!res.ok) {
-        if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] main bundle fetch failed', { status: res.status, url });
-        return null;
+    const fetchFn = typeof pageWindow.fetch === 'function'
+      ? pageWindow.fetch.bind(pageWindow)
+      : fetch;
+
+    for (const url of urls) {
+      try {
+        const res = await fetchFn(url, { credentials: 'include' });
+        if (!res.ok) {
+          if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] bundle fetch failed', { status: res.status, url });
+          continue;
+        }
+        const text = await res.text();
+        if (!text || text.length < 1000) {
+          if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] bundle text suspiciously small', { length: text?.length ?? 0, url });
+          continue;
+        }
+        if (!text.includes(BUNDLE_CONTENT_ANCHOR)) {
+          if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] bundle lacks anchor', { url, length: text.length });
+          continue;
+        }
+        bundleCache = text;
+        if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] bundle fetched', { url, length: text.length });
+        return text;
+      } catch {
+        if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] bundle fetch threw', { url });
       }
-      const text = await res.text();
-      if (!text || text.length < 1000) {
-        if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] main bundle text suspiciously small', { length: text?.length ?? 0, url });
-        return null;
-      }
-      bundleCache = text;
-      if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] main bundle fetched', { url, length: text.length });
-      return text;
-    } catch {
-      if (shouldDebug()) console.log('[QPM Catalog] [AbilityColors] main bundle fetch threw', { url });
-      return null;
-    } finally {
-      bundleFetchInFlight = null;
     }
-  })();
+
+    return null;
+  })().finally(() => {
+    bundleFetchInFlight = null;
+  });
 
   return bundleFetchInFlight;
 }

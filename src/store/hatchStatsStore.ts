@@ -167,7 +167,29 @@ export function resetHatchStatsSession(): void {
 // Seed lifetime from existing pets (inventory / hutch backfill)
 // ---------------------------------------------------------------------------
 
+function extractSeedMutations(pet: PetSeedInput): string[] {
+  const slot = (pet as Record<string, unknown>).slot as Record<string, unknown> | undefined;
+  const sources = [pet.mutations, pet.mutation, slot?.mutations, slot?.mutation];
+  const result: string[] = [];
+  for (const src of sources) {
+    if (Array.isArray(src)) {
+      for (const item of src) {
+        if (typeof item === 'string' && !result.includes(item)) result.push(item);
+      }
+    } else if (typeof src === 'string' && src.length > 0 && !result.includes(src)) {
+      result.push(src);
+    }
+  }
+  return result;
+}
+
 function detectSeedRarity(pet: PetSeedInput): 'normal' | 'gold' | 'rainbow' {
+  // Primary: check mutations array
+  const mutations = extractSeedMutations(pet);
+  if (mutations.some(m => m.toLowerCase() === 'rainbow')) return 'rainbow';
+  if (mutations.some(m => m.toLowerCase() === 'gold')) return 'gold';
+
+  // Fallback: explicit rarity/boolean fields
   if (pet.rarity) {
     const r = String(pet.rarity).toLowerCase();
     if (r.includes('rainbow')) return 'rainbow';
@@ -175,15 +197,7 @@ function detectSeedRarity(pet: PetSeedInput): 'normal' | 'gold' | 'rainbow' {
   }
   if (pet.isRainbow === true) return 'rainbow';
   if (pet.isGold === true) return 'gold';
-  if (typeof pet.targetScale === 'number') {
-    if (pet.targetScale >= 1.25) return 'rainbow';
-    if (pet.targetScale >= 1.1) return 'gold';
-  }
-  if (typeof pet.name === 'string') {
-    const n = pet.name.toLowerCase();
-    if (n.startsWith('rainbow ')) return 'rainbow';
-    if (n.startsWith('gold ')) return 'gold';
-  }
+
   return 'normal';
 }
 
@@ -204,9 +218,17 @@ export function seedLifetimeFromPets(pets: PetSeedInput[]): { added: number } {
     if (seenIds.has(id)) continue;
     seenIds.add(id);
 
-    const species = typeof pet.species === 'string' && pet.species
-      ? pet.species
-      : (typeof pet.name === 'string' ? pet.name : 'Unknown');
+    const slot = (pet as Record<string, unknown>).slot as Record<string, unknown> | undefined;
+    const speciesCandidates = [
+      pet.species, slot?.species, slot?.petSpecies,
+    ];
+    let species = 'Unknown';
+    for (const c of speciesCandidates) {
+      if (typeof c === 'string' && c.trim().length > 0) {
+        species = c.trim();
+        break;
+      }
+    }
     const rarity = detectSeedRarity(pet);
     const abilities = Array.isArray(pet.abilities)
       ? (pet.abilities as unknown[]).filter((a): a is string => typeof a === 'string')

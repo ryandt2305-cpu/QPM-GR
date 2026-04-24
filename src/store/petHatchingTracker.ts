@@ -16,13 +16,72 @@ let unsubscribe: (() => void) | null = null;
 interface PetInfo {
   id?: string;
   species?: string;
+  petSpecies?: string;
   name?: string;
-  targetScale?: number; // Used to determine rarity: 1.0 = normal, 1.15 = gold, 1.3 = rainbow
+  displayName?: string;
+  targetScale?: number;
   rarity?: string;
   isGold?: boolean;
   isRainbow?: boolean;
   abilities?: unknown;
+  mutation?: unknown;
+  mutations?: unknown;
+  slot?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+/** Extract species from nested pet data — mirrors pets.ts:extractSpecies logic.
+ *  Intentionally does NOT fall back to pet.name/displayName — those are user renames. */
+function extractSpecies(pet: PetInfo): string | null {
+  const slot = pet.slot ?? {};
+  const candidates = [
+    pet.species,
+    slot.species,
+    slot.petSpecies,
+    pet.petSpecies,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+/** Extract string list from nested pet data sources */
+function extractStringList(sources: unknown[]): string[] {
+  const result: string[] = [];
+  for (const src of sources) {
+    if (Array.isArray(src)) {
+      for (const item of src) {
+        if (typeof item === 'string' && !result.includes(item)) {
+          result.push(item);
+        }
+      }
+    } else if (typeof src === 'string' && src.length > 0 && !result.includes(src)) {
+      result.push(src);
+    }
+  }
+  return result;
+}
+
+/** Extract abilities from nested pet data — mirrors pets.ts:extractAbilities logic */
+function extractAbilities(pet: PetInfo): string[] {
+  const slot = pet.slot ?? {};
+  const nested = (slot.pet ?? pet.pet) as Record<string, unknown> | undefined;
+  return extractStringList([
+    pet.abilities, slot.abilities, slot.ability, nested?.abilities,
+  ]);
+}
+
+/** Extract mutations from nested pet data — mirrors pets.ts:extractMutations logic */
+function extractMutations(pet: PetInfo): string[] {
+  const slot = pet.slot ?? {};
+  const nested = (slot.pet ?? pet.pet) as Record<string, unknown> | undefined;
+  return extractStringList([
+    pet.mutation, slot.mutation, nested?.mutation,
+    pet.mutations, slot.mutations, nested?.mutations,
+  ]);
 }
 
 // Track known pet IDs to detect new hatches - PERSISTED to prevent compounding bug
@@ -52,32 +111,24 @@ function saveKnownPetIds(): void {
 }
 
 function determinePetRarity(pet: PetInfo): 'normal' | 'gold' | 'rainbow' {
-  // Method 1: Check explicit rarity property
-  if (pet.rarity) {
-    const rarityLower = String(pet.rarity).toLowerCase();
-    if (rarityLower.includes('rainbow')) return 'rainbow';
-    if (rarityLower.includes('gold')) return 'gold';
+  // Primary: check mutations array — canonical source per petOptimizer/collection.ts
+  const mutations = extractMutations(pet);
+  if (mutations.some(m => m.toLowerCase() === 'rainbow')) return 'rainbow';
+  if (mutations.some(m => m.toLowerCase() === 'gold')) return 'gold';
+
+  // Fallback: check explicit rarity/boolean fields
+  const slot = pet.slot ?? {};
+  for (const rarity of [pet.rarity, slot.rarity]) {
+    if (rarity) {
+      const r = String(rarity).toLowerCase();
+      if (r.includes('rainbow')) return 'rainbow';
+      if (r.includes('gold')) return 'gold';
+    }
   }
 
-  // Method 2: Check boolean flags
-  if (pet.isRainbow === true) return 'rainbow';
-  if (pet.isGold === true) return 'gold';
+  if (pet.isRainbow === true || slot.isRainbow === true) return 'rainbow';
+  if (pet.isGold === true || slot.isGold === true) return 'gold';
 
-  // Method 3: Check targetScale (common pattern in Magic Garden)
-  // Normal = 1.0, Gold = 1.15, Rainbow = 1.3
-  if (pet.targetScale !== undefined && typeof pet.targetScale === 'number') {
-    if (pet.targetScale >= 1.25) return 'rainbow'; // Rainbow threshold
-    if (pet.targetScale >= 1.1) return 'gold';     // Gold threshold
-  }
-
-  // Method 4: Check name for Rainbow/Gold prefix
-  if (pet.name || pet.species) {
-    const nameStr = String(pet.name || pet.species).toLowerCase();
-    if (nameStr.startsWith('rainbow ')) return 'rainbow';
-    if (nameStr.startsWith('gold ')) return 'gold';
-  }
-
-  // Default to normal
   return 'normal';
 }
 
@@ -110,9 +161,9 @@ function detectNewPets(pets: PetInfo[]): void {
   let newPetsDetected = false;
 
   for (const pet of pets) {
+    const species = extractSpecies(pet);
     // Create stable pet ID - use actual ID or create a stable fallback based on pet properties
-    // CRITICAL FIX: Do NOT use Math.random() as it creates a new ID every time, causing pets to be counted multiple times!
-    const petId = pet.id || `${pet.species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
+    const petId = pet.id || `${species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
     currentPetIds.add(petId);
 
     // Check if this is a new pet (not seen before)
@@ -120,13 +171,10 @@ function detectNewPets(pets: PetInfo[]): void {
       const rarity = determinePetRarity(pet);
       recordPetHatch(rarity, now);
 
-      const species = pet.species ?? pet.name ?? 'Unknown';
-      const abilities = Array.isArray(pet.abilities)
-        ? (pet.abilities as unknown[]).filter((a): a is string => typeof a === 'string')
-        : [];
-      recordDetailedHatch(species, rarity, abilities, now);
+      const abilities = extractAbilities(pet);
+      recordDetailedHatch(species ?? 'Unknown', rarity, abilities, now);
 
-      log(`🥚 Detected new ${rarity} pet hatched: ${species}`);
+      log(`🥚 Detected new ${rarity} pet hatched: ${species ?? 'Unknown'}`);
       newPetsDetected = true;
     }
   }
@@ -170,9 +218,8 @@ export async function startPetHatchingTracker(): Promise<void> {
           isFirstCall = false;
           const pets = extractPetInfos(value);
           for (const pet of pets) {
-            // Create stable pet ID - use actual ID or create a stable fallback based on pet properties
-            // CRITICAL FIX: Do NOT use Math.random() as it creates a new ID every time
-            const petId = pet.id || `${pet.species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
+            const species = extractSpecies(pet);
+            const petId = pet.id || `${species || 'unknown'}-${pet.name || 'unnamed'}-${pet.targetScale || 1}`;
             knownPetIds.add(petId);
           }
           // Save the initial state

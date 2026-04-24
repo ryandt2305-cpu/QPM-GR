@@ -39,6 +39,13 @@ export async function renderShopHistoryWindow(root: HTMLElement): Promise<void> 
     summaryRight.appendChild(creditsRow);
   }
 
+  if (stats.shop.totalSpentMagicDust > 0) {
+    const dustRow = document.createElement('div');
+    dustRow.style.cssText = 'font-size: 12px; color: #CE93D8;';
+    dustRow.textContent = `✨ ${stats.shop.totalSpentMagicDust.toLocaleString()} magic dust spent`;
+    summaryRight.appendChild(dustRow);
+  }
+
   header.append(summaryLeft, summaryRight);
   root.appendChild(header);
 
@@ -150,6 +157,7 @@ export async function renderShopHistoryWindow(root: HTMLElement): Promise<void> 
         const parts = [`×${entry.count}`];
         if (entry.coins > 0) parts.push(`💰 ${entry.coins.toLocaleString()} coins`);
         if (entry.credits > 0) parts.push(`💎 ${entry.credits.toLocaleString()} credits`);
+        if (entry.magicDust > 0) parts.push(`✨ ${entry.magicDust.toLocaleString()} dust`);
         detailRow.textContent = parts.join(' • ');
       } else {
         detailRow.textContent = `Reason: ${entry.failureReason || 'Unknown'}`;

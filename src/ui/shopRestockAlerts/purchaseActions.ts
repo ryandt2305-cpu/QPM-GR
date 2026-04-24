@@ -24,7 +24,6 @@ import {
 import {
   alertState,
   pendingOwnershipConfirmations,
-  dismissedInStockKeys,
 } from './alertState';
 import {
   sleep,
@@ -32,6 +31,7 @@ import {
   waitForOwnershipBaselines,
   captureOwnershipBaseline,
   clearPendingOwnershipConfirmation,
+  failPendingConfirmation,
   schedulePendingStaleNotice,
   scheduleMaxConfirmationTimeout,
   processPendingOwnershipConfirmations,
@@ -467,6 +467,7 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
       }
     }
 
+    const socketGenBefore = alertState.socketCloseGeneration;
     const result = await buyAllForAlert(buyModel, requested);
     if (result.error || result.sent <= 0) {
       debugLog('Buy-all request failed', { key: buyModel.key, requested, sent: result.sent, error: result.error });
@@ -521,6 +522,20 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
     setAlertBusy(active, false);
     schedulePendingStaleNotice(active.model.key);
     scheduleMaxConfirmationTimeout(active.model.key);
+
+    // If the socket closed or was replaced during the async buy flow, the
+    // close-event handler may have fired before the pending was created and
+    // therefore had nothing to fail.  Detect this via the generation counter.
+    if (alertState.socketCloseGeneration !== socketGenBefore) {
+      debugLog('Socket lost during buy flow — failing pending', {
+        key: active.model.key,
+        genBefore: socketGenBefore,
+        genNow: alertState.socketCloseGeneration,
+      });
+      failPendingConfirmation(active.model.key, 'Connection lost during purchase \u2014 retry');
+      return;
+    }
+
     processPendingOwnershipConfirmations();
   } catch (error) {
     log('[ShopRestockAlerts] Buy-all failed', error);

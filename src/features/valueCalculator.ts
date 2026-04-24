@@ -91,6 +91,7 @@ export function formatCoins(value: number): string {
 }
 
 export function formatCoinsAbbreviated(value: number): string {
+  if (!Number.isFinite(value)) return '—';
   const absValue = Math.abs(value);
   const sign = value < 0 ? '-' : '';
 

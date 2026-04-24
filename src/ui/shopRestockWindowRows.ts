@@ -3,7 +3,7 @@
 // Row builders receive callbacks instead of closing over render state.
 
 import { openItemRestockDetail } from './itemRestockDetailWindow';
-import { getItemName, getItemRarity, getItemPrice, getSpriteUrl, getCoinSpriteUrl } from './shopRestockWindowMeta';
+import { getItemName, getItemRarity, getItemPrice, getItemMeta, getSpriteUrl, getCoinSpriteUrl } from './shopRestockWindowMeta';
 import {
   rarityColor,
   rarityBorderStyle,
@@ -289,23 +289,41 @@ export function buildHistRow(
   }
   itemInfo.appendChild(histNameLine);
 
-  if (price > 0) {
+  const dustPrice = getItemMeta(item.item_id, item.shop_type)?.priceMagicDust ?? 0;
+  if (price > 0 || dustPrice > 0) {
     const priceRow = document.createElement('div');
-    priceRow.style.cssText = 'font-size:12px;opacity:0.9;display:flex;align-items:center;gap:3px;line-height:1;';
-    const coinSrc = getCoinSpriteUrl();
-    const coinSpan = coinSrc ? document.createElement('img') : document.createElement('span');
-    if (coinSrc && coinSpan instanceof HTMLImageElement) {
-      coinSpan.src = coinSrc;
-      coinSpan.alt = 'Coin';
-      coinSpan.style.cssText = 'width:11px;height:11px;object-fit:contain;image-rendering:auto;opacity:0.95;';
-    } else {
-      coinSpan.style.cssText = `color:#FFC734;font-weight:700;font-size:11px;`;
-      coinSpan.textContent = 'C';
+    priceRow.style.cssText = 'font-size:12px;opacity:0.9;display:flex;align-items:center;gap:6px;line-height:1;';
+    if (price > 0) {
+      const coinWrap = document.createElement('span');
+      coinWrap.style.cssText = 'display:flex;align-items:center;gap:3px;';
+      const coinSrc = getCoinSpriteUrl();
+      const coinSpan = coinSrc ? document.createElement('img') : document.createElement('span');
+      if (coinSrc && coinSpan instanceof HTMLImageElement) {
+        coinSpan.src = coinSrc;
+        coinSpan.alt = 'Coin';
+        coinSpan.style.cssText = 'width:11px;height:11px;object-fit:contain;image-rendering:auto;opacity:0.95;';
+      } else {
+        coinSpan.style.cssText = 'color:#FFC734;font-weight:700;font-size:11px;';
+        coinSpan.textContent = 'C';
+      }
+      const priceSpan = document.createElement('span');
+      priceSpan.style.cssText = 'color:#FFC734;font-weight:700;';
+      priceSpan.textContent = formatPrice(price);
+      coinWrap.append(coinSpan, priceSpan);
+      priceRow.appendChild(coinWrap);
     }
-    const priceSpan = document.createElement('span');
-    priceSpan.style.cssText = `color:#FFC734;font-weight:700;`;
-    priceSpan.textContent = formatPrice(price);
-    priceRow.append(coinSpan, priceSpan);
+    if (dustPrice > 0) {
+      const dustWrap = document.createElement('span');
+      dustWrap.style.cssText = 'display:flex;align-items:center;gap:2px;';
+      const dustIcon = document.createElement('span');
+      dustIcon.style.cssText = 'font-size:10px;';
+      dustIcon.textContent = '\u2728'; // ✨
+      const dustSpan = document.createElement('span');
+      dustSpan.style.cssText = 'color:#CE93D8;font-weight:700;';
+      dustSpan.textContent = formatPrice(dustPrice);
+      dustWrap.append(dustIcon, dustSpan);
+      priceRow.appendChild(dustWrap);
+    }
     itemInfo.appendChild(priceRow);
   }
   itemCell.appendChild(itemInfo);

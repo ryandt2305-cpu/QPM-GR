@@ -18,7 +18,6 @@ import {
   getMutationCatalog,
   getPlantSpecies,
 } from '../catalogs/gameCatalogs';
-import { getAbilityDefinition, type AbilityCategory } from '../data/petAbilities';
 import {
   getProduceSpriteDataUrlWithMutations,
   getMultiHarvestSpriteDataUrlWithMutations,
@@ -33,12 +32,50 @@ import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { setStatsHubSpeciesOverride, setStatsHubExcludeMutationsOverride, setStatsHubTileOverride, setStatsHubExcludeMutationsAllMode } from '../features/gardenFilters';
 import { lookupMaxScale } from '../utils/plantScales';
 import { normalizeSpeciesKey } from '../utils/helpers';
+import { analyzeAllEggs, type EggAnalysis } from '../features/eggEfficiency';
+import { areCatalogsReady } from '../catalogs/gameCatalogs';
+import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot, type Transaction } from '../store/economyTracker';
+import type { ShopCategoryKey } from '../store/stats';
 
 let coinSpriteUrlCache: string | null | undefined;
 function getCoinSpriteUrl(): string | null {
   if (coinSpriteUrlCache !== undefined) return coinSpriteUrlCache;
   coinSpriteUrlCache = getAnySpriteDataUrl('sprite/ui/Coin') || getAnySpriteDataUrl('ui/Coin') || null;
   return coinSpriteUrlCache;
+}
+
+let dustSpriteUrlCache: string | null | undefined;
+function getDustSpriteUrl(): string | null {
+  if (dustSpriteUrlCache !== undefined) return dustSpriteUrlCache;
+  // Game uses SpriteFrame.Item.MagicDust → "sprite/item/MagicDust"
+  dustSpriteUrlCache =
+    getAnySpriteDataUrl('sprite/item/MagicDust') ||
+    getAnySpriteDataUrl('item/MagicDust') ||
+    null;
+  return dustSpriteUrlCache;
+}
+
+let creditSpriteUrlCache: string | null | undefined;
+function getCreditSpriteUrl(): string | null {
+  if (creditSpriteUrlCache !== undefined) return creditSpriteUrlCache;
+  // Game uses SpriteFrame.Ui.Donut for credits
+  creditSpriteUrlCache =
+    getAnySpriteDataUrl('sprite/ui/Donut') ||
+    getAnySpriteDataUrl('ui/Donut') ||
+    null;
+  return creditSpriteUrlCache;
+}
+
+/** Create a currency icon element — game sprite if available, else emoji fallback */
+function currencyIcon(type: 'coins' | 'credits' | 'dust', size: number): HTMLElement {
+  const urlFn = type === 'coins' ? getCoinSpriteUrl : type === 'dust' ? getDustSpriteUrl : getCreditSpriteUrl;
+  const url = urlFn();
+  if (url) return makeSprite(url, size);
+  const fallbacks = { coins: '🪙', credits: '💎', dust: '✨' };
+  const span = document.createElement('span');
+  span.style.cssText = `font-size:${Math.round(size * 0.7)}px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;flex-shrink:0;`;
+  span.textContent = fallbacks[type];
+  return span;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,18 +198,6 @@ function rarityBadgeStyle(rarity: 'normal' | 'gold' | 'rainbow'): string {
     'text-transform:capitalize',
   ].join(';');
 }
-
-// ---------------------------------------------------------------------------
-// Ability category colors
-// ---------------------------------------------------------------------------
-
-const ABILITY_CATEGORY_COLORS: Record<AbilityCategory, string> = {
-  plantGrowth: '#66bb6a',
-  eggGrowth:   '#ab47bc',
-  xp:          '#42a5f5',
-  coins:       '#ffd600',
-  misc:        '#78909c',
-};
 
 // ---------------------------------------------------------------------------
 // Time helpers
@@ -1656,12 +1681,11 @@ function buildSpeciesCard(species: string, counts: SpeciesCounts): HTMLElement {
     'border-radius:10px',
     'border:1px solid rgba(143,130,255,0.14)',
     'background:rgba(255,255,255,0.03)',
-    'min-width:90px',
-    'max-width:120px',
+    'width:100%',
     'text-align:center',
   ].join(';');
 
-  card.appendChild(petSprite(species, 52));
+  card.appendChild(petSprite(species, 48));
 
   const nameEl = document.createElement('div');
   nameEl.style.cssText = 'font-size:11px;font-weight:600;color:#e0e0e0;word-break:break-word;';
@@ -1669,49 +1693,30 @@ function buildSpeciesCard(species: string, counts: SpeciesCounts): HTMLElement {
   card.appendChild(nameEl);
 
   const countEl = document.createElement('div');
-  countEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.65);line-height:1.5;';
-  const parts = [`${counts.total} total`];
-  if (counts.rainbow > 0) parts.push(`${counts.rainbow}🌈`);
-  if (counts.gold > 0) parts.push(`${counts.gold}⭐`);
-  countEl.textContent = parts.join(' · ');
+  countEl.style.cssText = 'font-size:18px;font-weight:800;color:#e0e0e0;line-height:1;';
+  countEl.textContent = String(counts.total);
   card.appendChild(countEl);
 
+  // Gold/rainbow mini-badges
+  if (counts.gold > 0 || counts.rainbow > 0) {
+    const badges = document.createElement('div');
+    badges.style.cssText = 'display:flex;gap:4px;justify-content:center;';
+    if (counts.gold > 0) {
+      const g = document.createElement('span');
+      g.style.cssText = 'background:#ffd600;color:#111;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700;';
+      g.textContent = `${counts.gold} gold`;
+      badges.appendChild(g);
+    }
+    if (counts.rainbow > 0) {
+      const r = document.createElement('span');
+      r.style.cssText = `background:${RAINBOW_GRADIENT};color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700;`;
+      r.textContent = `${counts.rainbow} 🌈`;
+      badges.appendChild(r);
+    }
+    card.appendChild(badges);
+  }
+
   return card;
-}
-
-function buildAbilityChip(abilityId: string, count: number): HTMLElement {
-  const chip = document.createElement('div');
-  chip.style.cssText = [
-    'display:inline-flex',
-    'align-items:center',
-    'gap:5px',
-    'padding:4px 9px',
-    'border-radius:20px',
-    'background:rgba(255,255,255,0.05)',
-    'border:1px solid rgba(255,255,255,0.1)',
-    'font-size:11px',
-    'color:#e0e0e0',
-    'white-space:nowrap',
-  ].join(';');
-
-  const def = getAbilityDefinition(abilityId);
-  const color = def ? ABILITY_CATEGORY_COLORS[def.category] : '#78909c';
-  const name = def ? def.name : abilityId;
-
-  const dot = document.createElement('span');
-  dot.style.cssText = `width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;`;
-  chip.appendChild(dot);
-
-  const label = document.createElement('span');
-  label.textContent = name;
-  chip.appendChild(label);
-
-  const countBadge = document.createElement('span');
-  countBadge.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.55);font-weight:700;';
-  countBadge.textContent = `×${count}`;
-  chip.appendChild(countBadge);
-
-  return chip;
 }
 
 function buildEventRow(event: HatchEvent): HTMLElement {
@@ -1720,14 +1725,14 @@ function buildEventRow(event: HatchEvent): HTMLElement {
     'display:flex',
     'align-items:center',
     'gap:8px',
-    'padding:5px 2px',
+    'padding:4px 0',
     'border-bottom:1px solid rgba(255,255,255,0.04)',
   ].join(';');
 
   row.appendChild(petSprite(event.species, 24));
 
   const nameEl = document.createElement('span');
-  nameEl.style.cssText = 'font-size:12px;color:#e0e0e0;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  nameEl.style.cssText = 'font-size:12px;color:#e0e0e0;font-weight:600;min-width:60px;';
   nameEl.textContent = event.species;
   row.appendChild(nameEl);
 
@@ -1738,28 +1743,8 @@ function buildEventRow(event: HatchEvent): HTMLElement {
     row.appendChild(rarBadge);
   }
 
-  if (event.abilities.length > 0) {
-    const abilWrap = document.createElement('div');
-    abilWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;max-width:200px;';
-    for (const abilId of event.abilities.slice(0, 3)) {
-      const def = getAbilityDefinition(abilId);
-      const color = def ? ABILITY_CATEGORY_COLORS[def.category] : '#78909c';
-      const chip = document.createElement('span');
-      chip.style.cssText = `background:${color}22;border:1px solid ${color}55;color:${color};border-radius:3px;padding:1px 5px;font-size:10px;white-space:nowrap;`;
-      chip.textContent = def ? def.name : abilId;
-      abilWrap.appendChild(chip);
-    }
-    if (event.abilities.length > 3) {
-      const more = document.createElement('span');
-      more.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.4);';
-      more.textContent = `+${event.abilities.length - 3}`;
-      abilWrap.appendChild(more);
-    }
-    row.appendChild(abilWrap);
-  }
-
   const timeEl = document.createElement('span');
-  timeEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);white-space:nowrap;flex-shrink:0;';
+  timeEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);white-space:nowrap;margin-left:auto;flex-shrink:0;';
   timeEl.textContent = timeAgo(event.timestamp);
   row.appendChild(timeEl);
 
@@ -1769,24 +1754,21 @@ function buildEventRow(event: HatchEvent): HTMLElement {
 function buildEggsTab(container: HTMLElement): () => void {
   container.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
 
-  // Session/Lifetime toggle
-  const toggleBar = document.createElement('div');
-  toggleBar.style.cssText = [
+  // --- Filter bar (same pattern as Garden tab's filter bar) ---
+  const filterBar = document.createElement('div');
+  filterBar.style.cssText = [
     'display:flex',
-    'align-items:center',
-    'gap:8px',
-    'padding:10px 14px',
+    'flex-wrap:wrap',
+    'gap:5px',
+    'padding:8px 14px',
     'border-bottom:1px solid rgba(143,130,255,0.12)',
     'flex-shrink:0',
+    'align-items:center',
   ].join(';');
-
-  const toggleLabel = document.createElement('span');
-  toggleLabel.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-right:4px;';
-  toggleLabel.textContent = 'View:';
-  toggleBar.appendChild(toggleLabel);
 
   const eggsViewSaved = loadStatsHubFilters().eggsView;
   let activeView: 'session' | 'lifetime' = eggsViewSaved === 'lifetime' ? 'lifetime' : 'session';
+
   const sessionBtn = document.createElement('button');
   sessionBtn.type = 'button';
   sessionBtn.textContent = 'Session';
@@ -1800,49 +1782,24 @@ function buildEggsTab(container: HTMLElement): () => void {
   };
   updateToggle();
 
-  sessionBtn.addEventListener('click', () => { activeView = 'session'; saveStatsHubFilters({ eggsView: 'session' }); updateToggle(); renderEggs(); });
-  lifetimeBtn.addEventListener('click', () => { activeView = 'lifetime'; saveStatsHubFilters({ eggsView: 'lifetime' }); updateToggle(); renderEggs(); });
-  toggleBar.append(sessionBtn, lifetimeBtn);
+  sessionBtn.addEventListener('click', () => { activeView = 'session'; saveStatsHubFilters({ eggsView: 'session' }); updateToggle(); renderAll(); });
+  lifetimeBtn.addEventListener('click', () => { activeView = 'lifetime'; saveStatsHubFilters({ eggsView: 'lifetime' }); updateToggle(); renderAll(); });
+  filterBar.append(sessionBtn, lifetimeBtn);
 
-  // Spacer
-  const spacer = document.createElement('div');
-  spacer.style.cssText = 'flex:1;';
-  toggleBar.appendChild(spacer);
+  // Separator
+  const sep = document.createElement('span');
+  sep.style.cssText = 'width:1px;height:16px;background:rgba(255,255,255,0.12);align-self:center;margin:0 2px;flex-shrink:0;';
+  filterBar.appendChild(sep);
 
-  // Seed from inventory button
+  // Seed button
   const seedBtn = document.createElement('button');
   seedBtn.type = 'button';
-  seedBtn.title = 'Seed lifetime stats from all pets you currently own (inventory + hutch). Runs once per pet — safe to repeat.';
-  seedBtn.textContent = '⬆ Seed pets';
-  seedBtn.style.cssText = [
-    'padding:4px 10px',
-    'border-radius:20px',
-    'font-size:11px',
-    'font-weight:600',
-    'cursor:pointer',
-    'border:1px solid rgba(255,255,255,0.14)',
-    'background:rgba(255,255,255,0.04)',
-    'color:rgba(224,224,224,0.5)',
-    'transition:background 0.12s,color 0.12s,border-color 0.12s',
-    'white-space:nowrap',
-  ].join(';');
-  seedBtn.addEventListener('mouseenter', () => {
-    seedBtn.style.background = 'rgba(255,255,255,0.09)';
-    seedBtn.style.color = 'rgba(224,224,224,0.8)';
-    seedBtn.style.borderColor = 'rgba(255,255,255,0.25)';
-  });
-  seedBtn.addEventListener('mouseleave', () => {
-    if (!seedBtn.disabled) {
-      seedBtn.style.background = 'rgba(255,255,255,0.04)';
-      seedBtn.style.color = 'rgba(224,224,224,0.5)';
-      seedBtn.style.borderColor = 'rgba(255,255,255,0.14)';
-    }
-  });
+  seedBtn.textContent = '⬆ Seed';
+  seedBtn.title = 'Import existing pets into lifetime stats';
+  seedBtn.style.cssText = pillBtnCss(false);
   seedBtn.addEventListener('click', () => {
     seedBtn.disabled = true;
-    seedBtn.textContent = '⏳ Seeding…';
-    seedBtn.style.opacity = '0.6';
-
+    seedBtn.textContent = '⏳';
     try {
       const allPets: PetSeedInput[] = [];
       for (const label of ['myPetInventoryAtom', 'myPetHutchPetItemsAtom']) {
@@ -1850,160 +1807,397 @@ function buildEggsTab(container: HTMLElement): () => void {
           const atom = getAtomByLabel(label);
           if (atom) {
             const items = readAtomValue<unknown[]>(atom);
-            if (Array.isArray(items)) {
-              allPets.push(...(items as PetSeedInput[]));
-            }
+            if (Array.isArray(items)) allPets.push(...(items as PetSeedInput[]));
           }
         } catch { /* atom not ready */ }
       }
-
       const { added } = seedLifetimeFromPets(allPets);
-
-      // Switch to lifetime view so the user sees the result
       activeView = 'lifetime';
       updateToggle();
-      renderEggs();
-
-      seedBtn.textContent = added > 0 ? `✓ +${added} added` : '✓ Up to date';
-      seedBtn.style.color = 'rgba(143,230,143,0.8)';
-      seedBtn.style.borderColor = 'rgba(143,230,143,0.35)';
-      seedBtn.style.background = 'rgba(143,230,143,0.08)';
-      seedBtn.style.opacity = '1';
-      setTimeout(() => {
-        seedBtn.disabled = false;
-        seedBtn.textContent = '⬆ Seed pets';
-        seedBtn.style.background = 'rgba(255,255,255,0.04)';
-        seedBtn.style.color = 'rgba(224,224,224,0.5)';
-        seedBtn.style.borderColor = 'rgba(255,255,255,0.14)';
-        seedBtn.style.opacity = '1';
-      }, 3000);
-    } catch (err) {
-      log('[StatsHub] Seed error', err);
+      renderAll();
+      seedBtn.textContent = added > 0 ? `+${added}` : '✓';
+      setTimeout(() => { seedBtn.disabled = false; seedBtn.textContent = '⬆ Seed'; }, 2000);
+    } catch {
       seedBtn.disabled = false;
-      seedBtn.textContent = '✗ Failed';
-      seedBtn.style.color = 'rgba(255,100,100,0.7)';
-      seedBtn.style.opacity = '1';
-      setTimeout(() => {
-        seedBtn.textContent = '⬆ Seed pets';
-        seedBtn.style.color = 'rgba(224,224,224,0.5)';
-      }, 2500);
+      seedBtn.textContent = '⬆ Seed';
     }
   });
-  toggleBar.appendChild(seedBtn);
+  filterBar.appendChild(seedBtn);
 
-  container.appendChild(toggleBar);
+  container.appendChild(filterBar);
 
+  // --- Scrollable content ---
   const content = document.createElement('div');
-  content.style.cssText = 'flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:14px;';
+  content.style.cssText = 'flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:16px;';
   container.appendChild(content);
 
   let currentStats: HatchStatsState | null = null;
 
-  function renderEggs(): void {
+  function renderAll(): void {
     content.innerHTML = '';
-    if (!currentStats) {
-      appendEmptyNote(content, 'No hatch data yet. Hatch a pet to see stats here.');
-      return;
-    }
+
+    // Section 1: Hatch stats
+    renderHatchStats();
+
+    // Section 2: Egg catalog (always, even without hatch data)
+    renderEggCatalog();
+  }
+
+  function renderHatchStats(): void {
+    if (!currentStats) return;
 
     const bucket = activeView === 'session' ? currentStats.session : currentStats.lifetime;
-
     if (bucket.totalHatched === 0) {
-      appendEmptyNote(content, activeView === 'session' ? 'No hatches this session yet.' : 'No lifetime hatch data yet.');
+      appendEmptyNote(content, activeView === 'session' ? 'No hatches this session.' : 'No lifetime data — use Seed to import.');
       return;
     }
 
     const goldTotal    = Object.values(bucket.bySpecies).reduce((s, c) => s + c.gold, 0);
     const rainbowTotal = Object.values(bucket.bySpecies).reduce((s, c) => s + c.rainbow, 0);
 
-    // Stat chips
-    const chipsRow = document.createElement('div');
-    chipsRow.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;';
-    const chipData = [
-      { label: 'Total Hatched', value: bucket.totalHatched, bg: 'rgba(255,255,255,0.07)', color: '#e0e0e0' },
-      { label: 'Gold', value: goldTotal, bg: '#ffd600', color: '#111' },
-      { label: 'Rainbow', value: rainbowTotal, bg: RAINBOW_GRADIENT, color: '#fff' },
-    ];
-    for (const c of chipData) {
-      const el = document.createElement('div');
-      el.style.cssText = `background:${c.bg};color:${c.color};border-radius:8px;padding:8px 14px;display:flex;flex-direction:column;align-items:center;min-width:80px;`;
-      const num = document.createElement('div');
-      num.style.cssText = 'font-size:22px;font-weight:800;line-height:1;';
-      num.textContent = String(c.value);
-      const lbl = document.createElement('div');
-      lbl.style.cssText = 'font-size:10px;font-weight:600;margin-top:3px;opacity:0.85;';
-      lbl.textContent = c.label;
-      el.append(num, lbl);
-      chipsRow.appendChild(el);
+    // Section header with inline totals
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:baseline;gap:10px;font-size:13px;font-weight:700;color:rgba(224,224,224,0.85);';
+    hdr.textContent = `${bucket.totalHatched} Hatched`;
+    if (goldTotal > 0) {
+      const g = document.createElement('span');
+      g.style.cssText = 'background:#ffd600;color:#111;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;';
+      g.textContent = `${goldTotal} gold`;
+      hdr.appendChild(g);
     }
-    content.appendChild(chipsRow);
+    if (rainbowTotal > 0) {
+      const r = document.createElement('span');
+      r.style.cssText = `background:${RAINBOW_GRADIENT};color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;`;
+      r.textContent = `${rainbowTotal} rainbow`;
+      hdr.appendChild(r);
+    }
+    content.appendChild(hdr);
 
-    // Species grid
-    const speciesEntries = Object.entries(bucket.bySpecies).sort((a, b) => b[1].total - a[1].total);
+    // Species grid (same pattern as Garden tab's tile grid)
+    const speciesEntries = Object.entries(bucket.bySpecies)
+      .filter(([sp]) => sp !== 'Unknown' && sp !== 'unknown')
+      .sort((a, b) => b[1].total - a[1].total);
+
     if (speciesEntries.length > 0) {
-      appendSectionHeader(content, 'By Species');
       const grid = document.createElement('div');
-      grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;';
       for (const [sp, counts] of speciesEntries) grid.appendChild(buildSpeciesCard(sp, counts));
       content.appendChild(grid);
     }
 
-    // Ability summary
-    const abilityEntries = Object.entries(bucket.byAbility).sort((a, b) => b[1] - a[1]);
-    if (abilityEntries.length > 0) {
-      appendSectionHeader(content, 'Abilities');
-      const ORDER: AbilityCategory[] = ['plantGrowth', 'eggGrowth', 'xp', 'coins', 'misc'];
-      const grouped = new Map<string, Array<[string, number]>>();
-      for (const cat of [...ORDER, 'unknown']) grouped.set(cat, []);
-      for (const [id, count] of abilityEntries) {
-        const def = getAbilityDefinition(id);
-        const cat = def ? def.category : 'unknown';
-        grouped.get(cat)!.push([id, count]);
-      }
-      const chipWrap = document.createElement('div');
-      chipWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
-      for (const entries of grouped.values()) {
-        for (const [id, count] of entries) chipWrap.appendChild(buildAbilityChip(id, count));
-      }
-      content.appendChild(chipWrap);
-    }
-
-    // Recent hatch log (collapsible)
-    const events = currentStats.recentEvents.slice(0, 50);
+    // Recent hatches (compact list, last 20)
+    const events = (currentStats.recentEvents ?? []).slice(0, 20);
     if (events.length > 0) {
-      const logSection = document.createElement('div');
-      const logHdr = document.createElement('div');
-      logHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;';
-      const logTitle = document.createElement('span');
-      logTitle.style.cssText = 'font-size:12px;font-weight:700;color:rgba(224,224,224,0.7);';
-      logTitle.textContent = `Recent Hatches (${events.length})`;
-      const arrow = document.createElement('span');
-      arrow.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.4);';
-      arrow.textContent = '▼ show';
-      logHdr.append(logTitle, arrow);
-      logSection.appendChild(logHdr);
-
-      const logBody = document.createElement('div');
-      logBody.style.display = 'none';
-      for (const ev of events) logBody.appendChild(buildEventRow(ev));
-      logSection.appendChild(logBody);
-
-      let expanded = false;
-      logHdr.addEventListener('click', () => {
-        expanded = !expanded;
-        logBody.style.display = expanded ? 'block' : 'none';
-        arrow.textContent = expanded ? '▲ hide' : '▼ show';
-      });
-      content.appendChild(logSection);
+      appendSectionHeader(content, 'Recent');
+      const list = document.createElement('div');
+      list.style.cssText = 'display:flex;flex-direction:column;';
+      for (const ev of events) list.appendChild(buildEventRow(ev));
+      content.appendChild(list);
     }
+  }
+
+  function renderEggCatalog(): void {
+    if (!areCatalogsReady()) return;
+
+    const allEggs = analyzeAllEggs();
+    if (allEggs.length === 0) return;
+
+    appendSectionHeader(content, 'Egg Catalog');
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;';
+
+    for (const egg of allEggs) {
+      grid.appendChild(buildEggCard(egg));
+    }
+    content.appendChild(grid);
   }
 
   const unsubscribe = subscribeHatchStats((s) => {
     currentStats = s;
-    renderEggs();
+    renderAll();
   });
 
-  return unsubscribe;
+  // Initial render (catalog may already be ready)
+  renderAll();
+
+  return () => {
+    unsubscribe();
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Egg analysis card — grid card matching species card visual pattern
+// ---------------------------------------------------------------------------
+
+function buildEggCard(egg: EggAnalysis): HTMLElement {
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'display:flex',
+    'flex-direction:column',
+    'align-items:center',
+    'gap:4px',
+    'padding:10px 8px 8px',
+    'border-radius:10px',
+    'border:1px solid rgba(143,130,255,0.14)',
+    'background:rgba(255,255,255,0.03)',
+    'text-align:center',
+  ].join(';');
+
+  // Egg name
+  const nameEl = document.createElement('div');
+  nameEl.style.cssText = 'font-size:11px;font-weight:600;color:#e0e0e0;word-break:break-word;line-height:1.3;';
+  nameEl.textContent = egg.eggName;
+  card.appendChild(nameEl);
+
+  // Top species sprites (up to 3)
+  if (egg.speciesBreakdown.length > 0) {
+    const sprites = document.createElement('div');
+    sprites.style.cssText = 'display:flex;gap:2px;justify-content:center;';
+    for (const sp of egg.speciesBreakdown.slice(0, 3)) {
+      const wrap = petSprite(sp.species, 28);
+      wrap.title = `${sp.species} ${(sp.probability * 100).toFixed(0)}%`;
+      sprites.appendChild(wrap);
+    }
+    if (egg.speciesBreakdown.length > 3) {
+      const more = document.createElement('span');
+      more.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.35);align-self:center;';
+      more.textContent = `+${egg.speciesBreakdown.length - 3}`;
+      sprites.appendChild(more);
+    }
+    card.appendChild(sprites);
+  }
+
+  // Compact stats
+  const stats = document.createElement('div');
+  stats.style.cssText = 'display:flex;flex-direction:column;gap:1px;font-size:10px;color:rgba(224,224,224,0.55);line-height:1.4;';
+
+  if (egg.eggCost > 0) {
+    const costEl = document.createElement('div');
+    costEl.style.cssText = 'color:#ffd600;font-weight:600;font-size:11px;';
+    costEl.textContent = formatCoinsAbbreviated(egg.eggCost);
+    stats.appendChild(costEl);
+  }
+
+  const hatchEl = document.createElement('div');
+  hatchEl.textContent = `${egg.hatchHours >= 1 ? Math.round(egg.hatchHours) + 'h' : Math.round(egg.hatchHours * 60) + 'm'} hatch`;
+  stats.appendChild(hatchEl);
+
+  if (egg.weightedFeedCost > 0) {
+    const feedEl = document.createElement('div');
+    feedEl.textContent = `~${formatCoinsAbbreviated(Math.round(egg.weightedFeedCost))} feed`;
+    stats.appendChild(feedEl);
+  }
+
+  card.appendChild(stats);
+
+  return card;
+}
+
+// ---------------------------------------------------------------------------
+// Economy tab
+// ---------------------------------------------------------------------------
+
+function buildEconomyTab(container: HTMLElement): () => void {
+  container.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
+
+  const content = document.createElement('div');
+  content.style.cssText = 'flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:14px;';
+  container.appendChild(content);
+
+  function render(snapshot: EconomySnapshot): void {
+    content.innerHTML = '';
+
+    // --- Balance chips (same visual pattern as hatch stats chips) ---
+    const chips = document.createElement('div');
+    chips.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;';
+
+    chips.appendChild(balanceChip(
+      formatCoinsAbbreviated(snapshot.coins.balance),
+      'Coins', 'coins', '#ffd600',
+      snapshot.coins.rate, snapshot.coins.connected,
+    ));
+    chips.appendChild(balanceChip(
+      formatCoinsAbbreviated(snapshot.credits.balance),
+      'Credits', 'credits', '#42a5f5',
+      null, snapshot.credits.connected,
+    ));
+    chips.appendChild(balanceChip(
+      formatCoinsAbbreviated(snapshot.dust.balance),
+      'Magic Dust', 'dust', '#ab47bc',
+      snapshot.dust.rate, snapshot.dust.connected,
+    ));
+    content.appendChild(chips);
+
+    // --- Spending ---
+    const totalData = snapshot.spending.total;
+    const hasSpending = totalData.coins > 0 || totalData.credits > 0 || totalData.dust > 0;
+
+    if (hasSpending) {
+      appendSectionHeader(content, 'Session Spending');
+
+      const categories: Array<{ key: ShopCategoryKey; label: string }> = [
+        { key: 'seeds', label: 'Seeds' },
+        { key: 'eggs', label: 'Eggs' },
+        { key: 'tools', label: 'Tools' },
+        { key: 'decor', label: 'Decor' },
+      ];
+
+      const list = document.createElement('div');
+      list.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+
+      for (const cat of categories) {
+        const d = snapshot.spending.byCategory[cat.key];
+        if (!d || (d.coins === 0 && d.credits === 0 && d.dust === 0)) continue;
+        list.appendChild(spendingRow(cat.label, d.coins, d.credits, d.dust));
+      }
+
+      // Total row
+      const totEl = spendingRow('Total', totalData.coins, totalData.credits, totalData.dust);
+      totEl.style.borderTop = '1px solid rgba(143,130,255,0.12)';
+      totEl.style.paddingTop = '4px';
+      totEl.style.marginTop = '2px';
+      totEl.style.fontWeight = '700';
+      list.appendChild(totEl);
+
+      content.appendChild(list);
+    }
+
+    // --- Transaction log ---
+    if (snapshot.transactions.length > 0) {
+      appendSectionHeader(content, 'Recent Activity');
+
+      const txList = document.createElement('div');
+      txList.style.cssText = 'display:flex;flex-direction:column;';
+
+      for (const tx of snapshot.transactions.slice(0, 20)) {
+        txList.appendChild(buildTransactionRow(tx));
+      }
+      content.appendChild(txList);
+    } else if (!hasSpending) {
+      const note = document.createElement('div');
+      note.style.cssText = 'color:rgba(224,224,224,0.3);font-size:12px;padding:8px 0;';
+      note.textContent = 'No activity this session.';
+      content.appendChild(note);
+    }
+  }
+
+  const unsub = subscribeEconomy(render);
+
+  return () => {
+    unsub();
+  };
+}
+
+/** Balance chip — currency sprite + big number + label + optional rate */
+function balanceChip(value: string, label: string, currencyType: 'coins' | 'credits' | 'dust', accentColor: string, rate: number | null, connected: boolean): HTMLElement {
+  const el = document.createElement('div');
+  const bg = connected ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)';
+  el.style.cssText = `background:${bg};border:1px solid rgba(143,130,255,0.14);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex:1;min-width:100px;`;
+
+  // Sprite icon
+  el.appendChild(currencyIcon(currencyType, 28));
+
+  // Text column
+  const col = document.createElement('div');
+  col.style.cssText = 'display:flex;flex-direction:column;gap:1px;';
+
+  const num = document.createElement('div');
+  num.style.cssText = `font-size:18px;font-weight:800;line-height:1;color:${connected ? accentColor : 'rgba(224,224,224,0.4)'};`;
+  num.textContent = connected ? value : '—';
+  col.appendChild(num);
+
+  const lbl = document.createElement('div');
+  lbl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);';
+  lbl.textContent = label;
+  col.appendChild(lbl);
+
+  if (!connected) {
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:9px;color:rgba(224,224,224,0.35);';
+    note.textContent = 'not connected';
+    col.appendChild(note);
+  } else if (rate != null && Math.abs(rate) >= 1) {
+    const rateEl = document.createElement('div');
+    const sign = rate >= 0 ? '+' : '';
+    const rateColor = rate >= 0 ? '#4caf50' : '#ef5350';
+    rateEl.style.cssText = `font-size:10px;color:${rateColor};font-weight:600;`;
+    rateEl.textContent = `${sign}${formatCoinsAbbreviated(Math.round(rate))}/hr`;
+    col.appendChild(rateEl);
+  }
+
+  el.appendChild(col);
+  return el;
+}
+
+/** Compact spending row — label + inline coin/credit/dust values */
+function spendingRow(label: string, coins: number, credits: number, dust: number): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;color:rgba(224,224,224,0.6);padding:2px 0;';
+
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'min-width:50px;color:rgba(224,224,224,0.5);';
+  lbl.textContent = label;
+  row.appendChild(lbl);
+
+  if (coins > 0) row.appendChild(inlineVal(formatCoinsAbbreviated(coins), '#ffd600'));
+  if (credits > 0) row.appendChild(inlineVal(formatCoinsAbbreviated(credits) + ' cr', '#42a5f5'));
+  if (dust > 0) row.appendChild(inlineVal(formatCoinsAbbreviated(dust) + ' dust', '#ab47bc'));
+
+  return row;
+}
+
+const CURRENCY_LABELS: Record<string, string> = {
+  coins: 'Coins', credits: 'Credits', dust: 'Magic Dust',
+};
+
+function buildTransactionRow(tx: Transaction): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'gap:8px',
+    'padding:5px 0',
+    'border-bottom:1px solid rgba(255,255,255,0.04)',
+  ].join(';');
+
+  const isIncome = tx.amount > 0;
+  const label = CURRENCY_LABELS[tx.currency] ?? 'Currency';
+
+  // Currency sprite
+  row.appendChild(currencyIcon(tx.currency, 20));
+
+  // Description — use WS context when available, fall back to generic
+  const desc = document.createElement('span');
+  desc.style.cssText = 'font-size:12px;color:rgba(224,224,224,0.65);flex:1;';
+  if (tx.context) {
+    desc.textContent = tx.context;
+  } else {
+    desc.textContent = isIncome ? `Earned ${label}` : `Spent ${label}`;
+  }
+  row.appendChild(desc);
+
+  // Amount (green for income, red for expense)
+  const amountEl = document.createElement('span');
+  const sign = isIncome ? '+' : '';
+  amountEl.style.cssText = `font-size:12px;font-weight:700;color:${isIncome ? '#4caf50' : '#ef5350'};white-space:nowrap;`;
+  amountEl.textContent = `${sign}${formatCoinsAbbreviated(Math.round(tx.amount))}`;
+  row.appendChild(amountEl);
+
+  // Time
+  const timeEl = document.createElement('span');
+  timeEl.style.cssText = 'font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;flex-shrink:0;margin-left:4px;';
+  timeEl.textContent = timeAgo(tx.timestamp);
+  row.appendChild(timeEl);
+
+  return row;
+}
+
+function inlineVal(text: string, color: string): HTMLElement {
+  const el = document.createElement('span');
+  el.style.cssText = `color:${color};font-weight:600;font-size:11px;`;
+  el.textContent = text;
+  return el;
 }
 
 function appendEmptyNote(parent: HTMLElement, text: string): void {
@@ -2025,15 +2219,16 @@ function appendSectionHeader(parent: HTMLElement, text: string): void {
 // ---------------------------------------------------------------------------
 
 export function openStatsHubWindow(): void {
-  toggleWindow('stats-hub', '📊 Garden & Hatch Stats', renderStatsHub, '920px', '85vh');
+  toggleWindow('stats-hub', '📊 Stats Hub', renderStatsHub, '920px', '85vh');
 }
 
 export function renderStatsHub(root: HTMLElement): void {
   root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
 
-  let activeTab: 'garden' | 'eggs' = 'garden';
+  type TabId = 'garden' | 'economy';
+  let activeTab: TabId = 'garden';
   let gardenCleanup: (() => void) | null = null;
-  let eggsCleanup: (() => void) | null = null;
+  let economyCleanup: (() => void) | null = null;
 
   // Tab bar
   const tabBar = document.createElement('div');
@@ -2064,24 +2259,26 @@ export function renderStatsHub(root: HTMLElement): void {
   }
 
   const gardenBtn = makeTab('🌿 Garden');
-  // Eggs tab disabled until complete
-  tabBar.append(gardenBtn);
-  // Hide the tab bar while only Garden is available (re-show when Eggs is re-enabled)
-  tabBar.style.display = 'none';
+  const economyBtn = makeTab('💰 Economy');
+  tabBar.append(gardenBtn, economyBtn);
   root.appendChild(tabBar);
 
   const tabContent = document.createElement('div');
   tabContent.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;';
   root.appendChild(tabContent);
 
-  function setActiveTab(tab: 'garden' | 'eggs'): void {
+  const tabBtns: Record<TabId, HTMLButtonElement> = { garden: gardenBtn, economy: economyBtn };
+
+  function setActiveTab(tab: TabId): void {
     activeTab = tab;
     tabContent.innerHTML = '';
     gardenCleanup?.(); gardenCleanup = null;
-    eggsCleanup?.();   eggsCleanup   = null;
+    economyCleanup?.(); economyCleanup = null;
 
-    gardenBtn.style.color = tab === 'garden' ? '#c8c0ff' : 'rgba(224,224,224,0.55)';
-    gardenBtn.style.borderBottomColor = tab === 'garden' ? '#8f82ff' : 'transparent';
+    for (const [id, btn] of Object.entries(tabBtns)) {
+      btn.style.color = id === tab ? '#c8c0ff' : 'rgba(224,224,224,0.55)';
+      btn.style.borderBottomColor = id === tab ? '#8f82ff' : 'transparent';
+    }
 
     const panel = document.createElement('div');
     panel.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
@@ -2091,7 +2288,7 @@ export function renderStatsHub(root: HTMLElement): void {
       if (tab === 'garden') {
         gardenCleanup = buildGardenTab(panel);
       } else {
-        eggsCleanup = buildEggsTab(panel);
+        economyCleanup = buildEconomyTab(panel);
       }
     } catch (error) {
       log('[StatsHub] Tab build error', error);
@@ -2100,12 +2297,13 @@ export function renderStatsHub(root: HTMLElement): void {
   }
 
   gardenBtn.addEventListener('click', () => setActiveTab('garden'));
+  economyBtn.addEventListener('click', () => setActiveTab('economy'));
 
   // Cleanup subscriptions when window is removed from DOM
   const observer = new MutationObserver(() => {
     if (!document.contains(root)) {
       gardenCleanup?.();
-      eggsCleanup?.();
+      economyCleanup?.();
       observer.disconnect();
     }
   });

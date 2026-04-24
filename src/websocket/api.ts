@@ -210,6 +210,19 @@ function getThrottleKey(type: RoomActionType, payload: Record<string, unknown>):
   }
 }
 
+// ---------------------------------------------------------------------------
+// Action-sent listeners — fire after a successful sendMessage()
+// ---------------------------------------------------------------------------
+
+export type ActionSentListener = (type: RoomActionType, payload: Record<string, unknown>) => void;
+const actionSentListeners = new Set<ActionSentListener>();
+
+/** Register a callback that fires after every successful WS send. Returns unsubscribe. */
+export function onActionSent(listener: ActionSentListener): () => void {
+  actionSentListeners.add(listener);
+  return () => { actionSentListeners.delete(listener); };
+}
+
 export function sendRoomAction(
   type: RoomActionType,
   payload: Record<string, unknown>,
@@ -246,6 +259,10 @@ export function sendRoomAction(
       type,
       ...payload,
     });
+    // Notify listeners after successful send
+    for (const cb of actionSentListeners) {
+      try { cb(type, payload); } catch { /* ignore listener errors */ }
+    }
     return { ok: true };
   } catch {
     return { ok: false, reason: 'send_failed' };

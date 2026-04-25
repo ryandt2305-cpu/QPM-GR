@@ -56,10 +56,10 @@ const TRACKER_DEFS = [
   },
   {
     key: 'storageValue',
-    label: 'Storage Value',
+    label: 'Value Display',
     icon: '💰',
-    desc: 'Show the total coin value of items in Seed Silo, Pet Hutch, Decor Shed, and Inventory',
-    windowTitle: '💰 Storage Value',
+    desc: 'Storage coin values and crop sell price overlays',
+    windowTitle: '💰 Value Display',
     windowId: 'trackers-detached-storageValue',
     width: '420px',
   },

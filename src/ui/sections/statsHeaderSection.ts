@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.61",
+    date: "2026-04",
+    notes: [
+      "Crop Price: new tooltip overlay shows sell value of the crop you're standing on (toggle in Value Display settings)",
+      "Crop Size indicator now reacts to C/X slot cycling instead of showing stale data",
+      "Tweaked shop restock alert sizing to be more compact",
+    ],
+  },
+  {
     version: "3.1.60",
     date: "2026-04",
     notes: [

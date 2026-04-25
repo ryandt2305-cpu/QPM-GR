@@ -1,13 +1,11 @@
 // src/features/cropSizeIndicator.ts
 // Inject crop size info into game's tooltip/info card when player hovers over crops
 
-import { getGardenSnapshot, onGardenSnapshot } from './gardenBridge';
 import { lookupMaxScale } from '../utils/plantScales';
 import { log } from '../utils/logger';
 import { storage } from '../utils/storage';
 import { onAdded, onRemoved, watch } from '../utils/dom';
 import { getCropStats, CROP_BASE_STATS, type CropStats } from '../data/cropBaseStats';
-import { getGrowSlotIndex, startGrowSlotIndexTracker } from '../store/growSlotIndex';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { getJournal, type Journal } from './journalChecker';
 import { VARIANT_BADGES } from '../data/variantBadges';
@@ -28,10 +26,46 @@ const DEFAULT_CONFIG: CropSizeConfig = {
 };
 
 let config: CropSizeConfig = { ...DEFAULT_CONFIG };
-let gardenUnsubscribe: (() => void) | null = null;
 let domObserverHandle: { disconnect: () => void } | null = null;
-let lastSnapshotCache: any = null;
 let cachedJournalData: Journal | null = null;
+
+// ---------------------------------------------------------------------------
+// Atom-based slot resolution (same approach as Aries mod)
+// ---------------------------------------------------------------------------
+
+const atomCleanups: Array<() => void> = [];
+let cachedGardenObject: Record<string, unknown> | null = null;
+let cachedSelectedSlotId: number = 0;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** Resolve the currently selected slot from the garden object + selected slot ID. */
+function resolveCurrentSlot(): Record<string, unknown> | null {
+  if (!cachedGardenObject) return null;
+  if (cachedGardenObject.objectType !== 'plant') return null;
+
+  const slots = cachedGardenObject.slots;
+  if (!Array.isArray(slots) || slots.length === 0) return null;
+
+  // Find slot matching the selected slot ID (C/X key cycling)
+  for (const raw of slots) {
+    if (!isRecord(raw)) continue;
+    if (raw.slotId === cachedSelectedSlotId) return raw;
+  }
+
+  // Fallback: first slot
+  return isRecord(slots[0]) ? slots[0] : null;
+}
+
+function reinjectAllTooltips(): void {
+  for (const tooltip of tooltipWatchers.keys()) {
+    // Clear content ID to force re-processing
+    tooltip.removeAttribute(INJECTED_MARKER);
+    injectCropSizeInfo(tooltip).catch(() => {});
+  }
+}
 
 const normalizeSpeciesKey = (value: string): string => (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -730,127 +764,18 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     removeSizeIndicator(tooltipContent);
     return;
   }
-  
-  // Get current garden snapshot first
-  const snapshot = lastSnapshotCache || getGardenSnapshot();
-  if (!snapshot) {
+
+  // Resolve current slot from cached garden object + selected slot ID
+  const slot = resolveCurrentSlot();
+  if (!slot) {
+    removeSizeIndicator(tooltipContent);
     return;
   }
-  
-  // Helper to convert tile index to coordinates
-  // Standard garden is 20 cols, boardwalk is variable
-  const tileIndexToCoords = (tileIndex: number, isBoardwalk: boolean = false): { x: number; y: number } => {
-    // Get cols from snapshot if available, otherwise use default
-    const cols = (snapshot as any)?.cols || (snapshot as any)?.map?.cols || 20;
-    const x = tileIndex % cols;
-    const y = Math.floor(tileIndex / cols);
-    return { x, y };
-  };
-  
-  // Collect all matching crops (for multi-harvest and same species on different tiles)
-  const matchingCrops: Array<{slot: any, tileKey: string, slotIndex: number, coords: {x: number, y: number}, tile: any}> = [];
-  
-  // Search through all crops to match this crop name
-  const searchCrops = (tiles: Record<string, any> | undefined) => {
-    if (!tiles) return;
 
-    for (const [tileKey, tile] of Object.entries(tiles)) {
-      // Only process plant tiles (not decorations, eggs, etc)
-      if (tile.objectType !== 'plant') {
-        continue;
-      }
-      
-      if (!tile.slots || !Array.isArray(tile.slots)) continue;
-
-      for (let slotIndex = 0; slotIndex < tile.slots.length; slotIndex++) {
-        const slot = tile.slots[slotIndex];
-        if (!slot || !slot.species) continue;
-
-        // Remove mutation prefixes from slot species to match base crop name
-        let baseSpecies = slot.species;
-        const mutationPrefixes = ['Rainbow', 'Gold', 'Golden', 'Frozen', 'Amber', 'Wet', 'Chilled', 'Dawnlit', 'Dawnbound', 'Amberbound'];
-        for (const prefix of mutationPrefixes) {
-          if (baseSpecies.startsWith(prefix + ' ')) {
-            baseSpecies = baseSpecies.substring(prefix.length + 1);
-            break;
-          }
-        }
-        
-        // Map species names (DawnCelestial -> dawnbinder, etc.)
-        const speciesToCropMap: Record<string, string> = {
-          'dawncelestial': 'dawnbinder',
-          'mooncelestial': 'moonbinder'
-        };
-        const mappedSpecies = speciesToCropMap[baseSpecies.toLowerCase()];
-        if (mappedSpecies) {
-          baseSpecies = mappedSpecies;
-        }
-        
-        // Check if this is the matching crop
-        // Normalize both sides to handle "PineTree" vs "pine tree" vs "pinetree"
-        const normalizedSlotSpecies = normalizeSpeciesKey(baseSpecies);
-        const normalizedSearchName = normalizeSpeciesKey(normalizedCropName);
-
-        if (normalizedSlotSpecies === normalizedSearchName) {
-          const tileIndex = parseInt(tileKey, 10);
-          const coords = tileIndexToCoords(tileIndex);
-          matchingCrops.push({slot, tileKey, slotIndex, coords, tile});
-        }
-      }
-    }
-  };
-  
-  // Search both gardens
-  searchCrops(snapshot.tileObjects);
-  searchCrops(snapshot.boardwalkTileObjects);
-  
-  if (matchingCrops.length === 0) {
-    // Debug: Show what species names are actually in the garden
-    const allSpecies = new Set<string>();
-    const debugSearch = (tiles: Record<string, any> | undefined) => {
-      if (!tiles) return;
-      for (const tile of Object.values(tiles)) {
-        if (tile.objectType === 'plant' && tile.slots) {
-          for (const slot of tile.slots) {
-            if (slot?.species) allSpecies.add(slot.species);
-          }
-        }
-      }
-    };
-    debugSearch(snapshot.tileObjects);
-    debugSearch(snapshot.boardwalkTileObjects);
-    
-    log(`📐 ⚠️ No match for "${normalizedCropName}" (original: "${cropName}")`);
-    log(`📐 Available species: ${Array.from(allSpecies).sort().join(', ')}`);
-    return; // No matching crops found
-  }
-  
-  // For multi-harvest plants, use the currently selected grow slot index
-  const selectedSlotIndex = getGrowSlotIndex();
-  
-  let bestMatch = matchingCrops[0]!;
-  
-  // Try to match using the current tile info (tile index)
-  if (currentTileInfoCache) {
-    // Match by tile index first
-    const tilesMatches = matchingCrops.filter(m => m.tileKey === String(currentTileInfoCache!.tileIndex));
-    
-    if (tilesMatches.length > 0) {
-      // If this tile has multiple slots (multi-harvest) and we have a selected slot index, use it
-      if (tilesMatches.length > 1 && selectedSlotIndex !== null && selectedSlotIndex !== undefined) {
-        const slotMatch = tilesMatches.find(m => m.slotIndex === selectedSlotIndex);
-        bestMatch = slotMatch || tilesMatches[0]!;
-      } else {
-        bestMatch = tilesMatches[0]!;
-      }
-    }
-  }
-  
-  const {slot, tileKey, slotIndex, tile} = bestMatch;
-  
-  // Track using crop + tile + slot + scale to detect changes between different tiles
-  const scale = slot.scale ?? slot.targetScale ?? 1.0;
-  const contentId = `${normalizedCropName}-${tileKey}-${slotIndex}-${scale.toFixed(3)}`;
+  // Track using crop + slot ID + scale to detect changes
+  const scale = (slot.scale ?? slot.targetScale ?? 1.0) as number;
+  const slotId = typeof slot.slotId === 'number' ? slot.slotId : 0;
+  const contentId = `${normalizedCropName}-${slotId}-${scale.toFixed(3)}`;
   const lastProcessed = element.getAttribute(INJECTED_MARKER);
   
   // Skip if we just processed this exact crop
@@ -864,7 +789,7 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
   }
   
   // Check if we should show this crop based on maturity
-  const endTime = slot.endTime ?? 0;
+  const endTime = typeof slot.endTime === 'number' ? slot.endTime : 0;
   const isMature = endTime > 0 && Date.now() >= endTime;
   
   if ((isMature && !config.showForMature) || (!isMature && !config.showForGrowing)) {
@@ -968,79 +893,47 @@ function stopTooltipWatcher(): void {
 }
 
 // ============================================================================
-// Current Tile Tracking
+// Atom subscriptions (garden object + selected slot ID)
 // ============================================================================
 
-let currentTileInfoCache: { objectType: string; species?: string; tileIndex: number; tileType: string } | null = null;
-let tileInfoUnsubscribe: (() => void) | null = null;
+async function startAtomSubscriptions(): Promise<void> {
+  // 1. Garden object atom — provides the tile's slots[] array
+  const gardenAtom =
+    getAtomByLabel('myCurrentGardenObjectAtom') ??
+    getAtomByLabel('myOwnCurrentGardenObjectAtom');
 
-async function updateCurrentTileInfo(): Promise<void> {
-  try {
-    // Get the current tile info atom which has tileType and localTileIndex
-    const currentGardenTileAtom = getAtomByLabel('myCurrentGardenTileAtom');
-    if (!currentGardenTileAtom) {
-      return;
-    }
-    
-    const tileInfo = await readAtomValue<any>(currentGardenTileAtom);
-    if (!tileInfo) {
-      currentTileInfoCache = null;
-      return;
-    }
-    
-    // Get the current tile object
-    const currentGardenObjectAtom = getAtomByLabel('myOwnCurrentGardenObjectAtom');
-    if (!currentGardenObjectAtom) {
-      return;
-    }
-    
-    const tileObject = await readAtomValue<any>(currentGardenObjectAtom);
-    if (!tileObject) {
-      currentTileInfoCache = null;
-      return;
-    }
-    
-    currentTileInfoCache = {
-      objectType: tileObject.objectType,
-      species: tileObject.species,
-      tileIndex: tileInfo.localTileIndex,
-      tileType: tileInfo.tileType
-    };
-  } catch (e) {
-    // Silently fail
-  }
-}
+  // 2. Selected slot ID atom — fires on C/X key press
+  const slotIdAtom = getAtomByLabel('mySelectedSlotIdAtom');
 
-function startCurrentTileTracking(): void {
-  if (tileInfoUnsubscribe) return;
-  
-  log('📐 Starting current tile tracking');
-  
-  const currentGardenTileAtom = getAtomByLabel('myCurrentGardenTileAtom');
-  if (!currentGardenTileAtom) {
-    log('📐 ⚠️ myCurrentGardenTileAtom not found');
-    return;
-  }
-  
-  // Subscribe to changes
-  subscribeAtom(currentGardenTileAtom, () => {
-    updateCurrentTileInfo();
-  }).then((unsub: () => void) => {
-    tileInfoUnsubscribe = unsub;
-  }).catch((e: any) => {
-    log('📐 ⚠️ Error subscribing to tile info:', e);
-  });
-  
-  // Initial update
-  updateCurrentTileInfo();
-}
+  if (gardenAtom) {
+    try {
+      const initial = await readAtomValue<unknown>(gardenAtom);
+      cachedGardenObject = isRecord(initial) ? initial : null;
+    } catch { /* ignore */ }
 
-function stopCurrentTileTracking(): void {
-  if (tileInfoUnsubscribe) {
-    tileInfoUnsubscribe();
-    tileInfoUnsubscribe = null;
+    const unsub = await subscribeAtom(gardenAtom, (value: unknown) => {
+      cachedGardenObject = isRecord(value) ? value : null;
+      reinjectAllTooltips();
+    });
+    atomCleanups.push(unsub);
+    log('📐 ✅ Found garden object atom');
+  } else {
+    log('📐 ⚠️ Garden object atom not found');
   }
-  currentTileInfoCache = null;
+
+  if (slotIdAtom) {
+    try {
+      const initial = await readAtomValue<unknown>(slotIdAtom);
+      cachedSelectedSlotId = typeof initial === 'number' ? initial : 0;
+    } catch { /* ignore */ }
+
+    const unsub = await subscribeAtom(slotIdAtom, (value: unknown) => {
+      cachedSelectedSlotId = typeof value === 'number' ? value : 0;
+      reinjectAllTooltips();
+    });
+    atomCleanups.push(unsub);
+    log('📐 ✅ Found mySelectedSlotIdAtom');
+  }
 }
 
 // ============================================================================
@@ -1048,37 +941,27 @@ function stopCurrentTileTracking(): void {
 // ============================================================================
 
 function startCropSizeIndicator(): void {
-  if (gardenUnsubscribe) return; // Already started
+  if (domObserverHandle) return; // Already started
 
   log('📐 Crop Size Indicator: Starting');
-  
-  // Start tracking the selected grow slot for multi-harvest plants
-  startGrowSlotIndexTracker();
-  
-  // Start tracking current tile
-  startCurrentTileTracking();
-  
-  // Subscribe to garden changes to keep snapshot cache updated
-  gardenUnsubscribe = onGardenSnapshot((snapshot) => {
-    lastSnapshotCache = snapshot;
-  });
 
-  // Initial snapshot
-  lastSnapshotCache = getGardenSnapshot();
+  // Subscribe to garden object + selected slot ID atoms
+  startAtomSubscriptions().catch(() => {});
 
   // Start watching for tooltips
   startTooltipWatcher();
 }
 
 function stopCropSizeIndicator(): void {
-  if (gardenUnsubscribe) {
-    gardenUnsubscribe();
-    gardenUnsubscribe = null;
-  }
-
   stopTooltipWatcher();
-  stopCurrentTileTracking();
-  
+
+  for (const cleanup of atomCleanups) {
+    try { cleanup(); } catch { /* ignore */ }
+  }
+  atomCleanups.length = 0;
+  cachedGardenObject = null;
+  cachedSelectedSlotId = 0;
+
   log('📐 Crop Size Indicator: Stopped');
 }
 

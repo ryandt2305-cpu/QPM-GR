@@ -136,9 +136,10 @@ const QPM_STORAGE_KEYS = [
   // Action Guard (Locker)
   'qpm.locker.config.v1',
 
-  // Crop Boost / Size Indicator
+  // Crop Boost / Size Indicator / Tile Value
   'cropBoostTracker:config',
   'cropSizeIndicator:config',
+  'qpm.tileValue.v1',
 
   // Journal
   'journal:notes',

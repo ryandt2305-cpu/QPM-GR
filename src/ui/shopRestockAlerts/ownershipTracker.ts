@@ -401,7 +401,7 @@ export function schedulePendingStaleNotice(key: string): void {
     const active = activeAlerts.get(key);
     if (!active || active.busy || !active.pendingConfirmation) return;
     active.statusEl.style.color = '#fde68a';
-    active.statusEl.textContent = `Requested ${latest.sent} - still waiting for inventory sync`;
+    active.statusEl.textContent = `Sent ${latest.sent} \u2014 confirming (slow)\u2026`;
     debugLog('Pending confirmation reached stale notice window', {
       key,
       sent: latest.sent,

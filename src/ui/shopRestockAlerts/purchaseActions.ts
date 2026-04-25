@@ -481,7 +481,7 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
       debugLog('Buy-all sent but confirmation source unavailable', { key: buyModel.key, requested, sent: result.sent, confirmationAvailable: result.confirmationAvailable });
       setAlertPendingConfirmation(active, false);
       active.statusEl.style.color = '#fca5a5';
-      active.statusEl.textContent = `Requested ${result.sent} - confirmation source unavailable`;
+      active.statusEl.textContent = `Sent ${result.sent} \u2014 no confirmation source`;
       setAlertBusy(active, false);
       return;
     }
@@ -518,7 +518,7 @@ export async function handleBuyAll(active: ActiveAlert): Promise<void> {
     pendingOwnershipConfirmations.set(active.model.key, pending);
     setAlertPendingConfirmation(active, true);
     active.statusEl.style.color = '#fde68a';
-    active.statusEl.textContent = `Requested ${result.sent} - waiting for inventory confirmation`;
+    active.statusEl.textContent = `Sent ${result.sent} \u2014 confirming\u2026`;
     setAlertBusy(active, false);
     schedulePendingStaleNotice(active.model.key);
     scheduleMaxConfirmationTimeout(active.model.key);

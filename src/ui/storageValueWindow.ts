@@ -7,6 +7,10 @@ import {
   getDetectedStorageIds,
   type StorageValueConfig,
 } from '../features/storageValue';
+import {
+  getTileValueConfig,
+  setTileValueConfig,
+} from '../features/tileValueIndicator';
 
 // ---------------------------------------------------------------------------
 // Toggle switch helper
@@ -114,7 +118,7 @@ export function renderStorageValueSettings(root: HTMLElement): void {
     'margin-bottom:2px',
   ].join(';');
   headerEl.textContent =
-    'Show the total coin value of items in each storage when you open it. ' +
+    'Toggle value displays for storage buildings and crop sell price overlays. ' +
     'Storage buildings not found in your garden are greyed out.';
   root.appendChild(headerEl);
 
@@ -168,4 +172,17 @@ export function renderStorageValueSettings(root: HTMLElement): void {
 
     root.appendChild(container);
   }
+
+  // ── Crop Price toggle (controls tileValueIndicator) ──
+  const tileValueCfg = getTileValueConfig();
+  const { container: cropPriceContainer } = buildToggle(
+    'Crop Price',
+    'Show sell price on crop tooltips when standing on a tile',
+    tileValueCfg.enabled,
+    false,
+    (value) => {
+      setTileValueConfig({ enabled: value });
+    },
+  );
+  root.appendChild(cropPriceContainer);
 }

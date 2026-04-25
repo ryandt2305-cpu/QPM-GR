@@ -8,13 +8,13 @@
 //      Fires when the player presses C/X to cycle fruits on multi-harvest plants.
 // We subscribe to both and resolve the current slot ourselves.
 
-import { getPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
+import { getPlantSpecies, getAllPlantSpecies, areCatalogsReady } from '../catalogs/gameCatalogs';
 import { computeMutationMultiplier } from '../utils/cropMultipliers';
 import { getAnySpriteDataUrl } from '../sprite-v2/compat';
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { onAdded, onRemoved, watch } from '../utils/dom';
 import { formatCoins } from '../utils/formatters';
-import { normalizeSpeciesKey } from '../utils/helpers';
+
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 
@@ -75,10 +75,35 @@ function getCoinSpriteUrl(): string | null {
 // Sell price calculation (pure)
 // ---------------------------------------------------------------------------
 
+function findPlantEntry(species: string): ReturnType<typeof getPlantSpecies> {
+  // 1. Direct match (exact catalog key)
+  const direct = getPlantSpecies(species);
+  if (direct?.crop) return direct;
+
+  // 2. Suffix match: atom species may include a variant prefix
+  //    e.g. "OrangeTulip" → catalog key "Tulip", "PinkRose" → "Rose"
+  //    Find the longest catalog key that matches the end of the species name.
+  const speciesLower = species.toLowerCase();
+  let bestKey: string | null = null;
+  for (const key of getAllPlantSpecies()) {
+    const keyLower = key.toLowerCase();
+    if (keyLower.length >= speciesLower.length) continue; // must be a proper suffix
+    if (speciesLower.endsWith(keyLower)) {
+      if (!bestKey || key.length > bestKey.length) bestKey = key;
+    }
+  }
+  if (bestKey) {
+    const entry = getPlantSpecies(bestKey);
+    if (entry?.crop) return entry;
+  }
+
+  return null;
+}
+
 function calculateSellPrice(species: string, scale: number, mutations: string[]): number | null {
   if (!areCatalogsReady()) return null;
 
-  const plantEntry = getPlantSpecies(species);
+  const plantEntry = findPlantEntry(species);
   const baseSellPrice = plantEntry?.crop?.baseSellPrice;
   if (typeof baseSellPrice !== 'number' || baseSellPrice <= 0) return null;
 
@@ -172,9 +197,10 @@ function ensureValueRow(container: Element, price: number, contentId: string): v
   row.setAttribute(CONTENT_ID_ATTR, contentId);
 }
 
-function removeValueRow(container: Element | null): void {
-  if (!container) return;
-  container.querySelector(`:scope > [${ROW_ATTR}]`)?.remove();
+function removeValueRow(root: Element | null): void {
+  if (!root) return;
+  // Search full subtree — the row may be in a nested container, not a direct child
+  root.querySelector(`[${ROW_ATTR}]`)?.remove();
 }
 
 // ---------------------------------------------------------------------------
@@ -254,59 +280,6 @@ function stripMutationPrefix(species: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Crop name validation (prevent injection into non-crop tooltips)
-// ---------------------------------------------------------------------------
-
-/** Maps fruit display names (as shown in tooltip) to base species keys. */
-const FRUIT_TO_SPECIES: Record<string, string> = {
-  'coffee bean': 'coffee',
-  'dragon fruit': 'dragonfruit',
-  "burro's tail": 'burrostail',
-  'burros tail': 'burrostail',
-  'fava bean': 'favabean',
-  'fava bean pod': 'favabean',
-  'fava pod': 'favabean',
-  'passion fruit': 'passionfruit',
-  'cacao bean': 'cacaobean',
-  'cacao': 'cacaobean',
-  'cocoa bean': 'cacaobean',
-  'bamboo shoot': 'bamboo',
-  'dawnbinder bulb': 'dawnbinder',
-  'moonbinder bulb': 'moonbinder',
-  'starweaver fruit': 'starweaver',
-  'lychee fruit': 'lychee',
-};
-
-/**
- * Returns true if the tooltip display name corresponds to a known crop species.
- * Used to filter out pet/decoration/egg tooltips that share the same CSS class.
- */
-function isKnownCropTooltip(displayName: string): boolean {
-  const stripped = stripMutationPrefix(displayName);
-  const lower = stripped.toLowerCase().trim();
-
-  // Check fruit-to-species mapping first (handles multi-word fruit names)
-  if (FRUIT_TO_SPECIES[lower]) return true;
-
-  // Check catalog with multiple name variations
-  if (!areCatalogsReady()) return false;
-
-  const variations = [
-    normalizeSpeciesKey(stripped),
-    stripped.replace(/\s+/g, ''),
-    stripped.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''),
-    stripped.charAt(0).toUpperCase() + stripped.slice(1).replace(/\s+/g, ''),
-  ];
-
-  for (const variant of variations) {
-    const entry = getPlantSpecies(variant);
-    if (entry?.crop) return true;
-  }
-
-  return false;
-}
-
-// ---------------------------------------------------------------------------
 // Tooltip watcher
 // ---------------------------------------------------------------------------
 
@@ -322,7 +295,14 @@ function injectValueIntoTooltip(tooltip: Element): void {
   if (!config.enabled) return;
   if (tooltip.classList.contains('qpm-window') || tooltip.closest('.qpm-window')) return;
 
-  // Find the crop name element (same selectors as cropSizeIndicator)
+  // Atom data is the authority — if no slot data, we're not on a plant tile
+  const data = cachedSlotData;
+  if (!data) {
+    removeValueRow(tooltip);
+    return;
+  }
+
+  // Find a text element to locate the tooltip content container
   const cropNameElement =
     tooltip.querySelector('p.chakra-text.css-1jc0opy') ??
     tooltip.querySelector('p.chakra-text') ??
@@ -337,27 +317,12 @@ function injectValueIntoTooltip(tooltip: Element): void {
     return;
   }
 
-  // Validate the tooltip text is a known crop (filters out pet/decoration/egg tooltips)
-  const cropName = cropNameElement.textContent?.trim();
-  if (!cropName || !isKnownCropTooltip(cropName)) {
-    removeValueRow(tooltip);
-    return;
-  }
-
-  // Find the tooltip content container (same pattern as cropSizeIndicator)
   const container =
     (cropNameElement.closest('.chakra-stack') as Element | null) ??
     (cropNameElement.parentElement as Element | null) ??
     tooltip;
 
-  // Get current slot data (resolved from garden object + selected slot ID)
-  const data = cachedSlotData;
-  if (!data) {
-    removeValueRow(container);
-    return;
-  }
-
-  // Strip mutation prefix from species for catalog lookup
+  // Use atom species directly (no tooltip text matching needed)
   const baseSpecies = stripMutationPrefix(data.species);
 
   const price = calculateSellPrice(baseSpecies, data.targetScale, data.mutations);

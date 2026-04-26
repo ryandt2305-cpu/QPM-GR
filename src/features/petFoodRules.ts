@@ -409,13 +409,17 @@ function coerceFavoritedIds(value: unknown): Set<string> {
   return new Set(value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0));
 }
 
-export function buildFoodInventorySnapshot(source: FoodInventorySource | null | undefined): InventorySnapshot | null {
+export function buildFoodInventorySnapshot(
+  source: FoodInventorySource | null | undefined,
+  excludeItemIds?: Set<string>,
+): InventorySnapshot | null {
   if (!source || !Array.isArray(source.items)) return null;
 
   const items: InventoryItemSnapshot[] = [];
   for (const rawItem of source.items) {
     const id = resolveInventoryItemId(rawItem);
     if (!id) continue;
+    if (excludeItemIds && excludeItemIds.has(id)) continue;
 
     const itemType = resolveInventoryItemType(rawItem);
     if (!isFeedableProduceItemType(itemType)) continue;

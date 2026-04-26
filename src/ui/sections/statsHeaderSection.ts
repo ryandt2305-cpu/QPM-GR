@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.63",
+    date: "2026-04",
+    notes: [
+      "Feed Queue: spam-click Feed on floating cards or pets window and requests queue automatically instead of waiting per click",
+      "Locker: fixed multi-harvest plants where one locked fruit blocked all other fruits on the same plant",
+      "Locker: fixed mutation locks (Chilled, Wet, etc.) not blocking harvest when the fruit also had other mutations",
+    ],
+  },
+  {
     version: "3.1.62",
     date: "2026-04",
     notes: [

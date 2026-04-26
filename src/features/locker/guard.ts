@@ -48,13 +48,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Extract mutations from a single grow slot record.
+ * Handles both string[] and Record<string, unknown> formats.
+ */
+function extractSlotMutations(slotRecord: Record<string, unknown>): string[] | undefined {
+  const raw = slotRecord.mutations;
+  if (!raw) return undefined;
+
+  const collected: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const m of raw) {
+      if (typeof m === 'string' && m.length > 0) collected.push(m);
+    }
+  } else if (isRecord(raw)) {
+    for (const k of Object.keys(raw)) {
+      if (k.length > 0) collected.push(k);
+    }
+  }
+  return collected.length > 0 ? collected : undefined;
+}
+
+/**
  * Resolve a slot number from a native WS message to tile context.
  *
  * Garden data layout:
- *   tileObjects:          Record<slot, { objectType, eggId?, slots?[{ species }] }>
- *   boardwalkTileObjects: Record<slot, { objectType, eggId?, slots?[{ species }] }>
+ *   tileObjects:          Record<slot, { objectType, eggId?, slots?[{ species, mutations, slotId }] }>
+ *   boardwalkTileObjects: Record<slot, { objectType, eggId?, slots?[{ species, mutations, slotId }] }>
+ *
+ * For HarvestCrop, `slotsIndex` identifies the specific grow slot being
+ * harvested (matches GrowSlot.slotId). Mutations are read from that slot
+ * so that per-mutation rules apply to the targeted fruit, not slot 0.
  */
-function resolveTileContext(slot: unknown): TileContext | undefined {
+function resolveTileContext(slot: unknown, slotsIndex?: unknown): TileContext | undefined {
   if (typeof slot !== 'number' || !Number.isFinite(slot)) return undefined;
 
   const garden = getGardenSnapshot();
@@ -74,24 +99,31 @@ function resolveTileContext(slot: unknown): TileContext | undefined {
   let mutations: string[] | undefined;
   let decorId: string | undefined;
 
-  if (Array.isArray(tile.slots) && isRecord(tile.slots[0])) {
-    const raw = tile.slots[0].species;
-    if (typeof raw === 'string' && raw.length > 0) species = raw;
+  if (Array.isArray(tile.slots) && tile.slots.length > 0) {
+    // Species is the same across all slots on a plant — read from first.
+    const firstSlot = tile.slots[0];
+    if (isRecord(firstSlot)) {
+      const raw = firstSlot.species;
+      if (typeof raw === 'string' && raw.length > 0) species = raw;
+    }
 
-    // Extract mutations from slot — can be string[], Record<string, unknown>, or nested
-    const slotMutations = tile.slots[0].mutations;
-    if (slotMutations) {
-      const collected: string[] = [];
-      if (Array.isArray(slotMutations)) {
-        for (const m of slotMutations) {
-          if (typeof m === 'string' && m.length > 0) collected.push(m);
-        }
-      } else if (isRecord(slotMutations)) {
-        for (const k of Object.keys(slotMutations)) {
-          if (k.length > 0) collected.push(k);
+    // Mutations are per-slot. When slotsIndex is provided (HarvestCrop),
+    // resolve from the targeted slot so the guard evaluates the correct fruit.
+    let targetSlot: Record<string, unknown> | undefined;
+    if (typeof slotsIndex === 'number' && Number.isFinite(slotsIndex)) {
+      for (const s of tile.slots) {
+        if (isRecord(s) && s.slotId === slotsIndex) {
+          targetSlot = s;
+          break;
         }
       }
-      if (collected.length > 0) mutations = collected;
+    }
+    // Fall back to first slot when no specific slot was requested or found.
+    if (!targetSlot && isRecord(firstSlot)) {
+      targetSlot = firstSlot;
+    }
+    if (targetSlot) {
+      mutations = extractSlotMutations(targetSlot);
     }
   }
 
@@ -112,7 +144,7 @@ function evaluate(
   const config = getLockerConfig();
   if (!config.enabled) return { blocked: false };
 
-  const tile = resolveTileContext(payload.slot);
+  const tile = resolveTileContext(payload.slot, payload.slotsIndex);
   const result = evaluateAction(actionType, payload, config, getInventorySnapshot(), tile);
   return result;
 }

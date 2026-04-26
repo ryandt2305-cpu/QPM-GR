@@ -6,13 +6,16 @@ import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { onInventoryChange } from '../store/inventory';
 import {
-  feedPetInstantly,
-  feedPetInstantlyByPetId,
-  feedPetInstantlyBySlotId,
   getInstantFeedPlan,
   getInstantFeedPlanByPetId,
   getInstantFeedPlanBySlotId,
+  enqueueFeedBySlotId,
+  enqueueFeedByPetId,
+  enqueueFeed,
+  getFeedQueueLength,
+  onFeedQueueEvent,
   type InstantFeedPlan,
+  type FeedQueueEvent,
 } from '../features/instantFeed';
 import { PET_FOOD_RULES_CHANGED_EVENT } from '../features/petFoodRules';
 import { PET_FEED_POLICY_CHANGED_EVENT } from '../store/petTeams';
@@ -443,7 +446,6 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   let destroyed = false;
   let currentPet: ActivePetInfo | null = null;
   let refreshSeq = 0;
-  let feeding = false;
   let lastMismatchSignature: string | null = null;
   let lastMismatchRetrySignature: string | null = null;
 
@@ -544,14 +546,18 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
       const foodKey = selected?.item.species ?? selected?.item.name ?? null;
       setFoodCounter(foodIconWrap, foodCount, foodKey, plan.availableCount);
 
-      if (feeding) return;
-      const canFeed = !!plan.petId && !!selected && plan.availableCount > 0;
-      setFeedButtonState('Feed', !canFeed);
-      feedBtn.title = canFeed ? `Feed with ${foodKey ?? 'food'}` : (plan.error ?? 'No suitable food');
+      const pending = getFeedQueueLength(slotIndex);
+      if (pending > 0) {
+        setFeedButtonState(`Feed (${pending})`, false);
+      } else {
+        const canFeed = !!plan.petId && !!selected && plan.availableCount > 0;
+        setFeedButtonState('Feed', !canFeed);
+        feedBtn.title = canFeed ? `Feed with ${foodKey ?? 'food'}` : (plan.error ?? 'No suitable food');
+      }
     } catch {
       if (destroyed || seq !== refreshSeq) return;
       setFoodCounter(foodIconWrap, foodCount, null, 0);
-      if (!feeding) setFeedButtonState('Feed', true);
+      setFeedButtonState('Feed', true);
       feedBtn.title = 'Unable to evaluate food availability';
     }
   };
@@ -584,33 +590,37 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   window.addEventListener(FEED_EVENT, onFeedEvent as EventListener);
   cleanups.push(() => window.removeEventListener(FEED_EVENT, onFeedEvent as EventListener));
 
-  feedBtn.addEventListener('click', async () => {
-    if (feeding) return;
+  feedBtn.addEventListener('click', () => {
+    if (!currentPet) return;
+    if (currentPet.slotId) {
+      enqueueFeedBySlotId(currentPet.slotId);
+    } else if (currentPet.petId) {
+      enqueueFeedByPetId(currentPet.petId);
+    } else {
+      enqueueFeed(slotIndex);
+    }
+    const pending = getFeedQueueLength(slotIndex);
+    if (pending > 0) {
+      setFeedButtonState(`Feed (${pending})`, false);
+    }
+  });
 
-    feeding = true;
-    setFeedButtonState('...', true);
-
-    try {
-      let result;
-      if (currentPet?.slotId) {
-        result = await feedPetInstantlyBySlotId(currentPet.slotId);
-      } else if (currentPet?.petId) {
-        result = await feedPetInstantlyByPetId(currentPet.petId);
-      } else {
-        result = await feedPetInstantly(slotIndex);
-      }
-      if (result.success) {
-        setFeedButtonState('Fed', true);
-        await new Promise((resolve) => window.setTimeout(resolve, 700));
-      } else {
-        setFeedButtonState(result.error?.toLowerCase().includes('food') ? 'No food' : 'Failed', true);
-        await new Promise((resolve) => window.setTimeout(resolve, 900));
-      }
-    } finally {
-      feeding = false;
+  const unsubscribeQueue = onFeedQueueEvent((event: FeedQueueEvent) => {
+    if (destroyed) return;
+    if (event.type === 'drained') {
+      void refreshAvailability();
+      return;
+    }
+    if (event.slotIndex !== slotIndex) return;
+    const pending = getFeedQueueLength(slotIndex);
+    if (pending > 0) {
+      setFeedButtonState(`Feed (${pending})`, false);
+    } else {
+      setFeedButtonState('Feed', false);
       void refreshAvailability();
     }
   });
+  cleanups.push(unsubscribeQueue);
 
   let dragStartX = 0;
   let dragStartY = 0;

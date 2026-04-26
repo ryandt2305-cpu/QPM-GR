@@ -60,7 +60,13 @@ import {
   SELL_ALL_PET_RARITY_OPTIONS,
 } from '../features/sellAllPets';
 import { normalizeSpeciesKey } from '../utils/helpers';
-import { feedPetInstantly, feedAllPetsInstantly } from '../features/instantFeed';
+import {
+  feedAllPetsInstantly,
+  enqueueFeed,
+  getFeedQueueLength,
+  onFeedQueueEvent,
+  type FeedQueueEvent,
+} from '../features/instantFeed';
 import { initFloatingCards, openFloatingCardForSlot, hasFloatingCardForSlot } from './petFloatingCard';
 import { importAriesTeams } from '../utils/ariesTeamImport';
 import type { PetTeam, PooledPet, PetItemFeedOverride } from '../types/petTeams';
@@ -2885,6 +2891,7 @@ function buildFeedingTab(root: HTMLElement): () => void {
   root.appendChild(feed);
   let destroyed = false;
   let renderQueued = false;
+  const renderCleanups: Array<() => void> = [];
 
   const queueRender = (): void => {
     if (destroyed || renderQueued) return;
@@ -2896,6 +2903,8 @@ function buildFeedingTab(root: HTMLElement): () => void {
   };
 
   function render(): void {
+    renderCleanups.forEach((fn) => fn());
+    renderCleanups.length = 0;
     feed.innerHTML = '';
 
     const rules = getPetFoodRules();
@@ -3035,22 +3044,33 @@ function buildFeedingTab(root: HTMLElement): () => void {
 
       // Feed button
       const feedBtn = btn('Feed', 'primary');
-      feedBtn.addEventListener('click', async () => {
-        feedBtn.disabled = true;
-        feedBtn.textContent = '⏳';
-        try {
-          const latestRules = getPetFoodRules();
-          const result = await feedPetInstantly(pet.slotIndex, latestRules.respectRules);
-          if (result.success) {
-            showToast(`Fed ${result.petName || 'pet'}${result.foodSpecies ? ` (${result.foodSpecies})` : ''}`, 'success');
-          } else {
-            showToast(result.error ?? 'Feed failed', 'error');
-          }
-        } finally {
-          feedBtn.disabled = false;
-          feedBtn.textContent = 'Feed';
+      const petSlotIndex = pet.slotIndex;
+      feedBtn.addEventListener('click', () => {
+        enqueueFeed(petSlotIndex);
+        const pending = getFeedQueueLength(petSlotIndex);
+        if (pending > 0) {
+          feedBtn.textContent = `Feed (${pending})`;
         }
       });
+
+      const unsubFeedQueue = onFeedQueueEvent((event: FeedQueueEvent) => {
+        if (destroyed) return;
+        if (event.type === 'drained') {
+          feedBtn.textContent = 'Feed';
+          return;
+        }
+        if (event.slotIndex !== petSlotIndex) return;
+
+        if (event.result?.success) {
+          showToast(`Fed ${event.result.petName || 'pet'}${event.result.foodSpecies ? ` (${event.result.foodSpecies})` : ''}`, 'success');
+        } else if (event.type === 'error') {
+          showToast(event.result?.error ?? 'Feed failed', 'error');
+        }
+
+        const pending = getFeedQueueLength(petSlotIndex);
+        feedBtn.textContent = pending > 0 ? `Feed (${pending})` : 'Feed';
+      });
+      renderCleanups.push(unsubFeedQueue);
       header.appendChild(feedBtn);
 
       // Pop-out button — opens a draggable floating card bound to this slot.
@@ -3157,6 +3177,8 @@ function buildFeedingTab(root: HTMLElement): () => void {
   window.addEventListener(FLOATING_CARD_STATE_EVENT, onFloatingCardState as EventListener);
   return () => {
     destroyed = true;
+    renderCleanups.forEach((fn) => fn());
+    renderCleanups.length = 0;
     unsubscribePets();
     unsubscribeSprites();
     window.removeEventListener(PET_FOOD_RULES_CHANGED_EVENT, onFoodRulesChanged as EventListener);

@@ -11,10 +11,10 @@ export interface InventorySnapshot {
 /** Resolved from garden tile data at the guard layer. */
 export interface TileContext {
   objectType?: string; // 'plant' | 'egg' | 'decor' | etc
-  species?: string;    // plant species from slots[0].species
+  species?: string;    // plant species (same across all slots)
   eggId?: string;      // egg ID from tile.eggId
   decorId?: string;    // decor type ID (objectType value for decor tiles)
-  mutations?: string[]; // active mutations on the plant (from slots[0].mutations)
+  mutations?: string[]; // mutations on the targeted grow slot (matched via slotsIndex)
 }
 
 const PASS: GuardResult = { blocked: false };

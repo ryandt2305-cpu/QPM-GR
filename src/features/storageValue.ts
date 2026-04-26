@@ -114,7 +114,7 @@ function computeGamePetScale(
 // Value computations
 // ---------------------------------------------------------------------------
 
-function computePetSellPrice(pet: Record<string, unknown>): number {
+export function computePetSellPrice(pet: Record<string, unknown>): number {
   const species = ((pet.petSpecies ?? pet.species) as string | undefined) ?? '';
   if (!species) return 0;
 
@@ -168,7 +168,7 @@ function computeStorageItemsValue(items: unknown[]): number {
   return total;
 }
 
-function computeInventoryValue(): number {
+export function computeInventoryValue(): number {
   const items = getInventoryItems();
   let total = 0;
 

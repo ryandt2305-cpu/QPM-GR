@@ -23,6 +23,8 @@ import {
   getMultiHarvestSpriteDataUrlWithMutations,
   getPetSpriteDataUrl,
   getAnySpriteDataUrl,
+  getCropSpriteDataUrl,
+  getProduceSpriteDataUrl,
 } from '../sprite-v2/compat';
 import { computeMutationMultiplier, resolveMutation } from '../utils/cropMultipliers';
 import { visibleInterval } from '../utils/timerManager';
@@ -36,6 +38,11 @@ import { analyzeAllEggs, type EggAnalysis } from '../features/eggEfficiency';
 import { areCatalogsReady } from '../catalogs/gameCatalogs';
 import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot, type Transaction } from '../store/economyTracker';
 import type { ShopCategoryKey } from '../store/stats';
+import { computeGardenValueFromCatalog } from '../features/valueCalculator';
+import { computeInventoryValue } from '../features/storageValue';
+import { onInventoryChange } from '../store/inventory';
+import { debounceCancelable } from '../utils/debounce';
+import { toggleValueCard, isValueCardOpen, type ValueCardType } from './valueFloatingCard';
 
 let coinSpriteUrlCache: string | null | undefined;
 function getCoinSpriteUrl(): string | null {
@@ -76,6 +83,87 @@ function currencyIcon(type: 'coins' | 'credits' | 'dust', size: number): HTMLEle
   span.style.cssText = `font-size:${Math.round(size * 0.7)}px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;flex-shrink:0;`;
   span.textContent = fallbacks[type];
   return span;
+}
+
+/** Resolve an egg sprite URL, trying multiple key patterns. */
+function resolveEggSpriteUrl(): string {
+  const prefixes = ['sprite/egg/', 'egg/', 'sprite/pet/', 'pet/'];
+  const ids = ['CommonEgg', 'UncommonEgg'];
+  for (const id of ids) {
+    for (const prefix of prefixes) {
+      const url = getAnySpriteDataUrl(`${prefix}${id}`);
+      if (url) return url;
+    }
+  }
+  return '';
+}
+
+/**
+ * Build overlapping circular sprite stack (like avatar groups).
+ * Each sprite is rendered as a clipped circle, overlapping left-to-right.
+ */
+function overlappingIcons(urls: string[], size: number): HTMLElement {
+  const valid = urls.filter(Boolean);
+  if (valid.length === 0) {
+    const span = document.createElement('span');
+    span.style.cssText = `font-size:${Math.round(size * 0.6)}px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;flex-shrink:0;`;
+    span.textContent = '📦';
+    return span;
+  }
+  if (valid.length === 1) return makeSprite(valid[0], size);
+
+  const count = valid.length;
+  const itemSize = Math.round(size * 0.72);
+  const overlap = Math.round(itemSize * 0.35);
+  const totalWidth = itemSize + (count - 1) * (itemSize - overlap);
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `position:relative;width:${totalWidth}px;height:${size}px;flex-shrink:0;`;
+
+  for (let i = 0; i < count; i++) {
+    const img = document.createElement('img');
+    img.src = valid[i];
+    img.alt = '';
+    const left = i * (itemSize - overlap);
+    img.style.cssText = [
+      `position:absolute`,
+      `left:${left}px`,
+      `top:${Math.round((size - itemSize) / 2)}px`,
+      `width:${itemSize}px`,
+      `height:${itemSize}px`,
+      `object-fit:contain`,
+      `image-rendering:pixelated`,
+      `border-radius:50%`,
+      `border:1.5px solid rgba(18,20,26,0.9)`,
+      `z-index:${count - i}`,
+    ].join(';');
+    wrap.appendChild(img);
+  }
+
+  return wrap;
+}
+
+/** Pick the right icon element for a balance/value chip based on card type. */
+function chipIcon(cardType: ValueCardType, size: number): HTMLElement {
+  if (cardType === 'garden') {
+    const url = getCropSpriteDataUrl('Carrot') || getProduceSpriteDataUrl('Carrot');
+    if (url) return makeSprite(url, size);
+    return currencyIcon('coins', size);
+  }
+  if (cardType === 'inventory') {
+    const coinUrl = getCoinSpriteUrl() || '';
+    const cropUrl = getProduceSpriteDataUrl('Carrot') || getCropSpriteDataUrl('Carrot') || '';
+    const eggUrl = resolveEggSpriteUrl();
+    const urls = [coinUrl, cropUrl, eggUrl].filter(Boolean);
+    if (urls.length > 1) return overlappingIcons(urls, size);
+    if (urls.length === 1) return makeSprite(urls[0], size);
+    return currencyIcon('coins', size);
+  }
+  // Currency types
+  const typeMap: Record<string, 'coins' | 'credits' | 'dust'> = {
+    coins: 'coins', credits: 'credits', dust: 'dust',
+  };
+  return currencyIcon(typeMap[cardType] ?? 'coins', size);
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,28 +2093,66 @@ function buildEconomyTab(container: HTMLElement): () => void {
   content.style.cssText = 'flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:14px;';
   container.appendChild(content);
 
+  // Stable container for garden/inventory value chips — updated independently
+  const gardenNumRef = { el: null as HTMLElement | null };
+  const inventoryNumRef = { el: null as HTMLElement | null };
+
+  function updateAssetValues(): void {
+    if (gardenNumRef.el) {
+      gardenNumRef.el.textContent = formatCoinsAbbreviated(computeGardenValueFromCatalog(getGardenSnapshot()));
+    }
+    if (inventoryNumRef.el) {
+      inventoryNumRef.el.textContent = formatCoinsAbbreviated(computeInventoryValue());
+    }
+  }
+
+  const debouncedGardenUpdate = debounceCancelable(() => updateAssetValues(), 250);
+  const debouncedInventoryUpdate = debounceCancelable(() => updateAssetValues(), 250);
+
+  const unsubGarden = onGardenSnapshot(() => debouncedGardenUpdate(), false);
+  const unsubInventory = onInventoryChange(() => debouncedInventoryUpdate());
+
   function render(snapshot: EconomySnapshot): void {
     content.innerHTML = '';
 
-    // --- Balance chips (same visual pattern as hatch stats chips) ---
+    // --- All value chips in a grid (3 cols → balances on row 1, assets on row 2) ---
     const chips = document.createElement('div');
-    chips.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;';
+    chips.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:8px;';
 
     chips.appendChild(balanceChip(
       formatCoinsAbbreviated(snapshot.coins.balance),
       'Coins', 'coins', '#ffd600',
-      snapshot.coins.rate, snapshot.coins.connected,
+      snapshot.coins.rate, snapshot.coins.connected, 'coins',
     ));
     chips.appendChild(balanceChip(
       formatCoinsAbbreviated(snapshot.credits.balance),
       'Credits', 'credits', '#42a5f5',
-      null, snapshot.credits.connected,
+      null, snapshot.credits.connected, 'credits',
     ));
     chips.appendChild(balanceChip(
       formatCoinsAbbreviated(snapshot.dust.balance),
       'Magic Dust', 'dust', '#ab47bc',
-      snapshot.dust.rate, snapshot.dust.connected,
+      snapshot.dust.rate, snapshot.dust.connected, 'dust',
     ));
+
+    // Garden value chip
+    const gardenChip = balanceChip(
+      formatCoinsAbbreviated(computeGardenValueFromCatalog(getGardenSnapshot())),
+      'Garden', 'coins', '#ffd600',
+      null, true, 'garden',
+    );
+    gardenNumRef.el = gardenChip.querySelector('[data-value-num]');
+    chips.appendChild(gardenChip);
+
+    // Inventory value chip
+    const invChip = balanceChip(
+      formatCoinsAbbreviated(computeInventoryValue()),
+      'Inventory', 'coins', '#ffd600',
+      null, true, 'inventory',
+    );
+    inventoryNumRef.el = invChip.querySelector('[data-value-num]');
+    chips.appendChild(invChip);
+
     content.appendChild(chips);
 
     // --- Spending ---
@@ -2086,29 +2212,38 @@ function buildEconomyTab(container: HTMLElement): () => void {
 
   return () => {
     unsub();
+    unsubGarden();
+    unsubInventory();
+    debouncedGardenUpdate.cancel();
+    debouncedInventoryUpdate.cancel();
   };
 }
 
-/** Balance chip — currency sprite + big number + label + optional rate */
-function balanceChip(value: string, label: string, currencyType: 'coins' | 'credits' | 'dust', accentColor: string, rate: number | null, connected: boolean): HTMLElement {
+/** Balance chip — currency sprite + value + label + optional rate + pop-out button */
+function balanceChip(
+  value: string, label: string, currencyType: 'coins' | 'credits' | 'dust',
+  accentColor: string, rate: number | null, connected: boolean,
+  cardType: ValueCardType,
+): HTMLElement {
   const el = document.createElement('div');
   const bg = connected ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)';
-  el.style.cssText = `background:${bg};border:1px solid rgba(143,130,255,0.14);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex:1;min-width:100px;`;
+  el.style.cssText = `background:${bg};border:1px solid rgba(143,130,255,0.14);border-radius:8px;padding:7px 10px;display:flex;align-items:center;gap:7px;min-width:0;`;
 
-  // Sprite icon
-  el.appendChild(currencyIcon(currencyType, 28));
+  // Sprite icon (compact) — card-type-aware
+  el.appendChild(chipIcon(cardType, 22));
 
   // Text column
   const col = document.createElement('div');
-  col.style.cssText = 'display:flex;flex-direction:column;gap:1px;';
+  col.style.cssText = 'display:flex;flex-direction:column;gap:1px;flex:1;min-width:0;overflow:hidden;';
 
   const num = document.createElement('div');
-  num.style.cssText = `font-size:18px;font-weight:800;line-height:1;color:${connected ? accentColor : 'rgba(224,224,224,0.4)'};`;
-  num.textContent = connected ? value : '—';
+  num.setAttribute('data-value-num', '');
+  num.style.cssText = `font-size:15px;font-weight:800;line-height:1;color:${connected ? accentColor : 'rgba(224,224,224,0.4)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+  num.textContent = connected ? value : '\u2014';
   col.appendChild(num);
 
   const lbl = document.createElement('div');
-  lbl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);';
+  lbl.style.cssText = 'font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);white-space:nowrap;';
   lbl.textContent = label;
   col.appendChild(lbl);
 
@@ -2121,12 +2256,38 @@ function balanceChip(value: string, label: string, currencyType: 'coins' | 'cred
     const rateEl = document.createElement('div');
     const sign = rate >= 0 ? '+' : '';
     const rateColor = rate >= 0 ? '#4caf50' : '#ef5350';
-    rateEl.style.cssText = `font-size:10px;color:${rateColor};font-weight:600;`;
+    rateEl.style.cssText = `font-size:9px;color:${rateColor};font-weight:600;white-space:nowrap;`;
     rateEl.textContent = `${sign}${formatCoinsAbbreviated(Math.round(rate))}/hr`;
     col.appendChild(rateEl);
   }
 
   el.appendChild(col);
+
+  // Pop-out button
+  const popBtn = document.createElement('button');
+  popBtn.type = 'button';
+  popBtn.title = `Pop out ${label}`;
+  const open = isValueCardOpen(cardType);
+  popBtn.style.cssText = `background:none;border:1px solid rgba(143,130,255,${open ? '0.5' : '0.25'});border-radius:4px;color:rgba(224,224,224,${open ? '0.8' : '0.45'});font-size:11px;cursor:pointer;padding:1px 4px;flex-shrink:0;transition:color 0.12s,border-color 0.12s;line-height:1;`;
+  popBtn.textContent = '\u2197';
+  popBtn.addEventListener('mouseenter', () => {
+    popBtn.style.color = '#e0e0e0';
+    popBtn.style.borderColor = 'rgba(143,130,255,0.6)';
+  });
+  popBtn.addEventListener('mouseleave', () => {
+    const isOpen = isValueCardOpen(cardType);
+    popBtn.style.color = `rgba(224,224,224,${isOpen ? '0.8' : '0.45'})`;
+    popBtn.style.borderColor = `rgba(143,130,255,${isOpen ? '0.5' : '0.25'})`;
+  });
+  popBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    toggleValueCard(cardType);
+    const isOpen = isValueCardOpen(cardType);
+    popBtn.style.color = `rgba(224,224,224,${isOpen ? '0.8' : '0.45'})`;
+    popBtn.style.borderColor = `rgba(143,130,255,${isOpen ? '0.5' : '0.25'})`;
+  });
+  el.appendChild(popBtn);
+
   return el;
 }
 

@@ -31,6 +31,14 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.64",
+    date: "2026-04",
+    notes: [
+      "Economy: added Garden Value and Inventory Value chips to the Economy tab with live updates",
+      "Economy: all balance/value chips can now be popped out as persistent draggable floating cards",
+    ],
+  },
+  {
     version: "3.1.63",
     date: "2026-04",
     notes: [

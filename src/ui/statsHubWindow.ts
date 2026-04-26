@@ -43,6 +43,20 @@ import { computeInventoryValue } from '../features/storageValue';
 import { onInventoryChange } from '../store/inventory';
 import { debounceCancelable } from '../utils/debounce';
 import { toggleValueCard, isValueCardOpen, type ValueCardType } from './valueFloatingCard';
+import {
+  startRoomPlayerEconomy,
+  getRoomPlayersSnapshot,
+  onRoomPlayersChange,
+  type RoomPlayersSnapshot,
+  type RoomPlayerEconomy,
+} from '../features/roomPlayerEconomy';
+import {
+  togglePlayerCompareCard,
+  closePlayerCompareCard,
+  isPlayerCompareCardOpen,
+  getCompareTargetPlayerId,
+  setCompareTarget,
+} from './playerCompareFloatingCard';
 
 let coinSpriteUrlCache: string | null | undefined;
 function getCoinSpriteUrl(): string | null {
@@ -2210,12 +2224,238 @@ function buildEconomyTab(container: HTMLElement): () => void {
 
   const unsub = subscribeEconomy(render);
 
+  // --- Compare with Room Player section (outside content so it doesn't get wiped) ---
+  const compareCleanups: Array<() => void> = [];
+  const compareSection = document.createElement('div');
+  compareSection.style.cssText = 'padding:8px 14px 12px;border-top:1px solid rgba(143,130,255,0.12);flex-shrink:0;';
+  container.appendChild(compareSection);
+
+  // Lazy-start roomPlayerEconomy
+  let roomEconStarted = false;
+  const compareSelectRef = { el: null as HTMLSelectElement | null };
+  const compareGridRef = { el: null as HTMLElement | null };
+
+  function buildCompareGrid(self: RoomPlayerEconomy | null, target: RoomPlayerEconomy | null, parent: HTMLElement): void {
+    parent.innerHTML = '';
+    if (!target || !self) return;
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:52px 1fr 1fr 1fr;gap:3px 6px;font-size:11px;margin-top:8px;';
+
+    // Header
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:contents;font-size:10px;font-weight:700;color:rgba(224,224,224,0.55);';
+    for (const text of ['', 'You', 'Them', 'Delta']) {
+      const el = document.createElement('span');
+      el.textContent = text;
+      el.style.textAlign = text === '' ? 'left' : 'right';
+      el.style.paddingBottom = '3px';
+      el.style.borderBottom = '1px solid rgba(143,130,255,0.1)';
+      hdr.appendChild(el);
+    }
+    grid.appendChild(hdr);
+
+    function addRow(label: string, myVal: number, theirVal: number, useInt: boolean): void {
+      const fmt = useInt ? (n: number) => String(Math.round(n)) : formatCoinsAbbreviated;
+      const diff = myVal - theirVal;
+      const deltaSign = diff > 0 ? '+' : '';
+      const deltaColor = Math.abs(diff) < 1 ? 'rgba(224,224,224,0.35)' : diff > 0 ? '#4caf50' : '#ef5350';
+      const deltaText = Math.abs(diff) < 1 ? '\u2014' : `${deltaSign}${fmt(Math.round(diff))}`;
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:contents;';
+
+      const metricEl = document.createElement('span');
+      metricEl.style.cssText = 'color:rgba(224,224,224,0.5);font-weight:600;padding:2px 0;';
+      metricEl.textContent = label;
+      row.appendChild(metricEl);
+
+      const myEl = document.createElement('span');
+      myEl.style.cssText = 'text-align:right;color:#ffd600;font-weight:700;padding:2px 0;';
+      myEl.textContent = fmt(myVal);
+      row.appendChild(myEl);
+
+      const theirEl = document.createElement('span');
+      theirEl.style.cssText = 'text-align:right;color:#e0e0e0;font-weight:700;padding:2px 0;';
+      theirEl.textContent = fmt(theirVal);
+      row.appendChild(theirEl);
+
+      const deltaEl = document.createElement('span');
+      deltaEl.style.cssText = `text-align:right;font-weight:700;font-size:10px;padding:2px 0;color:${deltaColor};`;
+      deltaEl.textContent = deltaText;
+      row.appendChild(deltaEl);
+
+      grid.appendChild(row);
+    }
+
+    addRow('Coins', self.coins, target.coins, false);
+    addRow('Garden', self.gardenValue, target.gardenValue, false);
+    addRow('Inv.', self.inventoryValue, target.inventoryValue, false);
+    addRow('Pets', self.petCount, target.petCount, true);
+
+    parent.appendChild(grid);
+  }
+
+  function updateCompareDropdown(snap: RoomPlayersSnapshot): void {
+    const select = compareSelectRef.el;
+    if (!select) return;
+
+    const prevValue = select.value;
+    select.innerHTML = '';
+
+    if (snap.others.length === 0) {
+      const opt = document.createElement('option');
+      opt.textContent = 'No other players';
+      opt.disabled = true;
+      opt.selected = true;
+      select.appendChild(opt);
+      select.disabled = true;
+      // Clear grid
+      if (compareGridRef.el) compareGridRef.el.innerHTML = '';
+      return;
+    }
+
+    select.disabled = false;
+
+    // Placeholder
+    const placeholder = document.createElement('option');
+    placeholder.textContent = 'Select a player\u2026';
+    placeholder.value = '';
+    placeholder.disabled = true;
+    select.appendChild(placeholder);
+
+    let foundPrev = false;
+    for (const player of snap.others) {
+      const opt = document.createElement('option');
+      opt.value = player.playerId;
+      opt.textContent = player.displayName;
+      if (player.playerId === prevValue) {
+        opt.selected = true;
+        foundPrev = true;
+      }
+      select.appendChild(opt);
+    }
+
+    if (!foundPrev) {
+      placeholder.selected = true;
+      if (compareGridRef.el) compareGridRef.el.innerHTML = '';
+      // If the previously selected player left, show notice
+      if (prevValue) {
+        if (compareGridRef.el) {
+          const notice = document.createElement('div');
+          notice.style.cssText = 'color:rgba(224,224,224,0.35);font-size:11px;padding:6px 0;text-align:center;';
+          notice.textContent = 'Selected player left the room.';
+          compareGridRef.el.innerHTML = '';
+          compareGridRef.el.appendChild(notice);
+        }
+      }
+    } else {
+      // Refresh comparison grid
+      const target = snap.others.find((p) => p.playerId === prevValue) ?? null;
+      if (compareGridRef.el) buildCompareGrid(snap.self, target, compareGridRef.el);
+      // Update floating card if open
+      if (isPlayerCompareCardOpen() && getCompareTargetPlayerId() !== prevValue && prevValue) {
+        setCompareTarget(prevValue);
+      }
+    }
+  }
+
+  function initCompareSection(): void {
+    compareSection.innerHTML = '';
+    appendSectionHeader(compareSection, 'Compare with Room Player');
+
+    // Dropdown row
+    const dropdownRow = document.createElement('div');
+    dropdownRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px;';
+
+    const select = document.createElement('select');
+    select.style.cssText = [
+      'flex:1',
+      'background:rgba(255,255,255,0.06)',
+      'border:1px solid rgba(143,130,255,0.25)',
+      'border-radius:6px',
+      'color:#e0e0e0',
+      'font-size:12px',
+      'padding:5px 8px',
+      'outline:none',
+      'cursor:pointer',
+    ].join(';');
+    compareSelectRef.el = select;
+
+    // Pop-out button
+    const popBtn = document.createElement('button');
+    popBtn.type = 'button';
+    popBtn.title = 'Pop out comparison';
+    const cardOpen = isPlayerCompareCardOpen();
+    popBtn.style.cssText = `background:none;border:1px solid rgba(143,130,255,${cardOpen ? '0.5' : '0.25'});border-radius:4px;color:rgba(224,224,224,${cardOpen ? '0.8' : '0.45'});font-size:11px;cursor:pointer;padding:2px 5px;flex-shrink:0;transition:color 0.12s,border-color 0.12s;line-height:1;`;
+    popBtn.textContent = '\u2197';
+    popBtn.addEventListener('mouseenter', () => {
+      popBtn.style.color = '#e0e0e0';
+      popBtn.style.borderColor = 'rgba(143,130,255,0.6)';
+    });
+    popBtn.addEventListener('mouseleave', () => {
+      const isOpen = isPlayerCompareCardOpen();
+      popBtn.style.color = `rgba(224,224,224,${isOpen ? '0.8' : '0.45'})`;
+      popBtn.style.borderColor = `rgba(143,130,255,${isOpen ? '0.5' : '0.25'})`;
+    });
+    popBtn.addEventListener('click', () => {
+      const targetId = select.value;
+      if (!targetId) return;
+      togglePlayerCompareCard(targetId);
+      const isOpen = isPlayerCompareCardOpen();
+      popBtn.style.color = `rgba(224,224,224,${isOpen ? '0.8' : '0.45'})`;
+      popBtn.style.borderColor = `rgba(143,130,255,${isOpen ? '0.5' : '0.25'})`;
+    });
+
+    dropdownRow.appendChild(select);
+    dropdownRow.appendChild(popBtn);
+    compareSection.appendChild(dropdownRow);
+
+    // Comparison grid container
+    const gridContainer = document.createElement('div');
+    compareGridRef.el = gridContainer;
+    compareSection.appendChild(gridContainer);
+
+    // Select change handler
+    select.addEventListener('change', () => {
+      const targetId = select.value;
+      if (!targetId) {
+        gridContainer.innerHTML = '';
+        return;
+      }
+      const snap = getRoomPlayersSnapshot();
+      const target = snap.others.find((p) => p.playerId === targetId) ?? null;
+      buildCompareGrid(snap.self, target, gridContainer);
+      // Update floating card if open
+      if (isPlayerCompareCardOpen()) {
+        setCompareTarget(targetId);
+      }
+    });
+
+    // Initial dropdown populate
+    updateCompareDropdown(getRoomPlayersSnapshot());
+
+    // Subscribe to room player changes
+    const unsubRoom = onRoomPlayersChange((snap) => {
+      updateCompareDropdown(snap);
+    });
+    compareCleanups.push(unsubRoom);
+  }
+
+  // Start room player economy and build section
+  void startRoomPlayerEconomy().then(() => {
+    roomEconStarted = true;
+    initCompareSection();
+  });
+
   return () => {
     unsub();
     unsubGarden();
     unsubInventory();
     debouncedGardenUpdate.cancel();
     debouncedInventoryUpdate.cancel();
+    compareCleanups.forEach((fn) => fn());
+    compareCleanups.length = 0;
   };
 }
 

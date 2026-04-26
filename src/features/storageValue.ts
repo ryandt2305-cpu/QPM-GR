@@ -135,7 +135,7 @@ export function computePetSellPrice(pet: Record<string, unknown>): number {
   return Math.round(maturitySellPrice * scale * totalMultiplier);
 }
 
-function computeStorageItemsValue(items: unknown[]): number {
+export function computeStorageItemsValue(items: unknown[]): number {
   let total = 0;
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;

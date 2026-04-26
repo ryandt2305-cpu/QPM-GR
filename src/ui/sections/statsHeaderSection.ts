@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.65",
+    date: "2026-04",
+    notes: [
+      "Economy: compare your Coins, Garden Value, Inventory Value, and Pet count with any other player in the room",
+    ],
+  },
+  {
     version: "3.1.64",
     date: "2026-04",
     notes: [

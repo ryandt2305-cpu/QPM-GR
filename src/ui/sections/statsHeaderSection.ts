@@ -31,6 +31,16 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.67",
+    date: "2026-04",
+    notes: [
+      "Economy: Net Worth metric — coins + garden + inventory + storages + active pets",
+      "Economy: Net Worth pop-out floating card with live updates",
+      "Economy: Net Worth row in player comparison grid",
+      "Version checker: cache-bust fetches, persist results, toast on new update",
+    ],
+  },
+  {
     version: "3.1.66",
     date: "2026-04",
     notes: [

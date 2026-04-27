@@ -21,6 +21,8 @@ export interface RoomPlayerEconomy {
   coins: number;
   gardenValue: number;
   inventoryValue: number;
+  storageValue: number;
+  activePetsValue: number;
   petCount: number;
   slotIndex: number;
 }
@@ -107,8 +109,25 @@ function extractSlotEconomy(
   const invItems = Array.isArray(inventory?.items) ? (inventory!.items as unknown[]) : [];
   const inventoryValue = computeStorageItemsValue(invItems);
 
-  // Pet count — active slots + inventory pets + hutch pets
-  const activePets = Array.isArray(data.petSlots) ? data.petSlots.filter((s) => s != null).length : 0;
+  // Storage buildings value (Seed Silo, Pet Hutch, Decor Shed)
+  const storages = Array.isArray(inventory?.storages) ? (inventory!.storages as unknown[]) : [];
+  let storageValueTotal = 0;
+  for (const s of storages) {
+    if (!s || typeof s !== 'object') continue;
+    const storageItems = Array.isArray((s as Record<string, unknown>).items)
+      ? ((s as Record<string, unknown>).items as unknown[])
+      : [];
+    storageValueTotal += computeStorageItemsValue(storageItems);
+  }
+
+  // Active pets — count + sell value
+  const petSlots = Array.isArray(data.petSlots) ? data.petSlots : [];
+  const activePets = petSlots.filter((s) => s != null).length;
+  let activePetsValueTotal = 0;
+  for (const ps of petSlots) {
+    if (!ps || typeof ps !== 'object') continue;
+    activePetsValueTotal += computePetSellPrice(ps as Record<string, unknown>);
+  }
 
   let inventoryPets = 0;
   for (const item of invItems) {
@@ -119,12 +138,11 @@ function extractSlotEconomy(
   }
 
   let hutchPets = 0;
-  const storages = Array.isArray(inventory?.storages) ? (inventory!.storages as unknown[]) : [];
   for (const s of storages) {
     if (!s || typeof s !== 'object') continue;
-    const storage = s as Record<string, unknown>;
-    if (storage.decorId !== 'PetHutch') continue;
-    const hutchItems = Array.isArray(storage.items) ? (storage.items as unknown[]) : [];
+    const storageRec = s as Record<string, unknown>;
+    if (storageRec.decorId !== 'PetHutch') continue;
+    const hutchItems = Array.isArray(storageRec.items) ? (storageRec.items as unknown[]) : [];
     for (const item of hutchItems) {
       if (!item || typeof item !== 'object') continue;
       const raw = item as Record<string, unknown>;
@@ -138,7 +156,11 @@ function extractSlotEconomy(
   // Display name
   const displayName = playerNameMap.get(playerId) ?? `Player ${playerId.slice(0, 6)}`;
 
-  return { playerId, displayName, coins, gardenValue, inventoryValue, petCount, slotIndex };
+  return {
+    playerId, displayName, coins, gardenValue, inventoryValue,
+    storageValue: storageValueTotal, activePetsValue: activePetsValueTotal,
+    petCount, slotIndex,
+  };
 }
 
 /** Rebuild snapshot from stateAtom value. */

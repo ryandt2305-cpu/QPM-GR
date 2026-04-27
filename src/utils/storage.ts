@@ -193,6 +193,9 @@ const QPM_STORAGE_KEYS = [
 
   // Debug globals opt-in
   'qpm.debug.globals.v1',
+
+  // Version checker
+  'qpm.versionCheck.v1',
 ];
 
 /**

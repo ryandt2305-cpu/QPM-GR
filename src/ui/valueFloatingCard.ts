@@ -5,8 +5,9 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { onGardenSnapshot, getGardenSnapshot } from '../features/gardenBridge';
 import { onInventoryChange } from '../store/inventory';
+import { onActivePetInfos } from '../store/pets';
 import { computeGardenValueFromCatalog, formatCoinsAbbreviated } from '../features/valueCalculator';
-import { computeInventoryValue } from '../features/storageValue';
+import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue } from '../features/storageValue';
 import { getAnySpriteDataUrl, getCropSpriteDataUrl, getProduceSpriteDataUrl } from '../sprite-v2/compat';
 import { debounceCancelable } from '../utils/debounce';
 import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot } from '../store/economyTracker';
@@ -17,8 +18,8 @@ import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot } from '../s
 
 const STORAGE_KEY = 'qpm.valueFloatingCards.v1';
 
-export type ValueCardType = 'coins' | 'credits' | 'dust' | 'garden' | 'inventory';
-const VALID_TYPES = new Set<string>(['coins', 'credits', 'dust', 'garden', 'inventory']);
+export type ValueCardType = 'coins' | 'credits' | 'dust' | 'garden' | 'inventory' | 'netWorth';
+const VALID_TYPES = new Set<string>(['coins', 'credits', 'dust', 'garden', 'inventory', 'netWorth']);
 
 const CARD_LABELS: Record<ValueCardType, string> = {
   coins: 'Coins',
@@ -26,6 +27,7 @@ const CARD_LABELS: Record<ValueCardType, string> = {
   dust: 'Magic Dust',
   garden: 'Garden Value',
   inventory: 'Inventory Value',
+  netWorth: 'Net Worth',
 };
 
 const CARD_COLORS: Record<ValueCardType, string> = {
@@ -34,6 +36,7 @@ const CARD_COLORS: Record<ValueCardType, string> = {
   dust: '#ab47bc',
   garden: '#ffd600',
   inventory: '#ffd600',
+  netWorth: '#8f82ff',
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +170,7 @@ function clampPosition(x: number, y: number): { x: number; y: number } {
 }
 
 const TYPE_INDEX: Record<ValueCardType, number> = {
-  coins: 0, credits: 1, dust: 2, garden: 3, inventory: 4,
+  coins: 0, credits: 1, dust: 2, garden: 3, inventory: 4, netWorth: 5,
 };
 
 function getDefaultPosition(type: ValueCardType): { x: number; y: number } {
@@ -302,6 +305,18 @@ function buildCardIcon(type: ValueCardType, size: number): HTMLElement {
     }
   }
 
+  if (type === 'netWorth') {
+    // Same as coins icon — gold coin represents total value
+    const coinUrl = getAnySpriteDataUrl('sprite/ui/Coin') || getAnySpriteDataUrl('ui/Coin');
+    if (coinUrl) {
+      const img = document.createElement('img');
+      img.style.cssText = `width:${size}px;height:${size}px;object-fit:contain;image-rendering:pixelated;display:block;flex-shrink:0;`;
+      img.src = coinUrl;
+      img.alt = 'net worth';
+      return img;
+    }
+  }
+
   // Currency types (coins/credits/dust) — single sprite
   const urlMap: Record<string, () => string | null> = {
     coins: () => getAnySpriteDataUrl('sprite/ui/Coin') || getAnySpriteDataUrl('ui/Coin') || null,
@@ -318,7 +333,7 @@ function buildCardIcon(type: ValueCardType, size: number): HTMLElement {
   }
 
   // Fallback emoji
-  const fallbacks: Record<string, string> = { coins: '🪙', credits: '💎', dust: '✨', garden: '🌿', inventory: '📦' };
+  const fallbacks: Record<string, string> = { coins: '🪙', credits: '💎', dust: '✨', garden: '🌿', inventory: '📦', netWorth: '🪙' };
   const span = document.createElement('span');
   span.style.cssText = `font-size:${Math.round(size * 0.6)}px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;flex-shrink:0;`;
   span.textContent = fallbacks[type] ?? '📦';
@@ -425,6 +440,26 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
     const unsub = onGardenSnapshot(() => debouncedUpdate(), false);
     cleanups.push(unsub);
     updateAmount(computeGardenValueFromCatalog(getGardenSnapshot()));
+  } else if (type === 'netWorth') {
+    function computeNetWorth(): number {
+      return getEconomySnapshot().coins.balance
+        + computeGardenValueFromCatalog(getGardenSnapshot())
+        + computeInventoryValue()
+        + computeAllStoragesValue()
+        + computeActivePetsValue();
+    }
+    const debouncedUpdate = debounceCancelable(() => {
+      if (destroyed) return;
+      updateAmount(computeNetWorth());
+    }, 200);
+    cleanups.push(debouncedUpdate.cancel);
+
+    // React to coins, garden, inventory, and pet changes
+    cleanups.push(subscribeEconomy(() => debouncedUpdate()));
+    cleanups.push(onGardenSnapshot(() => debouncedUpdate(), false));
+    cleanups.push(onInventoryChange(() => debouncedUpdate()));
+    cleanups.push(onActivePetInfos(() => debouncedUpdate()));
+    updateAmount(computeNetWorth());
   } else {
     const debouncedUpdate = debounceCancelable(() => {
       if (destroyed) return;

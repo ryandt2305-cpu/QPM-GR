@@ -1,10 +1,13 @@
+import { notify } from "../core/notifications";
+import { storage } from "./storage";
 import { visibleInterval } from "./timerManager";
 
-const CURRENT_VERSION = "3.1.66"; // This should match package.json version
+const CURRENT_VERSION = "3.1.67"; // This should match package.json version
 export const GITHUB_URL = "https://github.com/ryandt2305-cpu/QPM-GR";
 export const UPDATE_URL =
   "https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js";
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const STORAGE_KEY = "qpm.versionCheck.v1";
 
 type GmXhr = (input: {
   method: "GET";
@@ -57,17 +60,43 @@ export interface VersionInfo {
   checkedAt: number | null;
 }
 
+interface PersistedVersionCheck {
+  latest: string;
+  status: VersionStatus;
+  checkedAt: number;
+}
+
+function loadPersistedCheck(): Partial<VersionInfo> {
+  const saved = storage.get<PersistedVersionCheck | null>(STORAGE_KEY, null);
+  if (!saved || typeof saved.latest !== "string") return {};
+  const cmp = compareSemver(saved.latest, CURRENT_VERSION);
+  const status: VersionStatus = cmp > 0 ? "outdated" : "current";
+  return { latest: saved.latest, status, checkedAt: saved.checkedAt ?? null };
+}
+
+function persistCheck(info: VersionInfo): void {
+  if (!info.latest) return;
+  const data: PersistedVersionCheck = {
+    latest: info.latest,
+    status: info.status,
+    checkedAt: info.checkedAt ?? Date.now(),
+  };
+  storage.set(STORAGE_KEY, data);
+}
+
+const persisted = loadPersistedCheck();
 let cached: VersionInfo = {
   current: CURRENT_VERSION,
-  latest: null,
-  status: "checking",
+  latest: persisted.latest ?? null,
+  status: persisted.status ?? "checking",
   updateUrl: UPDATE_URL,
-  checkedAt: null,
+  checkedAt: persisted.checkedAt ?? null,
 };
 
 const listeners = new Set<(info: VersionInfo) => void>();
 let started = false;
 let timerCleanup: (() => void) | null = null;
+let notifiedOutdated = false;
 
 function emit(): void {
   listeners.forEach((cb) => {
@@ -96,7 +125,8 @@ function compareSemver(a: string, b: string): number {
 
 async function fetchRemoteVersion(): Promise<string | null> {
   try {
-    const text = await fetchText(UPDATE_URL);
+    const url = `${UPDATE_URL}?t=${Date.now()}`;
+    const text = await fetchText(url);
     const headerMatch = text.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
     if (headerMatch?.[1]) return headerMatch[1];
     const constMatch = text.match(
@@ -175,6 +205,17 @@ export async function checkForUpdates(_force = false): Promise<VersionInfo> {
     updateUrl: UPDATE_URL,
     checkedAt: now,
   };
+  persistCheck(cached);
+
+  if (status === "outdated" && !notifiedOutdated) {
+    notifiedOutdated = true;
+    notify({
+      feature: "versionChecker",
+      level: "info",
+      message: `QPM update available: v${CURRENT_VERSION} → v${latest}`,
+    });
+  }
+
   emit();
   return getVersionInfo();
 }

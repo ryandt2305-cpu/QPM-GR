@@ -39,8 +39,9 @@ import { areCatalogsReady } from '../catalogs/gameCatalogs';
 import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot, type Transaction } from '../store/economyTracker';
 import type { ShopCategoryKey } from '../store/stats';
 import { computeGardenValueFromCatalog } from '../features/valueCalculator';
-import { computeInventoryValue } from '../features/storageValue';
+import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue } from '../features/storageValue';
 import { onInventoryChange } from '../store/inventory';
+import { onActivePetInfos } from '../store/pets';
 import { debounceCancelable } from '../utils/debounce';
 import { toggleValueCard, isValueCardOpen, type ValueCardType } from './valueFloatingCard';
 import {
@@ -2107,24 +2108,33 @@ function buildEconomyTab(container: HTMLElement): () => void {
   content.style.cssText = 'flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:14px;';
   container.appendChild(content);
 
-  // Stable container for garden/inventory value chips — updated independently
+  // Stable container for garden/inventory/net-worth value chips — updated independently
   const gardenNumRef = { el: null as HTMLElement | null };
   const inventoryNumRef = { el: null as HTMLElement | null };
+  const netWorthNumRef = { el: null as HTMLElement | null };
 
   function updateAssetValues(): void {
+    const gardenVal = computeGardenValueFromCatalog(getGardenSnapshot());
+    const invVal = computeInventoryValue();
+    const storageVal = computeAllStoragesValue();
+    const petsVal = computeActivePetsValue();
     if (gardenNumRef.el) {
-      gardenNumRef.el.textContent = formatCoinsAbbreviated(computeGardenValueFromCatalog(getGardenSnapshot()));
+      gardenNumRef.el.textContent = formatCoinsAbbreviated(gardenVal);
     }
     if (inventoryNumRef.el) {
-      inventoryNumRef.el.textContent = formatCoinsAbbreviated(computeInventoryValue());
+      inventoryNumRef.el.textContent = formatCoinsAbbreviated(invVal);
+    }
+    if (netWorthNumRef.el) {
+      const coins = getEconomySnapshot().coins.balance;
+      netWorthNumRef.el.textContent = formatCoinsAbbreviated(coins + gardenVal + invVal + storageVal + petsVal);
     }
   }
 
-  const debouncedGardenUpdate = debounceCancelable(() => updateAssetValues(), 250);
-  const debouncedInventoryUpdate = debounceCancelable(() => updateAssetValues(), 250);
+  const debouncedAssetUpdate = debounceCancelable(() => updateAssetValues(), 250);
 
-  const unsubGarden = onGardenSnapshot(() => debouncedGardenUpdate(), false);
-  const unsubInventory = onInventoryChange(() => debouncedInventoryUpdate());
+  const unsubGarden = onGardenSnapshot(() => debouncedAssetUpdate(), false);
+  const unsubInventory = onInventoryChange(() => debouncedAssetUpdate());
+  const unsubPets = onActivePetInfos(() => debouncedAssetUpdate(), false);
 
   function render(snapshot: EconomySnapshot): void {
     content.innerHTML = '';
@@ -2166,6 +2176,20 @@ function buildEconomyTab(container: HTMLElement): () => void {
     );
     inventoryNumRef.el = invChip.querySelector('[data-value-num]');
     chips.appendChild(invChip);
+
+    // Net Worth chip (coins + garden + inventory + storages + active pets)
+    const gardenVal = computeGardenValueFromCatalog(getGardenSnapshot());
+    const invVal = computeInventoryValue();
+    const storageVal = computeAllStoragesValue();
+    const petsVal = computeActivePetsValue();
+    const netWorthVal = snapshot.coins.balance + gardenVal + invVal + storageVal + petsVal;
+    const nwChip = balanceChip(
+      formatCoinsAbbreviated(netWorthVal),
+      'Net Worth', 'coins', '#8f82ff',
+      null, true, 'netWorth',
+    );
+    netWorthNumRef.el = nwChip.querySelector('[data-value-num]');
+    chips.appendChild(nwChip);
 
     content.appendChild(chips);
 
@@ -2292,6 +2316,10 @@ function buildEconomyTab(container: HTMLElement): () => void {
     addRow('Garden', self.gardenValue, target.gardenValue, false);
     addRow('Inv.', self.inventoryValue, target.inventoryValue, false);
     addRow('Pets', self.petCount, target.petCount, true);
+    addRow('Worth',
+      self.coins + self.gardenValue + self.inventoryValue + self.storageValue + self.activePetsValue,
+      target.coins + target.gardenValue + target.inventoryValue + target.storageValue + target.activePetsValue,
+      false);
 
     parent.appendChild(grid);
   }
@@ -2452,8 +2480,8 @@ function buildEconomyTab(container: HTMLElement): () => void {
     unsub();
     unsubGarden();
     unsubInventory();
-    debouncedGardenUpdate.cancel();
-    debouncedInventoryUpdate.cancel();
+    unsubPets();
+    debouncedAssetUpdate.cancel();
     compareCleanups.forEach((fn) => fn());
     compareCleanups.length = 0;
   };

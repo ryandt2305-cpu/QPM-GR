@@ -267,6 +267,10 @@ function updateCardBody(body: HTMLElement, snap: RoomPlayersSnapshot): void {
   body.appendChild(buildComparisonRow('Garden', self.gardenValue, target.gardenValue, fmt));
   body.appendChild(buildComparisonRow('Inv.', self.inventoryValue, target.inventoryValue, fmt));
   body.appendChild(buildComparisonRow('Pets', self.petCount, target.petCount, fmtInt));
+  body.appendChild(buildComparisonRow('Worth',
+    self.coins + self.gardenValue + self.inventoryValue + self.storageValue + self.activePetsValue,
+    target.coins + target.gardenValue + target.inventoryValue + target.storageValue + target.activePetsValue,
+    fmt));
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
 import { getInventoryItems, onInventoryChange } from '../store/inventory';
+import { getActivePetInfos } from '../store/pets';
 import {
   getSeedPrice,
   getPlantSpecies,
@@ -240,6 +241,34 @@ export function computeInventoryValue(): number {
     }
   }
 
+  return total;
+}
+
+/**
+ * Total value of all items across all storage buildings (Seed Silo, Pet Hutch, Decor Shed).
+ * Requires `startStorageValue()` to have been called so that `cachedStorages` is populated.
+ */
+export function computeAllStoragesValue(): number {
+  let total = 0;
+  for (const s of cachedStorages) {
+    if (!s || typeof s !== 'object') continue;
+    const items = Array.isArray((s as Record<string, unknown>).items)
+      ? ((s as Record<string, unknown>).items as unknown[])
+      : [];
+    total += computeStorageItemsValue(items);
+  }
+  return total;
+}
+
+/**
+ * Total sell value of all active (placed) pets.
+ */
+export function computeActivePetsValue(): number {
+  let total = 0;
+  for (const pet of getActivePetInfos()) {
+    if (!pet.raw || typeof pet.raw !== 'object') continue;
+    total += computePetSellPrice(pet.raw as Record<string, unknown>);
+  }
   return total;
 }
 

@@ -2623,11 +2623,14 @@ export function openStatsHubWindow(): void {
   toggleWindow('stats-hub', '📊 Stats Hub', renderStatsHub, '920px', '85vh');
 }
 
+const STATS_HUB_ACTIVE_TAB_KEY = 'qpm.statsHub.activeTab.v1';
+
 export function renderStatsHub(root: HTMLElement): void {
   root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;';
 
   type TabId = 'garden' | 'economy';
-  let activeTab: TabId = 'garden';
+  const savedTab = storage.get<string>(STATS_HUB_ACTIVE_TAB_KEY, 'garden');
+  let activeTab: TabId = savedTab === 'economy' ? 'economy' : 'garden';
   let gardenCleanup: (() => void) | null = null;
   let economyCleanup: (() => void) | null = null;
 
@@ -2672,6 +2675,7 @@ export function renderStatsHub(root: HTMLElement): void {
 
   function setActiveTab(tab: TabId): void {
     activeTab = tab;
+    storage.set(STATS_HUB_ACTIVE_TAB_KEY, tab);
     tabContent.innerHTML = '';
     gardenCleanup?.(); gardenCleanup = null;
     economyCleanup?.(); economyCleanup = null;
@@ -2710,5 +2714,5 @@ export function renderStatsHub(root: HTMLElement): void {
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  setActiveTab('garden');
+  setActiveTab(activeTab);
 }

@@ -31,6 +31,17 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.66",
+    date: "2026-04",
+    notes: [
+      "Pet Teams: block selecting the same pet in multiple slots of one team",
+      "Pet Teams: auto-purge stale slots when a pet is sold or goes missing",
+      "Stats Hub: remember the last active tab (Garden/Economy) across refreshes",
+      "Panel: reposition upward when expanding near the bottom of the screen",
+      "Feeding: fix eligible food count incorrectly including favorited items when all food is favorited",
+    ],
+  },
+  {
     version: "3.1.65",
     date: "2026-04",
     notes: [

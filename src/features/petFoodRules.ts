@@ -842,7 +842,7 @@ export function evaluateFoodAvailabilityForPet(
   const countPredicate = context.respectRules
     ? (context.preferredNormalized ? ((normalized: string) => matchPreferred(normalized) || matchAllowed(normalized)) : matchAllowed)
     : (() => true);
-  const skipFavoritedForCount = context.avoidFavorited && !selected.usedFavoriteFallback;
+  const skipFavoritedForCount = context.avoidFavorited;
   const countItems = listMatchingFood(snapshot, skipFavoritedForCount, (normalized) => countPredicate(normalized));
 
   return {

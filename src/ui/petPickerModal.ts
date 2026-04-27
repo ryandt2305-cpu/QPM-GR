@@ -2111,6 +2111,8 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
       updateRightPanel(null);
       return;
     }
+    // Block selection of pets already assigned to another slot in this team
+    if (options.usedPetIds?.has(pet.id)) return;
     options.onSelect(pet.id);
     closePickerModal();
   }
@@ -2187,6 +2189,8 @@ export async function openPetPicker(options: OpenPickerOptions): Promise<void> {
       const card = renderPetCard(pet, () => handleCardClick(pet), onHover);
       if (inUse) {
         card.style.opacity = '0.45';
+        card.style.pointerEvents = 'none';
+        card.style.cursor = 'not-allowed';
         card.title = `[In use] ${card.title}`;
       }
       cardMap.set(pet.id, card);

@@ -33,6 +33,8 @@ let config: PetTeamsConfig = { ...DEFAULT_CONFIG };
 let feedPolicy: PetFeedPolicy = { ...DEFAULT_FEED_POLICY };
 const configListeners = new Set<(cfg: PetTeamsConfig) => void>();
 let activePetsUnsubscribe: (() => void) | null = null;
+let purgeUnsubscribe: (() => void) | null = null;
+let purgeTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---------------------------------------------------------------------------
 // Init / stop
@@ -111,12 +113,28 @@ export function initPetTeamsStore(): void {
     }
   });
 
+  // Debounced purge of stale pet references (sold/missing pets)
+  purgeUnsubscribe = onActivePetInfos(() => {
+    if (purgeTimer) clearTimeout(purgeTimer);
+    purgeTimer = setTimeout(async () => {
+      purgeTimer = null;
+      try {
+        const pool = await getAllPooledPets();
+        const validIds = new Set(pool.map(p => p.id));
+        purgeGonePets(validIds);
+      } catch { /* ignore */ }
+    }, 3000);
+  }, false);
+
   log(`[PetTeams] Store initialized - ${config.teams.length} teams`);
 }
 
 export function stopPetTeamsStore(): void {
   activePetsUnsubscribe?.();
   activePetsUnsubscribe = null;
+  purgeUnsubscribe?.();
+  purgeUnsubscribe = null;
+  if (purgeTimer) { clearTimeout(purgeTimer); purgeTimer = null; }
   configListeners.clear();
 }
 
@@ -262,6 +280,28 @@ export function setTeamSlot(teamId: string, slotIndex: 0 | 1 | 2, petItemId: str
 
 export function clearTeamSlot(teamId: string, slotIndex: 0 | 1 | 2): void {
   setTeamSlot(teamId, slotIndex, null);
+}
+
+// ---------------------------------------------------------------------------
+// Stale slot purge (sold / missing pets)
+// ---------------------------------------------------------------------------
+
+export function purgeGonePets(validIds: Set<string>): number {
+  let cleared = 0;
+  for (const team of config.teams) {
+    for (let i = 0; i < 3; i++) {
+      const slotId = team.slots[i];
+      if (slotId && !validIds.has(slotId)) {
+        team.slots[i] = null;
+        cleared++;
+      }
+    }
+  }
+  if (cleared > 0) {
+    saveConfig();
+    log(`[PetTeams] Purged ${cleared} stale slot(s)`);
+  }
+  return cleared;
 }
 
 // ---------------------------------------------------------------------------

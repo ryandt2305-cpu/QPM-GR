@@ -687,6 +687,10 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     collapseIcon.textContent = collapsed ? '▲' : '▼';
     collapseButton.setAttribute('aria-expanded', String(!collapsed));
     storage.set(PANEL_COLLAPSED_KEY, collapsed);
+    // After expanding, reposition panel to stay within viewport
+    if (!collapsed) {
+      requestAnimationFrame(() => clampPanelPosition());
+    }
   };
 
   collapseButton.addEventListener('pointerdown', (event) => {

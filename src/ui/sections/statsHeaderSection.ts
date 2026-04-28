@@ -31,6 +31,20 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.70",
+    date: "2026-04",
+    notes: [
+      "All value displays now use the live friend/room bonus instead of hardcoded 1.5x",
+      "Sell price rounding now matches the game (two-step: base price rounded, then friend bonus applied)",
+      "Fixed inventory value in player compare showing seed cost instead of sell price for produce",
+      "Player compare Inv. row now includes storage value",
+      "Garden, inventory, and net worth chips show expandable top-10 most valuable items",
+      "Net worth now includes storage building prices, placed decor/eggs, and growing crops (seed cost)",
+      "Fixed top-10 dropdown not showing storage items (timing + missing seed/decor handling)",
+      "Seeds in top-10 show seed sprite and label with quantity (e.g. Sunflower Seeds x100)",
+    ],
+  },
+  {
     version: "3.1.68",
     date: "2026-04",
     notes: [

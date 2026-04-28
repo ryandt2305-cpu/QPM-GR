@@ -17,6 +17,7 @@ import { formatCoins } from '../utils/formatters';
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import { getFriendBonusMultiplier, onFriendBonusChange } from '../store/friendBonus';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -108,7 +109,8 @@ function calculateSellPrice(species: string, scale: number, mutations: string[])
   if (typeof baseSellPrice !== 'number' || baseSellPrice <= 0) return null;
 
   const { totalMultiplier } = computeMutationMultiplier(mutations);
-  return Math.round(baseSellPrice * scale * totalMultiplier);
+  const basePrice = Math.round(baseSellPrice * scale * totalMultiplier);
+  return Math.round(basePrice * getFriendBonusMultiplier());
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +474,10 @@ function startTileValueIndicator(): void {
 
   // Subscribe to garden object + selected slot ID atoms
   startAtomSubscriptions().catch(() => {});
+
+  // Re-render when friend bonus changes
+  const unsubBonus = onFriendBonusChange(() => reinjectAllTooltips());
+  cleanups.push(unsubBonus);
 
   // Watch for tooltip DOM
   const addedHandle = onAdded(TOOLTIP_SELECTOR, attachTooltipWatcher);

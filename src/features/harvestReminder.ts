@@ -15,6 +15,7 @@ import { lookupMaxScale } from '../utils/plantScales';
 import { normalizeSpeciesKey } from '../utils/helpers';
 import { onWeatherSnapshot, startWeatherHub, WeatherSnapshot } from '../store/weatherHub';
 import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
+import { getFriendBonusMultiplier } from '../store/friendBonus';
 
 declare global {
   interface Window {
@@ -106,7 +107,6 @@ const MUTATION_RULES: Record<HarvestMutationKey, HarvestMutationRule> = {
   },
 };
 
-const FRIEND_BONUS = 1.5;
 const DEFAULT_MIN_SIZE = 80;
 const DEFAULT_MUTATIONS: Record<HarvestMutationKey, boolean> = {
   Rainbow: true,
@@ -147,7 +147,7 @@ let summary: HarvestSummary = {
   mutatedCount: 0,
   totalValue: 0,
   highestValue: null,
-  friendBonus: FRIEND_BONUS,
+  friendBonus: getFriendBonusMultiplier(),
 };
 
 let snapshotUnsubscribe: (() => void) | null = null;
@@ -436,7 +436,7 @@ function collectMatches(snapshot: GardenSnapshot | null, required: HarvestMutati
       const multiplier = computeMutationMultiplier(mutations);
       const unknownMutations = mutations.filter((mutation) => !normalizeMutationName(mutation));
 
-      const value = calculatePlantValue(species, scale, mutations, FRIEND_BONUS);
+      const value = calculatePlantValue(species, scale, mutations, getFriendBonusMultiplier());
       const key = `${tileId}:${slotIndex}`;
 
       matches.push({ key, tileId, slotIndex, species, mutations, size, value, multiplier, unknownMutations });
@@ -484,7 +484,7 @@ function setSummary(matches: HarvestMatch[]): void {
       mutatedCount: 0,
       totalValue: 0,
       highestValue: null,
-      friendBonus: FRIEND_BONUS,
+      friendBonus: getFriendBonusMultiplier(),
     };
   } else {
     const top = matches[0]!;
@@ -502,7 +502,7 @@ function setSummary(matches: HarvestMatch[]): void {
         totalMultiplierText: formatMultiplierValue(top.multiplier.totalMultiplier),
         unknownMutations: top.unknownMutations,
       },
-      friendBonus: FRIEND_BONUS,
+      friendBonus: getFriendBonusMultiplier(),
     };
   }
   notifySummaryListeners();
@@ -680,7 +680,7 @@ function resetCycle(): void {
     mutatedCount: 0,
     totalValue: 0,
     highestValue: null,
-    friendBonus: FRIEND_BONUS,
+    friendBonus: getFriendBonusMultiplier(),
   };
   notifySummaryListeners();
   resetHighlights();

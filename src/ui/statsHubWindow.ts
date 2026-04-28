@@ -39,11 +39,14 @@ import { areCatalogsReady } from '../catalogs/gameCatalogs';
 import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot, type Transaction } from '../store/economyTracker';
 import type { ShopCategoryKey } from '../store/stats';
 import { computeGardenValueFromCatalog } from '../features/valueCalculator';
-import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue } from '../features/storageValue';
-import { onInventoryChange } from '../store/inventory';
-import { onActivePetInfos } from '../store/pets';
+import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue, computePlacedDecorAndEggValue, computeGrowingCropsValue, onStorageDataChange } from '../features/storageValue';
+import { onInventoryChange, getInventoryItems } from '../store/inventory';
+import { onActivePetInfos, getActivePetInfos } from '../store/pets';
 import { debounceCancelable } from '../utils/debounce';
 import { toggleValueCard, isValueCardOpen, type ValueCardType } from './valueFloatingCard';
+import { getFriendBonusMultiplier, onFriendBonusChange } from '../store/friendBonus';
+import { getTopGardenItems, getTopInventoryItems, getTopNetWorthItems, type TopValueItem } from '../features/topValueItems';
+import { getCachedStorages } from '../features/storageValue';
 import {
   startRoomPlayerEconomy,
   getRoomPlayersSnapshot,
@@ -2114,10 +2117,14 @@ function buildEconomyTab(container: HTMLElement): () => void {
   const netWorthNumRef = { el: null as HTMLElement | null };
 
   function updateAssetValues(): void {
-    const gardenVal = computeGardenValueFromCatalog(getGardenSnapshot());
-    const invVal = computeInventoryValue();
-    const storageVal = computeAllStoragesValue();
-    const petsVal = computeActivePetsValue();
+    const fb = getFriendBonusMultiplier();
+    const snap = getGardenSnapshot();
+    const gardenVal = computeGardenValueFromCatalog(snap, fb);
+    const growingVal = computeGrowingCropsValue(snap);
+    const invVal = computeInventoryValue(fb);
+    const storageVal = computeAllStoragesValue(fb);
+    const petsVal = computeActivePetsValue(fb);
+    const placedDecorVal = computePlacedDecorAndEggValue(snap);
     if (gardenNumRef.el) {
       gardenNumRef.el.textContent = formatCoinsAbbreviated(gardenVal);
     }
@@ -2126,7 +2133,7 @@ function buildEconomyTab(container: HTMLElement): () => void {
     }
     if (netWorthNumRef.el) {
       const coins = getEconomySnapshot().coins.balance;
-      netWorthNumRef.el.textContent = formatCoinsAbbreviated(coins + gardenVal + invVal + storageVal + petsVal);
+      netWorthNumRef.el.textContent = formatCoinsAbbreviated(coins + gardenVal + growingVal + invVal + storageVal + petsVal + placedDecorVal);
     }
   }
 
@@ -2135,6 +2142,8 @@ function buildEconomyTab(container: HTMLElement): () => void {
   const unsubGarden = onGardenSnapshot(() => debouncedAssetUpdate(), false);
   const unsubInventory = onInventoryChange(() => debouncedAssetUpdate());
   const unsubPets = onActivePetInfos(() => debouncedAssetUpdate(), false);
+  const unsubFriendBonus = onFriendBonusChange(() => debouncedAssetUpdate());
+  const unsubStorage = onStorageDataChange(() => debouncedAssetUpdate());
 
   function render(snapshot: EconomySnapshot): void {
     content.innerHTML = '';
@@ -2160,8 +2169,9 @@ function buildEconomyTab(container: HTMLElement): () => void {
     ));
 
     // Garden value chip
+    const fb = getFriendBonusMultiplier();
     const gardenChip = balanceChip(
-      formatCoinsAbbreviated(computeGardenValueFromCatalog(getGardenSnapshot())),
+      formatCoinsAbbreviated(computeGardenValueFromCatalog(getGardenSnapshot(), fb)),
       'Garden', 'coins', '#ffd600',
       null, true, 'garden',
     );
@@ -2170,19 +2180,22 @@ function buildEconomyTab(container: HTMLElement): () => void {
 
     // Inventory value chip
     const invChip = balanceChip(
-      formatCoinsAbbreviated(computeInventoryValue()),
+      formatCoinsAbbreviated(computeInventoryValue(fb)),
       'Inventory', 'coins', '#ffd600',
       null, true, 'inventory',
     );
     inventoryNumRef.el = invChip.querySelector('[data-value-num]');
     chips.appendChild(invChip);
 
-    // Net Worth chip (coins + garden + inventory + storages + active pets)
-    const gardenVal = computeGardenValueFromCatalog(getGardenSnapshot());
-    const invVal = computeInventoryValue();
-    const storageVal = computeAllStoragesValue();
-    const petsVal = computeActivePetsValue();
-    const netWorthVal = snapshot.coins.balance + gardenVal + invVal + storageVal + petsVal;
+    // Net Worth chip (coins + garden + growing + inventory + storages + active pets + placed decor/eggs)
+    const initSnap = getGardenSnapshot();
+    const gardenVal = computeGardenValueFromCatalog(initSnap, fb);
+    const growingVal = computeGrowingCropsValue(initSnap);
+    const invVal = computeInventoryValue(fb);
+    const storageVal = computeAllStoragesValue(fb);
+    const petsVal = computeActivePetsValue(fb);
+    const placedDecorVal = computePlacedDecorAndEggValue(initSnap);
+    const netWorthVal = snapshot.coins.balance + gardenVal + growingVal + invVal + storageVal + petsVal + placedDecorVal;
     const nwChip = balanceChip(
       formatCoinsAbbreviated(netWorthVal),
       'Net Worth', 'coins', '#8f82ff',
@@ -2192,6 +2205,28 @@ function buildEconomyTab(container: HTMLElement): () => void {
     chips.appendChild(nwChip);
 
     content.appendChild(chips);
+
+    // --- Top-10 overlay dropdowns on Garden, Inventory, and Net Worth chips ---
+    const gardenDd = embedTopDropdown(gardenChip);
+    const invDd = embedTopDropdown(invChip);
+    const nwDd = embedTopDropdown(nwChip);
+
+    function refreshDropdowns(): void {
+      const fb2 = getFriendBonusMultiplier();
+      gardenDd.update(getTopGardenItems(getGardenSnapshot(), fb2));
+      invDd.update(getTopInventoryItems(getInventoryItems(), fb2));
+      nwDd.update(getTopNetWorthItems(
+        getGardenSnapshot(), getInventoryItems(), getCachedStorages(), getActivePetInfos(), fb2,
+      ));
+    }
+    refreshDropdowns();
+    const debouncedDropdownRefresh = debounceCancelable(refreshDropdowns, 300);
+    const unsubDropdownGarden = onGardenSnapshot(() => debouncedDropdownRefresh(), false);
+    const unsubDropdownInv = onInventoryChange(() => debouncedDropdownRefresh());
+    const unsubDropdownPets = onActivePetInfos(() => debouncedDropdownRefresh(), false);
+    const unsubDropdownBonus = onFriendBonusChange(() => debouncedDropdownRefresh());
+    const unsubDropdownStorage = onStorageDataChange(() => debouncedDropdownRefresh());
+    compareCleanups.push(unsubDropdownGarden, unsubDropdownInv, unsubDropdownPets, unsubDropdownBonus, unsubDropdownStorage, debouncedDropdownRefresh.cancel, gardenDd.destroy, invDd.destroy, nwDd.destroy);
 
     // --- Spending ---
     const totalData = snapshot.spending.total;
@@ -2314,11 +2349,11 @@ function buildEconomyTab(container: HTMLElement): () => void {
 
     addRow('Coins', self.coins, target.coins, false);
     addRow('Garden', self.gardenValue, target.gardenValue, false);
-    addRow('Inv.', self.inventoryValue, target.inventoryValue, false);
+    addRow('Inv.', self.inventoryValue + self.storageValue, target.inventoryValue + target.storageValue, false);
     addRow('Pets', self.petCount, target.petCount, true);
     addRow('Worth',
-      self.coins + self.gardenValue + self.inventoryValue + self.storageValue + self.activePetsValue,
-      target.coins + target.gardenValue + target.inventoryValue + target.storageValue + target.activePetsValue,
+      self.coins + self.gardenValue + self.growingCropsValue + self.placedDecorValue + self.inventoryValue + self.storageValue + self.activePetsValue,
+      target.coins + target.gardenValue + target.growingCropsValue + target.placedDecorValue + target.inventoryValue + target.storageValue + target.activePetsValue,
       false);
 
     parent.appendChild(grid);
@@ -2399,7 +2434,7 @@ function buildEconomyTab(container: HTMLElement): () => void {
     const select = document.createElement('select');
     select.style.cssText = [
       'flex:1',
-      'background:rgba(255,255,255,0.06)',
+      'background:rgba(18,20,26,0.95)',
       'border:1px solid rgba(143,130,255,0.25)',
       'border-radius:6px',
       'color:#e0e0e0',
@@ -2407,6 +2442,8 @@ function buildEconomyTab(container: HTMLElement): () => void {
       'padding:5px 8px',
       'outline:none',
       'cursor:pointer',
+      'appearance:auto',
+      'color-scheme:dark',
     ].join(';');
     compareSelectRef.el = select;
 
@@ -2481,10 +2518,155 @@ function buildEconomyTab(container: HTMLElement): () => void {
     unsubGarden();
     unsubInventory();
     unsubPets();
+    unsubFriendBonus();
+    unsubStorage();
     debouncedAssetUpdate.cancel();
     compareCleanups.forEach((fn) => fn());
     compareCleanups.length = 0;
   };
+}
+
+/** Embed a top-10 overlay dropdown button into a balance chip */
+function embedTopDropdown(chip: HTMLElement): { update: (items: TopValueItem[]) => void; destroy: () => void } {
+  let overlayEl: HTMLElement | null = null;
+  let outsideHandler: ((ev: MouseEvent) => void) | null = null;
+  let cachedItems: TopValueItem[] = [];
+
+  // Toggle arrow button — insert before the pop-out button
+  const arrow = document.createElement('button');
+  arrow.type = 'button';
+  arrow.title = 'Top items';
+  arrow.style.cssText = 'background:none;border:none;color:rgba(224,224,255,0.35);font-size:10px;cursor:pointer;padding:0 2px;flex-shrink:0;transition:color 0.12s,transform 0.15s;line-height:1;';
+  arrow.textContent = '\u25BE';
+  const popBtn = chip.querySelector('button[title^="Pop out"]');
+  if (popBtn) chip.insertBefore(arrow, popBtn);
+  else chip.appendChild(arrow);
+
+  function closeOverlay(): void {
+    overlayEl?.remove();
+    overlayEl = null;
+    if (outsideHandler) {
+      document.removeEventListener('click', outsideHandler, true);
+      outsideHandler = null;
+    }
+    arrow.style.transform = '';
+    arrow.style.color = 'rgba(224,224,255,0.35)';
+  }
+
+  function openOverlay(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'z-index:99998',
+      'background:rgba(14,16,22,0.98)',
+      'border:1px solid rgba(143,130,255,0.35)',
+      'border-radius:8px', 'padding:6px 8px',
+      'min-width:180px', 'max-width:240px',
+      'max-height:260px', 'overflow-y:auto',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.7)',
+      'display:flex', 'flex-direction:column', 'gap:2px',
+    ].join(';');
+
+    if (cachedItems.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:10px;color:rgba(224,224,255,0.3);padding:2px 0;';
+      empty.textContent = 'No items';
+      overlay.appendChild(empty);
+    } else {
+      for (const item of cachedItems) overlay.appendChild(topValueRow(item));
+    }
+
+    document.body.appendChild(overlay);
+    overlayEl = overlay;
+
+    const r = chip.getBoundingClientRect();
+    overlay.style.top = `${r.bottom + 4}px`;
+    overlay.style.left = `${r.left}px`;
+
+    arrow.style.transform = 'rotate(180deg)';
+    arrow.style.color = 'rgba(224,224,255,0.6)';
+
+    outsideHandler = (ev: MouseEvent) => {
+      if (!overlay.contains(ev.target as Node) && ev.target !== arrow) {
+        closeOverlay();
+      }
+    };
+    setTimeout(() => document.addEventListener('click', outsideHandler!, true), 0);
+  }
+
+  arrow.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (overlayEl) closeOverlay();
+    else openOverlay();
+  });
+
+  function update(items: TopValueItem[]): void {
+    cachedItems = items;
+    // If overlay is open, rebuild its content
+    if (overlayEl) {
+      overlayEl.innerHTML = '';
+      if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:10px;color:rgba(224,224,255,0.3);padding:2px 0;';
+        empty.textContent = 'No items';
+        overlayEl.appendChild(empty);
+      } else {
+        for (const item of items) overlayEl.appendChild(topValueRow(item));
+      }
+    }
+  }
+
+  function destroy(): void {
+    closeOverlay();
+    arrow.remove();
+  }
+
+  return { update, destroy };
+}
+
+/** Single row in the top-10 dropdown */
+function topValueRow(item: TopValueItem): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:5px;height:20px;padding:0 4px;';
+
+  // Sprite
+  const img = document.createElement('img');
+  img.width = 18;
+  img.height = 18;
+  img.style.cssText = 'image-rendering:pixelated;flex-shrink:0;';
+  img.draggable = false;
+
+  if (item.isPet) {
+    const url = getPetSpriteDataUrl(item.species) || getAnySpriteDataUrl(`sprite/pet/${item.species}`) || '';
+    img.src = url;
+  } else if (item.isSeed) {
+    const url = getCropSpriteDataUrl(item.species) || '';
+    img.src = url;
+  } else {
+    const url = getProduceSpriteDataUrlWithMutations(item.species, item.mutations) || getCropSpriteDataUrl(item.species) || '';
+    img.src = url;
+  }
+  if (img.src) {
+    row.appendChild(img);
+  }
+
+  // Species name
+  const name = document.createElement('span');
+  name.style.cssText = 'flex:1;font-size:10px;color:rgba(224,224,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  let label = item.species;
+  if (item.isSeed) {
+    label += ' Seeds';
+    if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
+  }
+  name.textContent = label;
+  row.appendChild(name);
+
+  // Value
+  const val = document.createElement('span');
+  val.style.cssText = 'font-size:10px;font-weight:700;color:#ffd600;white-space:nowrap;';
+  val.textContent = formatCoinsAbbreviated(item.value);
+  row.appendChild(val);
+
+  return row;
 }
 
 /** Balance chip — currency sprite + value + label + optional rate + pop-out button */

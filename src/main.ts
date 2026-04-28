@@ -1391,6 +1391,8 @@ async function initialize(): Promise<void> {
   // Phase 1: Critical stores that other features depend on
   initializeStatsStore();
   initializePetXpTracker();
+  const { startFriendBonusStore } = await import('./store/friendBonus');
+  startFriendBonusStore();
   await yieldToBrowser(); // Let browser paint
 
   // Phase 2: XP tracking and inventory

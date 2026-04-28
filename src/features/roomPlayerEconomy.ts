@@ -5,9 +5,11 @@
 
 import { getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
 import { computeGardenValueFromCatalog } from './valueCalculator';
-import { computeStorageItemsValue, computePetSellPrice } from './storageValue';
+import { computeStorageItemsValue, computePetSellPrice, computePlacedDecorAndEggValue, computeGrowingCropsValue } from './storageValue';
+import { getDecor } from '../catalogs/gameCatalogs';
 import { debounceCancelable } from '../utils/debounce';
 import { createLogger } from '../utils/logger';
+import { getFriendBonusMultiplier } from '../store/friendBonus';
 
 const log = createLogger('QPM:RoomPlayerEcon');
 
@@ -20,6 +22,8 @@ export interface RoomPlayerEconomy {
   displayName: string;
   coins: number;
   gardenValue: number;
+  growingCropsValue: number;
+  placedDecorValue: number;
   inventoryValue: number;
   storageValue: number;
   activePetsValue: number;
@@ -97,27 +101,39 @@ function extractSlotEconomy(
 
   // Coins
   const coins = typeof data.coinsCount === 'number' ? data.coinsCount : 0;
+  const fb = getFriendBonusMultiplier();
 
   // Garden value — data.garden has { tileObjects, boardwalkTileObjects }
   const garden = isRecord(data.garden) ? data.garden : null;
-  const gardenValue = garden
-    ? computeGardenValueFromCatalog(garden as { tileObjects?: Record<string, unknown>; boardwalkTileObjects?: Record<string, unknown> })
+  const gardenSnap = garden as { tileObjects?: Record<string, unknown>; boardwalkTileObjects?: Record<string, unknown> } | null;
+  const gardenValue = gardenSnap
+    ? computeGardenValueFromCatalog(gardenSnap, fb)
     : 0;
+
+  // Placed decor/egg value + growing crops value (from garden tiles)
+  const placedDecorValue = gardenSnap ? computePlacedDecorAndEggValue(gardenSnap) : 0;
+  const growingCropsValue = gardenSnap ? computeGrowingCropsValue(gardenSnap) : 0;
 
   // Inventory value — data.inventory.items
   const inventory = isRecord(data.inventory) ? data.inventory : null;
   const invItems = Array.isArray(inventory?.items) ? (inventory!.items as unknown[]) : [];
-  const inventoryValue = computeStorageItemsValue(invItems);
+  const inventoryValue = computeStorageItemsValue(invItems, fb);
 
-  // Storage buildings value (Seed Silo, Pet Hutch, Decor Shed)
+  // Storage buildings value (Seed Silo, Pet Hutch, Decor Shed) — building price + contents
   const storages = Array.isArray(inventory?.storages) ? (inventory!.storages as unknown[]) : [];
   let storageValueTotal = 0;
   for (const s of storages) {
     if (!s || typeof s !== 'object') continue;
-    const storageItems = Array.isArray((s as Record<string, unknown>).items)
-      ? ((s as Record<string, unknown>).items as unknown[])
-      : [];
-    storageValueTotal += computeStorageItemsValue(storageItems);
+    const rec = s as Record<string, unknown>;
+    // Building's own purchase price
+    const decorId = typeof rec.decorId === 'string' ? rec.decorId : '';
+    if (decorId) {
+      const entry = getDecor(decorId);
+      if (entry) storageValueTotal += entry.coinPrice ?? 0;
+    }
+    // Items inside
+    const storageItems = Array.isArray(rec.items) ? (rec.items as unknown[]) : [];
+    storageValueTotal += computeStorageItemsValue(storageItems, fb);
   }
 
   // Active pets — count + sell value
@@ -126,7 +142,7 @@ function extractSlotEconomy(
   let activePetsValueTotal = 0;
   for (const ps of petSlots) {
     if (!ps || typeof ps !== 'object') continue;
-    activePetsValueTotal += computePetSellPrice(ps as Record<string, unknown>);
+    activePetsValueTotal += computePetSellPrice(ps as Record<string, unknown>, fb);
   }
 
   let inventoryPets = 0;
@@ -157,8 +173,8 @@ function extractSlotEconomy(
   const displayName = playerNameMap.get(playerId) ?? `Player ${playerId.slice(0, 6)}`;
 
   return {
-    playerId, displayName, coins, gardenValue, inventoryValue,
-    storageValue: storageValueTotal, activePetsValue: activePetsValueTotal,
+    playerId, displayName, coins, gardenValue, growingCropsValue, placedDecorValue,
+    inventoryValue, storageValue: storageValueTotal, activePetsValue: activePetsValueTotal,
     petCount, slotIndex,
   };
 }

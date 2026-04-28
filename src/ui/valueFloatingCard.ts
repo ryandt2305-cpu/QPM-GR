@@ -7,10 +7,14 @@ import { onGardenSnapshot, getGardenSnapshot } from '../features/gardenBridge';
 import { onInventoryChange } from '../store/inventory';
 import { onActivePetInfos } from '../store/pets';
 import { computeGardenValueFromCatalog, formatCoinsAbbreviated } from '../features/valueCalculator';
-import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue } from '../features/storageValue';
-import { getAnySpriteDataUrl, getCropSpriteDataUrl, getProduceSpriteDataUrl } from '../sprite-v2/compat';
+import { computeInventoryValue, computeAllStoragesValue, computeActivePetsValue, computePlacedDecorAndEggValue, computeGrowingCropsValue, getCachedStorages, onStorageDataChange } from '../features/storageValue';
+import { getAnySpriteDataUrl, getCropSpriteDataUrl, getProduceSpriteDataUrl, getProduceSpriteDataUrlWithMutations, getPetSpriteDataUrl } from '../sprite-v2/compat';
+import { getTopGardenItems, getTopInventoryItems, getTopNetWorthItems, type TopValueItem } from '../features/topValueItems';
+import { getInventoryItems } from '../store/inventory';
+import { getActivePetInfos } from '../store/pets';
 import { debounceCancelable } from '../utils/debounce';
 import { subscribeEconomy, getEconomySnapshot, type EconomySnapshot } from '../store/economyTracker';
+import { getFriendBonusMultiplier, onFriendBonusChange } from '../store/friendBonus';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -277,6 +281,44 @@ function overlappingIcons(urls: string[], size: number): HTMLElement {
   return wrap;
 }
 
+/** Single row in floating card top-10 list */
+function floatingTopRow(item: TopValueItem): HTMLElement {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:5px;height:20px;';
+
+  const img = document.createElement('img');
+  img.width = 18;
+  img.height = 18;
+  img.style.cssText = 'image-rendering:pixelated;flex-shrink:0;';
+  img.draggable = false;
+
+  if (item.isPet) {
+    img.src = getPetSpriteDataUrl(item.species) || getAnySpriteDataUrl(`sprite/pet/${item.species}`) || '';
+  } else if (item.isSeed) {
+    img.src = getCropSpriteDataUrl(item.species) || '';
+  } else {
+    img.src = getProduceSpriteDataUrlWithMutations(item.species, item.mutations) || getCropSpriteDataUrl(item.species) || '';
+  }
+  if (img.src) row.appendChild(img);
+
+  const name = document.createElement('span');
+  name.style.cssText = 'flex:1;font-size:10px;color:rgba(224,224,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  let label = item.species;
+  if (item.isSeed) {
+    label += ' Seeds';
+    if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
+  }
+  name.textContent = label;
+  row.appendChild(name);
+
+  const val = document.createElement('span');
+  val.style.cssText = 'font-size:10px;font-weight:700;color:#ffd600;white-space:nowrap;';
+  val.textContent = formatCoinsAbbreviated(item.value);
+  row.appendChild(val);
+
+  return row;
+}
+
 /** Build a sprite icon element for the floating card body. */
 function buildCardIcon(type: ValueCardType, size: number): HTMLElement {
   if (type === 'garden') {
@@ -393,12 +435,106 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
 
   body.appendChild(textCol);
   card.appendChild(body);
+
+  // Top-10 overlay dropdown for garden, inventory, and netWorth cards
+  let topOverlay: { el: HTMLElement | null; cached: TopValueItem[]; outsideHandler: ((ev: MouseEvent) => void) | null } | null = null;
+  if (type === 'garden' || type === 'inventory' || type === 'netWorth') {
+    topOverlay = { el: null, cached: [], outsideHandler: null };
+
+    // Add toggle arrow to header (before close button)
+    const topArrow = document.createElement('button');
+    topArrow.type = 'button';
+    topArrow.title = 'Top items';
+    topArrow.style.cssText = 'background:none;border:none;color:rgba(224,224,255,0.35);font-size:10px;cursor:pointer;padding:0 2px;flex-shrink:0;transition:color 0.12s,transform 0.15s;line-height:1;';
+    topArrow.textContent = '\u25BE';
+    header.insertBefore(topArrow, closeBtn);
+
+    function closeTopOverlay(): void {
+      if (!topOverlay) return;
+      topOverlay.el?.remove();
+      topOverlay.el = null;
+      if (topOverlay.outsideHandler) {
+        document.removeEventListener('click', topOverlay.outsideHandler, true);
+        topOverlay.outsideHandler = null;
+      }
+      topArrow.style.transform = '';
+      topArrow.style.color = 'rgba(224,224,255,0.35)';
+    }
+
+    function openTopOverlay(): void {
+      if (!topOverlay) return;
+      const overlay = document.createElement('div');
+      overlay.style.cssText = [
+        'position:fixed', 'z-index:999991',
+        'background:rgba(14,16,22,0.98)',
+        'border:1px solid rgba(143,130,255,0.35)',
+        'border-radius:8px', 'padding:6px 8px',
+        'min-width:180px', 'max-width:220px',
+        'max-height:260px', 'overflow-y:auto',
+        'box-shadow:0 8px 32px rgba(0,0,0,0.7)',
+        'display:flex', 'flex-direction:column', 'gap:2px',
+      ].join(';');
+
+      if (topOverlay.cached.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:10px;color:rgba(224,224,255,0.3);padding:2px 0;';
+        empty.textContent = 'No items';
+        overlay.appendChild(empty);
+      } else {
+        for (const item of topOverlay.cached) overlay.appendChild(floatingTopRow(item));
+      }
+
+      document.body.appendChild(overlay);
+      topOverlay.el = overlay;
+
+      const r = card.getBoundingClientRect();
+      overlay.style.top = `${r.bottom + 4}px`;
+      overlay.style.left = `${r.left}px`;
+
+      topArrow.style.transform = 'rotate(180deg)';
+      topArrow.style.color = 'rgba(224,224,255,0.6)';
+
+      const handler = (ev: MouseEvent) => {
+        if (!overlay.contains(ev.target as Node) && ev.target !== topArrow) {
+          closeTopOverlay();
+        }
+      };
+      topOverlay.outsideHandler = handler;
+      setTimeout(() => document.addEventListener('click', handler, true), 0);
+    }
+
+    topArrow.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (topOverlay?.el) closeTopOverlay();
+      else openTopOverlay();
+    });
+
+    cleanups.push(() => closeTopOverlay());
+  }
+
   document.body.appendChild(card);
 
   let destroyed = false;
 
   function updateAmount(value: number): void {
     amountEl.textContent = formatCoinsAbbreviated(value);
+  }
+
+  function updateTopItems(items: TopValueItem[]): void {
+    if (!topOverlay) return;
+    topOverlay.cached = items;
+    // If overlay is open, rebuild its content
+    if (topOverlay.el) {
+      topOverlay.el.innerHTML = '';
+      if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:10px;color:rgba(224,224,255,0.3);padding:2px 0;';
+        empty.textContent = 'No items';
+        topOverlay.el.appendChild(empty);
+      } else {
+        for (const item of items) topOverlay.el.appendChild(floatingTopRow(item));
+      }
+    }
   }
 
   function updateRate(rate: number | null): void {
@@ -433,43 +569,68 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
   } else if (type === 'garden') {
     const debouncedUpdate = debounceCancelable(() => {
       if (destroyed) return;
-      updateAmount(computeGardenValueFromCatalog(getGardenSnapshot()));
+      const fb = getFriendBonusMultiplier();
+      updateAmount(computeGardenValueFromCatalog(getGardenSnapshot(), fb));
+      updateTopItems(getTopGardenItems(getGardenSnapshot(), fb));
     }, 200);
     cleanups.push(debouncedUpdate.cancel);
 
-    const unsub = onGardenSnapshot(() => debouncedUpdate(), false);
-    cleanups.push(unsub);
-    updateAmount(computeGardenValueFromCatalog(getGardenSnapshot()));
+    cleanups.push(onGardenSnapshot(() => debouncedUpdate(), false));
+    cleanups.push(onFriendBonusChange(() => debouncedUpdate()));
+    const fbInit = getFriendBonusMultiplier();
+    updateAmount(computeGardenValueFromCatalog(getGardenSnapshot(), fbInit));
+    updateTopItems(getTopGardenItems(getGardenSnapshot(), fbInit));
   } else if (type === 'netWorth') {
     function computeNetWorth(): number {
+      const fb = getFriendBonusMultiplier();
+      const snap = getGardenSnapshot();
       return getEconomySnapshot().coins.balance
-        + computeGardenValueFromCatalog(getGardenSnapshot())
-        + computeInventoryValue()
-        + computeAllStoragesValue()
-        + computeActivePetsValue();
+        + computeGardenValueFromCatalog(snap, fb)
+        + computeGrowingCropsValue(snap)
+        + computeInventoryValue(fb)
+        + computeAllStoragesValue(fb)
+        + computeActivePetsValue(fb)
+        + computePlacedDecorAndEggValue(snap);
     }
     const debouncedUpdate = debounceCancelable(() => {
       if (destroyed) return;
       updateAmount(computeNetWorth());
+      const fb = getFriendBonusMultiplier();
+      updateTopItems(getTopNetWorthItems(
+        getGardenSnapshot(), getInventoryItems(), getCachedStorages(), getActivePetInfos(), fb,
+      ));
     }, 200);
     cleanups.push(debouncedUpdate.cancel);
 
-    // React to coins, garden, inventory, and pet changes
+    // React to coins, garden, inventory, pet, storage, and friend bonus changes
     cleanups.push(subscribeEconomy(() => debouncedUpdate()));
     cleanups.push(onGardenSnapshot(() => debouncedUpdate(), false));
     cleanups.push(onInventoryChange(() => debouncedUpdate()));
     cleanups.push(onActivePetInfos(() => debouncedUpdate()));
+    cleanups.push(onFriendBonusChange(() => debouncedUpdate()));
+    cleanups.push(onStorageDataChange(() => debouncedUpdate()));
     updateAmount(computeNetWorth());
+    {
+      const fb = getFriendBonusMultiplier();
+      updateTopItems(getTopNetWorthItems(
+        getGardenSnapshot(), getInventoryItems(), getCachedStorages(), getActivePetInfos(), fb,
+      ));
+    }
   } else {
+    // inventory card
     const debouncedUpdate = debounceCancelable(() => {
       if (destroyed) return;
-      updateAmount(computeInventoryValue());
+      const fb = getFriendBonusMultiplier();
+      updateAmount(computeInventoryValue(fb));
+      updateTopItems(getTopInventoryItems(getInventoryItems(), fb));
     }, 200);
     cleanups.push(debouncedUpdate.cancel);
 
-    const unsub = onInventoryChange(() => debouncedUpdate());
-    cleanups.push(unsub);
-    updateAmount(computeInventoryValue());
+    cleanups.push(onInventoryChange(() => debouncedUpdate()));
+    cleanups.push(onFriendBonusChange(() => debouncedUpdate()));
+    const fbInit = getFriendBonusMultiplier();
+    updateAmount(computeInventoryValue(fbInit));
+    updateTopItems(getTopInventoryItems(getInventoryItems(), fbInit));
   }
 
   // Drag

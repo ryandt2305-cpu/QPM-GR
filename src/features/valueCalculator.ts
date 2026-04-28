@@ -79,8 +79,8 @@ export function calculateGardenValue(snapshot: GardenSnapshot | null | undefined
       const scaleRaw = (slot as Record<string, unknown>).targetScale;
       const scale = typeof scaleRaw === 'number' && Number.isFinite(scaleRaw) ? scaleRaw : 1;
 
-      const tileValue = Math.round(multiplier * baseValue * scale * friendBonus);
-      total += tileValue;
+      const basePrice = Math.round(multiplier * baseValue * scale);
+      total += Math.round(basePrice * friendBonus);
     }
   }
 
@@ -122,7 +122,8 @@ export function calculatePlantValue(
   const baseValue = SPECIES_VALUES[species];
   if (!baseValue) return 0;
   const multiplier = calculateMutationMultiplier(mutations ?? []);
-  return Math.round(baseValue * multiplier * scale * friendBonus);
+  const basePrice = Math.round(baseValue * multiplier * scale);
+  return Math.round(basePrice * friendBonus);
 }
 
 /**
@@ -130,7 +131,7 @@ export function calculatePlantValue(
  * hardcoded values.  Only counts harvestable slots (endTime <= now).
  * Iterates both `tileObjects` and `boardwalkTileObjects`.
  */
-export function computeGardenValueFromCatalog(snapshot: GardenSnapshot | null | undefined): number {
+export function computeGardenValueFromCatalog(snapshot: GardenSnapshot | null | undefined, friendBonus = 1): number {
   if (!snapshot) return 0;
 
   const now = Date.now();
@@ -170,7 +171,8 @@ export function computeGardenValueFromCatalog(snapshot: GardenSnapshot | null | 
         const mutations = Array.isArray(mutationsRaw) ? (mutationsRaw as string[]) : [];
         const { totalMultiplier } = computeMutationMultiplier(mutations);
 
-        total += Math.round(baseSellPrice * scale * totalMultiplier);
+        const basePrice = Math.round(baseSellPrice * scale * totalMultiplier);
+        total += Math.round(basePrice * friendBonus);
       }
     }
   }

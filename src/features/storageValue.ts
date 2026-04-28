@@ -3,8 +3,10 @@
 // Computes total sell/shop value of items in Seed Silo, Pet Hutch, Decor Shed, and Inventory
 
 import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
+import { getFriendBonusMultiplier } from '../store/friendBonus';
 import { getInventoryItems, onInventoryChange } from '../store/inventory';
 import { getActivePetInfos } from '../store/pets';
+import type { GardenSnapshot } from './gardenBridge';
 import {
   getSeedPrice,
   getPlantSpecies,
@@ -115,7 +117,7 @@ function computeGamePetScale(
 // Value computations
 // ---------------------------------------------------------------------------
 
-export function computePetSellPrice(pet: Record<string, unknown>): number {
+export function computePetSellPrice(pet: Record<string, unknown>, friendBonus = 1): number {
   const species = ((pet.petSpecies ?? pet.species) as string | undefined) ?? '';
   if (!species) return 0;
 
@@ -133,10 +135,13 @@ export function computePetSellPrice(pet: Record<string, unknown>): number {
   const mutations = Array.isArray(pet.mutations) ? (pet.mutations as string[]) : [];
   const { totalMultiplier } = computeMutationMultiplier(mutations);
 
-  return Math.round(maturitySellPrice * scale * totalMultiplier);
+  // Two-step rounding to match game (sell.ts:21-29):
+  // base price rounded first, then friend bonus applied and rounded again
+  const basePrice = Math.round(maturitySellPrice * scale * totalMultiplier);
+  return Math.round(basePrice * friendBonus);
 }
 
-export function computeStorageItemsValue(items: unknown[]): number {
+export function computeStorageItemsValue(items: unknown[], friendBonus = 1): number {
   let total = 0;
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;
@@ -150,7 +155,23 @@ export function computeStorageItemsValue(items: unknown[]): number {
     const itemType = typeof raw.itemType === 'string' ? raw.itemType.toLowerCase() : '';
 
     if (itemType === 'pet' || 'petSpecies' in raw) {
-      total += computePetSellPrice(raw);
+      total += computePetSellPrice(raw, friendBonus);
+    } else if (itemType === 'produce') {
+      const species = typeof raw.species === 'string' ? raw.species : '';
+      if (species) {
+        const plantEntry = getPlantSpecies(species) as Record<string, unknown> | null;
+        const cropEntry = plantEntry?.crop as Record<string, unknown> | undefined;
+        const baseSellPrice = typeof cropEntry?.baseSellPrice === 'number' ? cropEntry.baseSellPrice : 0;
+        if (baseSellPrice > 0) {
+          const scale =
+            typeof raw.scale === 'number' ? raw.scale :
+            typeof raw.targetScale === 'number' ? raw.targetScale : 1;
+          const mutations = Array.isArray(raw.mutations) ? (raw.mutations as string[]) : [];
+          const { totalMultiplier } = computeMutationMultiplier(mutations);
+          const basePrice = Math.round(baseSellPrice * scale * totalMultiplier);
+          total += Math.round(basePrice * friendBonus) * quantity;
+        }
+      }
     } else if (raw.decorId && typeof raw.decorId === 'string') {
       const entry = getDecor(raw.decorId);
       total += (entry?.coinPrice ?? 0) * quantity;
@@ -169,7 +190,7 @@ export function computeStorageItemsValue(items: unknown[]): number {
   return total;
 }
 
-export function computeInventoryValue(): number {
+export function computeInventoryValue(friendBonus = 1): number {
   const items = getInventoryItems();
   let total = 0;
 
@@ -183,7 +204,7 @@ export function computeInventoryValue(): number {
     ).toLowerCase();
 
     if (itemType === 'pet' || 'petSpecies' in raw) {
-      total += computePetSellPrice(raw);
+      total += computePetSellPrice(raw, friendBonus);
     } else if (itemType === 'produce') {
       const species = (
         (item.species as string | null) ??
@@ -200,7 +221,8 @@ export function computeInventoryValue(): number {
             typeof raw.targetScale === 'number' ? raw.targetScale : 1;
           const mutations = Array.isArray(raw.mutations) ? (raw.mutations as string[]) : [];
           const { totalMultiplier } = computeMutationMultiplier(mutations);
-          total += Math.round(baseSellPrice * scale * totalMultiplier) * quantity;
+          const basePrice = Math.round(baseSellPrice * scale * totalMultiplier);
+          total += Math.round(basePrice * friendBonus) * quantity;
         }
       }
     } else if (itemType === 'seed') {
@@ -248,14 +270,22 @@ export function computeInventoryValue(): number {
  * Total value of all items across all storage buildings (Seed Silo, Pet Hutch, Decor Shed).
  * Requires `startStorageValue()` to have been called so that `cachedStorages` is populated.
  */
-export function computeAllStoragesValue(): number {
+export function computeAllStoragesValue(friendBonus = 1): number {
   let total = 0;
   for (const s of cachedStorages) {
     if (!s || typeof s !== 'object') continue;
-    const items = Array.isArray((s as Record<string, unknown>).items)
-      ? ((s as Record<string, unknown>).items as unknown[])
-      : [];
-    total += computeStorageItemsValue(items);
+    const rec = s as Record<string, unknown>;
+
+    // Value of the storage building itself (SeedSilo, PetHutch, DecorShed)
+    const decorId = typeof rec.decorId === 'string' ? rec.decorId : '';
+    if (decorId) {
+      const entry = getDecor(decorId);
+      if (entry) total += entry.coinPrice ?? 0;
+    }
+
+    // Value of items inside the storage
+    const items = Array.isArray(rec.items) ? (rec.items as unknown[]) : [];
+    total += computeStorageItemsValue(items, friendBonus);
   }
   return total;
 }
@@ -263,13 +293,98 @@ export function computeAllStoragesValue(): number {
 /**
  * Total sell value of all active (placed) pets.
  */
-export function computeActivePetsValue(): number {
+export function computeActivePetsValue(friendBonus = 1): number {
   let total = 0;
   for (const pet of getActivePetInfos()) {
     if (!pet.raw || typeof pet.raw !== 'object') continue;
-    total += computePetSellPrice(pet.raw as Record<string, unknown>);
+    total += computePetSellPrice(pet.raw as Record<string, unknown>, friendBonus);
   }
   return total;
+}
+
+/**
+ * Total buy-price value of placed decor + eggs on room tiles.
+ * Iterates both tileObjects and boardwalkTileObjects, skipping 'plant' tiles.
+ */
+export function computePlacedDecorAndEggValue(snapshot: GardenSnapshot): number {
+  if (!snapshot) return 0;
+  let total = 0;
+
+  const tileSets = [snapshot.tileObjects, snapshot.boardwalkTileObjects];
+  for (const tileMap of tileSets) {
+    if (!tileMap) continue;
+    for (const tile of Object.values(tileMap)) {
+      if (!tile || typeof tile !== 'object') continue;
+      const t = tile as Record<string, unknown>;
+      const objType = t.objectType;
+
+      if (objType === 'decor') {
+        const decorId = (typeof t.decorId === 'string' ? t.decorId : null)
+          ?? (typeof t.species === 'string' ? t.species : null);
+        if (decorId) {
+          const entry = getDecor(decorId);
+          if (entry) total += entry.coinPrice ?? 0;
+        }
+      } else if (objType === 'egg') {
+        const eggId = (typeof t.eggId === 'string' ? t.eggId : null)
+          ?? (typeof t.eggType === 'string' ? t.eggType : null)
+          ?? (typeof t.species === 'string' ? t.species : null);
+        if (eggId) {
+          const entry = getEggType(eggId);
+          if (entry) total += entry.coinPrice ?? 0;
+        }
+      }
+    }
+  }
+
+  return total;
+}
+
+/**
+ * Total value of growing (not yet harvestable) crops on room tiles.
+ * Values each growing crop at its seed purchase price.
+ */
+export function computeGrowingCropsValue(snapshot: GardenSnapshot): number {
+  if (!snapshot) return 0;
+
+  const now = Date.now();
+  let total = 0;
+
+  const tileSets = [snapshot.tileObjects, snapshot.boardwalkTileObjects];
+  for (const tileMap of tileSets) {
+    if (!tileMap) continue;
+    for (const tile of Object.values(tileMap)) {
+      if (!tile || typeof tile !== 'object') continue;
+      const tileRec = tile as Record<string, unknown>;
+      if (tileRec.objectType !== 'plant') continue;
+
+      const slots = tileRec.slots;
+      if (!Array.isArray(slots)) continue;
+
+      for (const slot of slots) {
+        if (!slot || typeof slot !== 'object') continue;
+        const slotRec = slot as Record<string, unknown>;
+
+        const species = slotRec.species;
+        if (typeof species !== 'string') continue;
+
+        const endTimeRaw = slotRec.endTime;
+        const endTime = typeof endTimeRaw === 'number' ? endTimeRaw : Number(endTimeRaw);
+        // Only count crops that are still growing (endTime > now)
+        if (!Number.isFinite(endTime) || endTime <= now) continue;
+
+        const price = getSeedPrice(species);
+        total += price?.coins ?? 0;
+      }
+    }
+  }
+
+  return total;
+}
+
+/** Expose cached storages array for external consumers (e.g. top-10 value items). */
+export function getCachedStorages(): unknown[] {
+  return cachedStorages;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +399,7 @@ let cachedStorages: unknown[] = [];
 let modalAtomRetryCount = 0;
 
 const stateListeners = new Set<(state: StorageValueState) => void>();
+const storageDataListeners = new Set<() => void>();
 
 // Subscriptions (cleaned up on stop)
 let modalAtomUnsub: (() => void) | null = null;
@@ -323,8 +439,9 @@ function isEnabledForModal(modalId: string): boolean {
 }
 
 function computeValueForModal(modalId: string): number {
+  const fb = getFriendBonusMultiplier();
   if (modalId === 'inventory') {
-    return computeInventoryValue();
+    return computeInventoryValue(fb);
   }
   const storageDecorId = MODAL_TO_STORAGE_DECORID[modalId];
   if (!storageDecorId) return 0;
@@ -336,7 +453,7 @@ function computeValueForModal(modalId: string): number {
 
   if (!storageEntry) return 0;
   const items = Array.isArray(storageEntry.items) ? (storageEntry.items as unknown[]) : [];
-  return computeStorageItemsValue(items);
+  return computeStorageItemsValue(items, fb);
 }
 
 function recompute(): void {
@@ -397,6 +514,9 @@ async function initDataAtomSubscription(): Promise<void> {
       if (currentModalId && TARGET_MODALS.has(currentModalId)) {
         debouncedRecompute?.();
       }
+      for (const cb of storageDataListeners) {
+        try { cb(); } catch { /* ignore */ }
+      }
     });
     dataAtomUnsub = unsub;
     log('Subscribed to myDataAtom');
@@ -416,6 +536,12 @@ export function getStorageValueState(): StorageValueState {
 export function onStorageValueChange(cb: (state: StorageValueState) => void): () => void {
   stateListeners.add(cb);
   return () => { stateListeners.delete(cb); };
+}
+
+/** Subscribe to raw storage data changes (fires when cachedStorages is updated from myDataAtom). */
+export function onStorageDataChange(cb: () => void): () => void {
+  storageDataListeners.add(cb);
+  return () => { storageDataListeners.delete(cb); };
 }
 
 export function getStorageValueConfig(): StorageValueConfig {
@@ -495,6 +621,7 @@ export function stopStorageValue(): void {
   invUnsub = null;
 
   stateListeners.clear();
+  storageDataListeners.clear();
   currentModalId = null;
   cachedStorages = [];
   modalAtomRetryCount = 0;

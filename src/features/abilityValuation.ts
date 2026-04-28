@@ -13,8 +13,7 @@ import { isDebugGlobalsEnabled } from '../utils/debugGlobals';
 import { getAbilityDef } from '../catalogs/gameCatalogs';
 import { getWeatherSnapshot } from '../store/weatherHub';
 import { getAbilityDefinition } from '../data/petAbilities';
-
-const FRIEND_BONUS_MULTIPLIER = 1.5; // Assume max friend bonus (50%).
+import { getFriendBonusMultiplier } from '../store/friendBonus';
 const MIN_SCALE = 1;
 const MIN_PERCENT = 50;
 const MAX_PERCENT = 100;
@@ -311,7 +310,7 @@ function extractMatureCrops(snapshot: GardenSnapshot | null): MatureCrop[] {
           .map((value) => (typeof value === 'string' ? value : null))
           .filter((value): value is string => !!value);
 
-        const value = calculatePlantValue(species, scale, mutations, FRIEND_BONUS_MULTIPLIER);
+        const value = calculatePlantValue(species, scale, mutations, getFriendBonusMultiplier());
         if (!Number.isFinite(value) || value <= 0) continue;
 
         const breakdown = computeMutationMultiplier(mutations);
@@ -358,7 +357,7 @@ export function buildAbilityValuationContext(snapshot: GardenSnapshot | null = g
     uncoloredCrops,
     uncoloredFruitSlots,
     totalMatureValue,
-    friendBonus: FRIEND_BONUS_MULTIPLIER,
+    friendBonus: getFriendBonusMultiplier(),
   };
 }
 
@@ -429,7 +428,7 @@ function resolveCropScaleEffect(
   const expectedDelta = weightedDelta / totalWeight;
   const averageGain = weightedPercentApplied / totalWeight;
   const impactedFruits = totalWeight;
-  const detail = `Boosts ${impactedFruits} mature fruit${impactedFruits === 1 ? '' : 's'} by ~${averageGain.toFixed(2)}% size (50% friend bonus assumed, weighted by fruit count).`;
+  const detail = `Boosts ${impactedFruits} mature fruit${impactedFruits === 1 ? '' : 's'} by ~${averageGain.toFixed(2)}% size (friend bonus applied, weighted by fruit count).`;
 
   return {
     effectPerProc: expectedDelta,
@@ -451,7 +450,7 @@ function resolveColorGranterEffect(
   for (const crop of context.uncoloredCrops) {
     const weight = Math.max(1, Math.floor(crop.fruitCount));
     const mutations = [...crop.mutations, granted];
-    const newValue = calculatePlantValue(crop.species, crop.scale, mutations, FRIEND_BONUS_MULTIPLIER);
+    const newValue = calculatePlantValue(crop.species, crop.scale, mutations, getFriendBonusMultiplier());
     const delta = newValue - crop.currentValue;
     if (Number.isFinite(delta) && delta > 0) {
       totalWeight += weight;
@@ -466,7 +465,7 @@ function resolveColorGranterEffect(
   const averageDelta = weightedDelta / totalWeight;
   return {
     effectPerProc: averageDelta,
-    detail: `Converts 1 random uncolored crop to ${granted}. ${context.uncoloredFruitSlots} eligible fruit slot${context.uncoloredFruitSlots === 1 ? '' : 's'} across ${context.uncoloredCrops.length} plant${context.uncoloredCrops.length === 1 ? '' : 's'} (50% friend bonus, weighted by fruit count).`,
+    detail: `Converts 1 random uncolored crop to ${granted}. ${context.uncoloredFruitSlots} eligible fruit slot${context.uncoloredFruitSlots === 1 ? '' : 's'} across ${context.uncoloredCrops.length} plant${context.uncoloredCrops.length === 1 ? '' : 's'} (friend bonus applied, weighted by fruit count).`,
   };
 }
 
@@ -490,7 +489,7 @@ function resolveGranterEffect(
       crop.species,
       crop.scale,
       nextMutations,
-      FRIEND_BONUS_MULTIPLIER,
+      getFriendBonusMultiplier(),
     );
     const delta = newValue - crop.currentValue;
     if (Number.isFinite(delta) && delta > 0) {
@@ -504,7 +503,7 @@ function resolveGranterEffect(
   const averageDelta = weightedDelta / totalWeight;
   return {
     effectPerProc: averageDelta,
-    detail: `Grants ${mutationName} to 1 eligible crop. ${eligibleCount} plant${eligibleCount === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) eligible (50% friend bonus, weighted by fruit count).`,
+    detail: `Grants ${mutationName} to 1 eligible crop. ${eligibleCount} plant${eligibleCount === 1 ? '' : 's'} (${fruitSlots} fruit${fruitSlots === 1 ? '' : 's'}) eligible (friend bonus applied, weighted by fruit count).`,
   };
 }
 
@@ -665,8 +664,6 @@ function formatMutationCoin(value: number): string {
     return value.toFixed(0);
   }
 }
-
-export { FRIEND_BONUS_MULTIPLIER };
 
 type AbilityDebugApi = {
   getContext: () => AbilityValuationContext;

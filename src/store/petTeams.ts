@@ -4,6 +4,7 @@
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos } from './pets';
+import { onInventoryChange } from './inventory';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { logTeamEvent } from './petTeamsLogs';
 import { delay } from '../utils/scheduling';
@@ -34,6 +35,7 @@ let feedPolicy: PetFeedPolicy = { ...DEFAULT_FEED_POLICY };
 const configListeners = new Set<(cfg: PetTeamsConfig) => void>();
 let activePetsUnsubscribe: (() => void) | null = null;
 let purgeUnsubscribe: (() => void) | null = null;
+let purgeInvUnsubscribe: (() => void) | null = null;
 let purgeTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---------------------------------------------------------------------------
@@ -113,8 +115,9 @@ export function initPetTeamsStore(): void {
     }
   });
 
-  // Debounced purge of stale pet references (sold/missing pets)
-  purgeUnsubscribe = onActivePetInfos(() => {
+  // Debounced purge of stale pet references (sold/missing pets).
+  // Fires on both active-pet and inventory changes so selling from hutch/inventory is caught.
+  function schedulePurge(): void {
     if (purgeTimer) clearTimeout(purgeTimer);
     purgeTimer = setTimeout(async () => {
       purgeTimer = null;
@@ -124,7 +127,9 @@ export function initPetTeamsStore(): void {
         purgeGonePets(validIds);
       } catch { /* ignore */ }
     }, 3000);
-  }, false);
+  }
+  purgeUnsubscribe = onActivePetInfos(() => schedulePurge(), false);
+  purgeInvUnsubscribe = onInventoryChange(() => schedulePurge(), false);
 
   log(`[PetTeams] Store initialized - ${config.teams.length} teams`);
 }
@@ -134,6 +139,8 @@ export function stopPetTeamsStore(): void {
   activePetsUnsubscribe = null;
   purgeUnsubscribe?.();
   purgeUnsubscribe = null;
+  purgeInvUnsubscribe?.();
+  purgeInvUnsubscribe = null;
   if (purgeTimer) { clearTimeout(purgeTimer); purgeTimer = null; }
   configListeners.clear();
 }
@@ -915,7 +922,9 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   const resolvedSlotIdx = await resolveMyUserSlotIdx();
 
   // Pre-validate: check that all target pets are locatable somewhere.
+  // Missing pets are auto-removed from the team so the remaining pets apply cleanly.
   const validTargetIds: string[] = [];
+  let slotsCleared = false;
   for (const targetId of targetIds) {
     if (currentSet.has(targetId)) {
       validTargetIds.push(targetId);
@@ -925,8 +934,19 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     if (location) {
       validTargetIds.push(targetId);
     } else {
-      pushError('missing_source_pet', 'Pet not found in active/inventory/hutch: ' + targetId);
+      // Auto-clear the stale slot instead of erroring
+      for (let i = 0; i < 3; i++) {
+        if (team.slots[i] === targetId) {
+          team.slots[i] = null;
+          slotsCleared = true;
+        }
+      }
+      log(`[PetTeams] Auto-removed missing pet ${targetId} from "${team.name}"`);
     }
+  }
+  if (slotsCleared) {
+    saveConfig();
+    notifyConfigListeners();
   }
 
   if (validTargetIds.length === 0) {

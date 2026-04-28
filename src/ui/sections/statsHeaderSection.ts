@@ -31,6 +31,16 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.73",
+    date: "2026-04",
+    notes: [
+      "Fixed pet teams incorrectly clearing slots when atom reads fail (only purge with complete data)",
+      "Team apply no longer auto-removes slots for temporarily unlocatable pets",
+      "Fixed inventory capacity overlay jumping to wrong position after modal close or resize",
+      "Overlay anchor now invalidates on modal close and canvas resize for correct repositioning",
+    ],
+  },
+  {
     version: "3.1.72",
     date: "2026-04",
     notes: [

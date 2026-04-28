@@ -2,15 +2,16 @@
 // Persistent HUD indicator that shows !! (warning) or FULL!! (full) when
 // inventory slot count approaches or reaches the 100-slot cap.
 //
-// Position strategy (no polling):
-// 1. Walk Pixi tree once to find PixiTooltip (inventory button) or
+// Position strategy (reactive, no polling):
+// 1. Walk Pixi tree to find PixiTooltip (inventory button) or
 //    InventoryScrollView (bottom toolbar). Only accepts nodes in the
-//    bottom 25% of the canvas — rejects modal-open states where these
+//    bottom 40% of the canvas — rejects modal-open states where these
 //    nodes shift upward.
 // 2. Cache position as fractions of canvas Pixi dimensions.
 // 3. Compute CSS from cached fractions × canvas.getBoundingClientRect()
 //    on: window resize, ResizeObserver on canvas, state change.
-// 4. Hide when inventory modal is open (activeModalAtom === 'inventory').
+// 4. Invalidate anchor on modal close + canvas resize so it re-walks Pixi.
+// 5. Hide when inventory modal is open (activeModalAtom === 'inventory').
 
 import {
   onInventoryCapacityChange,
@@ -143,9 +144,14 @@ interface CachedAnchor {
 let cachedAnchor: CachedAnchor | null = null;
 let canvasRef: HTMLCanvasElement | null = null;
 
+/** Invalidate the cached anchor so the next sync re-walks the Pixi tree. */
+function invalidateAnchor(): void {
+  cachedAnchor = null;
+}
+
 /**
- * Walk the Pixi tree once to find the inventory area anchor.
- * Only accepts nodes in the bottom 25% of the canvas height,
+ * Walk the Pixi tree to find the inventory area anchor.
+ * Only accepts nodes in the bottom 40% of the canvas height,
  * which rejects modal-open states where these nodes shift upward.
  * Returns true if anchor was successfully locked.
  */
@@ -155,7 +161,7 @@ function lockAnchor(): boolean {
 
   const sw = Number(refs.renderer.screen?.width) || 750;
   const sh = Number(refs.renderer.screen?.height) || 1304;
-  const bottomThreshold = sh * 0.75;
+  const bottomThreshold = sh * 0.60;
 
   // Primary: PixiTooltip — the inventory open button in the bottom toolbar
   const tooltip = findNodeByLabel(refs.stage, 'PixiTooltip');
@@ -208,7 +214,9 @@ function onModalChange(value: string | null): void {
     const el = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
     if (el) el.style.opacity = '0';
   } else {
-    // Inventory modal closed — re-apply current state to show overlay
+    // Inventory modal closed — invalidate anchor because the toolbar moved,
+    // then re-apply state which will re-walk Pixi to find the new position.
+    invalidateAnchor();
     applyState(getInventoryCapacityState());
   }
 }
@@ -252,7 +260,7 @@ function syncPosition(): void {
   const el = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
   if (!el || !overlayVisible || inventoryModalOpen) return;
 
-  // Try to lock anchor if not yet locked
+  // Try to lock anchor if not yet locked (or was invalidated)
   if (!cachedAnchor || !canvasRef) {
     if (!lockAnchor()) return; // no anchor yet — stay hidden until lock succeeds
   }
@@ -260,15 +268,14 @@ function syncPosition(): void {
   const cr = canvasRef!.getBoundingClientRect();
   if (cr.width <= 0 || cr.height <= 0) return;
 
-  // Convert cached fractions → CSS viewport position
+  // Convert cached fractions → CSS viewport position (left-based)
   const cssLeft = cr.left + cr.width * cachedAnchor!.xFrac;
   const cssTop = cr.top + cr.height * cachedAnchor!.yFrac;
-  const cssRight = window.innerWidth - cssLeft;
 
-  el.style.left = '';
-  el.style.right = `${Math.round(cssRight)}px`;
+  el.style.right = '';
+  el.style.left = `${Math.round(cssLeft)}px`;
   el.style.top = `${Math.round(cssTop)}px`;
-  el.style.transform = 'translateY(-50%)';
+  el.style.transform = 'translate(-100%, -50%)';
   el.style.opacity = '1';
 }
 
@@ -308,9 +315,15 @@ function cancelLockRetry(): void {
 let resizeObserver: ResizeObserver | null = null;
 let resizeHandler: (() => void) | null = null;
 
+function onCanvasResize(): void {
+  // Canvas resized — Pixi layout may have changed, invalidate and re-lock.
+  invalidateAnchor();
+  syncPosition();
+}
+
 function setupResizeObserver(): void {
   if (resizeObserver || !canvasRef) return;
-  resizeObserver = new ResizeObserver(() => syncPosition());
+  resizeObserver = new ResizeObserver(() => onCanvasResize());
   resizeObserver.observe(canvasRef);
 }
 
@@ -417,7 +430,7 @@ function applyState(state: InventoryCapacityState): void {
     return;
   }
 
-  // Position the overlay (reactive — only Pixi-walks if anchor not yet cached)
+  // Position the overlay (re-walks Pixi if anchor was invalidated)
   if (cachedAnchor) {
     syncPosition();
   } else if (lockAnchor()) {
@@ -438,7 +451,11 @@ let unsubConfig: (() => void) | null = null;
 export function startInventoryCapacityOverlay(): void {
   if (unsubState) return;
 
-  resizeHandler = () => syncPosition();
+  resizeHandler = () => {
+    // Window resized — invalidate anchor and re-sync.
+    invalidateAnchor();
+    syncPosition();
+  };
   window.addEventListener('resize', resizeHandler);
 
   // Try to lock anchor immediately

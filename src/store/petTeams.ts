@@ -122,7 +122,11 @@ export function initPetTeamsStore(): void {
     purgeTimer = setTimeout(async () => {
       purgeTimer = null;
       try {
-        const pool = await getAllPooledPets();
+        const { pool, complete } = await getAllPooledPetsWithStatus();
+        if (!complete) {
+          log('[PetTeams] Skipping purge — atom data incomplete');
+          return;
+        }
         const validIds = new Set(pool.map(p => p.id));
         purgeGonePets(validIds);
       } catch { /* ignore */ }
@@ -335,8 +339,24 @@ export function detectCurrentTeam(): string | null {
 // Pet pool (active + hutch + inventory)
 // ---------------------------------------------------------------------------
 
+export interface PooledPetsResult {
+  pool: PooledPet[];
+  /** True only if all atom sources (active, hutch, inventory) were read successfully. */
+  complete: boolean;
+}
+
+/**
+ * Collect all pets the player owns across active slots, hutch, and inventory.
+ * Returns `{ pool, complete }` — `complete` is false if any atom read failed,
+ * meaning the pool may be missing pets and should NOT be used for purging.
+ */
 export async function getAllPooledPets(): Promise<PooledPet[]> {
+  return (await getAllPooledPetsWithStatus()).pool;
+}
+
+async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
   const pool: PooledPet[] = [];
+  let complete = true;
 
   // Active pets
   const active = getActivePetInfos();
@@ -397,9 +417,15 @@ export async function getAllPooledPets(): Promise<PooledPet[]> {
   // Hutch pets
   try {
     const hutchAtom = getAtomByLabel('myPetHutchPetItemsAtom');
-    if (hutchAtom) {
+    if (!hutchAtom) {
+      // Atom not discovered yet — data is incomplete
+      complete = false;
+    } else {
       const hutch = await readAtomValue(hutchAtom);
-      if (Array.isArray(hutch)) {
+      if (!Array.isArray(hutch)) {
+        // Atom returned non-array (transient state) — data is incomplete
+        complete = false;
+      } else {
         for (const item of hutch) {
           if (!item || typeof item !== 'object') continue;
           const it = item as Record<string, unknown>;
@@ -425,13 +451,17 @@ export async function getAllPooledPets(): Promise<PooledPet[]> {
     }
   } catch (error) {
     log('[petTeams] failed to read hutch', error);
+    complete = false;
   }
 
   // Inventory pets - use myInventoryAtom (general bag) with .items sub-array,
   // same as xpTrackerWindow. myPetInventoryAtom is a different/empty atom.
   try {
     const invAtom = getAtomByLabel('myInventoryAtom');
-    if (invAtom) {
+    if (!invAtom) {
+      // Atom not discovered yet — data is incomplete
+      complete = false;
+    } else {
       const invRaw = await readAtomValue(invAtom);
       const inv = invRaw as { items?: unknown[] } | null;
       const items = Array.isArray(inv?.items) ? inv.items : Array.isArray(invRaw) ? invRaw : [];
@@ -461,9 +491,10 @@ export async function getAllPooledPets(): Promise<PooledPet[]> {
     }
   } catch (error) {
     log('[petTeams] failed to read inventory', error);
+    complete = false;
   }
 
-  return pool;
+  return { pool, complete };
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +517,7 @@ const REPAIR_SETTLE_TIMEOUT_MS = 1200;
 export type ApplyErrorReason =
   | 'missing_connection'
   | 'missing_source_pet'
+  | 'not_found'
   | 'retrieve_failed_or_inventory_full'
   | 'hutch_store_failed_or_full'
   | 'store_failed_or_timeout'
@@ -833,6 +865,7 @@ function buildErrorSummary(reasonCounts: Partial<Record<ApplyErrorReason, number
   const labels: Record<ApplyErrorReason, string> = {
     missing_connection: 'No connection',
     missing_source_pet: 'Missing pet IDs',
+    not_found: 'Pet not found',
     retrieve_failed_or_inventory_full: 'Inventory full / retrieve failed',
     hutch_store_failed_or_full: 'Hutch full / store failed',
     store_failed_or_timeout: 'Store timeout',
@@ -922,9 +955,10 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   const resolvedSlotIdx = await resolveMyUserSlotIdx();
 
   // Pre-validate: check that all target pets are locatable somewhere.
-  // Missing pets are auto-removed from the team so the remaining pets apply cleanly.
+  // Missing pets are skipped for this apply attempt but NOT auto-removed from
+  // the team — the periodic purge (which requires all atom reads to succeed)
+  // handles true removal of sold/gone pets.
   const validTargetIds: string[] = [];
-  let slotsCleared = false;
   for (const targetId of targetIds) {
     if (currentSet.has(targetId)) {
       validTargetIds.push(targetId);
@@ -934,19 +968,9 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     if (location) {
       validTargetIds.push(targetId);
     } else {
-      // Auto-clear the stale slot instead of erroring
-      for (let i = 0; i < 3; i++) {
-        if (team.slots[i] === targetId) {
-          team.slots[i] = null;
-          slotsCleared = true;
-        }
-      }
-      log(`[PetTeams] Auto-removed missing pet ${targetId} from "${team.name}"`);
+      pushError('not_found', `Pet ${targetId} could not be located — skipping`);
+      log(`[PetTeams] Could not locate pet ${targetId} in "${team.name}" — skipping (not removing)`);
     }
-  }
-  if (slotsCleared) {
-    saveConfig();
-    notifyConfigListeners();
   }
 
   if (validTargetIds.length === 0) {

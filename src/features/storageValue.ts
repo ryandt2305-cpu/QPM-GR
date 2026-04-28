@@ -124,10 +124,10 @@ export function computePetSellPrice(pet: Record<string, unknown>, friendBonus = 
   const entry = getPetSpecies(species) as Record<string, unknown> | null;
   if (!entry) return 0;
 
-  const maturitySellPrice = typeof entry.maturitySellPrice === 'number' ? entry.maturitySellPrice : 0;
+  const maturitySellPrice = Number.isFinite(entry.maturitySellPrice) ? (entry.maturitySellPrice as number) : 0;
   if (!maturitySellPrice) return 0;
 
-  const xp = typeof pet.xp === 'number' ? pet.xp : 0;
+  const xp = Number.isFinite(pet.xp) ? (pet.xp as number) : 0;
   const targetScale = Number.isFinite(pet.targetScale) ? (pet.targetScale as number) : 1;
   const maxScale = getPetMaxScale(species) ?? 2;
   const hoursToMature = Math.max(getPetHoursToMature(species) ?? 12, 0.001);

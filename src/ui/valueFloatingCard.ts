@@ -584,13 +584,13 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
     function computeNetWorth(): number {
       const fb = getFriendBonusMultiplier();
       const snap = getGardenSnapshot();
-      return getEconomySnapshot().coins.balance
-        + computeGardenValueFromCatalog(snap, fb)
-        + computeGrowingCropsValue(snap)
-        + computeInventoryValue(fb)
-        + computeAllStoragesValue(fb)
-        + computeActivePetsValue(fb)
-        + computePlacedDecorAndEggValue(snap);
+      return (getEconomySnapshot().coins.balance || 0)
+        + (computeGardenValueFromCatalog(snap, fb) || 0)
+        + (computeGrowingCropsValue(snap) || 0)
+        + (computeInventoryValue(fb) || 0)
+        + (computeAllStoragesValue(fb) || 0)
+        + (computeActivePetsValue(fb) || 0)
+        + (computePlacedDecorAndEggValue(snap) || 0);
     }
     const debouncedUpdate = debounceCancelable(() => {
       if (destroyed) return;

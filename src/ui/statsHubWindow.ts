@@ -2132,8 +2132,9 @@ function buildEconomyTab(container: HTMLElement): () => void {
       inventoryNumRef.el.textContent = formatCoinsAbbreviated(invVal);
     }
     if (netWorthNumRef.el) {
-      const coins = getEconomySnapshot().coins.balance;
-      netWorthNumRef.el.textContent = formatCoinsAbbreviated(coins + gardenVal + growingVal + invVal + storageVal + petsVal + placedDecorVal);
+      const coins = getEconomySnapshot().coins.balance || 0;
+      const nw = (gardenVal || 0) + (growingVal || 0) + (invVal || 0) + (storageVal || 0) + (petsVal || 0) + (placedDecorVal || 0);
+      netWorthNumRef.el.textContent = formatCoinsAbbreviated(coins + nw);
     }
   }
 
@@ -2195,7 +2196,7 @@ function buildEconomyTab(container: HTMLElement): () => void {
     const storageVal = computeAllStoragesValue(fb);
     const petsVal = computeActivePetsValue(fb);
     const placedDecorVal = computePlacedDecorAndEggValue(initSnap);
-    const netWorthVal = snapshot.coins.balance + gardenVal + growingVal + invVal + storageVal + petsVal + placedDecorVal;
+    const netWorthVal = (snapshot.coins.balance || 0) + (gardenVal || 0) + (growingVal || 0) + (invVal || 0) + (storageVal || 0) + (petsVal || 0) + (placedDecorVal || 0);
     const nwChip = balanceChip(
       formatCoinsAbbreviated(netWorthVal),
       'Net Worth', 'coins', '#8f82ff',
@@ -2352,8 +2353,8 @@ function buildEconomyTab(container: HTMLElement): () => void {
     addRow('Inv.', self.inventoryValue + self.storageValue, target.inventoryValue + target.storageValue, false);
     addRow('Pets', self.petCount, target.petCount, true);
     addRow('Worth',
-      self.coins + self.gardenValue + self.growingCropsValue + self.placedDecorValue + self.inventoryValue + self.storageValue + self.activePetsValue,
-      target.coins + target.gardenValue + target.growingCropsValue + target.placedDecorValue + target.inventoryValue + target.storageValue + target.activePetsValue,
+      (self.coins || 0) + (self.gardenValue || 0) + (self.growingCropsValue || 0) + (self.placedDecorValue || 0) + (self.inventoryValue || 0) + (self.storageValue || 0) + (self.activePetsValue || 0),
+      (target.coins || 0) + (target.gardenValue || 0) + (target.growingCropsValue || 0) + (target.placedDecorValue || 0) + (target.inventoryValue || 0) + (target.storageValue || 0) + (target.activePetsValue || 0),
       false);
 
     parent.appendChild(grid);

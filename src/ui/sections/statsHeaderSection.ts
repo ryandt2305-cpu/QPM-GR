@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.71",
+    date: "2026-04",
+    notes: [
+      "Fixed net worth briefly showing '-' after feeding a pet (NaN from transient atom state)",
+    ],
+  },
+  {
     version: "3.1.70",
     date: "2026-04",
     notes: [

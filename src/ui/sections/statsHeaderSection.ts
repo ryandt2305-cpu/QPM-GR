@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.72",
+    date: "2026-04",
+    notes: [
+      "Added inventory capacity indicator with configurable warning/full thresholds and colors",
+      "Overlay hides when inventory modal is open, repositions reactively on resize",
+      "Optional sound alerts for warning and full levels (built-in + custom sounds, once or loop)",
+    ],
+  },
+  {
     version: "3.1.71",
     date: "2026-04",
     notes: [

@@ -196,6 +196,10 @@ const QPM_STORAGE_KEYS = [
 
   // Version checker
   'qpm.versionCheck.v1',
+
+  // Inventory Capacity
+  'qpm.inventoryCapacity.v1',
+  'qpm.inventoryCapacity.customSounds.v1',
 ];
 
 /**

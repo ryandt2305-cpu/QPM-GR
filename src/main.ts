@@ -80,6 +80,8 @@ import { timerManager } from './utils/timerManager';
 import { startController, stopController } from './features/controller/index';
 import { startStorageValue, stopStorageValue } from './features/storageValue';
 import { startStorageValueOverlay, stopStorageValueOverlay } from './ui/storageValueOverlay';
+import { startInventoryCapacity, stopInventoryCapacity } from './features/inventoryCapacity';
+import { startInventoryCapacityOverlay, stopInventoryCapacityOverlay } from './ui/inventoryCapacityOverlay';
 import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/textureSwapper';
 import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 import { startShopRestockAlerts } from './ui/shopRestockAlerts';
@@ -1284,6 +1286,8 @@ window.addEventListener('beforeunload', () => {
   stopPetTeamsStore();
   stopPetTeamsLogs();
   stopPetsWindow();
+  stopInventoryCapacityOverlay();
+  stopInventoryCapacity();
   stopStorageValueOverlay();
   stopStorageValue();
 }, { once: true });
@@ -1470,6 +1474,8 @@ async function initialize(): Promise<void> {
   startController();
   startStorageValue();
   startStorageValueOverlay();
+  startInventoryCapacity();
+  startInventoryCapacityOverlay();
   if (TEXTURE_MANIPULATOR_ENABLED) {
     initTextureSwapper();
   }

@@ -10,6 +10,7 @@ const ACTIVITY_LOG_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.activity
 const AUTO_RECONNECT_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.autoReconnectDefault.v1';
 const CONTROLLER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.controllerDefault.v1';
 const LOCKER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.lockerDefault.v1';
+const INV_CAPACITY_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.invCapacityDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -67,6 +68,13 @@ const FEATURE_DEFS = [
     icon: '🛡️',
     desc: 'Block game actions: inventory reserve, egg locks, harvest & pickup locks',
     windowTitle: '🛡️ Locker',
+  },
+  {
+    key: 'inv-capacity',
+    label: 'Inventory Capacity',
+    icon: '🎒',
+    desc: 'Visual warning when inventory approaches or reaches full capacity',
+    windowTitle: '🎒 Inventory Capacity',
   },
 ] as const;
 
@@ -135,6 +143,18 @@ function loadVisibleCards(): FeatureKey[] {
     storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
   }
 
+  const invCapacityMigrated = storage.get<boolean>(INV_CAPACITY_DEFAULT_MIGRATION_KEY, false);
+  if (!invCapacityMigrated && !selected.includes('inv-capacity')) {
+    const next: FeatureKey[] = [...selected, 'inv-capacity'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!invCapacityMigrated) {
+    storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
+  }
+
   return selected;
 }
 
@@ -174,6 +194,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'locker') {
           const { createLockerSection } = await import('./sections/lockerSection');
           windowRoot.appendChild(createLockerSection());
+        } else if (feat.key === 'inv-capacity') {
+          const { createInventoryCapacitySection } = await import('./sections/inventoryCapacitySection');
+          windowRoot.appendChild(createInventoryCapacitySection());
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -479,6 +502,7 @@ function renderUtilityHub(root: HTMLElement): void {
       storage.set(AUTO_RECONNECT_DEFAULT_MIGRATION_KEY, true);
       storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
       storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
+      storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

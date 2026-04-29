@@ -6,6 +6,8 @@ import type { LockerConfig, GuardResult } from './types';
 export interface InventorySnapshot {
   itemCount: number;
   capacity: number;
+  /** When true, the purchase will stack into an existing slot (no new slot consumed). */
+  purchaseWillStack?: boolean;
 }
 
 /** Resolved from garden tile data at the guard layer. */
@@ -21,6 +23,7 @@ const PASS: GuardResult = { blocked: false };
 
 function inventoryReserveCheck(config: LockerConfig, inventory: InventorySnapshot): GuardResult {
   if (!config.inventoryReserve.enabled) return PASS;
+  if (inventory.purchaseWillStack) return PASS;
   const freeSlots = inventory.capacity - inventory.itemCount;
   if (freeSlots < config.inventoryReserve.minFreeSlots) {
     return {

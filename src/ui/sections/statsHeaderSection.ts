@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.76",
+    date: "2026-04",
+    notes: [
+      "Fixed inventory reserve blocking purchases for stackable items already in inventory",
+    ],
+  },
+  {
     version: "3.1.75",
     date: "2026-04",
     notes: [

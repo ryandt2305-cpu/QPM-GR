@@ -3,7 +3,7 @@
 
 import { pageWindow } from '../../core/pageContext';
 import { notify } from '../../core/notifications';
-import { getInventoryItems } from '../../store/inventory';
+import { getInventoryItems, type InventoryItem } from '../../store/inventory';
 import { getGardenSnapshot } from '../gardenBridge';
 import { getLockerConfig } from './state';
 import { evaluateAction, type InventorySnapshot, type TileContext } from './rules';
@@ -36,9 +36,46 @@ function throttledNotify(rule: string, reason: string): void {
 
 const GAME_INVENTORY_CAP = 100;
 
-function getInventorySnapshot(): InventorySnapshot {
+const PURCHASE_FIELD_MAP: Record<string, string> = {
+  PurchaseSeed:  'species',
+  PurchaseEgg:   'eggId',
+  PurchaseTool:  'toolId',
+  PurchaseDecor: 'decorId',
+};
+
+/**
+ * Check whether a purchase will stack into an existing inventory slot rather
+ * than consuming a new one.  Seeds/eggs/tools/decor stack when the player
+ * already owns items of the same type, so the inventory reserve check should
+ * not block them.
+ */
+function checkPurchaseWillStack(
+  items: InventoryItem[],
+  actionType: string,
+  payload: Record<string, unknown>,
+): boolean {
+  const field = PURCHASE_FIELD_MAP[actionType];
+  if (!field) return false;
+
+  const value = payload[field];
+  if (typeof value !== 'string' || value.length === 0) return false;
+
+  return items.some((item) => {
+    if (!item.raw || typeof item.raw !== 'object') return false;
+    return (item.raw as Record<string, unknown>)[field] === value;
+  });
+}
+
+function getInventorySnapshot(
+  actionType?: string,
+  payload?: Record<string, unknown>,
+): InventorySnapshot {
   const items = getInventoryItems();
-  return { itemCount: items.length, capacity: GAME_INVENTORY_CAP };
+  const snapshot: InventorySnapshot = { itemCount: items.length, capacity: GAME_INVENTORY_CAP };
+  if (actionType && payload && actionType in PURCHASE_FIELD_MAP) {
+    snapshot.purchaseWillStack = checkPurchaseWillStack(items, actionType, payload);
+  }
+  return snapshot;
 }
 
 // ── Tile context resolution ────────────────────────────────────────────────
@@ -145,7 +182,7 @@ function evaluate(
   if (!config.enabled) return { blocked: false };
 
   const tile = resolveTileContext(payload.slot, payload.slotsIndex);
-  const result = evaluateAction(actionType, payload, config, getInventorySnapshot(), tile);
+  const result = evaluateAction(actionType, payload, config, getInventorySnapshot(actionType, payload), tile);
   return result;
 }
 

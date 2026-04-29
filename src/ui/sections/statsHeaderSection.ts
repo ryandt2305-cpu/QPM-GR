@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.74",
+    date: "2026-04",
+    notes: [
+      "Added Pet tab to Calculator with species selector, strength sliders, color mutations, and sell price formula",
+      "Added coin sprites to calculator dropdown rows and selector button",
+      "Fixed mutation sprite clipping in calculator result card",
+    ],
+  },
+  {
     version: "3.1.73",
     date: "2026-04",
     notes: [

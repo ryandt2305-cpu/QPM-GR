@@ -80,7 +80,7 @@ const MODAL_TO_STORAGE_DECORID: Record<string, string> = {
 // Pet scale formula (exact game logic from pets.ts)
 // ---------------------------------------------------------------------------
 
-function computeGamePetScale(
+export function computeGamePetScale(
   xp: number,
   targetScale: number,
   maxScale: number,

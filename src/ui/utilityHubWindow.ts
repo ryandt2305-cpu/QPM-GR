@@ -11,6 +11,7 @@ const AUTO_RECONNECT_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.autoRe
 const CONTROLLER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.controllerDefault.v1';
 const LOCKER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.lockerDefault.v1';
 const INV_CAPACITY_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.invCapacityDefault.v1';
+const CALC_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.cropCalcDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -76,13 +77,21 @@ const FEATURE_DEFS = [
     desc: 'Visual warning when inventory approaches or reaches full capacity',
     windowTitle: '🎒 Inventory Capacity',
   },
+  {
+    key: 'calculator',
+    label: 'Calculator',
+    icon: '🧮',
+    desc: 'Calculate crop and pet sell values with mutations, strength, and friend bonuses',
+    windowTitle: '🧮 Calculator',
+  },
 ] as const;
 
 type FeatureKey = (typeof FEATURE_DEFS)[number]['key'];
 type FeatureDef = (typeof FEATURE_DEFS)[number];
 
 function loadVisibleCards(): FeatureKey[] {
-  const saved = storage.get<FeatureKey[] | null>(VISIBLE_CARDS_KEY, null);
+  // Read as string[] to handle old keys that may no longer be valid FeatureKey values
+  const saved = storage.get<string[] | null>(VISIBLE_CARDS_KEY, null);
   const defaultVisible = FEATURE_DEFS.map((f) => f.key) as FeatureKey[];
   const validKeys = new Set<FeatureKey>(defaultVisible);
 
@@ -90,7 +99,13 @@ function loadVisibleCards(): FeatureKey[] {
     return defaultVisible;
   }
 
-  let selected = saved.filter((key): key is FeatureKey => validKeys.has(key as FeatureKey));
+  // Migrate renamed keys (crop-calculator → calculator)
+  const renamed = saved.map((k) => (k === 'crop-calculator' ? 'calculator' : k));
+  if (saved.some((k, i) => k !== renamed[i])) {
+    storage.set(VISIBLE_CARDS_KEY, renamed);
+  }
+
+  let selected = renamed.filter((key): key is FeatureKey => validKeys.has(key as FeatureKey));
   if (selected.length === 0) {
     return defaultVisible;
   }
@@ -155,6 +170,18 @@ function loadVisibleCards(): FeatureKey[] {
     storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
   }
 
+  const calcMigrated = storage.get<boolean>(CALC_DEFAULT_MIGRATION_KEY, false);
+  if (!calcMigrated && !selected.includes('calculator')) {
+    const next: FeatureKey[] = [...selected, 'calculator'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(CALC_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!calcMigrated) {
+    storage.set(CALC_DEFAULT_MIGRATION_KEY, true);
+  }
+
   return selected;
 }
 
@@ -197,6 +224,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'inv-capacity') {
           const { createInventoryCapacitySection } = await import('./sections/inventoryCapacitySection');
           windowRoot.appendChild(createInventoryCapacitySection());
+        } else if (feat.key === 'calculator') {
+          const { renderCalculator } = await import('./cropCalculatorWindow');
+          renderCalculator(windowRoot);
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -503,6 +533,7 @@ function renderUtilityHub(root: HTMLElement): void {
       storage.set(CONTROLLER_DEFAULT_MIGRATION_KEY, true);
       storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
       storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
+      storage.set(CALC_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

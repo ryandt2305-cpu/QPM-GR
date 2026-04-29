@@ -1565,6 +1565,7 @@ async function initialize(): Promise<void> {
   registerWindowOpener('utility-hub', openUtilityHubWindow);
   registerWindowOpener('tools-hub', openToolsHubWindow);
   registerWindowOpener('tools-guide', openGuideWindow);
+  registerWindowOpener('calculator', () => import('./ui/cropCalculatorWindow').then(({ openCalculatorWindow }) => openCalculatorWindow()));
   if (TEXTURE_MANIPULATOR_ENABLED) {
     registerWindowOpener('texture-swapper', openTextureSwapperWindow);
   }

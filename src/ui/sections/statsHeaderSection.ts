@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.75",
+    date: "2026-04",
+    notes: [
+      "Fixed insta-harvest firing when a tool is equipped — now defers to the game action (water, dig, pot, cleanse, etc.)",
+    ],
+  },
+  {
     version: "3.1.74",
     date: "2026-04",
     notes: [

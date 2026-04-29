@@ -30,6 +30,7 @@ interface PageWithRoomConnection extends Window {
 
 let dirtTileAtom: unknown = null;
 let selectedSlotIdAtom: unknown = null;
+let actionAtom: unknown = null;
 
 function ensureAtoms(): boolean {
   if (!dirtTileAtom) {
@@ -38,7 +39,25 @@ function ensureAtoms(): boolean {
   if (!selectedSlotIdAtom) {
     selectedSlotIdAtom = getAtomByLabel('mySelectedSlotIdAtom');
   }
+  if (!actionAtom) {
+    actionAtom = getAtomByLabel('actionAtom');
+  }
   return dirtTileAtom != null;
+}
+
+// ── Harvest action guard ─────────────────────────────────────────────────
+
+const HARVEST_ACTIONS: ReadonlySet<string> = new Set(['harvest', 'rainbowHarvest', 'goldHarvest']);
+
+function readStringAtomSync(atom: unknown): string | null {
+  const store = getCachedStore();
+  if (!store || !atom) return null;
+  try {
+    const value = store.get(atom);
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Synchronous reads ──────────────────────────────────────────────────────
@@ -180,6 +199,10 @@ function onKeyDownCapture(event: KeyboardEvent): void {
 
   if (!ensureAtoms()) return;
 
+  // Skip insta-harvest when a non-harvest action is active (tool equipped, shop open, etc.)
+  const currentAction = readStringAtomSync(actionAtom);
+  if (currentAction && !HARVEST_ACTIONS.has(currentAction)) return;
+
   const dirtTileIndex = getDirtTileIndexSync();
   if (dirtTileIndex == null) return;
 
@@ -210,4 +233,5 @@ export function stopInstaHarvest(): void {
   window.removeEventListener('keydown', onKeyDownCapture as EventListener, true);
   dirtTileAtom = null;
   selectedSlotIdAtom = null;
+  actionAtom = null;
 }

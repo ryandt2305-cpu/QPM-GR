@@ -46,6 +46,15 @@ import { diagnoseCatalogs } from './catalogLoader';
 export { diagnoseCatalogs };
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+/** Clamp non-finite catalog prices (Infinity for dust-only items, NaN) to 0. */
+function finiteOrZero(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+// ============================================================================
 // PET CATALOG ACCESS
 // ============================================================================
 
@@ -176,8 +185,8 @@ export function getSeedPrice(species: string): { coins: number; credits: number 
   if (!plant?.seed) return null;
 
   return {
-    coins: plant.seed.coinPrice ?? 0,
-    credits: plant.seed.creditPrice ?? 0,
+    coins: finiteOrZero(plant.seed.coinPrice),
+    credits: finiteOrZero(plant.seed.creditPrice),
   };
 }
 
@@ -276,8 +285,8 @@ export function getItemPrice(itemId: string): { coins: number; credits: number }
   if (!item) return null;
 
   return {
-    coins: item.coinPrice ?? 0,
-    credits: item.creditPrice ?? 0,
+    coins: finiteOrZero(item.coinPrice),
+    credits: finiteOrZero(item.creditPrice),
   };
 }
 

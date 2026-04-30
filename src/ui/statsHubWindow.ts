@@ -2642,6 +2642,12 @@ function topValueRow(item: TopValueItem): HTMLElement {
   } else if (item.isSeed) {
     const url = getCropSpriteDataUrl(item.species) || '';
     img.src = url;
+  } else if (item.isDecor) {
+    const url = getAnySpriteDataUrl(`decor/${item.species}`) || getAnySpriteDataUrl(item.species) || '';
+    img.src = url;
+  } else if (item.isEgg) {
+    const url = getCropSpriteDataUrl(item.species) || getAnySpriteDataUrl(`egg/${item.species}`) || getAnySpriteDataUrl(item.species) || '';
+    img.src = url;
   } else {
     const url = getProduceSpriteDataUrlWithMutations(item.species, item.mutations) || getCropSpriteDataUrl(item.species) || '';
     img.src = url;
@@ -2654,10 +2660,8 @@ function topValueRow(item: TopValueItem): HTMLElement {
   const name = document.createElement('span');
   name.style.cssText = 'flex:1;font-size:10px;color:rgba(224,224,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
   let label = item.species;
-  if (item.isSeed) {
-    label += ' Seeds';
-    if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
-  }
+  if (item.isSeed) label += ' Seeds';
+  if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
   name.textContent = label;
   row.appendChild(name);
 

@@ -296,6 +296,10 @@ function floatingTopRow(item: TopValueItem): HTMLElement {
     img.src = getPetSpriteDataUrl(item.species) || getAnySpriteDataUrl(`sprite/pet/${item.species}`) || '';
   } else if (item.isSeed) {
     img.src = getCropSpriteDataUrl(item.species) || '';
+  } else if (item.isDecor) {
+    img.src = getAnySpriteDataUrl(`decor/${item.species}`) || getAnySpriteDataUrl(item.species) || '';
+  } else if (item.isEgg) {
+    img.src = getCropSpriteDataUrl(item.species) || getAnySpriteDataUrl(`egg/${item.species}`) || getAnySpriteDataUrl(item.species) || '';
   } else {
     img.src = getProduceSpriteDataUrlWithMutations(item.species, item.mutations) || getCropSpriteDataUrl(item.species) || '';
   }
@@ -304,10 +308,8 @@ function floatingTopRow(item: TopValueItem): HTMLElement {
   const name = document.createElement('span');
   name.style.cssText = 'flex:1;font-size:10px;color:rgba(224,224,255,0.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
   let label = item.species;
-  if (item.isSeed) {
-    label += ' Seeds';
-    if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
-  }
+  if (item.isSeed) label += ' Seeds';
+  if (item.quantity && item.quantity > 1) label += ` x${item.quantity}`;
   name.textContent = label;
   row.appendChild(name);
 

@@ -31,6 +31,17 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.78",
+    date: "2026-04",
+    notes: [
+      "Fixed inventory and economy values being inflated by items bought with magic dust (Infinity coin price clamped to 0)",
+      "Fixed net worth top-10 dropdown ignoring quantity on decor items (e.g. 7 Wizard Towers showing as 1)",
+      "Fixed net worth top-10 not including placed garden decor and eggs",
+      "Top-10 dropdown now aggregates identical items across sources and shows quantity for all item types",
+      "Calculator pet tab now shows magic dust sell value with formula breakdown",
+    ],
+  },
+  {
     version: "3.1.77",
     date: "2026-04",
     notes: [

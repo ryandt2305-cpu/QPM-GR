@@ -11,6 +11,8 @@ import {
   getPetSpecies,
   getPetMaxScale,
   getPetHoursToMature,
+  getAllEggTypes,
+  getEggSpawnWeights,
 } from '../catalogs/gameCatalogs';
 import {
   getCropSpriteDataUrl,
@@ -43,6 +45,7 @@ const MUTED = 'rgba(232,224,255,0.6)';
 const CARD_BG = 'rgba(255,255,255,0.03)';
 const HOVER_BG = 'rgba(143,130,255,0.06)';
 const PRICE_COLOR = '#ffd84d';
+const DUST_COLOR = '#ab47bc';
 
 const PILL_ACTIVE_BG = 'rgba(143,130,255,0.2)';
 const PILL_ACTIVE_BORDER = 'rgba(143,130,255,0.5)';
@@ -194,6 +197,85 @@ function computePetCalcPrice(state: PetCalcState): { sellPrice: number; scale: n
   const sellPrice = Math.round(basePrice * friendBonus);
 
   return { sellPrice, scale, mutMult: totalMultiplier, friendBonus, targetScale };
+}
+
+// ---------------------------------------------------------------------------
+// Magic Dust sell value
+// ---------------------------------------------------------------------------
+
+const DUST_RARITY_MULT: Record<string, number> = {
+  Common: 1,
+  Uncommon: 2,
+  Rare: 5,
+  Legendary: 10,
+  Mythical: 50,
+  Divine: 50,
+  Celestial: 50,
+};
+
+const DUST_MUTATION_MULT: Record<string, number> = {
+  Rainbow: 50,
+  Gold: 25,
+};
+
+function getPullRateMult(spawnWeightPct: number): number {
+  if (spawnWeightPct >= 51) return 1;
+  if (spawnWeightPct >= 11) return 2;
+  return 5;
+}
+
+/** Find which egg contains a species and compute its spawn weight percentage. */
+function getSourceEggForSpecies(speciesKey: string): { eggId: string; spawnWeightPct: number } | null {
+  const eggIds = getAllEggTypes();
+  for (const eggId of eggIds) {
+    const weights = getEggSpawnWeights(eggId);
+    if (!(speciesKey in weights)) continue;
+    const total = Object.values(weights).reduce((sum, w) => sum + w, 0);
+    if (total <= 0) continue;
+    return { eggId, spawnWeightPct: (weights[speciesKey] / total) * 100 };
+  }
+  return null;
+}
+
+function computePetDustValue(state: PetCalcState): { dustValue: number; rarityMult: number; pullRateMult: number; dustMutMult: number; scale: number } {
+  if (!state.pet) return { dustValue: 0, rarityMult: 1, pullRateMult: 1, dustMutMult: 1, scale: 1 };
+
+  const targetScale = strengthToTargetScale(state.maxStrength, state.pet.maxScale);
+  const scale = state.maxStrength > 0 ? (state.currentStrength / state.maxStrength) * targetScale : 1;
+  const rarityMult = DUST_RARITY_MULT[state.pet.rarity] ?? 1;
+
+  const eggInfo = getSourceEggForSpecies(state.pet.key);
+  const pullRateMult = eggInfo ? getPullRateMult(eggInfo.spawnWeightPct) : 1;
+
+  const dustMutMult = state.colorMutation ? (DUST_MUTATION_MULT[state.colorMutation] ?? 1) : 1;
+  const dustValue = Math.floor(100 * rarityMult * pullRateMult * dustMutMult * scale);
+
+  return { dustValue, rarityMult, pullRateMult, dustMutMult, scale };
+}
+
+// ---------------------------------------------------------------------------
+// Dust sprite helper
+// ---------------------------------------------------------------------------
+
+let dustUrlCache: string | null | undefined;
+function getDustSpriteUrl(): string | null {
+  if (dustUrlCache !== undefined) return dustUrlCache;
+  dustUrlCache =
+    getAnySpriteDataUrl('sprite/item/MagicDust') ||
+    getAnySpriteDataUrl('item/MagicDust') ||
+    null;
+  return dustUrlCache;
+}
+
+function makeDustIcon(size: number): HTMLElement {
+  const url = getDustSpriteUrl();
+  if (url) {
+    const img = el('img', `width:${size}px;height:${size}px;image-rendering:pixelated;flex-shrink:0;vertical-align:middle;`) as HTMLImageElement;
+    img.src = url;
+    img.alt = 'magic dust';
+    return img;
+  }
+  return el('span', `font-size:${size}px;`, '\u2728');
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,6 +1267,9 @@ function renderPetTab(container: HTMLElement): () => void {
 
   let priceEl: HTMLElement;
   let priceCoinEl: HTMLElement;
+  let dustRow: HTMLElement;
+  let dustPriceEl: HTMLElement;
+  let dustIconEl: HTMLElement;
   let rangeEl: HTMLElement;
   let scaleEl: HTMLElement;
   let maxSliderInput: HTMLInputElement;
@@ -1192,6 +1277,7 @@ function renderPetTab(container: HTMLElement): () => void {
   let curSliderInput: HTMLInputElement;
   let curSliderValueEl: HTMLElement;
   let formulaEl: HTMLElement;
+  let dustFormulaEl: HTMLElement;
 
   function getActiveMutations(): string[] {
     return state.colorMutation ? [state.colorMutation] : [];
@@ -1225,6 +1311,13 @@ function renderPetTab(container: HTMLElement): () => void {
       rangeEl.style.display = 'none';
     }
 
+    // Dust value
+    const dust = computePetDustValue(state);
+    dustIconEl.innerHTML = '';
+    dustIconEl.appendChild(makeDustIcon(20));
+    dustPriceEl.textContent = fullFmt.format(dust.dustValue);
+    dustRow.style.display = dust.dustValue > 0 ? 'flex' : 'none';
+
     // Scale display
     scaleEl.textContent = `Scale: ${scale.toFixed(2)}x`;
 
@@ -1256,8 +1349,28 @@ function renderPetTab(container: HTMLElement): () => void {
           'base      scale   muts   friends',
         ),
       );
+
+      // Dust formula breakdown
+      dustFormulaEl.innerHTML = '';
+      if (dust.dustValue > 0) {
+        dustFormulaEl.appendChild(
+          el(
+            'span',
+            `color:${DUST_COLOR};font-size:11px;font-family:monospace;opacity:0.85;`,
+            `100 \u00D7 ${dust.rarityMult} \u00D7 ${dust.pullRateMult} \u00D7 ${dust.dustMutMult} \u00D7 ${dust.scale.toFixed(2)} = ${fullFmt.format(dust.dustValue)}`,
+          ),
+        );
+        dustFormulaEl.appendChild(
+          el(
+            'span',
+            `color:${DUST_COLOR};font-size:10px;opacity:0.5;display:block;margin-top:2px;font-family:monospace;`,
+            'base  rar   pull  mut   scale',
+          ),
+        );
+      }
     } else {
       formulaEl.innerHTML = '';
+      dustFormulaEl.innerHTML = '';
     }
   }
 
@@ -1298,6 +1411,12 @@ function renderPetTab(container: HTMLElement): () => void {
   priceEl = el('span', `font-size:28px;font-weight:700;color:${PRICE_COLOR};`);
   priceRow.append(priceCoinEl, priceEl);
   resultCard.appendChild(priceRow);
+
+  dustRow = el('div', 'display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:4px;');
+  dustIconEl = el('span', '');
+  dustPriceEl = el('span', `font-size:20px;font-weight:600;color:${DUST_COLOR};`);
+  dustRow.append(dustIconEl, dustPriceEl);
+  resultCard.appendChild(dustRow);
 
   rangeEl = el('div', `font-size:13px;color:${MUTED};`);
   resultCard.appendChild(rangeEl);
@@ -1413,6 +1532,9 @@ function renderPetTab(container: HTMLElement): () => void {
   // --- Formula ---
   formulaEl = el('div', 'text-align:center;');
   container.appendChild(formulaEl);
+
+  dustFormulaEl = el('div', 'text-align:center;margin-top:4px;');
+  container.appendChild(dustFormulaEl);
 
   updateDisplay();
   return updateDisplay;

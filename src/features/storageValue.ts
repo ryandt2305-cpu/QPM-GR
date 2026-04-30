@@ -17,6 +17,7 @@ import {
   getEggType,
   getItemPrice,
   areCatalogsReady,
+  onCatalogsReady,
 } from '../catalogs/gameCatalogs';
 import { computeMutationMultiplier } from '../utils/cropMultipliers';
 import { debounceCancelable } from '../utils/debounce';
@@ -25,6 +26,15 @@ import { createLogger } from '../utils/logger';
 import { criticalInterval, timerManager } from '../utils/timerManager';
 
 const log = createLogger('QPM:StorageValue');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Clamp non-finite catalog prices (Infinity for dust-only items, NaN) to 0. */
+function finiteOr0(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -174,7 +184,7 @@ export function computeStorageItemsValue(items: unknown[], friendBonus = 1): num
       }
     } else if (raw.decorId && typeof raw.decorId === 'string') {
       const entry = getDecor(raw.decorId);
-      total += (entry?.coinPrice ?? 0) * quantity;
+      total += finiteOr0(entry?.coinPrice) * quantity;
     } else {
       // Seeds (silo items): try species or seedName
       const species =
@@ -239,7 +249,7 @@ export function computeInventoryValue(friendBonus = 1): number {
       const eggId = (raw.eggId as string | undefined) ?? '';
       if (eggId) {
         const entry = getEggType(eggId);
-        total += (entry?.coinPrice ?? 0) * quantity;
+        total += finiteOr0(entry?.coinPrice) * quantity;
       }
     } else if (itemType === 'tool') {
       const toolId = (raw.toolId as string | undefined) ?? '';
@@ -251,7 +261,7 @@ export function computeInventoryValue(friendBonus = 1): number {
       const decorId = (raw.decorId as string | undefined) ?? '';
       if (decorId) {
         const entry = getDecor(decorId);
-        total += (entry?.coinPrice ?? 0) * quantity;
+        total += finiteOr0(entry?.coinPrice) * quantity;
       }
     } else if (itemType === 'plant') {
       // Growing plants: approximate as seed cost
@@ -261,6 +271,7 @@ export function computeInventoryValue(friendBonus = 1): number {
         total += price?.coins ?? 0;
       }
     }
+
   }
 
   return total;
@@ -280,7 +291,7 @@ export function computeAllStoragesValue(friendBonus = 1): number {
     const decorId = typeof rec.decorId === 'string' ? rec.decorId : '';
     if (decorId) {
       const entry = getDecor(decorId);
-      if (entry) total += entry.coinPrice ?? 0;
+      if (entry) total += finiteOr0(entry.coinPrice);
     }
 
     // Value of items inside the storage
@@ -323,7 +334,7 @@ export function computePlacedDecorAndEggValue(snapshot: GardenSnapshot): number 
           ?? (typeof t.species === 'string' ? t.species : null);
         if (decorId) {
           const entry = getDecor(decorId);
-          if (entry) total += entry.coinPrice ?? 0;
+          if (entry) total += finiteOr0(entry.coinPrice);
         }
       } else if (objType === 'egg') {
         const eggId = (typeof t.eggId === 'string' ? t.eggId : null)
@@ -331,7 +342,7 @@ export function computePlacedDecorAndEggValue(snapshot: GardenSnapshot): number 
           ?? (typeof t.species === 'string' ? t.species : null);
         if (eggId) {
           const entry = getEggType(eggId);
-          if (entry) total += entry.coinPrice ?? 0;
+          if (entry) total += finiteOr0(entry.coinPrice);
         }
       }
     }
@@ -405,6 +416,7 @@ const storageDataListeners = new Set<() => void>();
 let modalAtomUnsub: (() => void) | null = null;
 let dataAtomUnsub: (() => void) | null = null;
 let invUnsub: (() => void) | null = null;
+let catalogReadyUnsub: (() => void) | null = null;
 let stopRetryTimer: (() => void) | null = null;
 let debouncedRecompute: ((() => void) & { cancel: () => void }) | null = null;
 
@@ -598,6 +610,11 @@ export function startStorageValue(): void {
     }
   });
 
+  // Re-compute when catalogs become ready (overlay may have shown 'loading')
+  catalogReadyUnsub = onCatalogsReady(() => {
+    debouncedRecompute?.();
+  });
+
   log('Started');
 }
 
@@ -619,6 +636,9 @@ export function stopStorageValue(): void {
 
   invUnsub?.();
   invUnsub = null;
+
+  catalogReadyUnsub?.();
+  catalogReadyUnsub = null;
 
   stateListeners.clear();
   storageDataListeners.clear();

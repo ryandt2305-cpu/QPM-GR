@@ -129,7 +129,7 @@ function extractSlotEconomy(
     const decorId = typeof rec.decorId === 'string' ? rec.decorId : '';
     if (decorId) {
       const entry = getDecor(decorId);
-      if (entry) storageValueTotal += entry.coinPrice ?? 0;
+      if (entry) storageValueTotal += Number.isFinite(entry.coinPrice) ? entry.coinPrice : 0;
     }
     // Items inside
     const storageItems = Array.isArray(rec.items) ? (rec.items as unknown[]) : [];

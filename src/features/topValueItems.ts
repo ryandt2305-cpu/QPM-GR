@@ -21,7 +21,48 @@ export interface TopValueItem {
   source: 'garden' | 'inventory' | 'storage' | 'activePet';
   isPet: boolean;
   isSeed?: boolean;
+  isDecor?: boolean;
+  isEgg?: boolean;
   quantity?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Clamp non-finite catalog prices (Infinity for dust-only items, NaN) to 0. */
+function finiteOr0(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * Aggregate items with the same species + type flags into single entries,
+ * summing values and quantities. Pets are never aggregated (each is unique).
+ */
+function aggregateItems(items: TopValueItem[]): TopValueItem[] {
+  const map = new Map<string, TopValueItem>();
+  const result: TopValueItem[] = [];
+
+  for (const item of items) {
+    // Pets are unique (different scale/mutations/xp) — never aggregate
+    if (item.isPet) {
+      result.push(item);
+      continue;
+    }
+
+    const key = `${item.species}|${item.isSeed ? 's' : item.isDecor ? 'd' : item.isEgg ? 'e' : 'p'}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.value += item.value;
+      existing.quantity = (existing.quantity ?? 1) + (item.quantity ?? 1);
+    } else {
+      const entry = { ...item, quantity: item.quantity ?? 1 };
+      map.set(key, entry);
+      result.push(entry);
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,9 +244,14 @@ export function getTopNetWorthItems(
         items.push({ species, mutations, scale, value, source: 'storage', isPet: false });
       } else if (raw.decorId && typeof raw.decorId === 'string') {
         const entry = getDecor(raw.decorId);
-        const value = entry?.coinPrice ?? 0;
-        if (value <= 0) continue;
-        items.push({ species: raw.decorId, mutations: [], scale: 1, value, source: 'storage', isPet: false });
+        const unitPrice = finiteOr0(entry?.coinPrice);
+        if (unitPrice <= 0) continue;
+        const quantity =
+          typeof raw.quantity === 'number' ? raw.quantity :
+          typeof raw.qty === 'number' ? raw.qty :
+          typeof raw.count === 'number' ? raw.count : 1;
+        const value = unitPrice * quantity;
+        items.push({ species: raw.decorId, mutations: [], scale: 1, value, source: 'storage', isPet: false, isDecor: true, quantity });
       } else {
         // Seeds
         const species =
@@ -240,6 +286,40 @@ export function getTopNetWorthItems(
     });
   }
 
-  items.sort((a, b) => b.value - a.value);
-  return items.slice(0, limit);
+  // Placed decor + eggs on garden tiles
+  if (snapshot) {
+    const tileSets = [snapshot.tileObjects, snapshot.boardwalkTileObjects];
+    for (const tileMap of tileSets) {
+      if (!tileMap) continue;
+      for (const tile of Object.values(tileMap)) {
+        if (!tile || typeof tile !== 'object') continue;
+        const t = tile as Record<string, unknown>;
+        const objType = t.objectType;
+
+        if (objType === 'decor') {
+          const decorId = (typeof t.decorId === 'string' ? t.decorId : null)
+            ?? (typeof t.species === 'string' ? t.species : null);
+          if (!decorId) continue;
+          const entry = getDecor(decorId);
+          const unitPrice = finiteOr0(entry?.coinPrice);
+          if (unitPrice <= 0) continue;
+          items.push({ species: decorId, mutations: [], scale: 1, value: unitPrice, source: 'garden', isPet: false, isDecor: true, quantity: 1 });
+        } else if (objType === 'egg') {
+          const eggId = (typeof t.eggId === 'string' ? t.eggId : null)
+            ?? (typeof t.eggType === 'string' ? t.eggType : null)
+            ?? (typeof t.species === 'string' ? t.species : null);
+          if (!eggId) continue;
+          const entry = getEggType(eggId);
+          const unitPrice = finiteOr0(entry?.coinPrice);
+          if (unitPrice <= 0) continue;
+          items.push({ species: eggId, mutations: [], scale: 1, value: unitPrice, source: 'garden', isPet: false, isEgg: true, quantity: 1 });
+        }
+      }
+    }
+  }
+
+  // Aggregate identical non-pet items (same species + type) before ranking
+  const aggregated = aggregateItems(items);
+  aggregated.sort((a, b) => b.value - a.value);
+  return aggregated.slice(0, limit);
 }

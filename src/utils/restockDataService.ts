@@ -61,6 +61,7 @@ const RESTOCK_EXTENDED_COLUMNS = [
   'baseline_interval_ms',
   'ema_interval_ms',
   'weather_intervals',
+  'is_dormant',
 ] as const;
 const RESTOCK_QUERY = `select=${RESTOCK_COLUMNS.join(',')}`;
 const RESTOCK_EXTENDED_QUERY = `select=${RESTOCK_EXTENDED_COLUMNS.join(',')}`;

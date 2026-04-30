@@ -268,6 +268,46 @@ export function makeMutationTile(
   return tile;
 }
 
+// ── Accent tile (non-mutation toggle, QPM-themed) ────────────────────────────
+
+const ACCENT_RAW = '#8f82ff';
+
+export function makeAccentTile(
+  displayName: string,
+  getActive: () => boolean,
+  onToggle: () => void,
+): HTMLElement {
+  const color = ACCENT_RAW;
+  const active = getActive();
+
+  const tile = document.createElement('div');
+  tile.title = displayName;
+  tile.style.cssText = `padding:6px 10px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,color .15s;border:1.5px solid ${active ? color : UNLOCKED_BORDER};background:${active ? color : UNLOCKED_BG}`;
+
+  const dot = document.createElement('div');
+  dot.style.cssText = `width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:background .15s;background:${active ? 'rgba(0,0,0,0.2)' : color}`;
+
+  const label = document.createElement('div');
+  label.textContent = displayName;
+  label.style.cssText = `font-size:11px;font-weight:600;white-space:nowrap;transition:color .15s;color:${active ? '#111' : TEXT_MUTED}`;
+
+  tile.append(dot, label);
+
+  const applyState = (): void => {
+    const sel = getActive();
+    tile.style.borderColor = sel ? color : UNLOCKED_BORDER;
+    tile.style.background = sel ? color : UNLOCKED_BG;
+    dot.style.background = sel ? 'rgba(0,0,0,0.2)' : color;
+    label.style.color = sel ? '#111' : TEXT_MUTED as string;
+  };
+
+  tile.addEventListener('mouseenter', () => { if (!getActive()) { tile.style.background = `${color}18`; tile.style.borderColor = `${color}55`; } });
+  tile.addEventListener('mouseleave', () => { if (!getActive()) { tile.style.background = UNLOCKED_BG; tile.style.borderColor = UNLOCKED_BORDER; } });
+  tile.addEventListener('click', () => { onToggle(); applyState(); });
+
+  return tile;
+}
+
 // ── Rarity helpers ──────────────────────────────────────────────────────────
 
 export function makeRarityGroup(rarity: string, tiles: HTMLElement[]): HTMLElement {

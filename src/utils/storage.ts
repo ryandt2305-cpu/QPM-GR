@@ -212,6 +212,21 @@ const QPM_DYNAMIC_KEY_PREFIXES = [
   'qpm-window-state-',
 ] as const;
 
+/**
+ * Set of storage keys registered at runtime by features that use dynamic
+ * (e.g. player-scoped) key names. Used by exportAllValues() as a fallback
+ * discovery mechanism alongside the localStorage prefix scan.
+ */
+const dynamicKeys = new Set<string>();
+
+/**
+ * Register a storage key that was generated at runtime (e.g. player-scoped).
+ * Ensures it will be included in exports even when GM_listValues is unavailable.
+ */
+export function registerDynamicKey(key: string): void {
+  dynamicKeys.add(key);
+}
+
 export const storage: Storage = {
   get<T = any>(key: string, fallback: T = null as T): T {
     try {
@@ -330,7 +345,8 @@ function isDynamicWindowKey(key: string): boolean {
 /**
  * Serialises all currently-stored QPM values to a plain object of JSON strings.
  *
- * Only exports keys in QPM_STORAGE_KEYS or matching known QPM prefixes (qpm.*, quinoa*).
+ * Exports keys from QPM_STORAGE_KEYS, dynamically registered keys, and any localStorage
+ * keys matching known QPM prefixes (qpm.*, quinoa*).
  * Excludes dynamic window layout keys (position/size/state) — those are ephemeral UI state.
  *
  * Values are returned as JSON strings (the same format that storage.set writes)
@@ -353,8 +369,34 @@ export function exportAllValues(): Record<string, string> {
     }
   } catch { /* GM_listValues unavailable */ }
 
-  // Fallback: iterate the known key list against localStorage
+  // Fallback: iterate the known key list + scan localStorage for dynamic keys
+  const seen = new Set<string>();
+
   for (const key of QPM_STORAGE_KEYS) {
+    if (isDynamicWindowKey(key)) continue;
+    const val = storage.get(key);
+    if (val !== null) {
+      try { out[key] = JSON.stringify(val); seen.add(key); } catch { /* skip */ }
+    }
+  }
+
+  // Scan localStorage for dynamic qpm.*/quinoa* keys not in the static list
+  // (e.g. player-scoped petTeams keys like qpm.petTeams.config.v1.{playerId})
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (seen.has(key) || isDynamicWindowKey(key)) continue;
+      if (key.startsWith('qpm.') || key.startsWith('quinoa')) {
+        const val = storage.get(key);
+        if (val !== null) {
+          try { out[key] = JSON.stringify(val); } catch { /* skip */ }
+        }
+      }
+    }
+  } catch { /* localStorage access failed */ }
+
+  // Also check dynamically registered keys (defense-in-depth)
+  for (const key of dynamicKeys) {
+    if (key in out || isDynamicWindowKey(key)) continue;
     const val = storage.get(key);
     if (val !== null) {
       try { out[key] = JSON.stringify(val); } catch { /* skip */ }

@@ -15,7 +15,7 @@ import {
   type EligibleData,
   resolveEggSprite, resolveDecorSprite,
   makeToggleRow, makeBlockAllCheckbox, makeShowAllToggle, makeHint, makeGrid,
-  makeLockTile, makeMutationTile, buildRarityGrid,
+  makeLockTile, makeMutationTile, makeAccentTile, buildRarityGrid,
 } from './lockerPrimitives';
 import { buildCustomRulesCard } from './lockerCustomRules';
 
@@ -38,6 +38,11 @@ export function buildPlantsPanel(config: LockerConfig, eligible: EligibleData): 
     'Gold',
     () => getLockerConfig().instaHarvestGold,
     () => { updateLockerConfig({ instaHarvestGold: !getLockerConfig().instaHarvestGold }); },
+  ));
+  instaGrid.appendChild(makeAccentTile(
+    'Aries Hold',
+    () => getLockerConfig().ariesHold,
+    () => { updateLockerConfig({ ariesHold: !getLockerConfig().ariesHold }); },
   ));
   instaBody.appendChild(instaGrid);
   panel.appendChild(instaRoot);

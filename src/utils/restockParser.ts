@@ -116,6 +116,7 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     baseline_interval_ms: preferred.baseline_interval_ms ?? fallback.baseline_interval_ms ?? null,
     ema_interval_ms: preferred.ema_interval_ms ?? fallback.ema_interval_ms ?? null,
     weather_intervals: preferred.weather_intervals ?? fallback.weather_intervals ?? null,
+    is_dormant: preferred.is_dormant ?? fallback.is_dormant ?? null,
   };
 }
 
@@ -212,6 +213,7 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
     baseline_interval_ms: toMsDuration(raw.baseline_interval_ms ?? raw.baselineIntervalMs),
     ema_interval_ms: toMsDuration(raw.ema_interval_ms ?? raw.emaIntervalMs),
     weather_intervals: parseWeatherIntervals(raw.weather_intervals ?? raw.weatherIntervals),
+    is_dormant: !!(raw.is_dormant ?? raw.isDormant) || null,
   };
 }
 

@@ -26,6 +26,7 @@ export interface LockerConfig {
   customRules: CustomRule[];     // plant+mutation combo rules
   instaHarvestRainbow: boolean;  // skip hold-to-harvest for Rainbow plants
   instaHarvestGold: boolean;     // skip hold-to-harvest for Gold plants
+  ariesHold: boolean;            // rapid-fire hold mode (hold Space → repeat at 10 Hz)
 }
 
 export interface GuardResult {

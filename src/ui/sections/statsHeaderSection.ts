@@ -31,6 +31,14 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.80",
+    date: "2026-05",
+    notes: [
+      "Added Aries Hold toggle in Locker > Insta-Harvest — hold Space to rapidly repeat any action at 10/s (planting, harvesting, interacting, etc.)",
+      "Fixed Import/Export to discover player-scoped dynamic keys so pet team backups are never lost when switching accounts",
+    ],
+  },
+  {
     version: "3.1.79",
     date: "2026-04",
     notes: [

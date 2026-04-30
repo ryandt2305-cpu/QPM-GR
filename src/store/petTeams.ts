@@ -1,7 +1,7 @@
 // src/store/petTeams.ts
 // Team CRUD, apply engine, team detection, and pet pool.
 
-import { storage } from '../utils/storage';
+import { storage, registerDynamicKey } from '../utils/storage';
 import { log } from '../utils/logger';
 import { getActivePetInfos, onActivePetInfos } from './pets';
 import { onInventoryChange } from './inventory';
@@ -98,6 +98,10 @@ async function resolvePlayerKeyAndMigrate(): Promise<void> {
   // Activate scoped keys — all future saves use these
   resolvedConfigKey = scopedConfigKey;
   resolvedFeedKey = scopedFeedKey;
+
+  // Register with storage export so backup/restore captures them
+  registerDynamicKey(scopedConfigKey);
+  registerDynamicKey(scopedFeedKey);
 }
 
 // ---------------------------------------------------------------------------

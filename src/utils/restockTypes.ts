@@ -24,6 +24,8 @@ export interface RestockItem {
   // EMA + weather stratification (v7+)
   ema_interval_ms: number | null;
   weather_intervals: Record<string, number[]> | null;
+  // Dormancy detection (v9+)
+  is_dormant: boolean | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -117,4 +119,6 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'emaIntervalMs',
   'weather_intervals',
   'weatherIntervals',
+  'is_dormant',
+  'isDormant',
 ]);

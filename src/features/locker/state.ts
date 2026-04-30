@@ -21,6 +21,7 @@ const DEFAULT_CONFIG: LockerConfig = {
   customRules: [],
   instaHarvestRainbow: false,
   instaHarvestGold: false,
+  ariesHold: false,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,6 +101,7 @@ function sanitizeConfig(raw: unknown): LockerConfig {
     customRules: sanitizeCustomRules(raw.customRules),
     instaHarvestRainbow: toBoolean(raw.instaHarvestRainbow, DEFAULT_CONFIG.instaHarvestRainbow),
     instaHarvestGold: toBoolean(raw.instaHarvestGold, DEFAULT_CONFIG.instaHarvestGold),
+    ariesHold: toBoolean(raw.ariesHold, DEFAULT_CONFIG.ariesHold),
   };
 }
 

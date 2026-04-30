@@ -208,6 +208,37 @@ export function buildPredRow(
     return { row, etaRef: { el: document.createElement('span'), ts: 0 }, cleanups: rowCleanups };
   }
 
+  // Dormant items: seasonal/removed — suppress ETA and rate.
+  if (item.is_dormant === true) {
+    row.style.background = cel ? 'rgba(255,215,0,0.04)' : 'rgba(255,165,0,0.04)';
+
+    const dormantEtaWrap = document.createElement('div');
+    dormantEtaWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;min-width:68px;width:68px;';
+    const dormantLabel = document.createElement('div');
+    dormantLabel.style.cssText = 'font-size:14px;font-weight:700;color:rgba(255,165,0,0.6);white-space:nowrap;line-height:1.15;';
+    dormantLabel.textContent = 'Seasonal';
+    const dormantSub = document.createElement('div');
+    dormantSub.style.cssText = 'font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;';
+    dormantSub.textContent = 'next';
+    dormantEtaWrap.append(dormantLabel, dormantSub);
+    metrics.appendChild(dormantEtaWrap);
+
+    const dormantRateWrap = document.createElement('div');
+    dormantRateWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;min-width:70px;width:70px;';
+    const dormantDash = document.createElement('div');
+    dormantDash.style.cssText = 'font-size:19px;font-weight:700;color:rgba(232,224,255,0.3);font-variant-numeric:tabular-nums;line-height:1.15;';
+    dormantDash.textContent = '\u2014';
+    const dormantRateLbl = document.createElement('div');
+    dormantRateLbl.style.cssText = 'font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;';
+    dormantRateLbl.textContent = 'rate';
+    dormantRateWrap.append(dormantDash, dormantRateLbl);
+    metrics.appendChild(dormantRateWrap);
+
+    row.appendChild(metrics);
+    row.addEventListener('click', () => { opts.onUnpin(key); });
+    return { row, etaRef: { el: document.createElement('span'), ts: 0 }, cleanups: rowCleanups };
+  }
+
   const etaLabel = formatETA(ts);
   const etaCol   = etaColor(ts);
 

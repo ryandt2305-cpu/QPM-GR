@@ -33,17 +33,79 @@ const DEFAULT_FEED_POLICY: PetFeedPolicy = {
 let config: PetTeamsConfig = { ...DEFAULT_CONFIG };
 let feedPolicy: PetFeedPolicy = { ...DEFAULT_FEED_POLICY };
 const configListeners = new Set<(cfg: PetTeamsConfig) => void>();
+
+// Player-scoped storage key support (Fix B + C)
+let resolvedConfigKey = CONFIG_KEY;
+let resolvedFeedKey = FEED_POLICY_KEY;
+let initPlayerId: string | null = null;
+
 let activePetsUnsubscribe: (() => void) | null = null;
 let purgeUnsubscribe: (() => void) | null = null;
 let purgeInvUnsubscribe: (() => void) | null = null;
 let purgeTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---------------------------------------------------------------------------
+// Player identity helpers (Fix B + C)
+// ---------------------------------------------------------------------------
+
+async function resolveCurrentPlayerId(): Promise<string | null> {
+  try {
+    const playerAtom = getAtomByLabel('playerAtom');
+    if (!playerAtom) return null;
+    const player = await readAtomValue<unknown>(playerAtom).catch(() => null);
+    if (!player || typeof player !== 'object') return null;
+    const p = player as Record<string, unknown>;
+    for (const key of ['id', 'playerId', 'userId']) {
+      const v = p[key];
+      if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+    }
+  } catch { /* atom not ready */ }
+  return null;
+}
+
+async function resolvePlayerKeyAndMigrate(): Promise<void> {
+  const playerId = await resolveCurrentPlayerId();
+  if (!playerId) {
+    log('[PetTeams] Player ID unavailable — using unscoped storage key');
+    return;
+  }
+  initPlayerId = playerId;
+  const scopedConfigKey = `${CONFIG_KEY}.${playerId}`;
+  const scopedFeedKey = `${FEED_POLICY_KEY}.${playerId}`;
+
+  // Config migration: unscoped → scoped on first login under this version
+  const existingScoped = storage.get<PetTeamsConfig | null>(scopedConfigKey, null);
+  if (existingScoped === null) {
+    if (config.teams.length > 0) {
+      storage.set(scopedConfigKey, config);
+      log(`[PetTeams] Migrated ${config.teams.length} team(s) to player-scoped key`);
+    }
+  } else {
+    // Scoped key already has data for this player — load it and notify UI
+    config = storage.get<PetTeamsConfig>(scopedConfigKey, DEFAULT_CONFIG);
+    notifyConfigListeners();
+    log(`[PetTeams] Loaded player-scoped config (${config.teams.length} team(s))`);
+  }
+
+  // Feed policy: same migration pattern
+  const existingScopedFeed = storage.get<PetFeedPolicy | null>(scopedFeedKey, null);
+  if (existingScopedFeed === null && feedPolicy.updatedAt > 0) {
+    storage.set(scopedFeedKey, feedPolicy);
+  } else if (existingScopedFeed !== null) {
+    feedPolicy = storage.get<PetFeedPolicy>(scopedFeedKey, DEFAULT_FEED_POLICY);
+  }
+
+  // Activate scoped keys — all future saves use these
+  resolvedConfigKey = scopedConfigKey;
+  resolvedFeedKey = scopedFeedKey;
+}
+
+// ---------------------------------------------------------------------------
 // Init / stop
 // ---------------------------------------------------------------------------
 
 export function initPetTeamsStore(): void {
-  config = storage.get<PetTeamsConfig>(CONFIG_KEY, DEFAULT_CONFIG);
+  config = storage.get<PetTeamsConfig>(resolvedConfigKey, DEFAULT_CONFIG);
   // Ensure required fields exist after version upgrades
   if (!Array.isArray(config.teams)) config.teams = [];
   if (typeof config.keybinds !== 'object' || config.keybinds === null) config.keybinds = {};
@@ -96,12 +158,12 @@ export function initPetTeamsStore(): void {
   }
   if (keybindsChanged || Object.keys(migratedKeybinds).length !== Object.keys(config.keybinds).length) {
     config.keybinds = migratedKeybinds;
-    storage.set(CONFIG_KEY, config);
+    storage.set(resolvedConfigKey, config);
   } else if (teamsNormalized) {
-    storage.set(CONFIG_KEY, config);
+    storage.set(resolvedConfigKey, config);
   }
 
-  feedPolicy = storage.get<PetFeedPolicy>(FEED_POLICY_KEY, DEFAULT_FEED_POLICY);
+  feedPolicy = storage.get<PetFeedPolicy>(resolvedFeedKey, DEFAULT_FEED_POLICY);
   if (typeof feedPolicy.petItemOverrides !== 'object' || feedPolicy.petItemOverrides === null) {
     feedPolicy.petItemOverrides = {};
   }
@@ -128,6 +190,12 @@ export function initPetTeamsStore(): void {
           return;
         }
         const validIds = new Set(pool.map(p => p.id));
+        // Fix B: skip purge if the account changed since store init
+        const currentId = await resolveCurrentPlayerId();
+        if (initPlayerId !== null && currentId !== null && currentId !== initPlayerId) {
+          log('[PetTeams] Skipping purge — account change detected');
+          return;
+        }
         purgeGonePets(validIds);
       } catch { /* ignore */ }
     }, 3000);
@@ -136,6 +204,8 @@ export function initPetTeamsStore(): void {
   purgeInvUnsubscribe = onInventoryChange(() => schedulePurge(), false);
 
   log(`[PetTeams] Store initialized - ${config.teams.length} teams`);
+  // Fix C: resolve player-scoped key in background (non-blocking, keep function sync)
+  resolvePlayerKeyAndMigrate().catch(err => log('[PetTeams] Key resolution failed', err));
 }
 
 export function stopPetTeamsStore(): void {
@@ -147,6 +217,10 @@ export function stopPetTeamsStore(): void {
   purgeInvUnsubscribe = null;
   if (purgeTimer) { clearTimeout(purgeTimer); purgeTimer = null; }
   configListeners.clear();
+  // Reset player-scoped key state so re-init works correctly
+  resolvedConfigKey = CONFIG_KEY;
+  resolvedFeedKey = FEED_POLICY_KEY;
+  initPlayerId = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,13 +228,13 @@ export function stopPetTeamsStore(): void {
 // ---------------------------------------------------------------------------
 
 function saveConfig(): void {
-  storage.set(CONFIG_KEY, config);
+  storage.set(resolvedConfigKey, config);
   notifyConfigListeners();
 }
 
 function saveFeedPolicy(): void {
   feedPolicy.updatedAt = Date.now();
-  storage.set(FEED_POLICY_KEY, feedPolicy);
+  storage.set(resolvedFeedKey, feedPolicy);
   try {
     window.dispatchEvent(new CustomEvent(PET_FEED_POLICY_CHANGED_EVENT, {
       detail: { updatedAt: feedPolicy.updatedAt },

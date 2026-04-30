@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.79",
+    date: "2026-04",
+    notes: [
+      "Pet teams storage is now scoped per player account, preventing teams from being wiped when switching accounts",
+      "Purge no longer runs if the active account changed since the store was initialized, guarding against cross-account slot clearing",
+      "Existing teams are automatically migrated to the player-scoped key on first load after the update",
+    ],
+  },
+  {
     version: "3.1.78",
     date: "2026-04",
     notes: [

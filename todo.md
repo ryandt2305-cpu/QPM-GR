@@ -1,2 +1,0 @@
-find out where the weather and mutation reminders are and overhaul them - proper alert style, with sounds (just like other qpm alerts and sounds) - and a dedicated spot in utility hub with enable/disable button and config
-inventory storage value showing infinityNan or just '-' and the Networth and Garden metrics in economy tab say '-' but the top 10 dropdown works and displays (but it saying under net worth dropdown, i only own 1 wizard tower, when there are actually 7 in my garden and more in my decor shed)

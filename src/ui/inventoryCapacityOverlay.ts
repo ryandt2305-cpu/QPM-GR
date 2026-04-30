@@ -212,7 +212,10 @@ function onModalChange(value: string | null): void {
   if (inventoryModalOpen) {
     // Inventory modal opened — hide overlay
     const el = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
-    if (el) el.style.opacity = '0';
+    if (el) {
+      el.classList.remove('qpm-inv-full');
+      el.style.opacity = '0';
+    }
   } else {
     // Inventory modal closed — invalidate anchor because the toolbar moved,
     // then re-apply state which will re-walk Pixi to find the new position.
@@ -405,7 +408,10 @@ function applyState(state: InventoryCapacityState): void {
   if (state.level === 'ok') {
     overlayVisible = false;
     const el = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
-    if (el) el.style.opacity = '0';
+    if (el) {
+      el.classList.remove('qpm-inv-full');
+      el.style.opacity = '0';
+    }
     return;
   }
 

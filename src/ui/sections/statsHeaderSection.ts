@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.77",
+    date: "2026-04",
+    notes: [
+      "Fixed inventory capacity overlay keeping its blink animation after being disabled",
+    ],
+  },
+  {
     version: "3.1.76",
     date: "2026-04",
     notes: [

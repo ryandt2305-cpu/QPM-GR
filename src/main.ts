@@ -18,6 +18,7 @@ import { initializeAutoReconnect, stopAutoReconnect } from './features/autoRecon
 import { initializeGardenFilters } from './features/gardenFilters';
 import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
+import { startHutchStore } from './store/hutch';
 import { startSellSnapshotWatcher } from './store/sellSnapshot';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
@@ -1377,6 +1378,9 @@ async function initialize(): Promise<void> {
   });
   await startInventoryStore().catch((error) => {
     log('Inventory store pre-init failed', error);
+  });
+  await startHutchStore().catch((error) => {
+    log('Hutch store pre-init failed', error);
   });
   await startPetInfoStore().catch((error) => {
     log('Pet info store pre-init failed', error);

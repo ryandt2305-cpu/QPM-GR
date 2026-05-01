@@ -3,10 +3,14 @@
 
 import { pageWindow } from '../../core/pageContext';
 import { notify } from '../../core/notifications';
-import { getInventoryItems, type InventoryItem } from '../../store/inventory';
+import { getInventoryItems, getFavoritedItemIds, type InventoryItem } from '../../store/inventory';
 import { getGardenSnapshot } from '../gardenBridge';
+import { getSellAllPetsSettings } from '../sellAllPets';
+import { getPetMetadata } from '../../data/petMetadata';
+import { calculateMaxStrength } from '../../store/xpTracker';
 import { getLockerConfig } from './state';
 import { evaluateAction, type InventorySnapshot, type TileContext } from './rules';
+import type { GuardResult } from './types';
 import { criticalInterval } from '../../utils/timerManager';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -172,17 +176,126 @@ function resolveTileContext(slot: unknown, slotsIndex?: unknown): TileContext | 
   return { objectType, species, eggId, decorId, mutations };
 }
 
+// ── Pet sell guard ────────────────────────────────────────────────────────
+
+function readPetMutations(raw: unknown): string[] {
+  if (!isRecord(raw)) return [];
+  const candidates = [raw.mutations, isRecord(raw.pet) ? raw.pet.mutations : undefined];
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const v of candidate) {
+      if (typeof v === 'string' && v.length > 0) out.push(v);
+    }
+  }
+  return out;
+}
+
+function readPetTargetScale(raw: unknown): number | null {
+  if (!isRecord(raw)) return null;
+  const candidates = [
+    raw.targetScale,
+    isRecord(raw.pet) ? raw.pet.targetScale : undefined,
+    isRecord(raw.pet) ? raw.pet.scale : undefined,
+    raw.scale,
+  ];
+  for (const v of candidates) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function readPetStrength(item: InventoryItem): number | null {
+  const candidates = [
+    item.strength,
+    isRecord(item.raw) ? (item.raw as Record<string, unknown>).strength : undefined,
+    isRecord(item.raw) && isRecord((item.raw as Record<string, unknown>).pet)
+      ? ((item.raw as Record<string, unknown>).pet as Record<string, unknown>).strength
+      : undefined,
+  ];
+  for (const v of candidates) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+const PASS: GuardResult = { blocked: false };
+
+function evaluatePetSell(itemId: string): GuardResult {
+  const config = getLockerConfig();
+  if (!config.petSellGuard) return PASS;
+
+  const protections = getSellAllPetsSettings().protections;
+  if (!protections.enabled) return PASS;
+
+  // Safety net: always block selling favorited items
+  const favorites = getFavoritedItemIds();
+  if (favorites.has(itemId)) {
+    return { blocked: true, reason: 'Pet is favorited', rule: 'pet_sell_favorite' };
+  }
+
+  const items = getInventoryItems();
+  const item = items.find(i => i.id === itemId);
+  if (!item) return PASS; // unknown item — allow
+
+  const mutations = readPetMutations(item.raw);
+  const mutationsLower = mutations.map(m => m.toLowerCase());
+
+  if (protections.protectGold && mutationsLower.some(m => m.includes('gold'))) {
+    return { blocked: true, reason: 'Protected: Gold mutation', rule: 'pet_sell_gold' };
+  }
+  if (protections.protectRainbow && mutationsLower.some(m => m.includes('rainbow'))) {
+    return { blocked: true, reason: 'Protected: Rainbow mutation', rule: 'pet_sell_rainbow' };
+  }
+
+  const species = (typeof item.species === 'string' ? item.species : null)
+    ?? (isRecord(item.raw) ? (item.raw as Record<string, unknown>).petSpecies : null);
+  const speciesStr = typeof species === 'string' ? species : null;
+
+  if (speciesStr) {
+    const meta = getPetMetadata(speciesStr);
+    if (meta?.rarity) {
+      const protectedRarities = new Set(protections.protectedRarities.map(r => r.toLowerCase()));
+      if (protectedRarities.has(meta.rarity.toLowerCase())) {
+        return { blocked: true, reason: `Protected rarity: ${meta.rarity}`, rule: 'pet_sell_rarity' };
+      }
+    }
+  }
+
+  if (protections.protectMaxStr) {
+    const targetScale = readPetTargetScale(item.raw);
+    const computedMax = speciesStr ? calculateMaxStrength(targetScale, speciesStr) : null;
+    const strength = readPetStrength(item);
+    const maxStrength = computedMax ?? strength;
+    if (typeof maxStrength === 'number') {
+      const threshold = Math.max(0, Math.min(100, Math.round(protections.maxStrThreshold)));
+      if (Math.round(maxStrength) >= threshold) {
+        return { blocked: true, reason: `Protected: Max STR ${Math.round(maxStrength)}%`, rule: 'pet_sell_max_str' };
+      }
+    }
+  }
+
+  return PASS;
+}
+
 // ── Core evaluate helper ───────────────────────────────────────────────────
 
 function evaluate(
   actionType: string,
   payload: Record<string, unknown>,
-): { blocked: boolean; rule?: string; reason?: string } {
+): GuardResult {
   const config = getLockerConfig();
-  if (!config.enabled) return { blocked: false };
+  if (!config.enabled) return PASS;
 
   const tile = resolveTileContext(payload.slot, payload.slotsIndex);
   const result = evaluateAction(actionType, payload, config, getInventorySnapshot(actionType, payload), tile);
+  if (result.blocked) return result;
+
+  // Pet sell protection: evaluated at the guard layer because it needs store access
+  if (actionType === 'SellPet' && typeof payload.itemId === 'string') {
+    return evaluatePetSell(payload.itemId);
+  }
+
   return result;
 }
 

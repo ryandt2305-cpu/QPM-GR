@@ -81,6 +81,22 @@ export function evaluateAction(
       return inventoryReserveCheck(config, inventory);
     }
 
+    case 'RemoveGardenObject': {
+      // Reuse plant locks: if a plant is locked for harvest, also protect from shoveling
+      if (tile?.species && config.plantLocks[tile.species]) {
+        return { blocked: true, reason: `Plant locked (shovel): ${tile.species}`, rule: 'shovel_plant_lock' };
+      }
+      // Reuse mutation locks: protect plants with locked mutations from shoveling
+      if (tile?.mutations && tile.mutations.length > 0) {
+        const lockedMut = hasAnyLockedMutation(tile.mutations, config.mutationLocks);
+        if (lockedMut) {
+          const label = tile.species ? `${tile.species} (${lockedMut})` : lockedMut;
+          return { blocked: true, reason: `Mutation locked (shovel): ${label}`, rule: 'shovel_mutation_lock' };
+        }
+      }
+      return PASS;
+    }
+
     case 'PickupObject': {
       return inventoryReserveCheck(config, inventory);
     }
@@ -127,6 +143,11 @@ export function evaluateAction(
     case 'PurchaseDecor': {
       return inventoryReserveCheck(config, inventory);
     }
+
+    case 'SellPet':
+      // Pet sell protection is handled at the guard layer (guard.ts)
+      // because it requires store access for inventory/favorites lookup.
+      return PASS;
 
     default:
       return PASS;

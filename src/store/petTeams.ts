@@ -13,6 +13,12 @@ import type { PetTeam, PetTeamsConfig, PetFeedPolicy, PooledPet } from '../types
 import { sendRoomAction, type WebSocketSendFailureReason } from '../websocket/api';
 import { findEmptyGardenTile, PLACE_PET_DEFAULTS, resolveMyUserSlotIdx } from '../features/petTeamActions';
 import { normalizeSpeciesKey } from '../utils/helpers';
+import {
+  getHutchCapacity,
+  isCapacityResolved,
+  DEFAULT_HUTCH_CAPACITY,
+  INVENTORY_MAX,
+} from './hutch';
 
 const CONFIG_KEY = 'qpm.petTeams.config.v1';
 const FEED_POLICY_KEY = 'qpm.petTeams.feedPolicy.v1';
@@ -591,7 +597,6 @@ async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
 const INVENTORY_ATOM_LABEL = 'myInventoryAtom';
 const HUTCH_ATOM_LABEL = 'myPetHutchPetItemsAtom';
 const PET_HUTCH_STORAGE_ID = 'PetHutch';
-const DEFAULT_HUTCH_CAPACITY = 25;
 const HUTCH_RETRIEVE_TIMEOUT_MS = 3500;
 const STORE_TIMEOUT_MS = 3000;
 const PLACE_TIMEOUT_MS = 3000;
@@ -691,6 +696,8 @@ interface InventorySnapshot {
   ids: Set<string>;
   petIds: string[];
   freeIndex: number | null;
+  /** Total number of non-null items in inventory. */
+  totalCount: number;
 }
 
 interface HutchSnapshot {
@@ -711,13 +718,14 @@ async function readInventorySnapshot(): Promise<InventorySnapshot> {
   const petIds: string[] = [];
   const atom = getAtomByLabel(INVENTORY_ATOM_LABEL);
   if (!atom) {
-    return { ids, petIds, freeIndex: null };
+    return { ids, petIds, freeIndex: null, totalCount: 0 };
   }
 
   try {
     const raw = await readAtomValue(atom);
     const items = extractInventoryItems(raw);
     let firstFreeIndex: number | null = null;
+    let totalCount = 0;
 
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -727,6 +735,7 @@ async function readInventorySnapshot(): Promise<InventorySnapshot> {
         }
         continue;
       }
+      totalCount++;
       if (typeof item !== 'object') {
         continue;
       }
@@ -743,18 +752,18 @@ async function readInventorySnapshot(): Promise<InventorySnapshot> {
     }
 
     const freeIndex = firstFreeIndex ?? items.length;
-    return { ids, petIds, freeIndex };
+    return { ids, petIds, freeIndex, totalCount };
   } catch (error) {
     log('[petTeams] inventory snapshot read failed', error);
-    return { ids, petIds, freeIndex: null };
+    return { ids, petIds, freeIndex: null, totalCount: 0 };
   }
 }
 
-async function readHutchSnapshot(): Promise<HutchSnapshot> {
+async function readHutchSnapshot(resolvedCapacity?: number | null): Promise<HutchSnapshot> {
   const ids = new Set<string>();
   const atom = getAtomByLabel(HUTCH_ATOM_LABEL);
   if (!atom) {
-    return { ids, count: 0, hutchMax: DEFAULT_HUTCH_CAPACITY, freeIndex: 0 };
+    return { ids, count: 0, hutchMax: resolvedCapacity ?? DEFAULT_HUTCH_CAPACITY, freeIndex: 0 };
   }
 
   try {
@@ -791,8 +800,8 @@ async function readHutchSnapshot(): Promise<HutchSnapshot> {
       }
     }
 
-    // Derive effective max from the atom array length (reflects upgraded capacity).
-    const effectiveMax = Math.max(items.length, occupied, DEFAULT_HUTCH_CAPACITY);
+    // Use resolved capacity if available, otherwise fall back to heuristic
+    const effectiveMax = resolvedCapacity ?? Math.max(items.length, occupied, DEFAULT_HUTCH_CAPACITY);
 
     let freeIndex: number | null = null;
     if (hasStorageIndexes) {
@@ -811,7 +820,7 @@ async function readHutchSnapshot(): Promise<HutchSnapshot> {
     return { ids, count: occupied, hutchMax: effectiveMax, freeIndex };
   } catch (error) {
     log('[petTeams] hutch snapshot read failed', error);
-    return { ids, count: 0, hutchMax: DEFAULT_HUTCH_CAPACITY, freeIndex: null };
+    return { ids, count: 0, hutchMax: resolvedCapacity ?? DEFAULT_HUTCH_CAPACITY, freeIndex: null };
   }
 }
 
@@ -1041,6 +1050,10 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
   // Resolve player's garden slot index once — used by all PlacePet calls.
   const resolvedSlotIdx = await resolveMyUserSlotIdx();
 
+  // Read hutch capacity synchronously from the reactive hutch store.
+  // Returns the real capacity if resolved, or null to trigger the heuristic fallback.
+  const resolvedHutchCap = isCapacityResolved() ? getHutchCapacity() : null;
+
   // Pre-validate: check that all target pets are locatable somewhere.
   // Missing pets are skipped for this apply attempt but NOT auto-removed from
   // the team — the periodic purge (which requires all atom reads to succeed)
@@ -1125,6 +1138,13 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
     );
 
+  const sendStorePetDirect = (itemId: string, skipThrottle = false) =>
+    sendRoomAction(
+      'StorePet',
+      { itemId },
+      skipThrottle ? { skipThrottle: true } : { throttleMs: 100 },
+    );
+
   const sendPutItemInStorage = (itemId: string, toStorageIndex: number | null, skipThrottle = false) => {
     const payload: Record<string, unknown> = {
       itemId,
@@ -1177,7 +1197,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     petId: string,
     reportErrors: boolean,
   ): Promise<boolean> => {
-    const hutch = await readHutchSnapshot();
+    const hutch = await readHutchSnapshot(resolvedHutchCap);
     if (hutch.count >= hutch.hutchMax && hutch.freeIndex == null) {
       if (reportErrors) {
         pushError('hutch_store_failed_or_full', 'Pet Hutch is full while storing ' + petId);
@@ -1206,37 +1226,54 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     return true;
   };
 
-  const retrieveFromHutchWithConfirm = async (petId: string): Promise<boolean> => {
-    const tryRetrieveOnce = async (): Promise<{ ok: boolean; reason?: WebSocketSendFailureReason }> => {
-      const inventory = await readInventorySnapshot();
-      const retrieve = sendRetrieveFromHutch(petId, inventory.freeIndex, false);
-      if (!retrieve.ok) {
-        return retrieve.reason ? { ok: false, reason: retrieve.reason } : { ok: false };
-      }
-      const retrieved = await waitForInventoryContains(petId, HUTCH_RETRIEVE_TIMEOUT_MS);
-      return { ok: retrieved };
-    };
-
-    const first = await tryRetrieveOnce();
-    if (first.ok) {
-      return true;
-    }
-
+  const freeInventorySlot = async (): Promise<boolean> => {
     const activeSet = new Set(getActiveSlotIds());
     const inventory = await readInventorySnapshot();
-    const candidate = inventory.petIds.find((id) => !activeSet.has(id) && !validTargetSet.has(id));
-    if (candidate) {
-      await putInventoryPetInHutchWithConfirm(candidate, false);
+    const candidate = inventory.petIds.find(
+      (id) => !activeSet.has(id) && !validTargetSet.has(id),
+    );
+    if (!candidate) return false;
+    return putInventoryPetInHutchWithConfirm(candidate, false);
+  };
+
+  const ensureInventoryCapacity = async (): Promise<boolean> => {
+    const inventory = await readInventorySnapshot();
+    if (inventory.totalCount < INVENTORY_MAX) return true;
+    const freed = await freeInventorySlot();
+    if (!freed) return false;
+    await delay(APPLY_STEP_DELAY_MS);
+    return true;
+  };
+
+  const retrieveFromHutchWithConfirm = async (petId: string): Promise<boolean> => {
+    // Attempt 1: ensure capacity, then retrieve
+    if (!(await ensureInventoryCapacity())) {
+      pushError('retrieve_failed_or_inventory_full', 'Cannot free inventory space for: ' + petId);
+      return false;
+    }
+
+    const inv1 = await readInventorySnapshot();
+    const r1 = sendRetrieveFromHutch(petId, inv1.freeIndex, false);
+    if (r1.ok) {
+      const ok = await waitForInventoryContains(petId, HUTCH_RETRIEVE_TIMEOUT_MS);
+      if (ok) return true;
+    }
+
+    // Attempt 2: free one more slot (covers race where capacity filled between check and retrieve)
+    const freed = await freeInventorySlot();
+    if (freed) {
       await delay(APPLY_STEP_DELAY_MS);
     }
 
-    const second = await tryRetrieveOnce();
-    if (second.ok) {
-      return true;
+    const inv2 = await readInventorySnapshot();
+    const r2 = sendRetrieveFromHutch(petId, inv2.freeIndex, false);
+    if (r2.ok) {
+      const ok = await waitForInventoryContains(petId, HUTCH_RETRIEVE_TIMEOUT_MS);
+      if (ok) return true;
     }
 
     pushError(
-      mapSendReason(second.reason ?? first.reason, 'retrieve_failed_or_inventory_full'),
+      mapSendReason(r2.reason ?? r1.reason, 'retrieve_failed_or_inventory_full'),
       'RetrieveItemFromStorage failed: ' + petId + ' (inventory may be full)',
     );
     return false;
@@ -1271,17 +1308,25 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
     }
 
     const inventory = await readInventorySnapshot();
-    const hutch = await readHutchSnapshot();
+    const hutch = await readHutchSnapshot(resolvedHutchCap);
 
     const modeledHutchIds = new Set(hutch.ids);
     const unavailableTargets = new Set<string>();
+    let modeledInventoryCount = inventory.totalCount;
     let modeledInventoryIndex = inventory.freeIndex;
     let modeledHutchCount = hutch.count;
     let modeledHutchIndex = hutch.freeIndex;
     let fastOpsSent = 0;
 
     const retrieveTargets = pendingTargets.filter((targetId) => modeledHutchIds.has(targetId));
+
     for (const targetId of retrieveTargets) {
+      if (modeledInventoryCount >= INVENTORY_MAX) {
+        // No room — skip remaining hutch targets for repair path
+        unavailableTargets.add(targetId);
+        continue;
+      }
+
       const retrieve = sendRetrieveFromHutch(targetId, modeledInventoryIndex, true);
       if (!retrieve.ok) {
         unavailableTargets.add(targetId);
@@ -1290,6 +1335,7 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       fastOpsSent++;
       modeledHutchIds.delete(targetId);
       modeledHutchCount = Math.max(0, modeledHutchCount - 1);
+      modeledInventoryCount++;
       if (modeledHutchCount < hutch.hutchMax && modeledHutchIndex == null) {
         modeledHutchIndex = modeledHutchCount;
       }
@@ -1415,25 +1461,42 @@ async function applyTeamInternal(teamId: string): Promise<ApplyTeamResult> {
       await delay(APPLY_STEP_DELAY_MS);
     }
 
-    activeNow = getActiveSlotIds();
-    const leftovers = activeNow.filter((id) => !validTargetSet.has(id));
-    for (const extraId of leftovers) {
-      const pickup = sendPickupPet(extraId, false);
-      if (!pickup.ok) {
-        pushError(
-          mapSendReason(pickup.reason, 'hutch_store_failed_or_full'),
-          'PickupPet failed: ' + extraId + ' (' + String(pickup.reason ?? 'unknown') + ')',
-        );
-        continue;
+    const activePetsNow = getActivePetInfos();
+    const leftovers = activePetsNow.filter((p) => p.slotId && !validTargetSet.has(p.slotId));
+    for (const extra of leftovers) {
+      const extraSlotId = extra.slotId!;
+      // Primary: StorePet sends active → hutch directly (no inventory impact)
+      const store = sendStorePetDirect(extraSlotId, false);
+      if (store.ok) {
+        const removed = await waitForPetNotActive(extraSlotId, STORE_TIMEOUT_MS);
+        if (!removed) {
+          pushError('store_failed_or_timeout', 'StorePet timed out: ' + extraSlotId);
+          continue;
+        }
+      } else {
+        // Fallback: if StorePet fails (hutch full?), try PickupPet if inventory has room
+        const inv = await readInventorySnapshot();
+        if (inv.totalCount < INVENTORY_MAX && extra.petId) {
+          // PickupPet requires petId (entity UUID), not slotId (item UUID)
+          const pickup = sendPickupPet(extra.petId, false);
+          if (!pickup.ok) {
+            pushError(
+              mapSendReason(pickup.reason, 'hutch_store_failed_or_full'),
+              'PickupPet failed: ' + extraSlotId + ' (' + String(pickup.reason ?? 'unknown') + ')',
+            );
+            continue;
+          }
+          const picked = await waitForPetNotActive(extraSlotId, STORE_TIMEOUT_MS);
+          if (!picked) {
+            pushError('store_failed_or_timeout', 'PickupPet timed out: ' + extraSlotId);
+            continue;
+          }
+          await putInventoryPetInHutchWithConfirm(extraSlotId, true);
+        } else {
+          pushError('hutch_store_failed_or_full', 'StorePet failed and inventory full: ' + extraSlotId);
+          continue;
+        }
       }
-
-      const picked = await waitForPetNotActive(extraId, STORE_TIMEOUT_MS);
-      if (!picked) {
-        pushError('store_failed_or_timeout', 'PickupPet timed out: ' + extraId);
-        continue;
-      }
-
-      await putInventoryPetInHutchWithConfirm(extraId, true);
       applied++;
       await delay(APPLY_STEP_DELAY_MS);
     }

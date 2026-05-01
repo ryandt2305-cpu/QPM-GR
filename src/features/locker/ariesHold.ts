@@ -1,15 +1,16 @@
 // src/features/locker/ariesHold.ts
-// Rapid-fire hold mode: holding Space rapidly simulates pressing it at 10 Hz.
+// Rapid-fire hold mode: holding Space rapidly simulates pressing it at N Hz.
 // Replicates the Aries mod "Hold to repeat" feature for all game actions
 // (planting, harvesting, interacting, collecting, etc.).
 
 import { pageWindow } from '../../core/pageContext';
+import { getAtomByLabel, getCachedStore } from '../../core/jotaiBridge';
 import { getLockerConfig } from './state';
+import type { HoldContexts } from './types';
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const RATE_HZ = 10;
-const RATE_MS = 1000 / RATE_HZ;   // 100 ms between ticks
+const DEFAULT_RATE_HZ = 10;
 const KEYUP_DELAY_MS = 20;        // keydown → keyup gap per tap
 const SYN_FLAG = '__qpm_rapid_syn__';
 const SPACE_KEYCODE = 32;
@@ -63,16 +64,45 @@ function dispatchKey(type: 'keydown' | 'keyup', repeat: boolean): void {
   }
 }
 
+// ── Action context detection ──────────────────────────────────────────────
+
+let cachedActionAtom: unknown = null;
+
+function getActionContext(): keyof HoldContexts {
+  if (!cachedActionAtom) {
+    cachedActionAtom = getAtomByLabel('actionAtom');
+  }
+  const store = getCachedStore();
+  if (!store || !cachedActionAtom) return 'other';
+
+  let action: unknown;
+  try { action = store.get(cachedActionAtom); } catch { return 'other'; }
+  if (typeof action !== 'string' || action.length === 0) return 'other';
+
+  const lower = action.toLowerCase();
+  if (lower === 'harvest' || lower === 'rainbowharvest' || lower === 'goldharvest') return 'harvest';
+  if (lower === 'plant' || lower === 'plantseed') return 'plant';
+  if (lower === 'removegardenobject' || lower === 'shovel' || lower === 'dig' || lower === 'remove') return 'shovel';
+  if (lower === 'sell' || lower === 'sellpet' || lower === 'sellallcrops') return 'sell';
+  if (lower === 'hatch' || lower === 'hatchegg') return 'hatch';
+  return 'other';
+}
+
 // ── Rapid-fire loop ──────────────────────────────────────────────────────
 
 function tick(): void {
   if (!held) return;
+  const config = getLockerConfig();
   // Stop immediately if the user toggled the setting off mid-hold
-  if (!getLockerConfig().ariesHold) {
+  if (!config.ariesHold) {
     held = false;
     stopLoop();
     return;
   }
+  // Per-context hold check: skip tick if the current action context is disabled
+  const context = getActionContext();
+  if (!config.holdContexts[context]) return;
+
   dispatchKey('keydown', true);
   if (upTimer != null) clearTimeout(upTimer);
   upTimer = setTimeout(() => {
@@ -84,7 +114,9 @@ function tick(): void {
 function startLoop(): void {
   stopLoop();
   tick(); // first tick fires immediately (matches Aries behavior)
-  tickTimer = setInterval(tick, RATE_MS);
+  const rateHz = getLockerConfig().holdRateHz || DEFAULT_RATE_HZ;
+  const rateMs = 1000 / rateHz;
+  tickTimer = setInterval(tick, rateMs);
 }
 
 function stopLoop(): void {
@@ -127,11 +159,13 @@ function onBlur(): void {
 export function startAriesHold(): void {
   if (listening) return;
   listening = true;
-  // Register in capture phase, BEFORE instaHarvest to track held state
-  // before instaHarvest may stopImmediatePropagation for qualifying plants.
-  window.addEventListener('keydown', onKeyDown as EventListener, true);
-  window.addEventListener('keyup', onKeyUp as EventListener, true);
-  window.addEventListener('blur', onBlur);
+  // Register in capture phase on the PAGE window (not sandbox window),
+  // BEFORE instaHarvest to track held state before instaHarvest may
+  // stopImmediatePropagation for qualifying plants.
+  const pw = pageWindow as unknown as Window;
+  pw.addEventListener('keydown', onKeyDown as EventListener, true);
+  pw.addEventListener('keyup', onKeyUp as EventListener, true);
+  pw.addEventListener('blur', onBlur);
 }
 
 export function stopAriesHold(): void {
@@ -139,8 +173,10 @@ export function stopAriesHold(): void {
   listening = false;
   held = false;
   stopLoop();
-  window.removeEventListener('keydown', onKeyDown as EventListener, true);
-  window.removeEventListener('keyup', onKeyUp as EventListener, true);
-  window.removeEventListener('blur', onBlur);
+  const pw = pageWindow as unknown as Window;
+  pw.removeEventListener('keydown', onKeyDown as EventListener, true);
+  pw.removeEventListener('keyup', onKeyUp as EventListener, true);
+  pw.removeEventListener('blur', onBlur);
   lastTarget = null;
+  cachedActionAtom = null;
 }

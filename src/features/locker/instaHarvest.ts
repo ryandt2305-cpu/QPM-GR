@@ -224,13 +224,13 @@ let listening = false;
 export function startInstaHarvest(): void {
   if (listening) return;
   listening = true;
-  window.addEventListener('keydown', onKeyDownCapture as EventListener, true);
+  (pageWindow as unknown as Window).addEventListener('keydown', onKeyDownCapture as EventListener, true);
 }
 
 export function stopInstaHarvest(): void {
   if (!listening) return;
   listening = false;
-  window.removeEventListener('keydown', onKeyDownCapture as EventListener, true);
+  (pageWindow as unknown as Window).removeEventListener('keydown', onKeyDownCapture as EventListener, true);
   dirtTileAtom = null;
   selectedSlotIdAtom = null;
   actionAtom = null;

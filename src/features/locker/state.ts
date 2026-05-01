@@ -2,9 +2,18 @@
 // Persisted config for the Locker.
 
 import { storage } from '../../utils/storage';
-import type { LockerConfig, CustomRule } from './types';
+import type { LockerConfig, CustomRule, HoldContexts } from './types';
 
 const STORAGE_KEY = 'qpm.locker.config.v1';
+
+const DEFAULT_HOLD_CONTEXTS: HoldContexts = {
+  harvest: true,
+  plant: true,
+  shovel: true,
+  sell: true,
+  hatch: true,
+  other: true,
+};
 
 const DEFAULT_CONFIG: LockerConfig = {
   enabled: false,
@@ -18,10 +27,13 @@ const DEFAULT_CONFIG: LockerConfig = {
   decorLocks: {},
   sellAllCropsLock: false,
   cropSellLocks: {},
+  petSellGuard: false,
   customRules: [],
   instaHarvestRainbow: false,
   instaHarvestGold: false,
   ariesHold: false,
+  holdRateHz: 10,
+  holdContexts: { ...DEFAULT_HOLD_CONTEXTS },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,8 +82,20 @@ function sanitizeBooleanMap(raw: unknown): Record<string, boolean> {
   return out;
 }
 
+function sanitizeHoldContexts(raw: unknown): HoldContexts {
+  if (!isRecord(raw)) return { ...DEFAULT_HOLD_CONTEXTS };
+  return {
+    harvest: toBoolean(raw.harvest, true),
+    plant:   toBoolean(raw.plant, true),
+    shovel:  toBoolean(raw.shovel, true),
+    sell:    toBoolean(raw.sell, true),
+    hatch:   toBoolean(raw.hatch, true),
+    other:   toBoolean(raw.other, true),
+  };
+}
+
 function sanitizeConfig(raw: unknown): LockerConfig {
-  if (!isRecord(raw)) return { ...DEFAULT_CONFIG };
+  if (!isRecord(raw)) return { ...DEFAULT_CONFIG, holdContexts: { ...DEFAULT_HOLD_CONTEXTS } };
 
   const reserve = isRecord(raw.inventoryReserve) ? raw.inventoryReserve : {};
 
@@ -98,10 +122,13 @@ function sanitizeConfig(raw: unknown): LockerConfig {
     decorLocks: sanitizeBooleanMap(raw.decorLocks),
     sellAllCropsLock: toBoolean(raw.sellAllCropsLock, DEFAULT_CONFIG.sellAllCropsLock),
     cropSellLocks: sanitizeBooleanMap(raw.cropSellLocks),
+    petSellGuard: toBoolean(raw.petSellGuard, DEFAULT_CONFIG.petSellGuard),
     customRules: sanitizeCustomRules(raw.customRules),
     instaHarvestRainbow: toBoolean(raw.instaHarvestRainbow, DEFAULT_CONFIG.instaHarvestRainbow),
     instaHarvestGold: toBoolean(raw.instaHarvestGold, DEFAULT_CONFIG.instaHarvestGold),
     ariesHold: toBoolean(raw.ariesHold, DEFAULT_CONFIG.ariesHold),
+    holdRateHz: toNumber(raw.holdRateHz, DEFAULT_CONFIG.holdRateHz, 5, 20),
+    holdContexts: sanitizeHoldContexts(raw.holdContexts),
   };
 }
 
@@ -121,6 +148,7 @@ export function getLockerConfig(): LockerConfig {
     decorLocks: { ...config.decorLocks },
     cropSellLocks: { ...config.cropSellLocks },
     customRules: config.customRules.map(r => ({ ...r })),
+    holdContexts: { ...config.holdContexts },
   };
 }
 

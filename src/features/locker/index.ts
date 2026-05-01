@@ -4,6 +4,7 @@
 import { registerSendPreflight, clearSendPreflight } from '../../websocket/api';
 import { lockerPreflight, startNativeHook, stopNativeHook } from './guard';
 import { startAriesHold, stopAriesHold } from './ariesHold';
+import { startInstaAction, stopInstaAction } from './instaAction';
 import { startInstaHarvest, stopInstaHarvest } from './instaHarvest';
 
 let running = false;
@@ -13,9 +14,10 @@ export function startLocker(): void {
   running = true;
   registerSendPreflight(lockerPreflight);
   startNativeHook();
-  // ariesHold registers BEFORE instaHarvest so its capture-phase listener
-  // can track held state before instaHarvest may stopImmediatePropagation.
+  // ariesHold registers BEFORE instaAction/instaHarvest so its capture-phase
+  // listener can track held state before they may stopImmediatePropagation.
   startAriesHold();
+  startInstaAction();
   startInstaHarvest();
 }
 
@@ -25,6 +27,7 @@ export function stopLocker(): void {
   clearSendPreflight();
   stopNativeHook();
   stopAriesHold();
+  stopInstaAction();
   stopInstaHarvest();
 }
 

@@ -11,6 +11,15 @@ export interface CustomRule {
   mutations: string[]; // ALL must be present on the tile to trigger (AND logic)
 }
 
+export interface HoldContexts {
+  harvest: boolean;   // harvest/rainbowHarvest/goldHarvest
+  plant: boolean;     // planting seeds
+  shovel: boolean;    // removing garden objects
+  sell: boolean;      // selling at shops
+  hatch: boolean;     // hatching eggs
+  other: boolean;     // any unrecognized action context
+}
+
 export interface LockerConfig {
   enabled: boolean;              // master switch (off by default)
   inventoryReserve: InventoryReserveConfig;
@@ -23,10 +32,13 @@ export interface LockerConfig {
   decorLocks: Record<string, boolean>;    // per-decor pickup locks
   sellAllCropsLock: boolean;
   cropSellLocks: Record<string, boolean>; // per-crop sell protection (blocks SellAllCrops)
+  petSellGuard: boolean;         // block selling protected pets during hold-Space
   customRules: CustomRule[];     // plant+mutation combo rules
   instaHarvestRainbow: boolean;  // skip hold-to-harvest for Rainbow plants
   instaHarvestGold: boolean;     // skip hold-to-harvest for Gold plants
-  ariesHold: boolean;            // rapid-fire hold mode (hold Space → repeat at 10 Hz)
+  ariesHold: boolean;            // rapid-fire hold mode (hold Space → repeat at N Hz)
+  holdRateHz: number;            // hold repeat rate in Hz (5–20, default 10)
+  holdContexts: HoldContexts;   // per-action-context hold toggles
 }
 
 export interface GuardResult {

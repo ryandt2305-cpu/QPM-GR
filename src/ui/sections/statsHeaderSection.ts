@@ -31,6 +31,21 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.83",
+    date: "2026-05",
+    notes: [
+      "Added reactive hutch store with real-time capacity tracking (supports upgraded hutches up to 100 slots)",
+      "Fixed pet team apply failing on upgraded hutches: capacity was capped at 25 regardless of upgrade level",
+      "Fixed pet team apply failing when inventory is near-full (98-100 items): retrieves now respect available space",
+      "Fixed leftover cleanup using StorePet (active to hutch directly) instead of PickupPet through inventory",
+      "Fixed PickupPet sending wrong ID type (was slotId, now sends petId entity UUID)",
+      "Added Aries Hold: rapid-fire Space with configurable rate (5-20 Hz), per-context toggles, and hold-sell pet protection",
+      "Added Insta-Action: bypasses 500ms press-and-hold delay for shovel, crop cleanser, and mutation potion when Aries Hold is active",
+      "Added Insta-Harvest: instant Rainbow/Gold harvest without hold delay",
+      "Fixed hold context detection for shovel and sell actions",
+    ],
+  },
+  {
     version: "3.1.82",
     date: "2026-05",
     notes: [

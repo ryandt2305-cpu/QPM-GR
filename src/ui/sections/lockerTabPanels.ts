@@ -45,7 +45,49 @@ export function buildPlantsPanel(config: LockerConfig, eligible: EligibleData): 
     () => { updateLockerConfig({ ariesHold: !getLockerConfig().ariesHold }); },
   ));
   instaBody.appendChild(instaGrid);
+
+  // Hold rate slider
+  const rateWrap = document.createElement('div');
+  rateWrap.style.cssText = `display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-radius:8px;border:1px solid ${UNLOCKED_BORDER};background:${UNLOCKED_BG}`;
+  const rateHeader = document.createElement('div');
+  rateHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between';
+  const rateLabel = document.createElement('div');
+  rateLabel.style.cssText = 'font-size:12px;color:var(--qpm-text,#fff)';
+  rateLabel.textContent = 'Hold Rate';
+  const rateValue = document.createElement('div');
+  rateValue.style.cssText = `font-size:12px;color:${ACCENT};font-weight:600`;
+  rateValue.textContent = `${config.holdRateHz} Hz`;
+  rateHeader.append(rateLabel, rateValue);
+  const rateSlider = document.createElement('input');
+  rateSlider.type = 'range'; rateSlider.min = '5'; rateSlider.max = '20'; rateSlider.step = '1';
+  rateSlider.value = String(config.holdRateHz);
+  rateSlider.style.cssText = 'width:100%;cursor:pointer';
+  rateSlider.addEventListener('input', () => { rateValue.textContent = `${rateSlider.value} Hz`; });
+  rateSlider.addEventListener('change', () => {
+    updateLockerConfig({ holdRateHz: Number(rateSlider.value) });
+  });
+  rateWrap.append(rateHeader, rateSlider);
+  instaBody.appendChild(rateWrap);
+
+  // Hold Contexts card
+  const { root: ctxRoot, body: ctxBody } = createCard('Hold Contexts', { collapsible: true, startCollapsed: true });
+  ctxBody.appendChild(makeHint('Control which actions rapid-fire when holding Space.'));
+  const ctxKeys: Array<{ key: keyof typeof config.holdContexts; label: string }> = [
+    { key: 'harvest', label: 'Harvest' },
+    { key: 'plant',   label: 'Plant' },
+    { key: 'shovel',  label: 'Shovel' },
+    { key: 'sell',    label: 'Sell' },
+    { key: 'hatch',   label: 'Hatch' },
+    { key: 'other',   label: 'Other' },
+  ];
+  for (const { key, label } of ctxKeys) {
+    ctxBody.appendChild(makeToggleRow(label, config.holdContexts[key], (v) => {
+      const cur = getLockerConfig();
+      updateLockerConfig({ holdContexts: { ...cur.holdContexts, [key]: v } });
+    }));
+  }
   panel.appendChild(instaRoot);
+  panel.appendChild(ctxRoot);
 
   const blockAllCb = makeBlockAllCheckbox('Block All', config.harvestLock, (v) => {
     updateLockerConfig({ harvestLock: v });
@@ -283,6 +325,12 @@ export function buildSellPanel(config: LockerConfig, eligible: EligibleData): HT
 
   if (!config.enabled) cropSellRoot.style.opacity = '0.55';
   panel.appendChild(cropSellRoot);
+
+  // Hold-Sell Protection toggle — blocks selling protected pets during hold-Space
+  panel.appendChild(makeToggleRow('Hold-Sell Protection', config.petSellGuard, (v) => {
+    updateLockerConfig({ petSellGuard: v });
+  }));
+  panel.appendChild(makeHint('Block selling protected pets during hold-Space. Uses Sell All Pets protection rules below.'));
 
   // Sell All Pets Protections card
   panel.appendChild(buildSellAllPetsCard());

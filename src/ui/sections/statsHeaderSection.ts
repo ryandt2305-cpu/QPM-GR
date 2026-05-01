@@ -34,8 +34,8 @@ const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
     version: "3.1.82",
     date: "2026-05",
     notes: [
-      "Fixed Import/Export not transferring pet teams across browsers (player-scoped keys were missed in localStorage fallback)",
-      "Fixed pet team slots being silently cleared after import when hutch data hadn't loaded yet",
+      "Fixed Import/Export not transferring pet teams across browsers",
+      "Fixed pet team slots being silently cleared after import before hutch data loaded",
     ],
   },
   {

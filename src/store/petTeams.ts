@@ -44,6 +44,9 @@ let purgeUnsubscribe: (() => void) | null = null;
 let purgeInvUnsubscribe: (() => void) | null = null;
 let purgeTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** True once getAllPooledPetsWithStatus has returned hutch data at least once. */
+let hutchEverLoaded = false;
+
 // ---------------------------------------------------------------------------
 // Player identity helpers (Fix B + C)
 // ---------------------------------------------------------------------------
@@ -193,28 +196,11 @@ export function initPetTeamsStore(): void {
           log('[PetTeams] Skipping purge — atom data incomplete');
           return;
         }
+        if (!hutchEverLoaded) {
+          log('[PetTeams] Skipping purge — hutch data never loaded');
+          return;
+        }
         const validIds = new Set(pool.map(p => p.id));
-
-        // Safety: count how many unique pet IDs are referenced in teams.
-        // If the pool covers fewer than half of them, the data is likely
-        // still loading (hutch/inventory atoms exist but are empty).
-        const referencedIds = new Set<string>();
-        for (const team of config.teams) {
-          for (const s of team.slots) {
-            if (s) referencedIds.add(s);
-          }
-        }
-        if (referencedIds.size > 0) {
-          let matched = 0;
-          for (const id of referencedIds) {
-            if (validIds.has(id)) matched++;
-          }
-          if (matched < referencedIds.size * 0.5) {
-            log(`[PetTeams] Skipping purge — pool only covers ${matched}/${referencedIds.size} referenced pets`);
-            return;
-          }
-        }
-
         // Fix B: skip purge if the account changed since store init
         const currentId = await resolveCurrentPlayerId();
         if (initPlayerId !== null && currentId !== null && currentId !== initPlayerId) {
@@ -246,6 +232,7 @@ export function stopPetTeamsStore(): void {
   resolvedConfigKey = CONFIG_KEY;
   resolvedFeedKey = FEED_POLICY_KEY;
   initPlayerId = null;
+  hutchEverLoaded = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,11 +511,8 @@ async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
       if (!Array.isArray(hutch)) {
         // Atom returned non-array (transient state) — data is incomplete
         complete = false;
-      } else if (hutch.length === 0 && pool.length < 3) {
-        // Atom exists but is empty AND active pool is tiny — server data likely
-        // hasn't loaded yet.  Mark incomplete to prevent premature purge.
-        complete = false;
       } else {
+        if (hutch.length > 0) hutchEverLoaded = true;
         for (const item of hutch) {
           if (!item || typeof item !== 'object') continue;
           const it = item as Record<string, unknown>;

@@ -26,6 +26,10 @@ export interface RestockItem {
   weather_intervals: Record<string, number[]> | null;
   // Dormancy detection (v9+)
   is_dormant: boolean | null;
+  // Weather-conditional predictions (v10+)
+  current_weather: string | null;
+  weather_baseline_ms: number | null;
+  weather_samples: number | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -121,4 +125,10 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'weatherIntervals',
   'is_dormant',
   'isDormant',
+  'current_weather',
+  'currentWeather',
+  'weather_baseline_ms',
+  'weatherBaselineMs',
+  'weather_samples',
+  'weatherSamples',
 ]);

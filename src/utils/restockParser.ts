@@ -117,6 +117,9 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     ema_interval_ms: preferred.ema_interval_ms ?? fallback.ema_interval_ms ?? null,
     weather_intervals: preferred.weather_intervals ?? fallback.weather_intervals ?? null,
     is_dormant: preferred.is_dormant ?? fallback.is_dormant ?? null,
+    current_weather: preferred.current_weather ?? fallback.current_weather ?? null,
+    weather_baseline_ms: preferred.weather_baseline_ms ?? fallback.weather_baseline_ms ?? null,
+    weather_samples: preferred.weather_samples ?? fallback.weather_samples ?? null,
   };
 }
 
@@ -214,6 +217,11 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
     ema_interval_ms: toMsDuration(raw.ema_interval_ms ?? raw.emaIntervalMs),
     weather_intervals: parseWeatherIntervals(raw.weather_intervals ?? raw.weatherIntervals),
     is_dormant: !!(raw.is_dormant ?? raw.isDormant) || null,
+    current_weather: typeof (raw.current_weather ?? raw.currentWeather) === 'string'
+      ? String(raw.current_weather ?? raw.currentWeather)
+      : null,
+    weather_baseline_ms: toMsDuration(raw.weather_baseline_ms ?? raw.weatherBaselineMs),
+    weather_samples: toFloat(raw.weather_samples ?? raw.weatherSamples),
   };
 }
 

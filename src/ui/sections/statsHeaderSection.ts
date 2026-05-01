@@ -31,6 +31,16 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.81",
+    date: "2026-05",
+    notes: [
+      "Restock predictions now adjust for current weather — 89 items use weather-specific baselines when sufficient data exists",
+      "Fixed restock rate deflation for items added mid-tracking (lifespan-based rate calculation)",
+      "Fixed overdue ETA inflation for rare items — uses survival-based mean remaining time instead of cycle/probability",
+      "Seasonal and removed items now show a 'Seasonal' label instead of misleading countdowns",
+    ],
+  },
+  {
     version: "3.1.80",
     date: "2026-05",
     notes: [

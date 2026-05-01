@@ -186,10 +186,13 @@ const STYLES = `
 }
 `;
 
+/** Position stored as viewport-ratio (0–1). Survives any resize. */
 interface PersistedFloatingCard {
   slotIndex: number;
-  x: number;
-  y: number;
+  /** 0 = left edge, 1 = right edge (card fully visible). */
+  xPct: number;
+  /** 0 = top edge, 1 = bottom edge (card fully visible). */
+  yPct: number;
 }
 
 interface PersistedFloatingCardsState {
@@ -200,6 +203,8 @@ interface PersistedFloatingCardsState {
 interface FloatingCardEntry {
   slotIndex: number;
   el: HTMLElement;
+  /** Position as viewport ratio — the single source of truth. */
+  position: { xPct: number; yPct: number };
   destroy: () => void;
   refreshAvailability: () => void;
 }
@@ -207,6 +212,9 @@ interface FloatingCardEntry {
 const registry = new Map<number, FloatingCardEntry>();
 let stylesInjected = false;
 let initialized = false;
+
+const CARD_W = 172;
+const CARD_H_FALLBACK = 120;
 
 function ensureStyles(): void {
   if (stylesInjected) return;
@@ -223,33 +231,70 @@ function clampSlotIndex(slotIndex: number): number | null {
   return slotIndex;
 }
 
-function clampPosition(x: number, y: number): { x: number; y: number } {
-  const maxX = Math.max(0, window.innerWidth - 200);
-  const maxY = Math.max(0, window.innerHeight - 100);
+function clampPct(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function getCardHeight(el: HTMLElement): number {
+  return el.offsetHeight || CARD_H_FALLBACK;
+}
+
+/** Convert viewport ratios → pixel left/top, always within visible viewport. */
+function pctToPixels(xPct: number, yPct: number, cardH: number): { x: number; y: number } {
+  const maxX = Math.max(0, window.innerWidth - CARD_W);
+  const maxY = Math.max(0, window.innerHeight - cardH);
+  return {
+    x: Math.round(clampPct(xPct) * maxX),
+    y: Math.round(clampPct(yPct) * maxY),
+  };
+}
+
+/** Convert pixel left/top → viewport ratios (0–1). */
+function pixelsToPct(x: number, y: number, cardH: number): { xPct: number; yPct: number } {
+  const maxX = Math.max(1, window.innerWidth - CARD_W);
+  const maxY = Math.max(1, window.innerHeight - cardH);
+  return {
+    xPct: clampPct(x / maxX),
+    yPct: clampPct(y / maxY),
+  };
+}
+
+/** Clamp pixel position so card stays fully on-screen. */
+function clampPixels(x: number, y: number, cardH: number): { x: number; y: number } {
+  const maxX = Math.max(0, window.innerWidth - CARD_W);
+  const maxY = Math.max(0, window.innerHeight - cardH);
   return {
     x: Math.max(0, Math.min(maxX, Math.round(x))),
     y: Math.max(0, Math.min(maxY, Math.round(y))),
   };
 }
 
-function getDefaultPosition(slotIndex: number): { x: number; y: number } {
+function getDefaultPct(slotIndex: number): { xPct: number; yPct: number } {
   const offset = slotIndex * 18;
   const x = window.innerWidth - 220 - offset;
   const y = Math.max(16, window.innerHeight - 190 - offset);
-  return clampPosition(x, y);
+  return pixelsToPct(x, y, CARD_H_FALLBACK);
 }
 
-function getCurrentPosition(el: HTMLElement): { x: number; y: number } {
-  const rect = el.getBoundingClientRect();
-  return clampPosition(rect.left, rect.top);
+/** Set card position from ratios. */
+function applyPctPosition(el: HTMLElement, xPct: number, yPct: number): void {
+  const { x, y } = pctToPixels(xPct, yPct, getCardHeight(el));
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
 }
 
-function applyPosition(el: HTMLElement, x: number, y: number): void {
-  const clamped = clampPosition(x, y);
-  el.style.left = `${clamped.x}px`;
-  el.style.top = `${clamped.y}px`;
-  el.style.right = '';
-  el.style.bottom = '';
+/** Set card position from pixels, clamped to viewport. Used during drag. */
+function applyPixelPosition(el: HTMLElement, x: number, y: number): void {
+  const c = clampPixels(x, y, getCardHeight(el));
+  el.style.left = `${c.x}px`;
+  el.style.top = `${c.y}px`;
+}
+
+/** Reposition all open cards from their stored ratios. Called on viewport resize. */
+function handleViewportResize(): void {
+  for (const entry of registry.values()) {
+    applyPctPosition(entry.el, entry.position.xPct, entry.position.yPct);
+  }
 }
 
 function loadPersistedState(): PersistedFloatingCardsState {
@@ -261,12 +306,21 @@ function loadPersistedState(): PersistedFloatingCardsState {
   const cards = stored.cards
     .map((entry): PersistedFloatingCard | null => {
       if (!entry || typeof entry !== 'object') return null;
-      const slotIndex = clampSlotIndex(Number((entry as PersistedFloatingCard).slotIndex));
+      const raw = entry as Record<string, unknown>;
+      const slotIndex = clampSlotIndex(Number(raw.slotIndex));
       if (slotIndex == null) return null;
-      const x = Number((entry as PersistedFloatingCard).x);
-      const y = Number((entry as PersistedFloatingCard).y);
+
+      // New format: xPct / yPct (0–1 ratios)
+      if (typeof raw.xPct === 'number' && typeof raw.yPct === 'number') {
+        return { slotIndex, xPct: clampPct(raw.xPct), yPct: clampPct(raw.yPct) };
+      }
+
+      // Old format: absolute x / y pixels — migrate to ratios
+      const x = Number(raw.x);
+      const y = Number(raw.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-      return { slotIndex, x, y };
+      const pct = pixelsToPct(x, y, CARD_H_FALLBACK);
+      return { slotIndex, xPct: pct.xPct, yPct: pct.yPct };
     })
     .filter((entry): entry is PersistedFloatingCard => !!entry);
 
@@ -279,11 +333,10 @@ function loadPersistedState(): PersistedFloatingCardsState {
 function persistRegistryState(): void {
   const cards: PersistedFloatingCard[] = [];
   for (const entry of registry.values()) {
-    const pos = getCurrentPosition(entry.el);
     cards.push({
       slotIndex: entry.slotIndex,
-      x: pos.x,
-      y: pos.y,
+      xPct: entry.position.xPct,
+      yPct: entry.position.yPct,
     });
   }
 
@@ -373,15 +426,16 @@ function setFoodCounter(
   countEl.textContent = `${Math.max(0, Math.floor(count))}`;
 }
 
-function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: number }): FloatingCardEntry {
+function createFloatingCard(slotIndex: number, initialPct?: { xPct: number; yPct: number }): FloatingCardEntry {
   ensureStyles();
 
   const cleanups: Array<() => void> = [];
   const card = document.createElement('div');
   card.className = 'qpm-float-card';
 
-  const resolvedPos = initialPos ? clampPosition(initialPos.x, initialPos.y) : getDefaultPosition(slotIndex);
-  applyPosition(card, resolvedPos.x, resolvedPos.y);
+  const resolvedPct = initialPct ?? getDefaultPct(slotIndex);
+  const intendedPos = { xPct: resolvedPct.xPct, yPct: resolvedPct.yPct };
+  applyPctPosition(card, intendedPos.xPct, intendedPos.yPct);
 
   const header = document.createElement('div');
   header.className = 'qpm-float-card__header';
@@ -633,8 +687,6 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     if ((event.target as Element).closest('.qpm-float-card__feed-btn')) return;
 
     const rect = card.getBoundingClientRect();
-    applyPosition(card, rect.left, rect.top);
-
     isDragging = true;
     dragStartX = event.clientX;
     dragStartY = event.clientY;
@@ -647,12 +699,17 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
     if (!isDragging) return;
     const dx = event.clientX - dragStartX;
     const dy = event.clientY - dragStartY;
-    applyPosition(card, cardStartLeft + dx, cardStartTop + dy);
+    applyPixelPosition(card, cardStartLeft + dx, cardStartTop + dy);
   };
 
   const onMouseUp = (): void => {
     if (!isDragging) return;
     isDragging = false;
+    // Read the clamped visual position and convert to viewport ratio.
+    const rect = card.getBoundingClientRect();
+    const pct = pixelsToPct(rect.left, rect.top, getCardHeight(card));
+    intendedPos.xPct = pct.xPct;
+    intendedPos.yPct = pct.yPct;
     persistRegistryState();
   };
 
@@ -680,6 +737,7 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   return {
     slotIndex,
     el: card,
+    position: intendedPos,
     destroy,
     refreshAvailability: () => {
       void refreshAvailability();
@@ -687,7 +745,7 @@ function createFloatingCard(slotIndex: number, initialPos?: { x: number; y: numb
   };
 }
 
-function openFloatingCardInternal(slotIndex: number, initialPos?: { x: number; y: number }): void {
+function openFloatingCardInternal(slotIndex: number, initialPct?: { xPct: number; yPct: number }): void {
   if (registry.has(slotIndex)) {
     const existing = registry.get(slotIndex);
     if (existing) {
@@ -702,7 +760,7 @@ function openFloatingCardInternal(slotIndex: number, initialPos?: { x: number; y
     return;
   }
 
-  const entry = createFloatingCard(slotIndex, initialPos);
+  const entry = createFloatingCard(slotIndex, initialPct);
   registry.set(slotIndex, entry);
   persistRegistryState();
   emitFloatingCardStateChanged(slotIndex, true);
@@ -713,13 +771,14 @@ function openFloatingCardInternal(slotIndex: number, initialPos?: { x: number; y
 function restorePersistedCards(): void {
   const persisted = loadPersistedState();
   for (const card of persisted.cards) {
-    openFloatingCardInternal(card.slotIndex, { x: card.x, y: card.y });
+    openFloatingCardInternal(card.slotIndex, { xPct: card.xPct, yPct: card.yPct });
   }
 }
 
 export function initFloatingCards(): void {
   if (initialized) return;
   initialized = true;
+  window.addEventListener('resize', handleViewportResize);
   restorePersistedCards();
 }
 

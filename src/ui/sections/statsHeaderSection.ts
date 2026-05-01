@@ -31,6 +31,15 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.84",
+    date: "2026-05",
+    notes: [
+      "Fixed floating feed cards drifting when the browser window is resized or maximized",
+      "Fixed floating feed cards able to be dragged off-screen, making them unreachable",
+      "Improved floating feed card positioning: cards now store their position as a viewport ratio so they maintain their relative placement across any window size",
+    ],
+  },
+  {
     version: "3.1.83",
     date: "2026-05",
     notes: [

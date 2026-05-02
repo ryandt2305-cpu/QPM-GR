@@ -1,7 +1,7 @@
 // src/store/pets.ts
 // Bridge for active pet information via myPrimitivePetSlotsAtom.
 
-import { getAtomByLabel, subscribeAtom } from '../core/jotaiBridge';
+import { getAtomByLabel, subscribeAtom, getCachedStore } from '../core/jotaiBridge';
 import { getHungerCapForSpecies, DEFAULT_HUNGER_CAP } from '../data/petHungerCaps';
 import { log } from '../utils/logger';
 import { recordPetXP, estimatePetLevel } from './petLevelCalculator';
@@ -46,6 +46,7 @@ let initializing = false;
 let catalogReadyHooked = false;
 const listeners = new Set<(infos: ActivePetInfo[]) => void>();
 let retryTimer: number | null = null;
+let petInfosAtomRef: unknown = null;
 
 function notify(): void {
   for (const listener of listeners) {
@@ -786,11 +787,11 @@ export async function startPetInfoStore(): Promise<void> {
   if (unsubscribe || initializing) return;
   initializing = true;
   try {
-    const atom = getAtomByLabel(PET_INFOS_LABEL);
-    if (!atom) {
+    petInfosAtomRef = getAtomByLabel(PET_INFOS_LABEL);
+    if (!petInfosAtomRef) {
       throw new Error('myPrimitivePetSlotsAtom not found in jotai cache');
     }
-    unsubscribe = await subscribeAtom(atom, (value) => {
+    unsubscribe = await subscribeAtom(petInfosAtomRef, (value) => {
       lastRawValue = value;
       cachedInfos = normalizePetInfos(value);
       notify();
@@ -826,8 +827,29 @@ export function stopPetInfoStore(): void {
   unsubscribe = null;
   cachedInfos = [];
   lastRawValue = null;
+  petInfosAtomRef = null;
   catalogReadyHooked = false;
   clearStartRetry();
+}
+
+/**
+ * Re-read pet atom directly via store.get() and rebuild if changed.
+ * Used by the background atom poller to detect changes when native
+ * Jotai subscriptions don't fire (background tabs).
+ */
+export function forceRefreshPetInfos(): void {
+  if (!petInfosAtomRef) return;
+  const store = getCachedStore();
+  if (!store || store.__polyfill) return;
+
+  try {
+    const fresh = store.get(petInfosAtomRef);
+    if (fresh !== lastRawValue) {
+      lastRawValue = fresh;
+      cachedInfos = normalizePetInfos(fresh);
+      notify();
+    }
+  } catch {}
 }
 
 /**

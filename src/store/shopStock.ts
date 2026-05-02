@@ -2,7 +2,7 @@
 // Normalized view of shop atom data and restock timers.
 
 import { readAtomValue as readRegistryAtomValue, subscribeAtomValue } from '../core/atomRegistry';
-import { getAtomByLabel, readAtomValue as readJotaiAtomValue, subscribeAtom } from '../core/jotaiBridge';
+import { getAtomByLabel, readAtomValue as readJotaiAtomValue, subscribeAtom, getCachedStore } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
 import type {
   ShopsAtomSnapshot,
@@ -47,6 +47,8 @@ let shopsUnsubscribe: (() => void) | null = null;
 let purchasesUnsubscribe: (() => void) | null = null;
 let myDataPurchasesUnsubscribe: (() => void) | null = null;
 let customInventoriesUnsubscribe: (() => void) | null = null;
+let myDataAtomRef: unknown = null;
+let myUserSlotAtomRef: unknown = null;
 
 function createEmptyState(): ShopStockState {
   const categories = Object.create(null) as Record<ShopCategory, ShopStockCategoryState>;
@@ -136,7 +138,7 @@ export async function startShopStockStore(): Promise<void> {
       purchasesSnapshot = null;
     }
 
-    const myDataAtomRef = getAtomByLabel(MY_DATA_ATOM_LABEL);
+    myDataAtomRef = getAtomByLabel(MY_DATA_ATOM_LABEL);
     if (myDataAtomRef) {
       try {
         const myDataValue = await readJotaiAtomValue<unknown>(myDataAtomRef);
@@ -178,7 +180,7 @@ export async function startShopStockStore(): Promise<void> {
       }
     }
 
-    const myUserSlotAtomRef = getAtomByLabel(MY_USER_SLOT_ATOM_LABEL);
+    myUserSlotAtomRef = getAtomByLabel(MY_USER_SLOT_ATOM_LABEL);
     if (myUserSlotAtomRef) {
       try {
         customInventoriesUnsubscribe = await subscribeAtom<unknown>(myUserSlotAtomRef, (value) => {
@@ -218,7 +220,71 @@ export function stopShopStockStore(): void {
   purchasesSnapshot = null;
   myDataPurchasesSnapshot = null;
   customInventories = null;
+  myDataAtomRef = null;
+  myUserSlotAtomRef = null;
   cachedState = createEmptyState();
+}
+
+/**
+ * Re-read shop atoms directly via store.get() and rebuild if changed.
+ * Used by the background atom poller to detect changes when native
+ * Jotai subscriptions don't fire (background tabs).
+ */
+export function forceRefreshShopStock(): void {
+  const store = getCachedStore();
+  if (!store || store.__polyfill) return;
+
+  let changed = false;
+
+  // Re-read shops atom
+  try {
+    const shopsAtom = getAtomByLabel('shopsAtom');
+    if (shopsAtom) {
+      const fresh = store.get(shopsAtom) as ShopsAtomSnapshot | null;
+      if (fresh !== shopsSnapshot) {
+        shopsSnapshot = fresh;
+        changed = true;
+      }
+    }
+  } catch {}
+
+  // Re-read purchases atom
+  try {
+    const purchasesAtom = getAtomByLabel('myShopPurchasesAtom');
+    if (purchasesAtom) {
+      const fresh = store.get(purchasesAtom) as ShopPurchasesAtomSnapshot | null;
+      if (fresh !== purchasesSnapshot) {
+        purchasesSnapshot = fresh;
+        changed = true;
+      }
+    }
+  } catch {}
+
+  // Re-read myDataAtom purchases
+  if (myDataAtomRef) {
+    try {
+      const freshMyData = store.get(myDataAtomRef);
+      const freshPurchases = extractMyDataShopPurchases(freshMyData);
+      if (freshPurchases !== myDataPurchasesSnapshot) {
+        myDataPurchasesSnapshot = freshPurchases;
+        changed = true;
+      }
+    } catch {}
+  }
+
+  // Re-read custom inventories
+  if (myUserSlotAtomRef) {
+    try {
+      const freshSlot = store.get(myUserSlotAtomRef);
+      const freshCustom = extractCustomInventories(freshSlot);
+      if (freshCustom !== customInventories) {
+        customInventories = freshCustom;
+        changed = true;
+      }
+    } catch {}
+  }
+
+  if (changed) rebuildState();
 }
 
 export function getShopStockState(): ShopStockState {

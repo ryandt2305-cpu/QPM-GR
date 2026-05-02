@@ -1,5 +1,5 @@
 // src/features/gardenBridge.ts
-import { ensureJotaiStore, getAtomByLabel, readAtomValue, subscribeAtom } from '../core/jotaiBridge';
+import { ensureJotaiStore, getAtomByLabel, readAtomValue, subscribeAtom, getCachedStore } from '../core/jotaiBridge';
 import { shareGlobal, readSharedGlobal } from '../core/pageContext';
 import { log } from '../utils/logger';
 
@@ -28,6 +28,8 @@ let initialized = false;
 let cachedGarden: GardenSnapshot = readSharedGlobal<GardenSnapshot>(GLOBAL_CACHE_KEY) ?? null;
 let cachedMap: MapSnapshot | null = readSharedGlobal<MapSnapshot>(GLOBAL_MAP_CACHE_KEY) ?? null;
 let unsubscribe: (() => void) | null = null;
+let myDataAtomRef: unknown = null;
+let lastRawMyData: unknown = null;
 const listeners = new Set<(state: GardenSnapshot) => void>();
 let retryTimer: number | null = null;
 
@@ -149,8 +151,8 @@ export async function startGardenBridge(): Promise<void> {
     }
   }
 
-  const myDataAtom = getAtomByLabel(MY_DATA_ATOM_LABEL);
-  if (!myDataAtom) {
+  myDataAtomRef = getAtomByLabel(MY_DATA_ATOM_LABEL);
+  if (!myDataAtomRef) {
     log('⚠️ myDataAtom missing after initialization');
     initialized = false;
     if (!retryTimer) {
@@ -162,7 +164,8 @@ export async function startGardenBridge(): Promise<void> {
     return;
   }
 
-  unsubscribe = await subscribeAtom<Record<string, unknown> | null>(myDataAtom, (value) => {
+  unsubscribe = await subscribeAtom<Record<string, unknown> | null>(myDataAtomRef, (value) => {
+    lastRawMyData = value;
     updateCache(extractGarden(value ?? undefined));
   });
 
@@ -172,11 +175,32 @@ export async function startGardenBridge(): Promise<void> {
 export function stopGardenBridge(): void {
   unsubscribe?.();
   unsubscribe = null;
+  myDataAtomRef = null;
+  lastRawMyData = null;
   initialized = false;
   if (retryTimer) {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+}
+
+/**
+ * Re-read myDataAtom directly via store.get() and update garden cache if changed.
+ * Used by the background atom poller to detect changes when native
+ * Jotai subscriptions don't fire (background tabs).
+ */
+export function forceRefreshGarden(): void {
+  if (!myDataAtomRef) return;
+  const store = getCachedStore();
+  if (!store || store.__polyfill) return;
+
+  try {
+    const fresh = store.get(myDataAtomRef);
+    if (fresh !== lastRawMyData) {
+      lastRawMyData = fresh;
+      updateCache(extractGarden((fresh as Record<string, unknown> | null) ?? undefined));
+    }
+  } catch {}
 }
 
 export function getGardenSnapshot(): GardenSnapshot {

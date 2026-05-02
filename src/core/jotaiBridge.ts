@@ -388,9 +388,6 @@ class BatchedSubscriptionManager {
   };
 
   private pollAllSubscriptions(): void {
-    // Skip if page is hidden
-    if (document.hidden) return;
-
     for (const entry of this.subscriptions.values()) {
       try {
         const current = entry.getValue();

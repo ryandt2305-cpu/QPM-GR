@@ -1,7 +1,7 @@
 // src/store/inventory.ts
 // Bridge for inventory data via myInventoryAtom and myCropInventoryAtom
 
-import { getAtomByLabel, subscribeAtom, readAtomValue } from '../core/jotaiBridge';
+import { getAtomByLabel, subscribeAtom, readAtomValue, getCachedStore } from '../core/jotaiBridge';
 import { log } from '../utils/logger';
 
 export interface InventoryItem {
@@ -32,6 +32,8 @@ let cachedInventory: InventoryItem[] = [];
 let cachedFavorites: Set<string> = new Set();
 let unsubscribe: (() => void) | null = null;
 let initializing = false;
+let inventoryAtomRef: unknown = null;
+let lastRawInventoryValue: unknown = null;
 const listeners = new Set<(data: InventoryData) => void>();
 
 function normalizeInventoryItem(raw: any): InventoryItem | null {
@@ -142,21 +144,22 @@ export async function startInventoryStore(): Promise<void> {
   initializing = true;
   try {
     // Try myInventoryAtom first (full inventory)
-    let atom = getAtomByLabel(INVENTORY_ATOM_LABEL);
+    inventoryAtomRef = getAtomByLabel(INVENTORY_ATOM_LABEL);
 
     // Fallback to myCropInventoryAtom if myInventoryAtom not found
-    if (!atom) {
+    if (!inventoryAtomRef) {
       log('⚠️ myInventoryAtom not found, trying myCropInventoryAtom');
-      atom = getAtomByLabel(CROP_INVENTORY_ATOM_LABEL);
+      inventoryAtomRef = getAtomByLabel(CROP_INVENTORY_ATOM_LABEL);
     }
 
-    if (!atom) {
+    if (!inventoryAtomRef) {
       log('⚠️ Inventory atom not found');
       initializing = false;
       return;
     }
 
-    unsubscribe = await subscribeAtom(atom, (value: any) => {
+    unsubscribe = await subscribeAtom(inventoryAtomRef, (value: any) => {
+      lastRawInventoryValue = value;
       updateCache(value);
     });
 
@@ -173,8 +176,29 @@ export function stopInventoryStore(): void {
     unsubscribe();
     unsubscribe = null;
   }
+  inventoryAtomRef = null;
+  lastRawInventoryValue = null;
   cachedInventory = [];
   cachedFavorites = new Set();
+}
+
+/**
+ * Re-read inventory atom directly via store.get() and update cache if changed.
+ * Used by the background atom poller to detect changes when native
+ * Jotai subscriptions don't fire (background tabs).
+ */
+export function forceRefreshInventory(): void {
+  if (!inventoryAtomRef) return;
+  const store = getCachedStore();
+  if (!store || store.__polyfill) return;
+
+  try {
+    const fresh = store.get(inventoryAtomRef);
+    if (fresh !== lastRawInventoryValue) {
+      lastRawInventoryValue = fresh;
+      updateCache(fresh);
+    }
+  } catch {}
 }
 
 /**

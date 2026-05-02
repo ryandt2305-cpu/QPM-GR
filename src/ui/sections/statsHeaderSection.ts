@@ -31,6 +31,19 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.86",
+    date: "2026-05",
+    notes: [
+      "Refactored pet teams store into modular subfolder (8 files, same public API)",
+      "Fixed purge firing during team apply, which could corrupt active slots",
+      "Fixed team reorder placing items at wrong position on downward drag",
+      "Fixed getTeamById returning mutable internal reference",
+      "Fixed feed policy event not reaching page context (now uses cross-realm dispatch)",
+      "Fixed fast-path applied counter overcounting when falling back to repair pass",
+      "Frozen default config/feed policy objects to prevent accidental mutation",
+    ],
+  },
+  {
     version: "3.1.85",
     date: "2026-05",
     notes: [

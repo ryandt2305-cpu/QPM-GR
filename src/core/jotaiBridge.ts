@@ -4,7 +4,6 @@
 
 import { readSharedGlobal, shareGlobal, pageWindow } from './pageContext';
 import { log } from '../utils/logger';
-import { criticalInterval } from '../utils/timerManager';
 
 export type JotaiStore = {
   get(atom: unknown): any;
@@ -315,8 +314,7 @@ async function captureViaWriteOnce(timeoutMs = 5000): Promise<JotaiStore | null>
 
 // ============================================================================
 // BATCHED SUBSCRIPTION MANAGER
-// Uses a single criticalInterval (Worker-backed when available) for polling.
-// This ensures atom changes are detected even when the tab is backgrounded.
+// Uses a single requestAnimationFrame loop instead of multiple setIntervals
 // ============================================================================
 
 type SubscriptionEntry = {
@@ -328,9 +326,10 @@ type SubscriptionEntry = {
 
 class BatchedSubscriptionManager {
   private subscriptions = new Map<unknown, SubscriptionEntry>();
-  private cleanupTimer: (() => void) | null = null;
+  private rafId: number | null = null;
   private isRunning = false;
-  private readonly POLL_INTERVAL_MS = 500;
+  private lastPollTime = 0;
+  private readonly POLL_INTERVAL_MS = 500; // Poll every 500ms instead of 100-250ms per subscription
 
   subscribe(atom: unknown, cb: () => void, getValue: () => unknown): () => void {
     let entry = this.subscriptions.get(atom);
@@ -361,20 +360,37 @@ class BatchedSubscriptionManager {
   private start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.cleanupTimer = criticalInterval(
-      'jotai-subscription-poll',
-      () => this.pollAllSubscriptions(),
-      this.POLL_INTERVAL_MS,
-    );
+    this.lastPollTime = performance.now();
+    this.tick();
   }
 
   private stop(): void {
-    this.cleanupTimer?.();
-    this.cleanupTimer = null;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
     this.isRunning = false;
   }
 
+  private tick = (): void => {
+    if (!this.isRunning) return;
+
+    const now = performance.now();
+    const elapsed = now - this.lastPollTime;
+
+    // Only poll at the configured interval
+    if (elapsed >= this.POLL_INTERVAL_MS) {
+      this.lastPollTime = now;
+      this.pollAllSubscriptions();
+    }
+
+    this.rafId = requestAnimationFrame(this.tick);
+  };
+
   private pollAllSubscriptions(): void {
+    // Skip if page is hidden
+    if (document.hidden) return;
+
     for (const entry of this.subscriptions.values()) {
       try {
         const current = entry.getValue();

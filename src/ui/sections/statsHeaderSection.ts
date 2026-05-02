@@ -31,6 +31,13 @@ import { visibleInterval } from "../../utils/timerManager";
 
 const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.85",
+    date: "2026-05",
+    notes: [
+      "Added reactive seed silo store with real-time capacity and slot tracking (supports upgraded silos up to 50 slots)",
+    ],
+  },
+  {
     version: "3.1.84",
     date: "2026-05",
     notes: [

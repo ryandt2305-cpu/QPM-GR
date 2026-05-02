@@ -19,6 +19,7 @@ import { initializeGardenFilters } from './features/gardenFilters';
 import { getActivePetsDebug, startPetInfoStore } from './store/pets';
 import { startInventoryStore, readInventoryDirect, getInventoryItems } from './store/inventory';
 import { startHutchStore } from './store/hutch';
+import { startSeedSiloStore, stopSeedSiloStore } from './store/seedSilo';
 import { startSellSnapshotWatcher } from './store/sellSnapshot';
 import { shareGlobal } from './core/pageContext';
 import { estimatePetLevel, getPetXPHistory } from './store/petLevelCalculator';
@@ -1291,6 +1292,7 @@ window.addEventListener('beforeunload', () => {
   stopInventoryCapacity();
   stopStorageValueOverlay();
   stopStorageValue();
+  stopSeedSiloStore();
 }, { once: true });
 
 async function waitForGame(): Promise<void> {
@@ -1381,6 +1383,9 @@ async function initialize(): Promise<void> {
   });
   await startHutchStore().catch((error) => {
     log('Hutch store pre-init failed', error);
+  });
+  await startSeedSiloStore().catch((error) => {
+    log('Seed silo store pre-init failed', error);
   });
   await startPetInfoStore().catch((error) => {
     log('Pet info store pre-init failed', error);

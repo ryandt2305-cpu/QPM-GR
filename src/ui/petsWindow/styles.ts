@@ -420,6 +420,37 @@ const BASE_STYLES = `
 }
 .qpm-team-row__feed-toggle:hover { background: rgba(143,130,255,0.12); border-color: rgba(143,130,255,0.4); color: #d0c8ff; }
 .qpm-team-row__feed-toggle--active { background: rgba(143,130,255,0.18); border-color: rgba(143,130,255,0.5); color: #8f82ff; }
+.qpm-team-row__delete-btn {
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: background 0.12s, border-color 0.12s;
+  color: rgba(224,224,224,0.35);
+  padding: 0;
+}
+.qpm-team-row__delete-btn:hover {
+  background: rgba(248,113,113,0.12);
+  border-color: rgba(248,113,113,0.4);
+  color: #f87171;
+}
+.qpm-team-row__confirm-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #f87171;
+  width: 100%;
+}
 
 /* Compare badges on team rows */
 .qpm-team-row__cmp-badge {

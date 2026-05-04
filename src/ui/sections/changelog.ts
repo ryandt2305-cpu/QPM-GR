@@ -6,6 +6,14 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.96",
+    date: "2026-05",
+    notes: [
+      "Added inline delete button to each team row with confirm/cancel prompt",
+      "Refactored Manager tab into smaller modules for maintainability",
+    ],
+  },
+  {
     version: "3.1.95",
     date: "2026-05",
     notes: [

@@ -1,6 +1,7 @@
 // Shared types for the petsWindow subfolder.
 
 import type { CompareStage } from '../../data/petCompareRules';
+import type { PooledPet } from '../../types/petTeams';
 
 export interface CompareUiState {
   selectedTeamAId?: string;
@@ -28,4 +29,20 @@ export interface ComparePanelHandle {
 export interface CompareStateChange {
   visible: boolean;
   stage: CompareStage | null;
+}
+
+/** Shared context object passed between renderTeamList and renderEditor. */
+export interface ManagerContext {
+  state: ManagerState;
+  petPool: PooledPet[];
+  compareOpen: boolean;
+  compareTeamAId: string | null;
+  compareTeamBId: string | null;
+  dragTeamId: string | null;
+  teamsContainer: HTMLElement;
+  editor: HTMLElement;
+  comparePanel: ComparePanelHandle;
+  normalizeComparePair(): void;
+  renderTeamList(): void;
+  renderEditor(): void;
 }

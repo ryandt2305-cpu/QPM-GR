@@ -1,6 +1,10 @@
 // Shared UI helpers for the pets window.
 
 import { getAnySpriteDataUrl } from '../../sprite-v2/compat';
+import { calculatePetScore, type CollectedPet } from '../../features/petOptimizer';
+import { calculateMaxStrength } from '../../store/xpTracker';
+import { getAbilityDefinition } from '../../data/petAbilities';
+import type { PooledPet } from '../../types/petTeams';
 import { IS_MAC, IS_OPERA } from './constants';
 
 // ---------------------------------------------------------------------------
@@ -245,4 +249,54 @@ export function getAgeSpriteUrl(): string | null {
   const url = getAnySpriteDataUrl('sprite/ui/Age');
   if (url) ageSpriteUrlCache = url;
   return ageSpriteUrlCache;
+}
+
+// ---------------------------------------------------------------------------
+// Team score computation (shared by teamList and teamEditor)
+// ---------------------------------------------------------------------------
+
+function pooledToCollected(pooledPet: PooledPet): CollectedPet {
+  return {
+    id: pooledPet.id,
+    itemId: pooledPet.id,
+    name: pooledPet.name,
+    species: pooledPet.species,
+    location: pooledPet.location,
+    slotIndex: pooledPet.slotIndex ?? -1,
+    strength: pooledPet.strength ?? 0,
+    maxStrength: pooledPet.species && pooledPet.targetScale
+      ? calculateMaxStrength(pooledPet.targetScale, pooledPet.species)
+      : null,
+    targetScale: pooledPet.targetScale,
+    xp: pooledPet.xp,
+    level: pooledPet.level,
+    abilities: pooledPet.abilities,
+    abilityIds: pooledPet.abilities.map(a => getAbilityDefinition(a)?.id ?? a),
+    mutations: pooledPet.mutations,
+    hasGold: pooledPet.mutations.some(m => m.toLowerCase().includes('gold')),
+    hasRainbow: pooledPet.mutations.some(m => m.toLowerCase().includes('rainbow')),
+    raw: null,
+  };
+}
+
+export function computeTeamScore(teamSlots: Array<string | null>, petPool: PooledPet[]): number {
+  let total = 0;
+  for (const slotId of teamSlots) {
+    if (!slotId) continue;
+    const pooledPet = petPool.find(p => p.id === slotId);
+    if (!pooledPet || !pooledPet.species) continue;
+    const score = calculatePetScore(pooledToCollected(pooledPet));
+    total += score.total;
+  }
+  return total;
+}
+
+export function computePetScore(
+  slotId: string,
+  petPool: PooledPet[],
+): { total: number; granterBonus: number; granterType: 'rainbow' | 'gold' | null } | null {
+  const pooledPet = petPool.find(p => p.id === slotId);
+  if (!pooledPet || !pooledPet.species) return null;
+  const score = calculatePetScore(pooledToCollected(pooledPet));
+  return { total: score.total, granterBonus: score.granterBonus, granterType: score.granterType };
 }

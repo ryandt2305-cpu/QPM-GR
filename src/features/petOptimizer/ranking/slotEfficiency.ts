@@ -3,6 +3,7 @@ import {
   HATCH_TRIO_BROAD_ROLE_KEYS,
   SLOT_BONUS_CAP,
   SLOT_SUPPORT_WEIGHTS,
+  TIME_FAMILY_KEYS,
 } from '../constants';
 import type { ProgressionStageSnapshot } from '../../petCompareEngine';
 import { getGoldAdjustedValue } from '../scoring';
@@ -58,6 +59,10 @@ function isMeaningfulSupportFamily(
   return family.highestTier >= 2 || normalizedStanding >= 0.55 || isMutationGranterFamily(family.broadRoleFamilyKey);
 }
 
+function compressSupportStanding(standing: number): number {
+  return 0.3 + 0.7 * standing;
+}
+
 function compareStandingEntries(a: SlotEfficiencyStandingEntry, b: SlotEfficiencyStandingEntry): number {
   if (b.adjustedStanding !== a.adjustedStanding) return b.adjustedStanding - a.adjustedStanding;
   if (b.family.highestTier !== a.family.highestTier) return b.family.highestTier - a.family.highestTier;
@@ -97,6 +102,24 @@ function buildSupportCandidatesByBroadRole(
     const anchorIsHatchTrio = HATCH_TRIO_BROAD_ROLE_KEYS.has(anchor.family.broadRoleFamilyKey);
     const entryIsHatchTrio = HATCH_TRIO_BROAD_ROLE_KEYS.has(entry.family.broadRoleFamilyKey);
     if (anchorIsHatchTrio !== entryIsHatchTrio) continue;
+
+    // Synergy gate: only recognized synergy relationships provide support value.
+    // Mutation ecosystem (all granters + producemutationboost) ← crop ecosystem + coinfinder
+    // Crop ecosystem (time-family + producescaleboost) ← crop ecosystem + mutation eco + coinfinder
+    // Standalone (petxpboost, producerefund, sellboost, seedfinder, produceeater) ← nothing
+    if (!anchorIsHatchTrio) {
+      const anchorKey = anchor.family.broadRoleFamilyKey;
+      const supportKey = entry.family.broadRoleFamilyKey;
+      const anchorIsMutationEco = isMutationGranterFamily(anchorKey) || anchorKey === 'producemutationboost';
+      const anchorIsCropEco = TIME_FAMILY_KEYS.has(anchorKey) || anchorKey === 'producescaleboost';
+      const supportIsMutationEco = isMutationGranterFamily(supportKey) || supportKey === 'producemutationboost';
+      const supportIsCropEco = TIME_FAMILY_KEYS.has(supportKey) || supportKey === 'producescaleboost';
+      const supportIsCoinFinder = supportKey === 'coinfinder';
+
+      const hasSynergy = (anchorIsMutationEco && (supportIsCropEco || supportIsCoinFinder))
+        || (anchorIsCropEco && (supportIsCropEco || supportIsMutationEco || supportIsCoinFinder));
+      if (!hasSynergy) continue;
+    }
 
     if (!isMeaningfulSupportFamily(entry.family, entry.adjustedStanding)) continue;
 
@@ -180,7 +203,7 @@ export function populateSlotEfficiencySnapshots(
         familyLabel: entry.family.familyLabel,
         broadRoleFamilyKey: entry.family.broadRoleFamilyKey,
         broadRoleFamilyLabel: entry.family.broadRoleFamilyLabel,
-        value: entry.adjustedStanding,
+        value: compressSupportStanding(entry.adjustedStanding),
         weight: SLOT_SUPPORT_WEIGHTS[index] ?? 0,
       }));
 
@@ -216,8 +239,8 @@ export function populateSlotEfficiencySnapshots(
 
       if (hasMutationGranter && strongSupportCount >= 1) {
         const mutationBonus = anchorIsColorGranter
-          ? (strongSupportCount >= 2 ? 0.08 : 0.04)
-          : (strongSupportCount >= 2 ? 0.18 : 0.10);
+          ? (strongSupportCount >= 2 ? 0.04 : 0.02)
+          : (strongSupportCount >= 2 ? 0.10 : 0.06);
         const scaledBonus = allMeaningfulFamilies.some((entry) => entry.family.broadRoleFamilyKey === 'goldgranter')
           && !allMeaningfulFamilies.some((entry) => entry.family.broadRoleFamilyKey === 'rainbowgranter')
           ? mutationBonus * goldStandingFactor
@@ -239,31 +262,31 @@ export function populateSlotEfficiencySnapshots(
       }
 
       if (hasFoodSustain && (hasPlantSupport || hasEggSupport)) {
-        addBonus('Food sustain + growth support', 0.08);
+        addBonus('Food sustain + growth support', 0.04);
       }
 
       if (hasPlantSupport && hasEggSupport) {
-        addBonus('Plant + egg growth pairing', 0.05);
+        addBonus('Plant + egg growth pairing', 0.03);
       }
 
       if ((pet.species ?? '').toLowerCase() === 'turtle' && timeSynergy.coverage >= 2) {
-        addBonus('Turtle multi-time-family utility', 0.06);
+        addBonus('Turtle multi-time-family utility', 0.03);
       }
 
       if (turtleComposite && turtleComposite.coverage >= 2) {
-        addBonus('Turtle composite utility', Math.min(0.06, turtleComposite.compositeScore * 0.04));
+        addBonus('Turtle composite utility', Math.min(0.03, turtleComposite.compositeScore * 0.04));
       }
 
       if (pet.hasRainbow && meaningfulFamilyCount >= 2) {
-        addBonus('Rainbow mutation on multi-role pet', 0.06);
+        addBonus('Rainbow mutation on multi-role pet', 0.03);
       }
 
       if (anchor.family.broadRoleFamilyKey === 'rainbowgranter' || anchor.family.broadRoleFamilyKey === 'goldgranter') {
         if (hasSnapshotFamilyBroadRole(compareSnapshot, 'produceeater')) {
-          addPenalty('Produce Eater penalty on mutation-granter anchor', -0.05);
+          addPenalty('Produce Eater penalty on mutation-granter anchor', -0.03);
         }
         if (hasSnapshotSeedFinderFamily(compareSnapshot)) {
-          addPenalty('Seed Finder penalty on mutation-granter anchor', -0.03);
+          addPenalty('Seed Finder penalty on mutation-granter anchor', -0.02);
         }
       }
 

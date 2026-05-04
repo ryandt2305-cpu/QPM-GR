@@ -6,6 +6,17 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.90",
+    date: "2026-05",
+    notes: [
+      "Reduced synergy bonus dominance: halved all slot efficiency bonus magnitudes and lowered the bonus cap from 0.30 to 0.15",
+      "Added synergy-group gating: standalone abilities (XP Boost, Produce Refund, Sell Boost, etc.) no longer inflate scores as unrelated support",
+      "Compressed support standing values to reduce the gap between strong and weak support families",
+      "Reduced time-family uplift diversity multipliers so secondary ability combos create smaller ranking differences",
+      "Improved ranking accuracy: pets with the same primary role now rank primarily by strength and anchor quality, not secondary ability variety",
+    ],
+  },
+  {
     version: "3.1.89",
     date: "2026-05",
     notes: [

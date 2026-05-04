@@ -98,8 +98,8 @@ function getRainbowTimeUpliftStrEquivalent(
 
   const base = RAINBOW_TIME_UPLIFT_BASE[stage.stage];
   let multiplier = 1 + 0.12 * Math.max(0, synergy.coverage - 1);
-  if (synergy.hasRestore && synergy.hasPlantOrEgg) multiplier += 0.18;
-  if (synergy.hasPlant && synergy.hasEgg) multiplier += 0.10;
+  if (synergy.hasRestore && synergy.hasPlantOrEgg) multiplier += 0.08;
+  if (synergy.hasPlant && synergy.hasEgg) multiplier += 0.05;
   if ((pet.species ?? '').toLowerCase() === 'turtle') multiplier *= 1.05;
 
   return Math.min(MAX_TIME_UPLIFT_STR_EQ, base * multiplier);

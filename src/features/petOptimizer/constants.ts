@@ -47,7 +47,7 @@ export const MYTHICAL_SPECIES = new Set(['Butterfly', 'Peacock', 'Capybara']);
 
 export const MAX_BETTER_ALTERNATIVES = 12;
 export const GOLD_DISLIKE_FACTOR = 0.5;
-export const GRANTER_ANCHOR_PENALTY_CAP = 0.06;
+export const GRANTER_ANCHOR_PENALTY_CAP = 0.04;
 export const ANALYSIS_CACHE_TTL_MS = 30000;
 
 export const TIER_SCORES: Record<string, number> = {
@@ -104,7 +104,7 @@ export const TURTLE_COMPOSITE_WEIGHTS: Array<{ familyKey: string; weight: number
 ];
 
 export const SLOT_SUPPORT_WEIGHTS = [0.55, 0.30, 0.15] as const;
-export const SLOT_BONUS_CAP = 0.30;
+export const SLOT_BONUS_CAP = 0.15;
 export const RAINBOW_AUTO_KEEP_MIN_SCORE = 600;
 export const RAINBOW_AUTO_KEEP_MIN_MAX_STRENGTH = 90;
 export const RAINBOW_AUTO_KEEP_MAX_RANK = 6;

@@ -321,53 +321,37 @@ function executeBulkSell(pets: CollectedPet[], onDone: () => void): void {
 }
 
 export function appendSellButton(
-  card: HTMLElement,
+  container: HTMLElement,
   comparison: PetComparison,
   onAfterSell: () => void,
-  options?: {
-    rightOffsetPx?: number;
-    topOffsetPx?: number;
-    zIndex?: number;
-  },
 ): void {
-  const rightOffsetPx = options?.rightOffsetPx ?? 8;
-  const topOffsetPx = options?.topOffsetPx ?? 8;
-  const zIndex = options?.zIndex ?? 5;
-
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.title = 'Sell this pet';
-  btn.textContent = '💰';
+  btn.textContent = 'Sell';
   btn.style.cssText = [
-    'position:absolute',
-    `top:${topOffsetPx}px`,
-    `right:${rightOffsetPx}px`,
-    'width:26px',
-    'height:26px',
-    'border-radius:6px',
-    'border:1px solid rgba(255,255,255,0.12)',
-    'background:rgba(0,0,0,0.3)',
-    'color:#ccc',
-    'font-size:13px',
+    'padding:3px 8px',
+    'border-radius:5px',
+    'border:1px solid rgba(244,67,54,0.4)',
+    'background:rgba(244,67,54,0.12)',
+    'color:#ff9e95',
+    'font-size:10px',
+    'font-weight:600',
     'cursor:pointer',
-    'display:flex',
-    'align-items:center',
-    'justify-content:center',
-    'padding:0',
-    'opacity:0.5',
-    'transition:opacity 0.15s, background 0.15s',
-    `z-index:${zIndex}`,
+    'white-space:nowrap',
     'line-height:1',
+    'transition:opacity 0.15s, filter 0.15s',
   ].join(';');
 
-  btn.addEventListener('mouseenter', () => {
-    btn.style.opacity = '1';
-  });
-  btn.addEventListener('mouseleave', () => {
-    btn.style.opacity = '0.5';
-  });
+  btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
+  btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
   btn.addEventListener('click', (event) => {
     event.stopPropagation();
+
+    // Walk up to find the card element (the top-level position:relative container)
+    const card = container.closest<HTMLElement>('[style*="position: relative"]')
+      ?? container.parentElement
+      ?? container;
 
     const pet = comparison.pet;
     showSellConfirmModal(
@@ -380,7 +364,7 @@ export function appendSellButton(
     });
   });
 
-  card.appendChild(btn);
+  container.appendChild(btn);
 }
 
 export function showFamilySellModal(

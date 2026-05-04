@@ -1,5 +1,6 @@
 import { getOptimizerAnalysis } from '../../features/petOptimizer';
 import { toggleWindow } from '../modalWindow';
+import { renderFamilyNav } from './familyNav';
 import { renderFilters } from './filters';
 import { renderResults } from './results';
 import { renderSummary } from './summary';
@@ -8,6 +9,14 @@ import {
   getGlobalState,
   setGlobalState,
 } from './windowState';
+
+function updateFamilyNav(): void {
+  const globalState = getGlobalState();
+  if (!globalState?.currentAnalysis || !globalState.navContainer) return;
+  globalState.navContainer.innerHTML = '';
+  const nav = renderFamilyNav(globalState.currentAnalysis, globalState.resultsContainer);
+  globalState.navContainer.appendChild(nav);
+}
 
 function renderCurrentAnalysis(): void {
   const globalState = getGlobalState();
@@ -18,6 +27,7 @@ function renderCurrentAnalysis(): void {
     () => void refreshAnalysis(true),
     () => renderCurrentAnalysis(),
   );
+  updateFamilyNav();
   globalState.root.scrollTop = savedScroll;
 }
 
@@ -68,6 +78,7 @@ async function refreshAnalysis(forceRefresh = false): Promise<void> {
       () => void refreshAnalysis(true),
       () => renderCurrentAnalysis(),
     );
+    updateFamilyNav();
     // Restore scroll after content is rebuilt. Re-read state in case window
     // was torn down and rebuilt during the async fetch.
     const stateAfter = getGlobalState();
@@ -152,6 +163,10 @@ export function renderPetOptimizerWindow(body: HTMLElement): void {
   `;
   root.appendChild(filtersContainer);
 
+  const navContainer = document.createElement('div');
+  navContainer.style.cssText = 'margin-bottom:8px;position:sticky;top:0;z-index:10;background:rgba(18,20,26,0.97);padding:4px 0;';
+  root.appendChild(navContainer);
+
   const resultsContainer = document.createElement('div');
   resultsContainer.style.cssText = 'min-height: 200px;';
   root.appendChild(resultsContainer);
@@ -162,6 +177,7 @@ export function renderPetOptimizerWindow(body: HTMLElement): void {
     root,
     summaryContainer,
     filtersContainer,
+    navContainer,
     resultsContainer,
     currentAnalysis: null,
   });

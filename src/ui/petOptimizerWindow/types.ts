@@ -8,6 +8,7 @@ export interface WindowState {
   root: HTMLElement;
   summaryContainer: HTMLElement;
   filtersContainer: HTMLElement;
+  navContainer: HTMLElement;
   resultsContainer: HTMLElement;
   currentAnalysis: OptimizerAnalysis | null;
 }

@@ -1,13 +1,32 @@
 import { getOptimizerConfig, type PetComparison } from '../../features/petOptimizer';
+import { getAbilityColor } from '../../utils/petCardRenderer';
 import { createFamilyTeam } from './actions';
 import { createPetCard } from './card';
 import {
   buildFamilyGroups,
+  deduplicateFamilyGroups,
   getTopTeamCandidatesForFamily,
   sortFamilyGroups,
 } from './familyGroups';
 import { showFamilySellModal } from './sell';
 import type { StatusSectionId } from './types';
+
+/** Convert a color string to rgba at the given alpha. Handles hex and falls back for gradients. */
+function colorWithAlpha(color: string, alpha: number): string {
+  if (color.includes('gradient') || color.includes('rgb')) {
+    return `rgba(143,130,255,${alpha})`;
+  }
+  const hex = color.replace('#', '');
+  if (hex.length >= 6) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) {
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+  }
+  return `rgba(143,130,255,${alpha})`;
+}
 
 const STATUS_CONFIG: Record<StatusSectionId, {
   icon: string;
@@ -116,16 +135,26 @@ export function createStatusSection(
   const petsContainer = document.createElement('div');
   petsContainer.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px;';
 
-  const familyGroups = sortFamilyGroups(buildFamilyGroups(comparisons));
+  const familyGroups = sortFamilyGroups(deduplicateFamilyGroups(buildFamilyGroups(comparisons)));
   for (const family of familyGroups) {
-    const abilityHeader = document.createElement('div');
-    abilityHeader.style.cssText = `
+    const abilityColor = getAbilityColor(family.representativeAbilityName);
+    const bgTint = colorWithAlpha(abilityColor.base, 0.06);
+    const borderTint = colorWithAlpha(abilityColor.base, 0.18);
+
+    // Wrapper groups header + cards visually
+    const familyWrapper = document.createElement('div');
+    familyWrapper.style.cssText = `
       margin-top: 8px;
-      margin-bottom: 4px;
+      border-radius: 6px;
+      background: ${bgTint};
+      border: 1px solid ${borderTint};
+      overflow: hidden;
+    `;
+
+    const abilityHeader = document.createElement('div');
+    abilityHeader.dataset.familyKey = family.familyKey;
+    abilityHeader.style.cssText = `
       padding: 6px 10px;
-      background: rgba(66, 165, 245, 0.1);
-      border-radius: 4px;
-      border-left: 3px solid #42A5F5;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -135,25 +164,17 @@ export function createStatusSection(
     const headerMeta = document.createElement('div');
     headerMeta.style.cssText = 'display:flex; align-items:center; gap:8px;';
 
+    // Colored dot matching the ability color
+    const colorDot = document.createElement('span');
+    const dotBg = abilityColor.base.includes('gradient') ? '#8f82ff' : abilityColor.base;
+    colorDot.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotBg};flex-shrink:0;`;
+    headerMeta.appendChild(colorDot);
+
     const headerTitle = document.createElement('span');
-    headerTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #aaa;';
+    headerTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #ccc;';
     headerTitle.textContent = `${family.familyLabel} (${family.pets.length} pet${family.pets.length > 1 ? 's' : ''})`;
     headerMeta.appendChild(headerTitle);
 
-    if (family.highestTierLabel) {
-      const tierBadge = document.createElement('span');
-      tierBadge.style.cssText = [
-        'font-size:10px',
-        'font-weight:700',
-        'padding:2px 6px',
-        'border-radius:999px',
-        'border:1px solid rgba(66,165,245,0.45)',
-        'background:rgba(66,165,245,0.15)',
-        'color:#9fd0ff',
-      ].join(';');
-      tierBadge.textContent = `Best tier: ${family.highestTierLabel}`;
-      headerMeta.appendChild(tierBadge);
-    }
     abilityHeader.appendChild(headerMeta);
 
     const headerBtnGroup = document.createElement('div');
@@ -225,7 +246,10 @@ export function createStatusSection(
     }
 
     abilityHeader.appendChild(headerBtnGroup);
-    petsContainer.appendChild(abilityHeader);
+    familyWrapper.appendChild(abilityHeader);
+
+    const cardsArea = document.createElement('div');
+    cardsArea.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:0 8px 8px 8px;';
 
     const visiblePets = status === 'keep'
       ? (optimizerConfig.showAllKeeps ? family.pets : family.pets.slice(0, 3))
@@ -236,8 +260,11 @@ export function createStatusSection(
         ? (familyPeersMap.get(entry.familyKey) ?? []).filter((p) => p.pet.id !== entry.comparison.pet.id)
         : undefined;
       const petCard = createPetCard(entry.comparison, entry, peers, onAfterSell, onAfterKeep);
-      petsContainer.appendChild(petCard);
+      cardsArea.appendChild(petCard);
     }
+
+    familyWrapper.appendChild(cardsArea);
+    petsContainer.appendChild(familyWrapper);
   }
 
   section.appendChild(petsContainer);

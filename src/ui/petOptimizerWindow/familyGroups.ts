@@ -242,6 +242,86 @@ export function buildFamilyGroups(comparisons: PetComparison[]): Map<string, Fam
   return byFamily;
 }
 
+/**
+ * Merge families whose top-3 pets are exactly identical into a single group
+ * with combined labels (e.g., "Dawn Boost / Dawnlit Granter").
+ */
+export function deduplicateFamilyGroups(
+  groups: Map<string, FamilyAbilityGroup>,
+): Map<string, FamilyAbilityGroup> {
+  // Build a canonical key from the sorted top-3 pet identity keys
+  const canonicalKeyOf = (group: FamilyAbilityGroup): string => {
+    const topPets = group.pets.slice(0, 3);
+    if (topPets.length === 0) return group.familyKey;
+    return topPets.map((entry) => getComparisonIdentityKey(entry.comparison)).sort().join('|');
+  };
+
+  // Group families by their canonical top-3 key
+  const byCanonical = new Map<string, FamilyAbilityGroup[]>();
+  for (const group of groups.values()) {
+    const key = canonicalKeyOf(group);
+    let bucket = byCanonical.get(key);
+    if (!bucket) {
+      bucket = [];
+      byCanonical.set(key, bucket);
+    }
+    bucket.push(group);
+  }
+
+  const merged = new Map<string, FamilyAbilityGroup>();
+  for (const bucket of byCanonical.values()) {
+    if (bucket.length === 1) {
+      const group = bucket[0]!;
+      merged.set(group.familyKey, group);
+      continue;
+    }
+
+    // Merge duplicates: combine labels, keep highest tier, union pets
+    const primary = bucket[0]!;
+    const combinedLabels = bucket.map((g) => g.familyLabel);
+    const mergedLabel = combinedLabels.join(' / ');
+    const mergedKey = bucket.map((g) => g.familyKey).join('+');
+
+    let bestTierValue = primary.highestTierValue;
+    let bestTierLabel = primary.highestTierLabel;
+    let bestRepresentative = primary.representativeAbilityName;
+
+    const petMap = new Map<string, FamilyPetEntry>();
+    for (const group of bucket) {
+      if (group.highestTierValue > bestTierValue) {
+        bestTierValue = group.highestTierValue;
+        bestTierLabel = group.highestTierLabel;
+        bestRepresentative = group.representativeAbilityName;
+      }
+      for (const entry of group.pets) {
+        const petKey = getComparisonIdentityKey(entry.comparison);
+        const existing = petMap.get(petKey);
+        if (!existing || compareFamilyPetEntriesForDedup(entry, existing) < 0) {
+          petMap.set(petKey, entry);
+        }
+      }
+    }
+
+    const mergedGroup: FamilyAbilityGroup = {
+      familyKey: mergedKey,
+      familyLabel: mergedLabel,
+      highestTierValue: bestTierValue,
+      highestTierLabel: bestTierLabel,
+      representativeAbilityName: bestRepresentative,
+      pets: [...petMap.values()].sort(compareDisplayFamilyEntries),
+    };
+    merged.set(mergedKey, mergedGroup);
+  }
+
+  return merged;
+}
+
+/** Compare for dedup: prefer better rank, then higher tier */
+function compareFamilyPetEntriesForDedup(a: FamilyPetEntry, b: FamilyPetEntry): number {
+  if (a.rank !== b.rank) return a.rank - b.rank;
+  return b.tierValue - a.tierValue;
+}
+
 export function sortFamilyGroups(groups: Map<string, FamilyAbilityGroup>): FamilyAbilityGroup[] {
   return [...groups.values()].sort((a, b) => {
     const aTop = a.pets[0];

@@ -6,6 +6,19 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.89",
+    date: "2026-05",
+    notes: [
+      "Overhauled pet optimizer card layout: inline ability squares, rank badges, and location sprites replace the old stacked design",
+      "Added family navigation bar with sticky jump-to links for each ability group",
+      "Added family group deduplication: identical top-3 groups are merged into combined labels",
+      "Improved family group headers with ability-colored tinting and dot indicators",
+      "Replaced floating emoji sell button with inline contextual sell button",
+      "Replaced emoji location icons with game sprites for hutch and inventory",
+      "Fixed slot efficiency ranking inflated by zero-score abilities (weather-locked or unwanted abilities no longer qualify as meaningful support)",
+    ],
+  },
+  {
     version: "3.1.88",
     date: "2026-05",
     notes: [

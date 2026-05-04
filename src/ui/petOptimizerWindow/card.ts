@@ -4,96 +4,130 @@ import {
   unprotectPet,
   type PetComparison,
 } from '../../features/petOptimizer';
+import { getOptimizerAbilityFamilyInfo } from '../../features/petCompareEngine';
 import { getAbilityColor, normalizeAbilityName } from '../../utils/petCardRenderer';
-import { toOrdinal } from './familyGroups';
 import { openBetterPetsCompare, openCompetitorsPetCompare } from './actions';
 import { appendSellButton } from './sell';
-import { getPetSprite, renderAbilitySquares } from './sprites';
+import { getLocationIcon, getPetSprite, renderAbilitySquares } from './sprites';
 import type { FamilyPetEntry } from './types';
 
-const LOCATION_ICONS: Record<string, string> = {
-  active: '🟢',
-  inventory: '📦',
-  hutch: '🏠',
-};
+function getRankColor(rank: number): string {
+  if (rank === 1) return '#FFD700';
+  if (rank <= 3) return '#4CAF50';
+  if (rank <= 6) return '#e8e0ff';
+  return 'rgba(255,255,255,0.4)';
+}
 
-function appendManualKeepButton(
-  card: HTMLElement,
-  comparison: PetComparison,
-  isReturnAction: boolean,
-  onAfterKeep: () => void,
-): void {
-  const button = document.createElement('button');
-  const palette = isReturnAction
-    ? {
-      border: 'rgba(255,193,7,0.55)',
-      background: 'rgba(255,193,7,0.16)',
-      text: '#ffe08a',
-    }
-    : {
-      border: 'rgba(76,175,80,0.55)',
-      background: 'rgba(76,175,80,0.18)',
-      text: '#9de6a8',
-    };
+function buildFamilyRankMap(comparison: PetComparison): Map<string, number> {
+  const map = new Map<string, number>();
+  const ranks = comparison.familyRanks;
+  if (!Array.isArray(ranks)) return map;
+  for (const entry of ranks) {
+    map.set(entry.familyKey, entry.rank);
+  }
+  return map;
+}
 
-  button.type = 'button';
-  button.textContent = isReturnAction ? 'Return' : 'Keep';
-  button.title = isReturnAction
-    ? 'Return this pet to optimizer recommendations'
-    : 'Keep this pet in the optimizer';
-  button.style.cssText = [
-    'position:absolute',
-    'top:8px',
-    'right:40px',
-    'height:26px',
-    'min-width:54px',
-    'padding:0 9px',
-    'border-radius:6px',
+function getAbilityFamilyKey(abilityId: string, abilityName: string): string | null {
+  const info = getOptimizerAbilityFamilyInfo(abilityId, abilityName);
+  return info?.exactFamilyKey?.trim().toLowerCase() ?? null;
+}
+
+function formatStrength(strength: number, maxStrength: number | null | undefined): string {
+  if (!maxStrength || maxStrength <= strength) return `STR ${strength}`;
+  return `STR ${strength}/${maxStrength}`;
+}
+
+function makeSmallButton(
+  text: string,
+  palette: { border: string; background: string; color: string },
+): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = text;
+  btn.style.cssText = [
+    'padding:3px 8px',
+    'border-radius:5px',
     `border:1px solid ${palette.border}`,
     `background:${palette.background}`,
-    `color:${palette.text}`,
-    'font-size:11px',
-    'font-weight:700',
+    `color:${palette.color}`,
+    'font-size:10px',
+    'font-weight:600',
     'cursor:pointer',
-    'display:flex',
-    'align-items:center',
-    'justify-content:center',
+    'white-space:nowrap',
     'line-height:1',
-    'opacity:0.82',
     'transition:opacity 0.15s, filter 0.15s',
-    'z-index:6',
   ].join(';');
+  btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
+  btn.addEventListener('mouseleave', () => { btn.style.filter = 'none'; });
+  return btn;
+}
 
-  button.addEventListener('mouseenter', () => {
-    button.style.opacity = '1';
-    button.style.filter = 'brightness(1.05)';
-  });
-  button.addEventListener('mouseleave', () => {
-    button.style.opacity = '0.82';
-    button.style.filter = 'none';
-  });
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    button.disabled = true;
-    button.style.opacity = '0.6';
-    button.style.pointerEvents = 'none';
+function appendButtonRow(
+  card: HTMLElement,
+  comparison: PetComparison,
+  familyEntry: FamilyPetEntry | undefined,
+  familyPeers: PetComparison[] | undefined,
+  onAfterSell: () => void,
+  onAfterKeep: () => void,
+): void {
+  const isManuallyProtected = getOptimizerConfig().protectedPetIds.has(comparison.pet.id);
+  const canKeepManually = comparison.status === 'sell' || comparison.status === 'review';
+  const canReturnToOptimizer = comparison.status === 'keep' && isManuallyProtected;
+  const showManualKeep = canKeepManually || canReturnToOptimizer;
 
-    try {
-      if (isReturnAction) {
-        unprotectPet(comparison.pet.id);
-      } else {
-        protectPet(comparison.pet.id);
+  const hasRankContext = !!familyEntry && Number.isFinite(familyEntry.rank) && familyEntry.rank < Number.MAX_SAFE_INTEGER;
+  const rankMetaLabel = hasRankContext && familyEntry?.totalCompetitors
+    ? `${familyEntry.totalCompetitors} competitor${familyEntry.totalCompetitors === 1 ? '' : 's'}`
+    : null;
+  const showCompetitors = comparison.status === 'keep' && !!rankMetaLabel && !!familyPeers && familyPeers.length > 0;
+
+  const row = document.createElement('div');
+  row.style.cssText = 'position:absolute;top:8px;right:8px;display:flex;gap:4px;z-index:6;';
+
+  if (showCompetitors && familyEntry) {
+    const btn = makeSmallButton(rankMetaLabel!, {
+      border: 'rgba(143,130,255,0.4)',
+      background: 'rgba(143,130,255,0.12)',
+      color: '#d8d1ff',
+    });
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openCompetitorsPetCompare(comparison, familyEntry.familyLabel, familyPeers!);
+    });
+    row.appendChild(btn);
+  }
+
+  if (showManualKeep) {
+    const isReturn = canReturnToOptimizer;
+    const palette = isReturn
+      ? { border: 'rgba(255,193,7,0.55)', background: 'rgba(255,193,7,0.16)', color: '#ffe08a' }
+      : { border: 'rgba(76,175,80,0.55)', background: 'rgba(76,175,80,0.18)', color: '#9de6a8' };
+    const btn = makeSmallButton(isReturn ? 'Return' : 'Keep', palette);
+    btn.title = isReturn ? 'Return this pet to optimizer recommendations' : 'Keep this pet in the optimizer';
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      btn.style.pointerEvents = 'none';
+      try {
+        if (isReturn) { unprotectPet(comparison.pet.id); }
+        else { protectPet(comparison.pet.id); }
+        onAfterKeep();
+      } catch (error) {
+        console.error('[Pet Optimizer] Failed to update manual keep status:', error);
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
       }
-      onAfterKeep();
-    } catch (error) {
-      console.error('[Pet Optimizer] Failed to update manual keep status:', error);
-      button.disabled = false;
-      button.style.opacity = '1';
-      button.style.pointerEvents = 'auto';
-    }
-  });
+    });
+    row.appendChild(btn);
+  }
 
-  card.appendChild(button);
+  // Sell button
+  appendSellButton(row, comparison, onAfterSell);
+
+  card.appendChild(row);
 }
 
 export function createPetCard(
@@ -104,11 +138,6 @@ export function createPetCard(
   onAfterKeep: () => void,
 ): HTMLElement {
   const { pet, score, status, reason, betterAlternatives, decisionFamilyLabel } = comparison;
-  const isManuallyProtected = getOptimizerConfig().protectedPetIds.has(pet.id);
-  const canKeepManually = status === 'sell' || status === 'review';
-  const canReturnToOptimizer = status === 'keep' && isManuallyProtected;
-  const showManualKeepButton = canKeepManually || canReturnToOptimizer;
-  const scoreColumnRightMarginPx = showManualKeepButton ? 104 : 30;
 
   const card = document.createElement('div');
   card.style.cssText = `
@@ -130,37 +159,25 @@ export function createPetCard(
   });
 
   const sprite = getPetSprite(pet.species, pet.hasRainbow, pet.hasGold);
-  const showDecisionFamily = status === 'sell' && !!decisionFamilyLabel;
   const betterPetsHeading = decisionFamilyLabel ? `Better ${decisionFamilyLabel} pets` : 'Better pets';
-  const hasRankContext = !!familyEntry && Number.isFinite(familyEntry.rank) && familyEntry.rank < Number.MAX_SAFE_INTEGER;
-  const rankLabel = hasRankContext && familyEntry
-    ? `${toOrdinal(familyEntry.rank)} ${familyEntry.familyLabel}`
-    : null;
-  const rankMetaLabel = hasRankContext && familyEntry?.totalCompetitors
-    ? `${familyEntry.totalCompetitors} competitor${familyEntry.totalCompetitors === 1 ? '' : 's'}`
-    : null;
-  const familyTierLabel = familyEntry?.tierLabel ? `Tier ${familyEntry.tierLabel}` : null;
-  const modeLabel = comparison.decisionMode === 'slot_efficiency'
-    ? 'Slot Efficiency'
-    : comparison.decisionMode === 'specialist'
-      ? 'Specialist'
-      : null;
-  const showModeLabel = status === 'sell' && !!modeLabel;
-  const showCompetitorsButton = status === 'keep' && !!rankMetaLabel && !!familyPeers && familyPeers.length > 0;
+
+  // Build the title line: name + optional species subtitle + location icon
+  const displayName = pet.name || pet.species;
+  const showSpeciesSubtitle = pet.name && pet.species !== pet.name;
+
+  // Build ability-to-rank map for rank badges
+  const familyRankMap = buildFamilyRankMap(comparison);
 
   card.innerHTML = `
-    <div style="display: flex; gap: 12px; align-items: start;">
-      <div style="flex-shrink: 0;">
+    <div style="display: flex; gap: 10px; align-items: start;">
+      <div style="flex-shrink: 0; display: flex; align-items: center; gap: 3px;">
+        ${renderAbilitySquares(pet.abilities, 10)}
         <div style="
-          position: relative;
           width: 48px;
           height: 48px;
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 6px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.03);
         ">
           ${sprite ? `
             <img src="${sprite}" alt="${pet.species}" style="
@@ -170,34 +187,26 @@ export function createPetCard(
               image-rendering: pixelated;
             ">
           ` : `
-            <span style="font-size: 18px; color: #666;">•</span>
+            <span style="font-size: 18px; color: #666;">\u2022</span>
           `}
-          ${renderAbilitySquares(pet.abilities, 12, pet.hasRainbow, pet.hasGold, pet.species || undefined)}
         </div>
       </div>
 
       <div style="flex: 1; min-width: 0;">
-        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-          <div style="font-size: 14px; font-weight: 600; color: #fff;">
-            ${pet.name || pet.species}
-          </div>
-          <div style="font-size: 12px; color: #777;">
-            ${LOCATION_ICONS[pet.location]} ${pet.location}
-          </div>
-          ${pet.hasRainbow ? '<span style="font-size: 12px;">🌈 Rainbow</span>' : ''}
-          ${pet.hasGold ? '<span style="font-size: 12px;">✨ Gold</span>' : ''}
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap;">
+          <span style="font-size: 14px; font-weight: 600; color: #fff;">${displayName}</span>
+          ${showSpeciesSubtitle ? `<span style="font-size: 11px; color: #666;">${pet.species}</span>` : ''}
+          <span style="font-size: 11px; color: #888;">${formatStrength(pet.strength, pet.maxStrength)}</span>
+          <span data-location-icon style="display:flex;align-items:center;"></span>
         </div>
 
-        <div style="font-size: 12px; color: #aaa; margin-bottom: 6px;">
-          ${pet.species}${pet.species !== (pet.name || pet.species) ? ` "${pet.name || pet.species}"` : ''}
-          • STR ${pet.strength}${pet.maxStrength ? ` / Max ${pet.maxStrength}` : ''}
-          ${pet.maxStrength && pet.maxStrength > pet.strength ? ` <span style="color: #4CAF50;">(+${pet.maxStrength - pet.strength} potential)</span>` : ''}
-        </div>
-
-        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
-          ${pet.abilities.map((ability) => {
+        <div data-ability-pills style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px;">
+          ${pet.abilities.map((ability, idx) => {
             const normalizedName = normalizeAbilityName(ability);
             const color = getAbilityColor(ability);
+            const abilityId = pet.abilityIds[idx] ?? ability;
+            const fKey = getAbilityFamilyKey(abilityId, ability);
+            const rank = fKey ? familyRankMap.get(fKey) : undefined;
 
             let background: string;
             let textColor: string;
@@ -216,8 +225,21 @@ export function createPetCard(
               textColor = color.text;
             }
 
+            const rankBadge = (rank != null && Number.isFinite(rank) && rank < Number.MAX_SAFE_INTEGER)
+              ? `<span style="
+                  position:absolute;top:-7px;right:-6px;
+                  font-size:11px;font-weight:800;
+                  color:${getRankColor(rank)};
+                  transform:rotate(12deg);
+                  font-variant-numeric:tabular-nums;
+                  text-shadow:-1px -1px 0 rgba(0,0,0,0.9),1px -1px 0 rgba(0,0,0,0.9),-1px 1px 0 rgba(0,0,0,0.9),1px 1px 0 rgba(0,0,0,0.9),0 0 4px rgba(0,0,0,0.6);
+                  pointer-events:none;
+                ">#${rank}</span>`
+              : '';
+
             return `
               <span style="
+                position: relative;
                 padding: 4px 10px;
                 border-radius: 4px;
                 font-size: 11px;
@@ -226,37 +248,43 @@ export function createPetCard(
                 color: ${textColor};
                 border: 1px solid ${(isRainbowGranter || isGoldGranter) ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.3)'};
                 font-weight: ${(isRainbowGranter || isGoldGranter) ? '600' : '500'};
-              ">${normalizedName}</span>
+              ">${normalizedName}${rankBadge}</span>
             `;
           }).join('')}
         </div>
 
-        <div style="font-size: 12px; color: #ccc; margin-bottom: 8px;">
-          ${reason}
+        <div style="display:flex;align-items:baseline;gap:6px;">
+          <div style="flex:1;font-size: 12px; color: #ccc;">
+            ${reason}
+          </div>
+          <div style="flex-shrink:0;display:flex;align-items:center;gap:4px;">
+            <span style="font-size:10px;color:#555;">SCORE</span>
+            <span style="font-size:15px;font-weight:bold;color:#42A5F5;">${Math.round(score.total - score.granterBonus)}</span>
+            ${score.granterBonus > 0 ? `
+              <span style="
+                font-size:12px;font-weight:600;
+                ${score.granterType === 'rainbow'
+                  ? 'background: linear-gradient(135deg, #ff0080, #ff8c00, #40e0d0, #8a2be2, #ff0080); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;'
+                  : 'background: linear-gradient(135deg, #ffd700, #ffed4e, #ffd700); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;'
+                }
+              ">+${Math.round(score.granterBonus)}</span>
+            ` : ''}
+          </div>
         </div>
-        ${showDecisionFamily ? `
-          <div style="font-size: 11px; color: #7fb3ff; margin-bottom: 8px;">
-            Ability family: ${decisionFamilyLabel}
-          </div>
-        ` : ''}
-        ${showModeLabel ? `
-          <div style="font-size: 11px; color: #9a8cff; margin-bottom: 8px;">
-            Optimizer mode: ${modeLabel}
-          </div>
-        ` : ''}
 
         ${betterAlternatives.length > 0 ? `
-          <div style="font-size: 11px; color: #888; margin-top: 8px; padding-top: 8px; border-top: 1px solid #333;">
+          <div style="font-size: 11px; color: #888; margin-top: 6px; padding-top: 6px; border-top: 1px solid #333;">
             <button
               type="button"
               data-better-compare="true"
               style="
-                border: 1px solid rgba(127, 179, 255, 0.5);
-                background: rgba(127, 179, 255, 0.12);
-                color: #9ec4ff;
-                border-radius: 6px;
-                font-size: 11px;
-                padding: 4px 8px;
+                border: 1px solid rgba(143,130,255,0.4);
+                background: rgba(143,130,255,0.12);
+                color: #d8d1ff;
+                border-radius: 5px;
+                font-size: 10px;
+                font-weight: 600;
+                padding: 3px 8px;
                 cursor: pointer;
                 margin-right: 6px;
               "
@@ -267,79 +295,23 @@ export function createPetCard(
           </div>
         ` : ''}
       </div>
-
-      <div style="flex-shrink: 0; text-align: right; margin-right: ${scoreColumnRightMarginPx}px;">
-        <div style="font-size: 18px; font-weight: bold; color: #42A5F5;">${Math.round(score.total - score.granterBonus)}</div>
-        ${score.granterBonus > 0 ? `
-          <div style="
-            font-size: 14px;
-            font-weight: 600;
-            margin-top: 2px;
-            ${score.granterType === 'rainbow'
-              ? 'background: linear-gradient(135deg, #ff0080, #ff8c00, #40e0d0, #8a2be2, #ff0080); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;'
-              : 'background: linear-gradient(135deg, #ffd700, #ffed4e, #ffd700); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;'
-            }
-          ">+${Math.round(score.granterBonus)}</div>
-        ` : ''}
-        <div style="font-size: 10px; color: #666;">SCORE</div>
-        ${rankLabel ? `<div style="font-size: 11px; color: #8bbfff; margin-top: 6px;">${rankLabel}</div>` : ''}
-        ${showCompetitorsButton ? `
-          <button
-            type="button"
-            data-competitors-compare="true"
-            style="
-              border: 1px solid rgba(127,179,255,0.45);
-              background: rgba(127,179,255,0.1);
-              color: #8ab8f5;
-              border-radius: 5px;
-              font-size: 10px;
-              padding: 2px 6px;
-              cursor: pointer;
-              display: block;
-              margin-top: 2px;
-              white-space: nowrap;
-              width: 100%;
-              text-align: center;
-              transition: background 0.15s, border-color 0.15s;
-            "
-          >${rankMetaLabel}</button>
-        ` : (rankMetaLabel ? `<div style="font-size: 10px; color: #6f84a8; margin-top: 2px;">${rankMetaLabel}</div>` : '')}
-        ${familyTierLabel ? `<div style="font-size: 10px; color: #777; margin-top: 2px;">${familyTierLabel}</div>` : ''}
-      </div>
     </div>
   `;
 
-  if (showManualKeepButton) {
-    appendManualKeepButton(card, comparison, canReturnToOptimizer, onAfterKeep);
+  // Insert location icon (DOM element, not innerHTML)
+  const locationSlot = card.querySelector<HTMLElement>('[data-location-icon]');
+  if (locationSlot) {
+    locationSlot.appendChild(getLocationIcon(pet.location));
   }
 
-  appendSellButton(card, comparison, onAfterSell, {
-    rightOffsetPx: 8,
-    topOffsetPx: 8,
-    zIndex: 6,
-  });
+  // Build the button row (sell, keep/return, competitors)
+  appendButtonRow(card, comparison, familyEntry, familyPeers, onAfterSell, onAfterKeep);
 
   const compareBtn = card.querySelector<HTMLButtonElement>('button[data-better-compare="true"]');
   if (compareBtn) {
     compareBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       openBetterPetsCompare(comparison);
-    });
-  }
-
-  const competitorsBtn = card.querySelector<HTMLButtonElement>('button[data-competitors-compare="true"]');
-  if (competitorsBtn && familyPeers && familyPeers.length > 0 && familyEntry) {
-    competitorsBtn.addEventListener('mouseenter', () => {
-      competitorsBtn.style.background = 'rgba(127,179,255,0.2)';
-      competitorsBtn.style.borderColor = 'rgba(127,179,255,0.7)';
-    });
-    competitorsBtn.addEventListener('mouseleave', () => {
-      competitorsBtn.style.background = 'rgba(127,179,255,0.1)';
-      competitorsBtn.style.borderColor = 'rgba(127,179,255,0.45)';
-    });
-    competitorsBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      openCompetitorsPetCompare(comparison, familyEntry.familyLabel, familyPeers);
     });
   }
 

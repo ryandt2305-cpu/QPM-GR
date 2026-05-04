@@ -54,6 +54,7 @@ function isMeaningfulSupportFamily(
   family: SlotEfficiencyStandingEntry['family'],
   normalizedStanding: number,
 ): boolean {
+  if (family.familyScore <= 0) return false;
   return family.highestTier >= 2 || normalizedStanding >= 0.55 || isMutationGranterFamily(family.broadRoleFamilyKey);
 }
 

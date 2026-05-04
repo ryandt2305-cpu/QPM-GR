@@ -46,6 +46,8 @@ export const store = {
   hutchEverLoaded: false,
   /** True while applyTeam is executing — prevents purge from corrupting slots. */
   applyInProgress: false,
+  /** True after resolvePlayerKeyAndMigrate settles — prevents purge during init race. */
+  purgeReady: false,
 };
 
 // ---------------------------------------------------------------------------

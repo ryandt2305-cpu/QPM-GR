@@ -110,6 +110,11 @@ export async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
       const hutch = await readAtomValue(hutchAtom);
       if (!Array.isArray(hutch)) {
         complete = false;
+      } else if (hutch.length === 0 && pool.length < 3) {
+        // Hutch atom exists but returned empty while active pool is tiny —
+        // server data likely hasn't loaded yet.  Mark incomplete to prevent
+        // premature purge that would wipe team slots.
+        complete = false;
       } else {
         if (hutch.length > 0) store.hutchEverLoaded = true;
         for (const item of hutch) {
@@ -148,30 +153,35 @@ export async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
       complete = false;
     } else {
       const invRaw = await readAtomValue(invAtom);
-      const inv = invRaw as { items?: unknown[] } | null;
-      const items = Array.isArray(inv?.items) ? inv.items : Array.isArray(invRaw) ? invRaw : [];
-      for (const item of items) {
-        if (!item || typeof item !== 'object') continue;
-        const it = item as Record<string, unknown>;
-        const itemType = String(it.itemType ?? '').trim().toLowerCase();
-        if (itemType !== 'pet') continue;
-        const id = typeof it.id === 'string' ? it.id : typeof it.itemId === 'string' ? it.itemId : null;
-        if (!id || activeIds.has(id)) continue;
-        pool.push({
-          id,
-          petId: typeof it.petId === 'string' ? it.petId : null,
-          name: String(it.name ?? it.species ?? ''),
-          species: String(it.petSpecies ?? it.species ?? ''),
-          level: typeof it.level === 'number' ? it.level : null,
-          strength: resolveStrength(it),
-          mutations: toStrArr(it.mutations),
-          abilities: toStrArr(it.abilities),
-          xp: typeof it.xp === 'number' ? it.xp : null,
-          targetScale: typeof it.targetScale === 'number' ? it.targetScale : null,
-          hunger: null,
-          location: 'inventory',
-        });
-        activeIds.add(id);
+      if (invRaw == null) {
+        // Atom returned null/undefined — transient state, data is incomplete
+        complete = false;
+      } else {
+        const inv = invRaw as { items?: unknown[] };
+        const items = Array.isArray(inv?.items) ? inv.items : Array.isArray(invRaw) ? invRaw : [];
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+          const it = item as Record<string, unknown>;
+          const itemType = String(it.itemType ?? '').trim().toLowerCase();
+          if (itemType !== 'pet') continue;
+          const id = typeof it.id === 'string' ? it.id : typeof it.itemId === 'string' ? it.itemId : null;
+          if (!id || activeIds.has(id)) continue;
+          pool.push({
+            id,
+            petId: typeof it.petId === 'string' ? it.petId : null,
+            name: String(it.name ?? it.species ?? ''),
+            species: String(it.petSpecies ?? it.species ?? ''),
+            level: typeof it.level === 'number' ? it.level : null,
+            strength: resolveStrength(it),
+            mutations: toStrArr(it.mutations),
+            abilities: toStrArr(it.abilities),
+            xp: typeof it.xp === 'number' ? it.xp : null,
+            targetScale: typeof it.targetScale === 'number' ? it.targetScale : null,
+            hunger: null,
+            location: 'inventory',
+          });
+          activeIds.add(id);
+        }
       }
     }
   } catch (error) {

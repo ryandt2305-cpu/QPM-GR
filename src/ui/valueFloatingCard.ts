@@ -3,6 +3,7 @@
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import { pctToPixels, pixelsToPct, clampPct } from '../utils/windowPosition';
 import { onGardenSnapshot, getGardenSnapshot } from '../features/gardenBridge';
 import { onInventoryChange } from '../store/inventory';
 import { onActivePetInfos } from '../store/pets';
@@ -129,13 +130,17 @@ const STYLES = `
 
 interface PersistedCard {
   type: ValueCardType;
-  x: number;
-  y: number;
+  xPct: number;
+  yPct: number;
 }
 
 interface PersistedState {
   cards: PersistedCard[];
 }
+
+// Approximate card dimensions for ratio math (CSS-defined width, height varies)
+const CARD_W = 172;
+const CARD_H_APPROX = 80;
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -144,6 +149,8 @@ interface PersistedState {
 interface FloatingCardEntry {
   type: ValueCardType;
   el: HTMLElement;
+  xPct: number;
+  yPct: number;
   destroy: () => void;
 }
 
@@ -177,16 +184,9 @@ const TYPE_INDEX: Record<ValueCardType, number> = {
   coins: 0, credits: 1, dust: 2, garden: 3, inventory: 4, netWorth: 5,
 };
 
-function getDefaultPosition(type: ValueCardType): { x: number; y: number } {
-  const offset = TYPE_INDEX[type] * 18;
-  const x = window.innerWidth - 220 - offset;
-  const y = Math.max(16, window.innerHeight - 120 - offset);
-  return clampPosition(x, y);
-}
-
-function getCurrentPosition(el: HTMLElement): { x: number; y: number } {
-  const rect = el.getBoundingClientRect();
-  return clampPosition(rect.left, rect.top);
+function getDefaultPct(type: ValueCardType): { xPct: number; yPct: number } {
+  const offset = TYPE_INDEX[type] * 0.03;
+  return { xPct: clampPct(0.9 - offset), yPct: clampPct(0.85 - offset) };
 }
 
 function applyPosition(el: HTMLElement, x: number, y: number): void {
@@ -198,26 +198,44 @@ function applyPosition(el: HTMLElement, x: number, y: number): void {
 }
 
 function loadPersistedState(): PersistedState {
-  const stored = storage.get<PersistedState>(STORAGE_KEY, { cards: [] });
+  const stored = storage.get<Record<string, unknown>>(STORAGE_KEY, { cards: [] });
   if (!stored || typeof stored !== 'object' || !Array.isArray(stored.cards)) {
     return { cards: [] };
   }
-  const cards = stored.cards
-    .filter((c): c is PersistedCard =>
-      !!c && typeof c === 'object' &&
-      VALID_TYPES.has(c.type) &&
-      Number.isFinite(c.x) && Number.isFinite(c.y),
-    );
+  const cards: PersistedCard[] = [];
+  for (const raw of stored.cards) {
+    if (!raw || typeof raw !== 'object') continue;
+    const c = raw as Record<string, unknown>;
+    if (!VALID_TYPES.has(c.type as string)) continue;
+    const type = c.type as ValueCardType;
+    // New ratio format
+    if (typeof c.xPct === 'number' && typeof c.yPct === 'number') {
+      cards.push({ type, xPct: clampPct(c.xPct), yPct: clampPct(c.yPct) });
+    // Old pixel format — auto-migrate
+    } else if (typeof c.x === 'number' && typeof c.y === 'number') {
+      const pct = pixelsToPct(c.x, c.y, CARD_W, CARD_H_APPROX);
+      cards.push({ type, xPct: pct.xPct, yPct: pct.yPct });
+    }
+  }
   return { cards };
 }
 
 function persistRegistryState(): void {
   const cards: PersistedCard[] = [];
   for (const entry of registry.values()) {
-    const pos = getCurrentPosition(entry.el);
-    cards.push({ type: entry.type, x: pos.x, y: pos.y });
+    cards.push({ type: entry.type, xPct: entry.xPct, yPct: entry.yPct });
   }
   storage.set(STORAGE_KEY, { cards } satisfies PersistedState);
+}
+
+function handleViewportResize(): void {
+  for (const entry of registry.values()) {
+    const w = entry.el.offsetWidth || CARD_W;
+    const h = entry.el.offsetHeight || CARD_H_APPROX;
+    const pos = pctToPixels(entry.xPct, entry.yPct, w, h);
+    entry.el.style.left = `${pos.x}px`;
+    entry.el.style.top = `${pos.y}px`;
+  }
 }
 
 /** Resolve an egg sprite URL, trying multiple key patterns. */
@@ -388,14 +406,14 @@ function buildCardIcon(type: ValueCardType, size: number): HTMLElement {
 // Card factory
 // ---------------------------------------------------------------------------
 
-function createValueCard(type: ValueCardType, initialPos?: { x: number; y: number }): FloatingCardEntry {
+function createValueCard(type: ValueCardType, initialPct: { xPct: number; yPct: number }): FloatingCardEntry {
   ensureStyles();
 
   const cleanups: Array<() => void> = [];
   const card = document.createElement('div');
   card.className = 'qpm-value-card';
 
-  const resolvedPos = initialPos ? clampPosition(initialPos.x, initialPos.y) : getDefaultPosition(type);
+  const resolvedPos = pctToPixels(initialPct.xPct, initialPct.yPct, CARD_W, CARD_H_APPROX);
   applyPosition(card, resolvedPos.x, resolvedPos.y);
 
   // Header
@@ -666,6 +684,14 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
   const onMouseUp = (): void => {
     if (!isDragging) return;
     isDragging = false;
+    // Update ratios from final pixel position
+    const entry = registry.get(type);
+    if (entry) {
+      const rect = card.getBoundingClientRect();
+      const pct = pixelsToPct(rect.left, rect.top, rect.width || CARD_W, rect.height || CARD_H_APPROX);
+      entry.xPct = pct.xPct;
+      entry.yPct = pct.yPct;
+    }
     persistRegistryState();
   };
 
@@ -690,14 +716,14 @@ function createValueCard(type: ValueCardType, initialPos?: { x: number; y: numbe
 
   closeBtn.addEventListener('click', destroy);
 
-  return { type, el: card, destroy };
+  return { type, el: card, xPct: initialPct.xPct, yPct: initialPct.yPct, destroy };
 }
 
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
 
-function openCardInternal(type: ValueCardType, initialPos?: { x: number; y: number }): void {
+function openCardInternal(type: ValueCardType, initialPct?: { xPct: number; yPct: number }): void {
   if (registry.has(type)) {
     const existing = registry.get(type)!;
     existing.el.style.border = '1px solid rgba(143,130,255,0.9)';
@@ -709,7 +735,7 @@ function openCardInternal(type: ValueCardType, initialPos?: { x: number; y: numb
     return;
   }
 
-  const entry = createValueCard(type, initialPos);
+  const entry = createValueCard(type, initialPct ?? getDefaultPct(type));
   registry.set(type, entry);
   persistRegistryState();
   log(`[ValueFloatingCard] Opened ${type} card`);
@@ -718,7 +744,7 @@ function openCardInternal(type: ValueCardType, initialPos?: { x: number; y: numb
 function restorePersistedCards(): void {
   const persisted = loadPersistedState();
   for (const card of persisted.cards) {
-    openCardInternal(card.type, { x: card.x, y: card.y });
+    openCardInternal(card.type, { xPct: card.xPct, yPct: card.yPct });
   }
 }
 
@@ -730,6 +756,7 @@ export function initValueFloatingCards(): void {
   if (initialized) return;
   initialized = true;
   restorePersistedCards();
+  window.addEventListener('resize', handleViewportResize);
 }
 
 export function toggleValueCard(type: ValueCardType): void {

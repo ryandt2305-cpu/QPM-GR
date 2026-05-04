@@ -3,6 +3,7 @@
 
 import { storage } from '../utils/storage';
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
+import { pctToPixels, pixelsToPct, clampPct } from '../utils/windowPosition';
 import {
   getRoomPlayersSnapshot,
   onRoomPlayersChange,
@@ -119,24 +120,40 @@ const STYLES = `
 // Persistence
 // ---------------------------------------------------------------------------
 
+// Approximate card dimensions for ratio math (CSS-defined)
+const CARD_W = 260;
+const CARD_H_APPROX = 120;
+
 interface PersistedState {
   targetPlayerId: string | null;
-  x: number;
-  y: number;
+  xPct: number;
+  yPct: number;
 }
+
+let currentPct = { xPct: 0.85, yPct: 0.75 };
 
 function loadPersistedState(): PersistedState {
-  const stored = storage.get<PersistedState>(STORAGE_KEY, { targetPlayerId: null, x: -1, y: -1 });
-  if (!stored || typeof stored !== 'object') return { targetPlayerId: null, x: -1, y: -1 };
-  return {
-    targetPlayerId: typeof stored.targetPlayerId === 'string' ? stored.targetPlayerId : null,
-    x: Number.isFinite(stored.x) ? stored.x : -1,
-    y: Number.isFinite(stored.y) ? stored.y : -1,
-  };
+  const stored = storage.get<Record<string, unknown>>(STORAGE_KEY, { targetPlayerId: null, xPct: -1, yPct: -1 });
+  if (!stored || typeof stored !== 'object') return { targetPlayerId: null, xPct: -1, yPct: -1 };
+
+  const targetPlayerId = typeof stored.targetPlayerId === 'string' ? stored.targetPlayerId : null;
+
+  // New ratio format
+  if (typeof stored.xPct === 'number' && typeof stored.yPct === 'number' && stored.xPct >= 0) {
+    return { targetPlayerId, xPct: clampPct(stored.xPct), yPct: clampPct(stored.yPct) };
+  }
+
+  // Old pixel format — auto-migrate
+  if (typeof stored.x === 'number' && typeof stored.y === 'number' && stored.x >= 0) {
+    const pct = pixelsToPct(stored.x, stored.y, CARD_W, CARD_H_APPROX);
+    return { targetPlayerId, xPct: pct.xPct, yPct: pct.yPct };
+  }
+
+  return { targetPlayerId, xPct: -1, yPct: -1 };
 }
 
-function persistState(targetPlayerId: string | null, x: number, y: number): void {
-  storage.set(STORAGE_KEY, { targetPlayerId, x, y } satisfies PersistedState);
+function persistState(targetPlayerId: string | null, xPct: number, yPct: number): void {
+  storage.set(STORAGE_KEY, { targetPlayerId, xPct, yPct } satisfies PersistedState);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,16 +179,25 @@ function clampPosition(x: number, y: number): { x: number; y: number } {
   };
 }
 
-function getDefaultPosition(): { x: number; y: number } {
-  return clampPosition(window.innerWidth - 300, Math.max(16, window.innerHeight - 200));
-}
-
 function applyPosition(el: HTMLElement, x: number, y: number): void {
   const clamped = clampPosition(x, y);
   el.style.left = `${clamped.x}px`;
   el.style.top = `${clamped.y}px`;
   el.style.right = '';
   el.style.bottom = '';
+}
+
+function applyCurrentPctPosition(): void {
+  if (!cardEl) return;
+  const w = cardEl.offsetWidth || CARD_W;
+  const h = cardEl.offsetHeight || CARD_H_APPROX;
+  const pos = pctToPixels(currentPct.xPct, currentPct.yPct, w, h);
+  cardEl.style.left = `${pos.x}px`;
+  cardEl.style.top = `${pos.y}px`;
+}
+
+function handleViewportResize(): void {
+  applyCurrentPctPosition();
 }
 
 // ---------------------------------------------------------------------------
@@ -282,15 +308,16 @@ function createCard(targetPlayerId: string): void {
   destroyed = false;
 
   const persisted = loadPersistedState();
-  const initialPos = persisted.x >= 0 && persisted.y >= 0
-    ? clampPosition(persisted.x, persisted.y)
-    : getDefaultPosition();
+  currentPct = persisted.xPct >= 0 && persisted.yPct >= 0
+    ? { xPct: persisted.xPct, yPct: persisted.yPct }
+    : { xPct: 0.85, yPct: 0.75 };
 
   currentTargetId = targetPlayerId;
 
   const card = document.createElement('div');
   card.className = 'qpm-pcmp-card';
-  applyPosition(card, initialPos.x, initialPos.y);
+  const initPos = pctToPixels(currentPct.xPct, currentPct.yPct, CARD_W, CARD_H_APPROX);
+  applyPosition(card, initPos.x, initPos.y);
 
   // Resolve target name
   const snap = getRoomPlayersSnapshot();
@@ -367,7 +394,10 @@ function createCard(targetPlayerId: string): void {
     if (!isDragging) return;
     isDragging = false;
     const rect = card.getBoundingClientRect();
-    persistState(currentTargetId, rect.left, rect.top);
+    const pct = pixelsToPct(rect.left, rect.top, rect.width || CARD_W, rect.height || CARD_H_APPROX);
+    currentPct.xPct = pct.xPct;
+    currentPct.yPct = pct.yPct;
+    persistState(currentTargetId, currentPct.xPct, currentPct.yPct);
   };
 
   header.addEventListener('mousedown', onMouseDown);
@@ -378,6 +408,10 @@ function createCard(targetPlayerId: string): void {
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
   });
+
+  // Viewport resize handler
+  window.addEventListener('resize', handleViewportResize);
+  cleanups.push(() => window.removeEventListener('resize', handleViewportResize));
 
   // Close
   closeBtn.addEventListener('click', () => closePlayerCompareCard());
@@ -406,6 +440,7 @@ export function closePlayerCompareCard(): void {
   cardEl = null;
   persistState(null, -1, -1);
   currentTargetId = null;
+  currentPct = { xPct: 0.85, yPct: 0.75 };
 }
 
 export function isPlayerCompareCardOpen(): boolean {
@@ -419,14 +454,11 @@ export function getCompareTargetPlayerId(): string | null {
 /** Update the floating card target (e.g. when dropdown changes). */
 export function setCompareTarget(targetPlayerId: string): void {
   if (!cardEl) return;
-  // Re-create with new target, preserving position
+  // Capture current ratios before closing
   const rect = cardEl.getBoundingClientRect();
+  const savedPct = pixelsToPct(rect.left, rect.top, rect.width || CARD_W, rect.height || CARD_H_APPROX);
   closePlayerCompareCard();
-  const pos = clampPosition(rect.left, rect.top);
-  currentTargetId = targetPlayerId;
-  // Inline create to preserve position
-  ensureStyles();
-  destroyed = false;
+  // Persist position so createCard picks it up
+  persistState(targetPlayerId, savedPct.xPct, savedPct.yPct);
   createCard(targetPlayerId);
-  if (cardEl) applyPosition(cardEl, pos.x, pos.y);
 }

@@ -1,8 +1,10 @@
 // src/ui/modalWindow.ts - Modal Window System inspired by Aries mod
-// Windows open when clicking tab buttons, draggable, with persistent position
+// Windows open when clicking tab buttons, draggable, with persistent position.
+// Position is stored as viewport ratios (0–1) so windows survive any viewport resize.
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import { clampPct } from '../utils/windowPosition';
 
 export type PanelRender = (root: HTMLElement) => void;
 
@@ -25,6 +27,8 @@ interface WindowState {
   isMinimized: boolean;
   maxWidth: string;
   maxHeight: string;
+  /** Position as viewport ratio — the single source of truth. */
+  position: { xPct: number; yPct: number };
   restoreWidth: string | null;
   restoreHeight: string | null;
   restoreMinHeight: string | null;
@@ -42,6 +46,30 @@ const windows = new Map<string, WindowState>();
 let currentZ = 10000;
 let resizeListenerAdded = false;
 
+// ─── Ratio positioning (margin-aware) ─────────────────────────────────────────
+
+/** Convert viewport ratios → pixel left/top, respecting WINDOW_MARGIN. */
+function ratioPctToPixels(xPct: number, yPct: number, w: number, h: number): { x: number; y: number } {
+  const availW = Math.max(0, window.innerWidth - w - WINDOW_MARGIN * 2);
+  const availH = Math.max(0, window.innerHeight - h - WINDOW_MARGIN * 2);
+  return {
+    x: Math.round(WINDOW_MARGIN + clampPct(xPct) * availW),
+    y: Math.round(WINDOW_MARGIN + clampPct(yPct) * availH),
+  };
+}
+
+/** Convert pixel left/top → viewport ratios (0–1), accounting for WINDOW_MARGIN. */
+function ratioPixelsToPct(x: number, y: number, w: number, h: number): { xPct: number; yPct: number } {
+  const availW = Math.max(1, window.innerWidth - w - WINDOW_MARGIN * 2);
+  const availH = Math.max(1, window.innerHeight - h - WINDOW_MARGIN * 2);
+  return {
+    xPct: clampPct((x - WINDOW_MARGIN) / availW),
+    yPct: clampPct((y - WINDOW_MARGIN) / availH),
+  };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function emitWindowEvent(eventName: string, id: string): void {
   window.dispatchEvent(new CustomEvent(eventName, { detail: { id } }));
 }
@@ -55,6 +83,16 @@ function setResizeHandleVisible(w: WindowState, visible: boolean): void {
   if (handle) handle.style.display = visible ? '' : 'none';
 }
 
+/** Apply position from stored ratios. */
+function applyRatioPosition(w: WindowState): void {
+  const rect = w.el.getBoundingClientRect();
+  const { x, y } = ratioPctToPixels(w.position.xPct, w.position.yPct, rect.width, rect.height);
+  w.el.style.left = `${x}px`;
+  w.el.style.top = `${y}px`;
+  w.el.style.right = 'auto';
+  w.el.style.bottom = 'auto';
+}
+
 function restoreWindowFromMinimize(w: WindowState): void {
   showWindowElement(w.body, 'flex');
   if (w.restoreWidth) w.el.style.width = w.restoreWidth;
@@ -66,14 +104,12 @@ function restoreWindowFromMinimize(w: WindowState): void {
   setResizeHandleVisible(w, true);
   requestAnimationFrame(() => {
     clampWindowSize(w.el);
-    clampWindowRect(w.el);
-    saveWindowPosition(w.id, w.el);
+    applyRatioPosition(w);
   });
 }
 
-/**
- * Clamp window position to ensure it stays visible (Aries mod pattern)
- */
+// ─── Size clamping ────────────────────────────────────────────────────────────
+
 function clampWindowSizeToViewport(width: number, height: number): { width: number; height: number } {
   const maxWidth = Math.max(160, window.innerWidth - (WINDOW_MARGIN * 2));
   const maxHeight = Math.max(80, window.innerHeight - (WINDOW_MARGIN * 2));
@@ -97,49 +133,361 @@ function clampWindowSize(win: HTMLElement): void {
   }
 }
 
-function clampWindowRect(win: HTMLElement): void {
-  const rect = win.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+// ─── Viewport resize ─────────────────────────────────────────────────────────
 
-  const sr = parseFloat(win.style.right);
-  const st = parseFloat(win.style.top);
-  let right = Number.isFinite(sr) ? sr : (vw - rect.right);
-  let top = Number.isFinite(st) ? st : rect.top;
-
-  const maxRight = Math.max(WINDOW_MARGIN, vw - rect.width - WINDOW_MARGIN);
-  const maxTop = Math.max(WINDOW_MARGIN, vh - rect.height - WINDOW_MARGIN);
-
-  right = Math.min(Math.max(right, WINDOW_MARGIN), maxRight);
-  top = Math.min(Math.max(top, WINDOW_MARGIN), maxTop);
-
-  win.style.right = `${right}px`;
-  win.style.top = `${top}px`;
-  win.style.left = 'auto';
-  win.style.bottom = 'auto';
-}
-
-/**
- * Clamp all open windows on browser resize
- */
-function clampAllWindows(): void {
+/** Reposition all open windows from their stored ratios on browser resize. */
+function repositionAllWindows(): void {
   windows.forEach((state) => {
     if (!state.isMinimized) {
       clampWindowSize(state.el);
-      clampWindowRect(state.el);
-      saveWindowPosition(state.id, state.el);
+      applyRatioPosition(state);
     }
   });
 }
 
-/**
- * Add window resize listener (once)
- */
 function ensureResizeListener(): void {
   if (resizeListenerAdded) return;
-  window.addEventListener('resize', clampAllWindows);
+  window.addEventListener('resize', repositionAllWindows);
   resizeListenerAdded = true;
 }
+
+// ─── Position persistence ─────────────────────────────────────────────────────
+
+/** Save position as viewport ratios. */
+function saveWindowPosition(id: string): void {
+  const w = windows.get(id);
+  if (!w) return;
+  storage.set(WINDOW_POSITION_KEY + id, { xPct: w.position.xPct, yPct: w.position.yPct });
+}
+
+/** Update position from current pixel rect and save. */
+function captureAndSavePosition(w: WindowState): void {
+  const rect = w.el.getBoundingClientRect();
+  const pct = ratioPixelsToPct(rect.left, rect.top, rect.width, rect.height);
+  w.position.xPct = pct.xPct;
+  w.position.yPct = pct.yPct;
+  saveWindowPosition(w.id);
+}
+
+/**
+ * Load saved position, with auto-migration from old pixel-based format.
+ * Returns null if no saved position exists.
+ */
+function loadSavedPosition(id: string, win: HTMLElement): { xPct: number; yPct: number } | null {
+  const saved = storage.get<Record<string, unknown>>(WINDOW_POSITION_KEY + id);
+  if (!saved || typeof saved !== 'object') return null;
+
+  // New format: xPct/yPct ratios
+  if (typeof saved.xPct === 'number' && typeof saved.yPct === 'number') {
+    return { xPct: clampPct(saved.xPct), yPct: clampPct(saved.yPct) };
+  }
+
+  // Old format: { right, top } in pixels — migrate to ratios
+  if (typeof saved.right === 'number' && typeof saved.top === 'number') {
+    const rect = win.getBoundingClientRect();
+    const left = window.innerWidth - saved.right - rect.width;
+    return ratioPixelsToPct(left, saved.top, rect.width, rect.height);
+  }
+
+  return null;
+}
+
+/** Restore window position from storage or center on screen. */
+function restoreWindowPosition(id: string, win: HTMLElement, state: WindowState): void {
+  const saved = loadSavedPosition(id, win);
+
+  if (saved) {
+    state.position.xPct = saved.xPct;
+    state.position.yPct = saved.yPct;
+  } else {
+    // Center on screen
+    state.position.xPct = 0.5;
+    state.position.yPct = 0.5;
+  }
+
+  applyRatioPosition(state);
+  // Re-save to persist migration and initial centering
+  saveWindowPosition(id);
+}
+
+// ─── Size persistence ─────────────────────────────────────────────────────────
+
+function saveWindowSize(id: string, win: HTMLElement): void {
+  const rect = win.getBoundingClientRect();
+  storage.set(WINDOW_SIZE_KEY + id, { width: Math.round(rect.width), height: Math.round(rect.height) });
+}
+
+function restoreWindowSize(id: string, win: HTMLElement): void {
+  const saved = storage.get<{ width: number; height: number }>(WINDOW_SIZE_KEY + id);
+  if (saved && saved.width > 0 && saved.height > 0) {
+    const clamped = clampWindowSizeToViewport(saved.width, saved.height);
+    win.style.width = `${Math.round(clamped.width)}px`;
+    win.style.height = `${Math.round(clamped.height)}px`;
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+  }
+}
+
+// ─── Window state persistence ─────────────────────────────────────────────────
+
+function saveWindowState(id: string, isOpen: boolean, isMinimized: boolean): void {
+  storage.set(WINDOW_STATE_KEY + id, { isOpen, isMinimized });
+}
+
+// ─── Window chrome helpers ────────────────────────────────────────────────────
+
+function isWindowShown(el: HTMLElement): boolean {
+  return el.style.display !== 'none';
+}
+
+function bumpZ(el: HTMLElement): void {
+  el.style.zIndex = String(currentZ++);
+}
+
+function createWindowButton(text: string, title: string): HTMLElement {
+  const btn = document.createElement('button');
+  btn.className = 'qpm-window-btn';
+  btn.textContent = text;
+  btn.title = title;
+  btn.style.cssText = `
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: #e0e0e0;
+    font-size: ${text === '×' ? '20px' : '18px'};
+    font-weight: 300;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `;
+
+  btn.addEventListener('mouseenter', () => {
+    if (text === '×') {
+      btn.style.background = 'rgba(244, 67, 54, 0.8)';
+    } else {
+      btn.style.background = 'rgba(143, 130, 255, 0.5)';
+    }
+    btn.style.color = '#fff';
+  });
+
+  btn.addEventListener('mouseleave', () => {
+    btn.style.background = 'rgba(255, 255, 255, 0.08)';
+    btn.style.color = '#e0e0e0';
+  });
+
+  return btn;
+}
+
+// ─── Drag ─────────────────────────────────────────────────────────────────────
+
+function makeDraggable(win: HTMLElement, head: HTMLElement, state: WindowState): void {
+  let down = false;
+  let sx = 0;
+  let sy = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  const onMove = (e: MouseEvent) => {
+    if (!down) return;
+    e.preventDefault();
+
+    const dx = e.clientX - sx;
+    const dy = e.clientY - sy;
+    const rawLeft = startLeft + dx;
+    const rawTop = startTop + dy;
+
+    // Clamp to viewport with margin
+    const rect = win.getBoundingClientRect();
+    const maxLeft = Math.max(WINDOW_MARGIN, window.innerWidth - rect.width - WINDOW_MARGIN);
+    const maxTop = Math.max(WINDOW_MARGIN, window.innerHeight - rect.height - WINDOW_MARGIN);
+    const clampedLeft = Math.max(WINDOW_MARGIN, Math.min(maxLeft, rawLeft));
+    const clampedTop = Math.max(WINDOW_MARGIN, Math.min(maxTop, rawTop));
+
+    win.style.left = `${clampedLeft}px`;
+    win.style.top = `${clampedTop}px`;
+  };
+
+  const onUp = () => {
+    if (!down) return;
+    down = false;
+    head.style.cursor = 'move';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+
+    // Convert final pixel position to ratios and save
+    captureAndSavePosition(state);
+  };
+
+  head.addEventListener('mousedown', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.qpm-window-btn')) return;
+
+    down = true;
+    head.style.cursor = 'grabbing';
+    sx = e.clientX;
+    sy = e.clientY;
+
+    const rect = win.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
+
+    // Ensure left-anchored for drag
+    win.style.left = `${rect.left}px`;
+    win.style.top = `${rect.top}px`;
+    win.style.right = 'auto';
+    win.style.bottom = 'auto';
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    bumpZ(win);
+  });
+}
+
+// ─── Resize ───────────────────────────────────────────────────────────────────
+
+function makeResizable(win: HTMLElement, state: WindowState): void {
+  const handle = document.createElement('div');
+  handle.className = 'qpm-window-resize-handle';
+  handle.title = 'Drag to resize';
+  handle.style.cssText = [
+    'position:absolute',
+    'bottom:0',
+    'right:0',
+    'width:16px',
+    'height:16px',
+    'cursor:se-resize',
+    'background:linear-gradient(135deg,transparent 50%,rgba(143,130,255,0.4) 50%)',
+    'border-radius:0 0 7px 0',
+    'z-index:2',
+    'flex-shrink:0',
+  ].join(';');
+  win.appendChild(handle);
+
+  let down = false;
+  let startX = 0;
+  let startY = 0;
+  let startW = 0;
+  let startH = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  const onMove = (e: MouseEvent): void => {
+    if (!down) return;
+    e.preventDefault();
+    const rawWidth = startW + (e.clientX - startX);
+    const rawHeight = startH + (e.clientY - startY);
+    const maxWidth = Math.max(160, window.innerWidth - startLeft - WINDOW_MARGIN);
+    const maxHeight = Math.max(80, window.innerHeight - startTop - WINDOW_MARGIN);
+    const minWidth = Math.min(WINDOW_MIN_WIDTH, maxWidth);
+    const minHeight = Math.min(WINDOW_MIN_HEIGHT, maxHeight);
+    const newW = Math.min(Math.max(rawWidth, minWidth), maxWidth);
+    const newH = Math.min(Math.max(rawHeight, minHeight), maxHeight);
+    win.style.width = `${newW}px`;
+    win.style.height = `${newH}px`;
+  };
+
+  const onUp = (): void => {
+    if (!down) return;
+    down = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    clampWindowSize(win);
+    // Re-capture position ratios with new size and save both
+    captureAndSavePosition(state);
+    saveWindowSize(state.id, win);
+  };
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = win.getBoundingClientRect();
+    startW = rect.width;
+    startH = rect.height;
+    startLeft = rect.left;
+    startTop = rect.top;
+    // Ensure left-anchored so resize handle tracks cursor correctly
+    win.style.left = `${rect.left}px`;
+    win.style.top = `${rect.top}px`;
+    win.style.right = 'auto';
+    win.style.bottom = 'auto';
+    win.style.width = `${startW}px`;
+    win.style.height = `${startH}px`;
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+    startX = e.clientX;
+    startY = e.clientY;
+    down = true;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    bumpZ(win);
+  });
+}
+
+// ─── Scrollbar styles ─────────────────────────────────────────────────────────
+
+function addScrollbarStyles(id: string): void {
+  const styleId = `qpm-window-scrollbar-${id}`;
+  if (document.getElementById(styleId)) return;
+
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    /* Scrollbar on the window itself (Aries mod pattern) */
+    #qpm-window-${id}::-webkit-scrollbar {
+      width: 8px;
+    }
+    #qpm-window-${id}::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+    }
+    #qpm-window-${id}::-webkit-scrollbar-thumb {
+      background: rgba(143, 130, 255, 0.35);
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    #qpm-window-${id}::-webkit-scrollbar-thumb:hover {
+      background: rgba(143, 130, 255, 0.55);
+    }
+
+    /* Constrain all content within window - prevent horizontal overflow */
+    #qpm-window-${id} *,
+    #qpm-window-${id} *::before,
+    #qpm-window-${id} *::after {
+      box-sizing: border-box;
+      max-width: 100%;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+
+    #qpm-window-${id} .qpm-card,
+    #qpm-window-${id} .qpm-card__body,
+    #qpm-window-${id} .qpm-card__header,
+    #qpm-window-${id} .qpm-section-muted,
+    #qpm-window-${id} input,
+    #qpm-window-${id} button,
+    #qpm-window-${id} select,
+    #qpm-window-${id} div {
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    /* Prevent pre/code from breaking layout */
+    #qpm-window-${id} pre,
+    #qpm-window-${id} code {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Open a window by ID. If already exists, show it and bump to front.
@@ -158,11 +506,10 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     return;
   }
 
-  // Use custom sizes if provided, otherwise default to 90vw/90vh
   const windowMaxWidth = maxWidth || '90vw';
   const windowMaxHeight = maxHeight || '90vh';
 
-  // Create new window - Using Aries mod's working pattern
+  // Create new window
   const win = document.createElement('div');
   win.className = 'qpm-window';
   win.id = `qpm-window-${id}`;
@@ -170,6 +517,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     position: fixed;
     display: flex;
     flex-direction: column;
+    width: ${windowMaxWidth};
     min-width: 260px;
     min-height: 120px;
     max-width: ${windowMaxWidth};
@@ -225,7 +573,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   head.appendChild(titleEl);
   head.appendChild(btnContainer);
 
-  // Body - flex:1 so it fills remaining height; overflow:auto for scrolling
+  // Body
   const body = document.createElement('div');
   body.className = 'qpm-window-body';
   body.style.cssText = `
@@ -239,7 +587,6 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     box-sizing: border-box;
   `;
 
-  // Add custom scrollbar
   addScrollbarStyles(id);
 
   win.appendChild(head);
@@ -266,8 +613,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     e.stopPropagation();
   }, { passive: false });
 
-  // Register window state BEFORE render — ensures the window is tracked
-  // and state is persisted even if the render function throws.
+  // Register window state BEFORE render
   const state: WindowState = {
     id,
     el: win,
@@ -279,6 +625,7 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
     isMinimized: false,
     maxWidth: windowMaxWidth,
     maxHeight: windowMaxHeight,
+    position: { xPct: 0.5, yPct: 0.5 },
     restoreWidth: null,
     restoreHeight: null,
     restoreMinHeight: null,
@@ -288,35 +635,28 @@ export function openWindow(id: string, title: string, render: PanelRender, maxWi
   windows.set(id, state);
   saveWindowState(id, true, false);
 
-  // Render content (after registration so toggleWindow won't create duplicates on failure)
+  // Render content
   try {
     render(body);
   } catch (error) {
     log(`[Window] Render failed for "${id}"`, error);
   }
 
-  // Restore position or center
-  restoreWindowPosition(id, win);
-
-  // Restore saved size if available (overrides max-width/max-height)
+  // Restore size first (so we know dimensions for ratio conversion)
   restoreWindowSize(id, win);
 
-  // Ensure window stays on screen after positioning, then persist the final coords.
-  // Without this save, clampWindowRect may silently move the window (e.g. after a
-  // viewport resize between sessions) and the adjusted position is never written back,
-  // causing the pre-clamp position to be re-applied on every reload.
+  // Restore position (reads ratios, with migration from old format)
+  // Deferred to rAF so the browser has laid out the window at its final size.
   requestAnimationFrame(() => {
     clampWindowSize(win);
-    clampWindowRect(win);
-    saveWindowPosition(id, win);
+    restoreWindowPosition(id, win, state);
   });
 
-  // Add resize listener to keep windows visible (Aries mod pattern)
   ensureResizeListener();
 
   // Make draggable and resizable
-  makeDraggable(win, head, id);
-  makeResizable(win, id);
+  makeDraggable(win, head, state);
+  makeResizable(win, state);
 }
 
 /**
@@ -357,7 +697,7 @@ export function toggleWindow(id: string, title: string, render: PanelRender, max
     emitWindowEvent('qpm:window-restored', id);
     return true;
   } else {
-    // _restoring && already shown — no-op, window is already open
+    // _restoring && already shown — no-op
     return true;
   }
 }
@@ -393,350 +733,6 @@ export function toggleMinimize(id: string): void {
   }
 
   saveWindowState(id, true, w.isMinimized);
-}
-
-/**
- * Check if window is currently shown
- */
-function isWindowShown(el: HTMLElement): boolean {
-  return el.style.display !== 'none';
-}
-
-/**
- * Bump window to front
- */
-function bumpZ(el: HTMLElement): void {
-  el.style.zIndex = String(currentZ++);
-}
-
-/**
- * Create window control button
- */
-function createWindowButton(text: string, title: string): HTMLElement {
-  const btn = document.createElement('button');
-  btn.className = 'qpm-window-btn';
-  btn.textContent = text;
-  btn.title = title;
-  btn.style.cssText = `
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: rgba(255, 255, 255, 0.08);
-    color: #e0e0e0;
-    font-size: ${text === '×' ? '20px' : '18px'};
-    font-weight: 300;
-    line-height: 1;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: all 0.15s ease;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  `;
-
-  btn.addEventListener('mouseenter', () => {
-    if (text === '×') {
-      btn.style.background = 'rgba(244, 67, 54, 0.8)';
-    } else {
-      btn.style.background = 'rgba(143, 130, 255, 0.5)';
-    }
-    btn.style.color = '#fff';
-  });
-
-  btn.addEventListener('mouseleave', () => {
-    btn.style.background = 'rgba(255, 255, 255, 0.08)';
-    btn.style.color = '#e0e0e0';
-  });
-
-  return btn;
-}
-
-/**
- * Make window draggable
- */
-function makeDraggable(win: HTMLElement, head: HTMLElement, id: string): void {
-  let down = false;
-  let sx = 0;
-  let sy = 0;
-  let or = 0;
-  let ot = 0;
-
-  const onMove = (e: MouseEvent) => {
-    if (!down) return;
-    e.preventDefault();
-
-    const dx = e.clientX - sx;
-    const dy = e.clientY - sy;
-
-    const nr = or - dx;
-    const nt = ot + dy;
-
-    // Clamp to viewport using WINDOW_MARGIN
-    const maxRight = window.innerWidth - WINDOW_MARGIN;
-    const maxBottom = window.innerHeight - WINDOW_MARGIN;
-    const rect = win.getBoundingClientRect();
-
-    const clampedRight = Math.max(WINDOW_MARGIN - rect.width, Math.min(maxRight - rect.width, nr));
-    const clampedTop = Math.max(WINDOW_MARGIN, Math.min(maxBottom - rect.height, nt));
-
-    win.style.right = `${clampedRight}px`;
-    win.style.top = `${clampedTop}px`;
-    win.style.left = 'auto';
-    win.style.bottom = 'auto';
-  };
-
-  const onUp = () => {
-    if (!down) return;
-    down = false;
-    head.style.cursor = 'move';
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-
-    // Save position
-    saveWindowPosition(id, win);
-  };
-
-  head.addEventListener('mousedown', (e) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('.qpm-window-btn')) return; // Don't drag when clicking buttons
-
-    down = true;
-    head.style.cursor = 'grabbing';
-    sx = e.clientX;
-    sy = e.clientY;
-
-    const rect = win.getBoundingClientRect();
-    const dsr = parseFloat(win.style.right);
-    const dst = parseFloat(win.style.top);
-    or = Number.isFinite(dsr) ? dsr : (window.innerWidth - rect.right);
-    ot = Number.isFinite(dst) ? dst : rect.top;
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    bumpZ(win);
-  });
-}
-
-/**
- * Make window resizable via bottom-right drag handle
- */
-function makeResizable(win: HTMLElement, id: string): void {
-  const handle = document.createElement('div');
-  handle.className = 'qpm-window-resize-handle';
-  handle.title = 'Drag to resize';
-  handle.style.cssText = [
-    'position:absolute',
-    'bottom:0',
-    'right:0',
-    'width:16px',
-    'height:16px',
-    'cursor:se-resize',
-    'background:linear-gradient(135deg,transparent 50%,rgba(143,130,255,0.4) 50%)',
-    'border-radius:0 0 7px 0',
-    'z-index:2',
-    'flex-shrink:0',
-  ].join(';');
-  win.appendChild(handle);
-
-  let down = false;
-  let startX = 0;
-  let startY = 0;
-  let startW = 0;
-  let startH = 0;
-  let startLeft = 0;
-  let startTop = 0;
-
-  const onMove = (e: MouseEvent): void => {
-    if (!down) return;
-    e.preventDefault();
-    const rawWidth = startW + (e.clientX - startX);
-    const rawHeight = startH + (e.clientY - startY);
-    const maxWidth = Math.max(160, window.innerWidth - startLeft - WINDOW_MARGIN);
-    const maxHeight = Math.max(80, window.innerHeight - startTop - WINDOW_MARGIN);
-    const minWidth = Math.min(WINDOW_MIN_WIDTH, maxWidth);
-    const minHeight = Math.min(WINDOW_MIN_HEIGHT, maxHeight);
-    const newW = Math.min(Math.max(rawWidth, minWidth), maxWidth);
-    const newH = Math.min(Math.max(rawHeight, minHeight), maxHeight);
-    win.style.width = `${newW}px`;
-    win.style.height = `${newH}px`;
-  };
-
-  const onUp = (): void => {
-    if (!down) return;
-    down = false;
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    // Convert back to right-anchored (consistent with drag and initial positioning)
-    const r = win.getBoundingClientRect();
-    win.style.left = 'auto';
-    win.style.right = `${Math.max(0, window.innerWidth - r.right)}px`;
-    win.style.top = `${r.top}px`;
-    clampWindowSize(win);
-    clampWindowRect(win);
-    saveWindowSize(id, win);
-    saveWindowPosition(id, win);
-  };
-
-  handle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = win.getBoundingClientRect();
-    startW = rect.width;
-    startH = rect.height;
-    startLeft = rect.left;
-    startTop = rect.top;
-    // Convert to left-anchored so resize handle tracks cursor correctly.
-    // Without this, right-anchored windows grow leftward while the handle stays
-    // pinned to the right viewport edge, making direction feel inverted.
-    win.style.left = `${rect.left}px`;
-    win.style.top = `${rect.top}px`;
-    win.style.right = 'auto';
-    win.style.bottom = 'auto';
-    win.style.width = `${startW}px`;
-    win.style.height = `${startH}px`;
-    win.style.maxWidth = 'none';
-    win.style.maxHeight = 'none';
-    startX = e.clientX;
-    startY = e.clientY;
-    down = true;
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    bumpZ(win);
-  });
-}
-
-/**
- * Save window size to localStorage
- */
-function saveWindowSize(id: string, win: HTMLElement): void {
-  const rect = win.getBoundingClientRect();
-  storage.set(WINDOW_SIZE_KEY + id, { width: Math.round(rect.width), height: Math.round(rect.height) });
-}
-
-/**
- * Restore saved window size (overrides max constraints)
- */
-function restoreWindowSize(id: string, win: HTMLElement): void {
-  const saved = storage.get<{ width: number; height: number }>(WINDOW_SIZE_KEY + id);
-  if (saved && saved.width > 0 && saved.height > 0) {
-    const clamped = clampWindowSizeToViewport(saved.width, saved.height);
-    win.style.width = `${Math.round(clamped.width)}px`;
-    win.style.height = `${Math.round(clamped.height)}px`;
-    win.style.maxWidth = 'none';
-    win.style.maxHeight = 'none';
-  }
-}
-
-/**
- * Save window position to localStorage
- */
-function saveWindowPosition(id: string, win: HTMLElement): void {
-  const rect = win.getBoundingClientRect();
-  const sr = parseFloat(win.style.right);
-  const st = parseFloat(win.style.top);
-  const position = {
-    right: Number.isFinite(sr) ? sr : (window.innerWidth - rect.right),
-    top: Number.isFinite(st) ? st : rect.top,
-  };
-  storage.set(WINDOW_POSITION_KEY + id, position);
-}
-
-/**
- * Restore window position from localStorage
- */
-function restoreWindowPosition(id: string, win: HTMLElement): void {
-  const saved = storage.get<{ right: number; top: number }>(WINDOW_POSITION_KEY + id);
-
-  if (saved) {
-    win.style.right = `${saved.right}px`;
-    win.style.top = `${saved.top}px`;
-    win.style.left = 'auto';
-    win.style.bottom = 'auto';
-  } else {
-    // Center on screen
-    win.style.left = '50%';
-    win.style.top = '50%';
-    win.style.transform = 'translate(-50%, -50%)';
-    win.style.right = 'auto';
-    win.style.bottom = 'auto';
-
-    // After render, remove transform and calculate position
-    requestAnimationFrame(() => {
-      const rect = win.getBoundingClientRect();
-      win.style.transform = '';
-      win.style.left = 'auto';
-      win.style.right = `${window.innerWidth - rect.right}px`;
-      win.style.top = `${rect.top}px`;
-      saveWindowPosition(id, win);
-    });
-  }
-}
-
-/**
- * Save window state (open/closed, minimized) to localStorage
- */
-function saveWindowState(id: string, isOpen: boolean, isMinimized: boolean): void {
-  storage.set(WINDOW_STATE_KEY + id, { isOpen, isMinimized });
-}
-
-/**
- * Add custom scrollbar styles
- */
-function addScrollbarStyles(id: string): void {
-  const styleId = `qpm-window-scrollbar-${id}`;
-  if (document.getElementById(styleId)) return;
-
-  const style = document.createElement('style');
-  style.id = styleId;
-  style.textContent = `
-    /* Scrollbar on the window itself (Aries mod pattern) */
-    #qpm-window-${id}::-webkit-scrollbar {
-      width: 8px;
-    }
-    #qpm-window-${id}::-webkit-scrollbar-track {
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 4px;
-    }
-    #qpm-window-${id}::-webkit-scrollbar-thumb {
-      background: rgba(143, 130, 255, 0.35);
-      border-radius: 4px;
-      transition: background 0.2s;
-    }
-    #qpm-window-${id}::-webkit-scrollbar-thumb:hover {
-      background: rgba(143, 130, 255, 0.55);
-    }
-
-    /* Constrain all content within window - prevent horizontal overflow */
-    #qpm-window-${id} *,
-    #qpm-window-${id} *::before,
-    #qpm-window-${id} *::after {
-      box-sizing: border-box;
-      max-width: 100%;
-      word-wrap: break-word;
-      overflow-wrap: break-word;
-    }
-
-    #qpm-window-${id} .qpm-card,
-    #qpm-window-${id} .qpm-card__body,
-    #qpm-window-${id} .qpm-card__header,
-    #qpm-window-${id} .qpm-section-muted,
-    #qpm-window-${id} input,
-    #qpm-window-${id} button,
-    #qpm-window-${id} select,
-    #qpm-window-${id} div {
-      max-width: 100%;
-      min-width: 0;
-    }
-
-    /* Prevent pre/code from breaking layout */
-    #qpm-window-${id} pre,
-    #qpm-window-${id} code {
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-  `;
-  document.head.appendChild(style);
 }
 
 /**
@@ -819,20 +815,13 @@ export function resetAllWindowLayouts(): void {
     w.el.style.maxWidth = w.maxWidth;
     w.el.style.maxHeight = w.maxHeight;
 
-    // Re-center on screen
-    w.el.style.left = '50%';
-    w.el.style.top = '50%';
-    w.el.style.transform = 'translate(-50%, -50%)';
-    w.el.style.right = 'auto';
-    w.el.style.bottom = 'auto';
+    // Center on screen using ratios
+    w.position.xPct = 0.5;
+    w.position.yPct = 0.5;
 
     requestAnimationFrame(() => {
-      const rect = w.el.getBoundingClientRect();
-      w.el.style.transform = '';
-      w.el.style.left = 'auto';
-      w.el.style.right = `${window.innerWidth - rect.right}px`;
-      w.el.style.top = `${rect.top}px`;
-      saveWindowPosition(w.id, w.el);
+      applyRatioPosition(w);
+      saveWindowPosition(w.id);
     });
   });
 
@@ -869,9 +858,7 @@ export function restoreOpenWindows(): void {
         const result = opener();
         const isAsync = result != null && typeof (result as Promise<unknown>).then === 'function';
 
-        // Restore minimized state — opener always opens the window full-size,
-        // so we need to re-minimize it afterwards if that was the saved state.
-        // For async openers the window is not in the map yet, so defer until resolution.
+        // Restore minimized state
         const applyMinimized = (): void => {
           if (!saved.isMinimized) return;
           const w = windows.get(id);

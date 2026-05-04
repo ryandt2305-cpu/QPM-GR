@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const ROOT_DIR = path.join(__dirname, '..');
 const PACKAGE_JSON_PATH = path.join(ROOT_DIR, 'package.json');
 const VERSION_CHECKER_PATH = path.join(ROOT_DIR, 'src', 'utils', 'versionChecker.ts');
-const DASHBOARD_CHANGELOG_PATH = path.join(ROOT_DIR, 'src', 'ui', 'sections', 'statsHeaderSection.ts');
+const DASHBOARD_CHANGELOG_PATH = path.join(ROOT_DIR, 'src', 'ui', 'sections', 'changelog.ts');
 
 function readFileOrThrow(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -64,7 +64,7 @@ function validateVersionSync(packageVersion) {
       [
         'Version sync check failed.',
         ...errors.map((e) => `- ${e}`),
-        'Release requirement: every version bump must also update src/ui/sections/statsHeaderSection.ts CHANGELOG[0].',
+        'Release requirement: every version bump must also update src/ui/sections/changelog.ts CHANGELOG[0].',
       ].join('\n')
     );
   }

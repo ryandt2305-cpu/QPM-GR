@@ -15,8 +15,8 @@ const TRACKER_DEFS = [
     icon: '📊',
     desc: 'Monitor pet ability procs, mutation grants, and coin/hr earnings in real time',
     windowTitle: '📊 Ability Tracker',
-    windowId: 'trackers-detached-ability',
-    width: '1000px',
+    windowId: 'trackers-v2-ability',
+    width: '1200px',
   },
   {
     key: 'turtle',
@@ -24,7 +24,7 @@ const TRACKER_DEFS = [
     icon: '🐢',
     desc: 'Track turtle fishing timers and cooldowns across all active turtles',
     windowTitle: '🐢 Turtle Timer',
-    windowId: 'trackers-detached-turtle',
+    windowId: 'trackers-v2-turtle',
     width: '700px',
   },
   {
@@ -33,7 +33,7 @@ const TRACKER_DEFS = [
     icon: '✨',
     desc: 'Track pet XP progress, level-up estimates, and strength growth over time',
     windowTitle: '✨ XP Tracker',
-    windowId: 'trackers-detached-xp',
+    windowId: 'trackers-v2-xp',
     width: '900px',
   },
   {
@@ -42,7 +42,7 @@ const TRACKER_DEFS = [
     icon: '🌱',
     desc: 'View active crop boost effects, sources, and their remaining durations',
     windowTitle: '🌱 Crop Boosts',
-    windowId: 'trackers-detached-crops',
+    windowId: 'trackers-v2-crops',
     width: '800px',
   },
   {
@@ -51,7 +51,7 @@ const TRACKER_DEFS = [
     icon: '🌿',
     desc: 'Visual stats for garden mutation progress and hatching history with ability breakdown',
     windowTitle: '🌿 Garden & Hatch Stats',
-    windowId: 'trackers-detached-stats',
+    windowId: 'trackers-v2-stats',
     width: '920px',
   },
   {
@@ -60,7 +60,7 @@ const TRACKER_DEFS = [
     icon: '💰',
     desc: 'Storage coin values and crop sell price overlays',
     windowTitle: '💰 Value Display',
-    windowId: 'trackers-detached-storageValue',
+    windowId: 'trackers-v2-storageValue',
     width: '420px',
   },
 ] as const;

@@ -9,6 +9,7 @@ import { findAbilityHistoryForIdentifiers, onAbilityHistoryUpdate } from '../sto
 import { formatCoinsAbbreviated } from '../features/valueCalculator';
 import { throttle } from '../utils/scheduling';
 import { storage } from '../utils/storage';
+import { clampPct, scaledDimension } from '../utils/windowPosition';
 import {
   buildAbilityValuationContext,
   resolveDynamicAbilityEffect,
@@ -21,9 +22,13 @@ import { visibleInterval } from '../utils/timerManager';
 // CONSTANTS
 // ============================================================================
 
-const LAYOUT_KEY = 'qpm.trackerWindow.layout.v1';
-const DEFAULT_WIDTH = 440;
-const DEFAULT_HEIGHT = 560;
+const LAYOUT_KEY = 'qpm.trackerWindow.layout.v3';
+/** Design-baseline dimensions (tuned for 1920px viewport). Used by updateContentScale. */
+const DESIGN_WIDTH = 440;
+const DESIGN_HEIGHT = 560;
+/** Viewport-scaled defaults — always the same fraction of the screen. */
+function defaultWidth(): number { return scaledDimension(DESIGN_WIDTH, 'w'); }
+function defaultHeight(): number { return scaledDimension(DESIGN_HEIGHT, 'h'); }
 const MIN_WIDTH = 320;
 const MIN_HEIGHT = 200;
 const TICKER_INTERVAL_MS = 1000;
@@ -69,10 +74,31 @@ export interface AbilityTrackerWindowState {
 }
 
 interface WindowLayout {
-  top: number;
-  left: number;
+  xPct: number;
+  yPct: number;
   width: number;
   height: number;
+}
+
+const MARGIN = 8;
+let currentPct = { xPct: 0.5, yPct: 0.5 };
+
+function layoutPctToPixels(xPct: number, yPct: number, w: number, h: number): { x: number; y: number } {
+  const availW = Math.max(0, window.innerWidth - w - MARGIN * 2);
+  const availH = Math.max(0, window.innerHeight - h - MARGIN * 2);
+  return {
+    x: Math.round(MARGIN + clampPct(xPct) * availW),
+    y: Math.round(MARGIN + clampPct(yPct) * availH),
+  };
+}
+
+function layoutPixelsToPct(x: number, y: number, w: number, h: number): { xPct: number; yPct: number } {
+  const availW = Math.max(1, window.innerWidth - w - MARGIN * 2);
+  const availH = Math.max(1, window.innerHeight - h - MARGIN * 2);
+  return {
+    xPct: clampPct((x - MARGIN) / availW),
+    yPct: clampPct((y - MARGIN) / availH),
+  };
 }
 
 // ============================================================================
@@ -80,54 +106,82 @@ interface WindowLayout {
 // ============================================================================
 
 function loadLayout(): WindowLayout | null {
-  try { return storage.get<WindowLayout | null>(LAYOUT_KEY, null); } catch { return null; }
+  try {
+    const saved = storage.get<Record<string, unknown> | null>(LAYOUT_KEY, null);
+    if (!saved || typeof saved !== 'object') return null;
+
+    const width = (typeof saved.width === 'number' && saved.width >= defaultWidth()) ? saved.width : defaultWidth();
+    const height = (typeof saved.height === 'number' && saved.height >= defaultHeight()) ? saved.height : defaultHeight();
+
+    if (typeof saved.xPct === 'number' && typeof saved.yPct === 'number') {
+      return { xPct: clampPct(saved.xPct), yPct: clampPct(saved.yPct), width, height };
+    }
+
+    if (typeof saved.top === 'number' && typeof saved.left === 'number') {
+      const pct = layoutPixelsToPct(saved.left, saved.top, width, height);
+      return { xPct: pct.xPct, yPct: pct.yPct, width, height };
+    }
+
+    return null;
+  } catch { return null; }
 }
 
 function saveLayout(root: HTMLElement): void {
   try {
     storage.set(LAYOUT_KEY, {
-      top: parseFloat(root.style.top) || 80,
-      left: parseFloat(root.style.left) || (window.innerWidth - DEFAULT_WIDTH - 20),
-      width: root.offsetWidth || DEFAULT_WIDTH,
-      height: root.offsetHeight || DEFAULT_HEIGHT,
-    });
+      xPct: currentPct.xPct,
+      yPct: currentPct.yPct,
+      width: root.offsetWidth || defaultWidth(),
+      height: root.offsetHeight || defaultHeight(),
+    } satisfies WindowLayout);
   } catch { /* ignore */ }
+}
+
+function capturePositionAndSave(root: HTMLElement): void {
+  const rect = root.getBoundingClientRect();
+  const pct = layoutPixelsToPct(rect.left, rect.top, rect.width, rect.height);
+  currentPct.xPct = pct.xPct;
+  currentPct.yPct = pct.yPct;
+  saveLayout(root);
+}
+
+function applyCurrentPosition(root: HTMLElement): void {
+  const { x, y } = layoutPctToPixels(currentPct.xPct, currentPct.yPct, root.offsetWidth, root.offsetHeight);
+  root.style.left = `${x}px`;
+  root.style.top = `${y}px`;
 }
 
 // ============================================================================
 // WINDOW CHROME
 // ============================================================================
 
-function clampToViewport(root: HTMLElement): void {
-  const margin = 8;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const w = root.offsetWidth;
-  const h = root.offsetHeight;
-  const top = Math.min(Math.max(parseFloat(root.style.top) || 0, margin), Math.max(margin, vh - h - margin));
-  const left = Math.min(Math.max(parseFloat(root.style.left) || 0, margin), Math.max(margin, vw - w - margin));
-  root.style.top = `${top}px`;
-  root.style.left = `${left}px`;
-}
-
 function makeDraggable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
-  let sx = 0, sy = 0;
+  let sx = 0, sy = 0, startLeft = 0, startTop = 0;
   const onMove = (e: MouseEvent) => {
-    root.style.top = `${root.offsetTop + e.clientY - sy}px`;
-    root.style.left = `${root.offsetLeft + e.clientX - sx}px`;
-    sx = e.clientX;
-    sy = e.clientY;
+    const dx = e.clientX - sx;
+    const dy = e.clientY - sy;
+    const rawLeft = startLeft + dx;
+    const rawTop = startTop + dy;
+    const w = root.offsetWidth;
+    const h = root.offsetHeight;
+    const maxLeft = Math.max(MARGIN, window.innerWidth - w - MARGIN);
+    const maxTop = Math.max(MARGIN, window.innerHeight - h - MARGIN);
+    root.style.left = `${Math.max(MARGIN, Math.min(maxLeft, rawLeft))}px`;
+    root.style.top = `${Math.max(MARGIN, Math.min(maxTop, rawTop))}px`;
   };
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
-    clampToViewport(root);
+    capturePositionAndSave(root);
     onEnd();
   };
   handle.addEventListener('mousedown', (e: MouseEvent) => {
     e.preventDefault();
     sx = e.clientX;
     sy = e.clientY;
+    const rect = root.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
@@ -136,14 +190,15 @@ function makeDraggable(root: HTMLElement, handle: HTMLElement, onEnd: () => void
 function makeResizable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
   let sx = 0, sy = 0, sw = 0, sh = 0;
   const onMove = (e: MouseEvent) => {
-    const maxW = window.innerWidth - parseFloat(root.style.left || '0') - 8;
-    const maxH = window.innerHeight - parseFloat(root.style.top || '0') - 8;
+    const maxW = window.innerWidth - parseFloat(root.style.left || '0') - MARGIN;
+    const maxH = window.innerHeight - parseFloat(root.style.top || '0') - MARGIN;
     root.style.width = `${Math.max(MIN_WIDTH, Math.min(sw + e.clientX - sx, maxW))}px`;
     root.style.height = `${Math.max(MIN_HEIGHT, Math.min(sh + e.clientY - sy, maxH))}px`;
   };
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    capturePositionAndSave(root);
     onEnd();
   };
   handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -218,7 +273,7 @@ function updateContentScale(scaleWrapper: HTMLElement, scaleOuter: HTMLElement, 
   if (!parent) return;
   const w = parent.offsetWidth;
   if (w <= 0) return;
-  const scale = Math.max(0.65, Math.min(2.5, w / defaultWidth));
+  const scale = Math.max(0.65, Math.min(4, w / defaultWidth));
   scaleWrapper.style.transformOrigin = 'top left';
   scaleWrapper.style.transform = `scale(${scale.toFixed(4)})`;
   // Width compensation: after scaling, content visually fills the container exactly.
@@ -226,15 +281,6 @@ function updateContentScale(scaleWrapper: HTMLElement, scaleOuter: HTMLElement, 
   scaleWrapper.style.width = `${(100 / scale).toFixed(3)}%`;
   // Sync outer height so the scroll container reflects the post-transform visual height.
   scaleOuter.style.height = `${Math.ceil(scaleWrapper.scrollHeight * scale)}px`;
-}
-
-/** Grow/shrink the window height so content fits without vertical scrollbars. */
-function autoSizeToContent(root: HTMLElement, scrollEl: HTMLElement): void {
-  const topPx = parseFloat(root.style.top) || 80;
-  const maxH = window.innerHeight - topPx - 16;
-  const fixedH = root.offsetHeight - scrollEl.offsetHeight;
-  const idealH = Math.min(maxH, fixedH + scrollEl.scrollHeight);
-  root.style.height = `${Math.max(MIN_HEIGHT, idealH)}px`;
 }
 
 // ============================================================================
@@ -722,20 +768,22 @@ function stopTicker(state: AbilityTrackerWindowState): void {
 
 export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
   const layout = loadLayout();
-  const savedTop = layout?.top ?? 80;
-  const savedLeft = layout?.left ?? Math.max(20, window.innerWidth - DEFAULT_WIDTH - 460);
-  const savedWidth = layout?.width ?? DEFAULT_WIDTH;
-  const savedHeight = layout?.height ?? DEFAULT_HEIGHT;
+  const initWidth = layout?.width ?? defaultWidth();
+  const initHeight = layout?.height ?? defaultHeight();
+  currentPct = layout
+    ? { xPct: layout.xPct, yPct: layout.yPct }
+    : { xPct: 0.5, yPct: 0.5 };
+  const initPos = layoutPctToPixels(currentPct.xPct, currentPct.yPct, initWidth, initHeight);
 
   // Root
   const root = document.createElement('div');
   root.id = 'qpm-ability-tracker-window';
   root.style.cssText = [
     'position:fixed',
-    `top:${savedTop}px`,
-    `left:${savedLeft}px`,
-    `width:${savedWidth}px`,
-    `height:${savedHeight}px`,
+    `top:${initPos.y}px`,
+    `left:${initPos.x}px`,
+    `width:${initWidth}px`,
+    `height:${initHeight}px`,
     'display:none',
     'flex-direction:column',
     'overflow:hidden',
@@ -866,20 +914,20 @@ export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
   };
 
   // Window behaviours
-  const onLayoutChange = () => saveLayout(root);
+  const onLayoutChange = () => { /* position saved in capturePositionAndSave */ };
   makeDraggable(root, titleBar, onLayoutChange);
   makeResizable(root, resizeHandle, onLayoutChange);
 
   closeBtn.addEventListener('click', () => { hideAbilityTrackerWindow(state); });
 
   const resizeListener = () => {
-    if (root.style.display !== 'none') clampToViewport(root);
+    if (root.style.display !== 'none') applyCurrentPosition(root);
   };
   window.addEventListener('resize', resizeListener);
   state.resizeListener = resizeListener;
 
   // Content scaling — live update as the user drags the resize handle
-  const doUpdateScale = () => updateContentScale(scaleWrapper, scaleOuter, DEFAULT_WIDTH);
+  const doUpdateScale = () => updateContentScale(scaleWrapper, scaleOuter, DESIGN_WIDTH);
   state.updateScale = doUpdateScale;
   const scaleObserver = new ResizeObserver(doUpdateScale);
   scaleObserver.observe(root);
@@ -914,15 +962,10 @@ export function createAbilityTrackerWindow(): AbilityTrackerWindowState {
 // ============================================================================
 
 export function showAbilityTrackerWindow(state: AbilityTrackerWindowState): void {
-  const firstOpen = !loadLayout();
   state.root.style.display = 'flex';
-  clampToViewport(state.root);
+  applyCurrentPosition(state.root);
   renderAbilityTracker(state); // calls state.updateScale?.() internally
   startTicker(state);
-  if (firstOpen) {
-    autoSizeToContent(state.root, state.scrollContent);
-    saveLayout(state.root);
-  }
 }
 
 export function hideAbilityTrackerWindow(state: AbilityTrackerWindowState): void {

@@ -3,6 +3,12 @@
 
 import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
+import {
+  clampPct,
+  pctToPixels as _pctToPixels,
+  pixelsToPct as _pixelsToPct,
+  clampPixels as _clampPixels,
+} from '../utils/windowPosition';
 import { getActivePetInfos, onActivePetInfos, type ActivePetInfo } from '../store/pets';
 import { onInventoryChange } from '../store/inventory';
 import {
@@ -231,42 +237,23 @@ function clampSlotIndex(slotIndex: number): number | null {
   return slotIndex;
 }
 
-function clampPct(v: number): number {
-  return Math.max(0, Math.min(1, v));
-}
-
 function getCardHeight(el: HTMLElement): number {
   return el.offsetHeight || CARD_H_FALLBACK;
 }
 
 /** Convert viewport ratios → pixel left/top, always within visible viewport. */
 function pctToPixels(xPct: number, yPct: number, cardH: number): { x: number; y: number } {
-  const maxX = Math.max(0, window.innerWidth - CARD_W);
-  const maxY = Math.max(0, window.innerHeight - cardH);
-  return {
-    x: Math.round(clampPct(xPct) * maxX),
-    y: Math.round(clampPct(yPct) * maxY),
-  };
+  return _pctToPixels(xPct, yPct, CARD_W, cardH);
 }
 
 /** Convert pixel left/top → viewport ratios (0–1). */
 function pixelsToPct(x: number, y: number, cardH: number): { xPct: number; yPct: number } {
-  const maxX = Math.max(1, window.innerWidth - CARD_W);
-  const maxY = Math.max(1, window.innerHeight - cardH);
-  return {
-    xPct: clampPct(x / maxX),
-    yPct: clampPct(y / maxY),
-  };
+  return _pixelsToPct(x, y, CARD_W, cardH);
 }
 
 /** Clamp pixel position so card stays fully on-screen. */
 function clampPixels(x: number, y: number, cardH: number): { x: number; y: number } {
-  const maxX = Math.max(0, window.innerWidth - CARD_W);
-  const maxY = Math.max(0, window.innerHeight - cardH);
-  return {
-    x: Math.max(0, Math.min(maxX, Math.round(x))),
-    y: Math.max(0, Math.min(maxY, Math.round(y))),
-  };
+  return _clampPixels(x, y, CARD_W, cardH);
 }
 
 function getDefaultPct(slotIndex: number): { xPct: number; yPct: number } {

@@ -98,10 +98,15 @@ export function initPetTeamsStore(): void {
 
   // Debounced purge of stale pet references (sold/missing pets).
   // Fires on both active-pet and inventory changes so selling from hutch/inventory is caught.
+  // Gated on purgeReady — which is only set after resolvePlayerKeyAndMigrate settles,
+  // so we never purge before we know which player config we're operating on.
   function schedulePurge(): void {
     if (store.purgeTimer) clearTimeout(store.purgeTimer);
     store.purgeTimer = setTimeout(async () => {
       store.purgeTimer = null;
+      if (!store.purgeReady) {
+        return;
+      }
       if (store.applyInProgress) {
         log('[PetTeams] Skipping purge — apply in progress');
         return;
@@ -117,11 +122,32 @@ export function initPetTeamsStore(): void {
           return;
         }
         const validIds = new Set(pool.map(p => p.id));
-        // Fix B: skip purge if the account changed since store init
+        // Skip purge if the account changed since store init
         const currentId = await resolveCurrentPlayerId();
         if (store.initPlayerId !== null && currentId !== null && currentId !== store.initPlayerId) {
           log('[PetTeams] Skipping purge — account change detected');
           return;
+        }
+        // Coverage check: count how many team-referenced pet IDs exist in the
+        // pool vs how many would be purged. Allow small purges (1-2 pets sold)
+        // unconditionally, but block large purges when coverage is low — that
+        // pattern indicates stale atom data, not legitimate sells.
+        const referencedIds = new Set<string>();
+        for (const team of store.config.teams) {
+          for (const s of team.slots) {
+            if (s) referencedIds.add(s);
+          }
+        }
+        if (referencedIds.size > 0) {
+          let matched = 0;
+          for (const id of referencedIds) {
+            if (validIds.has(id)) matched++;
+          }
+          const wouldPurge = referencedIds.size - matched;
+          if (wouldPurge > 2 && matched <= referencedIds.size * 0.5) {
+            log(`[PetTeams] Skipping purge — pool covers ${matched}/${referencedIds.size} referenced pets, ${wouldPurge} would be cleared`);
+            return;
+          }
         }
         purgeGonePets(validIds);
       } catch { /* ignore */ }
@@ -131,8 +157,14 @@ export function initPetTeamsStore(): void {
   store.purgeInvUnsubscribe = onInventoryChange(() => schedulePurge(), false);
 
   log(`[PetTeams] Store initialized - ${store.config.teams.length} teams`);
-  // Fix C: resolve player-scoped key in background (non-blocking, keep function sync)
-  resolvePlayerKeyAndMigrate().catch(err => log('[PetTeams] Key resolution failed', err));
+  // Resolve player-scoped key in background. Purge is gated on purgeReady
+  // so it cannot fire until this settles and config/key are consistent.
+  resolvePlayerKeyAndMigrate()
+    .catch(err => log('[PetTeams] Key resolution failed', err))
+    .finally(() => {
+      store.purgeReady = true;
+      schedulePurge();
+    });
 }
 
 export function stopPetTeamsStore(): void {
@@ -150,6 +182,7 @@ export function stopPetTeamsStore(): void {
   store.initPlayerId = null;
   store.hutchEverLoaded = false;
   store.applyInProgress = false;
+  store.purgeReady = false;
 }
 
 // ---------------------------------------------------------------------------

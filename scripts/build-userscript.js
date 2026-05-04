@@ -15,7 +15,7 @@ const DASHBOARD_CHANGELOG_PATH = path.join(
   "src",
   "ui",
   "sections",
-  "statsHeaderSection.ts",
+  "changelog.ts",
 );
 
 function readFileOrThrow(filePath) {
@@ -91,7 +91,7 @@ function validateVersionSync(packageVersion) {
       [
         "Version sync check failed.",
         ...errors.map((e) => `- ${e}`),
-        "Release requirement: every version bump must also update src/ui/sections/statsHeaderSection.ts CHANGELOG[0].",
+        "Release requirement: every version bump must also update src/ui/sections/changelog.ts CHANGELOG[0].",
       ].join("\n"),
     );
   }
@@ -100,7 +100,7 @@ function validateVersionSync(packageVersion) {
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         QPM (ALPHA)
 // @namespace    Quinoa
-// @version      3.1.87
+// @version      3.1.88
 // @description  Quality-of-life enhancements for Magic Garden: crop type locking, mutation tracking, value calculator, harvest reminders, journal species checker, and persistent feed statistics.
 // @author       TOKYO.#6464
 // @match        https://1227719606223765687.discordsays.com/*

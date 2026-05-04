@@ -6,6 +6,14 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.94",
+    date: "2026-05",
+    notes: [
+      "Added Shop Keybinds: keyboard shortcuts to open game shops directly (default Alt+S/E/T/D)",
+      "Configurable per-shop bindings and enable/disable toggle in Utility Hub",
+    ],
+  },
+  {
     version: "3.1.93",
     date: "2026-05",
     notes: [

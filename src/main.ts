@@ -89,6 +89,7 @@ import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 import { startShopRestockAlerts } from './ui/shopRestockAlerts';
 import { initGmExportBridge } from './utils/gmExportBridge';
 import { startLocker } from './features/locker/index';
+import { startShopKeybinds, stopShopKeybinds } from './features/shopKeybinds';
 // Data Catalog Loader
 import {
   initCatalogLoader,
@@ -1284,6 +1285,7 @@ window.addEventListener('error', _errorHandler, true);
 window.addEventListener('beforeunload', () => {
   window.removeEventListener('error', _errorHandler, true);
   stopController();
+  stopShopKeybinds();
   stopAutoReconnect();
   stopAntiAfk();
   stopActivityLogEnhancer();
@@ -1489,6 +1491,7 @@ async function initialize(): Promise<void> {
   initTileValueIndicator();
   startNativeFeedIntercept();
   startController();
+  startShopKeybinds();
   startStorageValue();
   startStorageValueOverlay();
   startInventoryCapacity();

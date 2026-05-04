@@ -12,6 +12,7 @@ const CONTROLLER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.controller
 const LOCKER_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.lockerDefault.v1';
 const INV_CAPACITY_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.invCapacityDefault.v1';
 const CALC_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.cropCalcDefault.v1';
+const SHOP_KEYBINDS_DEFAULT_MIGRATION_KEY = 'qpm.utilityHub.visibleCards.shopKeybindsDefault.v1';
 
 const FEATURE_DEFS = [
   {
@@ -83,6 +84,13 @@ const FEATURE_DEFS = [
     icon: '🧮',
     desc: 'Calculate crop and pet sell values with mutations, strength, and friend bonuses',
     windowTitle: '🧮 Calculator',
+  },
+  {
+    key: 'shop-keybinds',
+    label: 'Shop Keybinds',
+    icon: '⌨️',
+    desc: 'Keyboard shortcuts to open game shops (Seeds, Eggs, Tools, Decor)',
+    windowTitle: '⌨️ Shop Keybinds',
   },
 ] as const;
 
@@ -182,6 +190,18 @@ function loadVisibleCards(): FeatureKey[] {
     storage.set(CALC_DEFAULT_MIGRATION_KEY, true);
   }
 
+  const shopKeybindsMigrated = storage.get<boolean>(SHOP_KEYBINDS_DEFAULT_MIGRATION_KEY, false);
+  if (!shopKeybindsMigrated && !selected.includes('shop-keybinds')) {
+    const next: FeatureKey[] = [...selected, 'shop-keybinds'];
+    storage.set(VISIBLE_CARDS_KEY, next);
+    storage.set(SHOP_KEYBINDS_DEFAULT_MIGRATION_KEY, true);
+    selected = next;
+  }
+
+  if (!shopKeybindsMigrated) {
+    storage.set(SHOP_KEYBINDS_DEFAULT_MIGRATION_KEY, true);
+  }
+
   return selected;
 }
 
@@ -227,6 +247,9 @@ async function openFeatureWindow(feat: FeatureDef): Promise<void> {
         } else if (feat.key === 'calculator') {
           const { renderCalculator } = await import('./cropCalculatorWindow');
           renderCalculator(windowRoot);
+        } else if (feat.key === 'shop-keybinds') {
+          const { createShopKeybindsSection } = await import('./sections/shopKeybindsSection');
+          windowRoot.appendChild(createShopKeybindsSection());
         }
       } catch (err) {
         log('⚠️ Failed to load feature window', err);
@@ -534,6 +557,7 @@ function renderUtilityHub(root: HTMLElement): void {
       storage.set(LOCKER_DEFAULT_MIGRATION_KEY, true);
       storage.set(INV_CAPACITY_DEFAULT_MIGRATION_KEY, true);
       storage.set(CALC_DEFAULT_MIGRATION_KEY, true);
+      storage.set(SHOP_KEYBINDS_DEFAULT_MIGRATION_KEY, true);
       closeOverlay();
       renderCards();
     });

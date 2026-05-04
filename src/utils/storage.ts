@@ -219,6 +219,9 @@ const QPM_STORAGE_KEYS = [
 
   // Feed Keybinds
   'qpm.feed-keybinds.v1',
+
+  // Shop Keybinds
+  'qpm.shop-keybinds.v1',
 ];
 
 /**

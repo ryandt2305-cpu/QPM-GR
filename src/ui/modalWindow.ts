@@ -2,7 +2,7 @@
 // Windows open when clicking tab buttons, draggable, with persistent position.
 // Position is stored as viewport ratios (0–1) so windows survive any viewport resize.
 
-import { storage } from '../utils/storage';
+import { removeStorageKeysByPrefix, storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { clampPct } from '../utils/windowPosition';
 
@@ -785,24 +785,7 @@ export function destroyAllWindows(): void {
 export function resetAllWindowLayouts(): void {
   // Clear stored sizes and positions from storage
   const prefixes = [WINDOW_SIZE_KEY, WINDOW_POSITION_KEY];
-
-  try {
-    if (typeof GM_listValues === 'function' && typeof GM_deleteValue === 'function') {
-      for (const key of GM_listValues()) {
-        if (prefixes.some(p => key.startsWith(p))) {
-          GM_deleteValue(key);
-        }
-      }
-    }
-  } catch { /* GM_listValues unavailable */ }
-
-  try {
-    for (const key of Object.keys(localStorage)) {
-      if (prefixes.some(p => key.startsWith(p))) {
-        localStorage.removeItem(key);
-      }
-    }
-  } catch { /* localStorage unavailable */ }
+  removeStorageKeysByPrefix(prefixes);
 
   // Reset currently open windows to their original constraints
   windows.forEach((w) => {

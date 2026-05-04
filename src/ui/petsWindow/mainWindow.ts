@@ -22,7 +22,7 @@ import { WINDOW_ID, PETS_WINDOW_SWITCH_TAB_EVENT, DEFAULT_KEYBIND, PETS_TAB_KEY 
 import { ensureStyles } from './styles';
 import { btn, showToast, normalizeKeybind, isEditableTarget, createKeybindButton } from './helpers';
 import { buildManagerTab } from './managerTab';
-import { buildFeedingTab } from './feedingTab';
+import { startFeedKeybinds, stopFeedKeybinds } from '../../features/feedKeybinds';
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -35,7 +35,7 @@ let currentKeybind = DEFAULT_KEYBIND;
 // ---------------------------------------------------------------------------
 
 export function togglePetsWindow(): void {
-  toggleWindow(WINDOW_ID, 'Pets', renderPetsWindow, '880px', '600px');
+  toggleWindow(WINDOW_ID, 'Pets', renderPetsWindow, '960px', '600px');
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +83,6 @@ function renderPetsWindow(root: HTMLElement): void {
 
   const tabDefs = [
     { id: 'manager', label: 'Manager', lazy: false },
-    { id: 'feeding', label: 'Feeding', lazy: false },
     { id: 'pet-optimizer', label: '\uD83C\uDFAF Pet Optimizer', lazy: true },
   ] as const;
 
@@ -344,7 +343,7 @@ function renderPetsWindow(root: HTMLElement): void {
     panel.style.overflow = 'hidden';
 
     const scrollTargets = panel.querySelectorAll<HTMLElement>(
-      '.qpm-mgr__teams, .qpm-mgr__editor, .qpm-editor, .qpm-feed, .qpm-tcmp-grid, .qpm-window-body, .qpm-pet-optimizer-root',
+      '.qpm-mgr__teams, .qpm-mgr__editor, .qpm-editor, .qpm-tcmp-grid, .qpm-window-body, .qpm-pet-optimizer-root',
     );
     scrollTargets.forEach((target) => {
       if (!target.style.minHeight) target.style.minHeight = '0';
@@ -403,8 +402,6 @@ function renderPetsWindow(root: HTMLElement): void {
         renderCompareStageBadge();
       });
       allCleanups.push(...managerState.cleanups);
-    } else if (def.id === 'feeding') {
-      allCleanups.push(buildFeedingTab(panel));
     }
     // pet-optimizer is lazy-loaded on first click
   }
@@ -426,7 +423,7 @@ function renderPetsWindow(root: HTMLElement): void {
   const onPetsWindowSwitchTab = (event: Event): void => {
     const detail = (event as CustomEvent<{ tab?: string; teamId?: string | null }>).detail;
     if (!detail?.tab) return;
-    if (detail.tab !== 'manager' && detail.tab !== 'feeding' && detail.tab !== 'pet-optimizer') return;
+    if (detail.tab !== 'manager' && detail.tab !== 'pet-optimizer') return;
     switchTab(detail.tab);
     if (detail.tab === 'manager' && managerState) {
       managerState.selectTeam(detail.teamId ?? null);
@@ -453,6 +450,7 @@ let keybindHandler: ((e: KeyboardEvent) => void) | null = null;
 
 export function initPetsWindow(): void {
   initFloatingCards();
+  startFeedKeybinds();
   if (keybindHandler) return; // idempotent
 
   keybindHandler = (e: KeyboardEvent) => {
@@ -530,6 +528,7 @@ export function initPetsWindow(): void {
 }
 
 export function stopPetsWindow(): void {
+  stopFeedKeybinds();
   if (keybindHandler) {
     document.removeEventListener('keydown', keybindHandler);
     keybindHandler = null;

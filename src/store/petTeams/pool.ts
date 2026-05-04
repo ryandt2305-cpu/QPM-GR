@@ -5,6 +5,7 @@ import { log } from '../../utils/logger';
 import { getActivePetInfos } from '../pets';
 import { getAtomByLabel, readAtomValue } from '../../core/jotaiBridge';
 import { getSpeciesXpPerLevel, calculateMaxStrength } from '../xpTracker';
+import { getHungerCapForSpecies, DEFAULT_HUNGER_CAP } from '../../data/petHungerCaps';
 import type { PooledPet } from '../../types/petTeams';
 import { store } from './state';
 
@@ -21,6 +22,14 @@ export interface PooledPetsResult {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Convert raw hunger value to a percentage using species hunger cap. */
+function rawHungerToPct(rawHunger: unknown, species: string): number | null {
+  if (typeof rawHunger !== 'number' || !Number.isFinite(rawHunger)) return null;
+  const cap = getHungerCapForSpecies(species) ?? DEFAULT_HUNGER_CAP;
+  if (cap <= 0) return null;
+  return Math.max(0, Math.min(100, (rawHunger / cap) * 100));
+}
 
 /** Coerce a raw atom field to string[] */
 function toStrArr(v: unknown): string[] {
@@ -122,18 +131,19 @@ export async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
           const it = item as Record<string, unknown>;
           const id = typeof it.id === 'string' ? it.id : typeof it.itemId === 'string' ? it.itemId : null;
           if (!id || activeIds.has(id)) continue;
+          const hutchSpecies = String(it.petSpecies ?? it.species ?? '');
           pool.push({
             id,
             petId: typeof it.petId === 'string' ? it.petId : null,
             name: String(it.name ?? it.species ?? ''),
-            species: String(it.petSpecies ?? it.species ?? ''),
+            species: hutchSpecies,
             level: typeof it.level === 'number' ? it.level : null,
             strength: resolveStrength(it),
             mutations: toStrArr(it.mutations),
             abilities: toStrArr(it.abilities),
             xp: typeof it.xp === 'number' ? it.xp : null,
             targetScale: typeof it.targetScale === 'number' ? it.targetScale : null,
-            hunger: null,
+            hunger: rawHungerToPct(it.hunger, hutchSpecies),
             location: 'hutch',
           });
           activeIds.add(id);
@@ -177,7 +187,7 @@ export async function getAllPooledPetsWithStatus(): Promise<PooledPetsResult> {
             abilities: toStrArr(it.abilities),
             xp: typeof it.xp === 'number' ? it.xp : null,
             targetScale: typeof it.targetScale === 'number' ? it.targetScale : null,
-            hunger: null,
+            hunger: rawHungerToPct(it.hunger, String(it.petSpecies ?? it.species ?? '')),
             location: 'inventory',
           });
           activeIds.add(id);

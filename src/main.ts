@@ -76,7 +76,7 @@ import { getAtomByLabel, readAtomValue } from './core/jotaiBridge';
 import { openInspectorDirect, setupGardenInspector } from './ui/publicRoomsWindow';
 import { resetFriendsCache } from './services/ariesPlayers';
 import { exposeValidationCommands } from './utils/validationCommands';
-import { storage } from './utils/storage';
+import { initializeStorage, storage } from './utils/storage';
 import { DEBUG_GLOBALS_OPT_IN_KEY, isDebugGlobalsEnabled } from './utils/debugGlobals';
 import { timerManager } from './utils/timerManager';
 import { startController, stopController } from './features/controller/index';
@@ -102,7 +102,7 @@ import {
 } from './catalogs/gameCatalogs';
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
-const DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
+let DEBUG_GLOBALS_ENABLED = false;
 
 // Expose debug API globally (using shareGlobal for userscript sandbox compatibility)
 const QPM_DEBUG_API = {
@@ -1120,16 +1120,29 @@ const QPM_ACTIVITY_LOG_API = {
   },
 };
 
-try {
-  shareGlobal('QPM_ACTIVITY_LOG', QPM_ACTIVITY_LOG_API);
-  (window as any).QPM_ACTIVITY_LOG = QPM_ACTIVITY_LOG_API;
-} catch (error) {
-  log('[Main] Failed to expose QPM_ACTIVITY_LOG API', error);
-}
+function initializeGlobalApis(): void {
+  try {
+    shareGlobal('QPM_ACTIVITY_LOG', QPM_ACTIVITY_LOG_API);
+    (window as any).QPM_ACTIVITY_LOG = QPM_ACTIVITY_LOG_API;
+  } catch (error) {
+    log('[Main] Failed to expose QPM_ACTIVITY_LOG API', error);
+  }
 
-if (DEBUG_GLOBALS_ENABLED) {
-  registerInspectFriendHelper();
-  registerInspectPlayerHelper();
+  if (DEBUG_GLOBALS_ENABLED) {
+    registerInspectFriendHelper();
+    registerInspectPlayerHelper();
+  }
+
+  if (DEBUG_GLOBALS_ENABLED) {
+    shareGlobal('QPM', QPM_DEBUG_API);
+    shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
+    const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    (globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
+    (globalDebugTarget as any).QPM = QPM_DEBUG_API;
+    log('QPM debug API registered');
+  } else {
+    log(`[Main] Debug globals disabled. Set ${DEBUG_GLOBALS_OPT_IN_KEY}=true to enable.`);
+  }
 }
 
 // Simple console helper to force inspector self playerId for friend-level testing
@@ -1180,17 +1193,6 @@ function registerInspectPlayerHelper(): void {
     console.warn('[PublicRooms] Failed to share QPM_INSPECT_PLAYER globally', err);
   }
 }
-if (DEBUG_GLOBALS_ENABLED) {
-  shareGlobal('QPM', QPM_DEBUG_API);
-  shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
-  const globalDebugTarget = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  (globalDebugTarget as any).QPM_DEBUG_API = QPM_DEBUG_API;
-  (globalDebugTarget as any).QPM = QPM_DEBUG_API;
-  log('QPM debug API registered');
-} else {
-  log(`[Main] Debug globals disabled. Set ${DEBUG_GLOBALS_OPT_IN_KEY}=true to enable.`);
-}
-
 // Load configuration similar to original
 const LS_KEY = 'quinoa-pet-manager';
 const defaultCfg = {
@@ -1233,35 +1235,38 @@ const defaultCfg = {
     includeBoardwalk: false,
     minActiveHungerPct: 2,
     fallbackTargetScale: 1.5,
-    focus: 'latest',
+    focus: 'latest' as const,
   },
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function loadCfg(): any {
-  return storage.get<any>(LS_KEY, {});
+type QpmConfig = typeof defaultCfg;
+
+function loadCfg(): Partial<QpmConfig> {
+  return storage.get<Partial<QpmConfig>>(LS_KEY, {});
 }
 
-const loadedCfg = loadCfg();
-const cfg = {
-  ...defaultCfg,
-  ...loadedCfg,
-  ui: { ...defaultCfg.ui, ...(loadedCfg.ui || {}) },
-  inventoryLocker: { ...defaultCfg.inventoryLocker, ...(loadedCfg.inventoryLocker || {}) },
-  mutationReminder: { ...defaultCfg.mutationReminder, ...(loadedCfg.mutationReminder || {}) },
-  harvestReminder: {
-    ...defaultCfg.harvestReminder,
-    ...(loadedCfg.harvestReminder || {}),
-    selectedMutations: {
-      ...defaultCfg.harvestReminder.selectedMutations,
-      ...(loadedCfg.harvestReminder?.selectedMutations || {}),
+function buildCfg(): QpmConfig {
+  const loadedCfg = loadCfg();
+  return {
+    ...defaultCfg,
+    ...loadedCfg,
+    ui: { ...defaultCfg.ui, ...(loadedCfg.ui || {}) },
+    inventoryLocker: { ...defaultCfg.inventoryLocker, ...(loadedCfg.inventoryLocker || {}) },
+    mutationReminder: { ...defaultCfg.mutationReminder, ...(loadedCfg.mutationReminder || {}) },
+    harvestReminder: {
+      ...defaultCfg.harvestReminder,
+      ...(loadedCfg.harvestReminder || {}),
+      selectedMutations: {
+        ...defaultCfg.harvestReminder.selectedMutations,
+        ...(loadedCfg.harvestReminder?.selectedMutations || {}),
+      },
     },
-  },
-  turtleTimer: {
-    ...defaultCfg.turtleTimer,
-    ...(loadedCfg.turtleTimer || {}),
-  },
-};
+    turtleTimer: {
+      ...defaultCfg.turtleTimer,
+      ...(loadedCfg.turtleTimer || {}),
+    },
+  };
+}
 
 // Global error filter to silence noisy external proxy errors
 const _errorHandler = (event: ErrorEvent): boolean => {
@@ -1331,6 +1336,9 @@ async function waitForGame(): Promise<void> {
 
 async function initialize(): Promise<void> {
   importantLog('Quinoa Pet Manager initializing...');
+  DEBUG_GLOBALS_ENABLED = isDebugGlobalsEnabled();
+  initializeGlobalApis();
+  const cfg = buildCfg();
 
   // Initialize catalog loader (hooks Object.* methods to capture game data)
   // MUST be called early, before game code runs
@@ -1612,11 +1620,12 @@ async function initialize(): Promise<void> {
   scheduleWarmup(2000);
 }
 
-// Register the Starweaver Mod Manager GM-export bridge before initialisation so
-// it is available as early as possible, independent of async init timing.
-initGmExportBridge();
+async function bootstrap(): Promise<void> {
+  await initializeStorage();
+  initGmExportBridge();
+  await initialize();
+}
 
-// Initialize when script loads
-initialize().catch(error => {
+bootstrap().catch(error => {
   console.error('[QuinoaPetMgr] Initialization failed:', error);
 });

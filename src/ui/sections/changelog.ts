@@ -6,6 +6,34 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.93",
+    date: "2026-05",
+    notes: [
+      "Overhauled Pet Teams Manager into a unified hub: team list on the left, full editor on the right",
+      "Team list: three-line rows with team name, metric (/hr), score, pet sprites, ability pills, and feed toggle",
+      "Editor slot cards: ability squares, pet sprite, species/STR, change/clear buttons, hunger bar, feed button, diet gear, and optimizer score",
+      "Hunger bars now work for all pets (active, hutch, and inventory), not just active pets",
+      "Diet gear popover: click to open crop checklist with sprites, click again to close (toggle behavior)",
+      "Feed button opens a floating pet card at its last saved position instead of resetting to default",
+      "Per-slot feed keybinds (default Alt+1/2/3): configure via the gear icon on floating cards or in editor slots",
+      "Compact ability metric badges in the team summary bar, sized to fit alongside the team score on one row",
+      "Removed the standalone Feeding tab, all feeding controls are now inline in the Manager tab",
+    ],
+  },
+  {
+    version: "3.1.92",
+    date: "2026-05",
+    notes: [
+      "Overhauled Pet Teams Manager: two-line team rows with sprite clusters, dominant metric, ability pills, and team scores",
+      "Added per-pet optimizer scores to editor slot cards with granter bonus indicators",
+      "Added inline feeding controls to editor slot cards: hunger bar, feed button, and diet gear popover",
+      "Added ability squares to editor slot cards showing each pet's abilities with color coding",
+      "Added per-slot feed keybinds (default Alt+1/2/3) with configurable bindings in editor and floating cards",
+      "Removed Feeding tab, all feeding controls are now integrated into the Manager tab",
+      "Added team score display to the team summary bar",
+    ],
+  },
+  {
     version: "3.1.91",
     date: "2026-05",
     notes: [

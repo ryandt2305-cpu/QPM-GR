@@ -35,6 +35,10 @@ CLAUDE.md
 .gitignore
 AGENTS.md
 todo.md
+.superpowers/
+docs/analysis/
+docs/superpowers/
+
 
 # OS files
 .DS_Store

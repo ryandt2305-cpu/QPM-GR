@@ -69,7 +69,7 @@ export interface PooledPet {
   abilities: string[];     // ability IDs/names
   xp: number | null;
   targetScale: number | null;
-  hunger: number | null;   // hunger % (active pets only)
+  hunger: number | null;   // hunger % (active, hutch, and inventory pets)
   location: 'active' | 'hutch' | 'inventory';
   slotIndex?: number;      // only for active pets (0-based)
 }

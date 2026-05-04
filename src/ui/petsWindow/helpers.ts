@@ -237,3 +237,12 @@ export function getCoinSpriteUrl(): string | null {
   if (url) coinSpriteUrlCache = url;
   return coinSpriteUrlCache;
 }
+
+let ageSpriteUrlCache: string | null = null;
+
+export function getAgeSpriteUrl(): string | null {
+  if (ageSpriteUrlCache) return ageSpriteUrlCache;
+  const url = getAnySpriteDataUrl('sprite/ui/Age');
+  if (url) ageSpriteUrlCache = url;
+  return ageSpriteUrlCache;
+}

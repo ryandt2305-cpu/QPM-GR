@@ -25,6 +25,8 @@ import {
 } from '../features/instantFeed';
 import { PET_FOOD_RULES_CHANGED_EVENT } from '../features/petFoodRules';
 import { PET_FEED_POLICY_CHANGED_EVENT } from '../store/petTeams';
+import { getFeedKeybind, setFeedKeybind, clearFeedKeybind } from '../features/feedKeybinds';
+import { createKeybindButton, formatKeybind } from './petsWindow/helpers';
 import {
   getCropSpriteDataUrl,
   getPetSpriteDataUrlWithMutations,
@@ -35,6 +37,9 @@ const STORAGE_KEY = 'qpm.petFloatingCards.v1';
 const FEED_EVENT = 'qpm:feedPet';
 const FLOATING_CARD_STATE_EVENT = 'qpm:floating-card-state';
 const MAX_SLOTS = 3;
+
+/** Remembers last position per slot so reopening restores placement even after close. */
+const lastKnownPositions = new Map<number, { xPct: number; yPct: number }>();
 
 const STYLES = `
 .qpm-float-card {
@@ -435,6 +440,59 @@ function createFloatingCard(slotIndex: number, initialPct?: { xPct: number; yPct
   nameEl.className = 'qpm-float-card__name';
   header.appendChild(nameEl);
 
+  // Feed keybind gear icon
+  const gearBtn = document.createElement('button');
+  gearBtn.type = 'button';
+  gearBtn.style.cssText = 'background:none;border:none;font-size:11px;color:rgba(224,224,224,0.4);cursor:pointer;padding:2px;flex-shrink:0;transition:color 0.12s;';
+  gearBtn.textContent = '\u2699';
+  gearBtn.title = `Feed keybind: ${formatKeybind(getFeedKeybind(slotIndex)) || 'none'}`;
+  let gearPopup: HTMLElement | null = null;
+  gearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (gearPopup) {
+      gearPopup.remove();
+      gearPopup = null;
+      return;
+    }
+    gearPopup = document.createElement('div');
+    gearPopup.style.cssText = 'position:fixed;z-index:2147483647;background:rgba(14,17,25,0.98);border:1px solid rgba(143,130,255,0.35);border-radius:6px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,0.5);display:flex;align-items:center;gap:6px;font-size:11px;color:rgba(224,224,224,0.7);';
+    gearPopup.textContent = 'Feed key: ';
+    const kbBtn = createKeybindButton({
+      onSet(combo) {
+        setFeedKeybind(slotIndex, combo);
+        gearBtn.title = `Feed keybind: ${formatKeybind(combo)}`;
+        if (gearPopup) { gearPopup.remove(); gearPopup = null; }
+      },
+      onClear() {
+        clearFeedKeybind(slotIndex);
+        gearBtn.title = 'Feed keybind: none';
+        if (gearPopup) { gearPopup.remove(); gearPopup = null; }
+      },
+      readCurrent: () => getFeedKeybind(slotIndex),
+      width: '80px',
+    });
+    gearPopup.appendChild(kbBtn);
+    document.body.appendChild(gearPopup);
+    const rect = gearBtn.getBoundingClientRect();
+    gearPopup.style.left = `${Math.max(8, Math.round(rect.left))}px`;
+    gearPopup.style.top = `${Math.round(rect.bottom + 4)}px`;
+    const closePopup = (ev: MouseEvent): void => {
+      if (gearPopup && !gearPopup.contains(ev.target as Node) && ev.target !== gearBtn) {
+        gearPopup.remove();
+        gearPopup = null;
+        document.removeEventListener('mousedown', closePopup, true);
+      }
+    };
+    document.addEventListener('mousedown', closePopup, true);
+    cleanups.push(() => {
+      document.removeEventListener('mousedown', closePopup, true);
+      if (gearPopup) { gearPopup.remove(); gearPopup = null; }
+    });
+  });
+  gearBtn.addEventListener('mouseenter', () => { gearBtn.style.color = 'rgba(224,224,224,0.7)'; });
+  gearBtn.addEventListener('mouseleave', () => { gearBtn.style.color = 'rgba(224,224,224,0.4)'; });
+  header.appendChild(gearBtn);
+
   const closeBtn = document.createElement('button');
   closeBtn.className = 'qpm-float-card__close';
   closeBtn.textContent = 'x';
@@ -697,6 +755,7 @@ function createFloatingCard(slotIndex: number, initialPct?: { xPct: number; yPct
     const pct = pixelsToPct(rect.left, rect.top, getCardHeight(card));
     intendedPos.xPct = pct.xPct;
     intendedPos.yPct = pct.yPct;
+    lastKnownPositions.set(slotIndex, { xPct: pct.xPct, yPct: pct.yPct });
     persistRegistryState();
   };
 
@@ -712,6 +771,8 @@ function createFloatingCard(slotIndex: number, initialPct?: { xPct: number; yPct
   const destroy = (): void => {
     if (destroyed) return;
     destroyed = true;
+    // Save position before removing so reopen restores it
+    lastKnownPositions.set(slotIndex, { xPct: intendedPos.xPct, yPct: intendedPos.yPct });
     cleanups.forEach((fn) => fn());
     card.remove();
     registry.delete(slotIndex);
@@ -758,6 +819,7 @@ function openFloatingCardInternal(slotIndex: number, initialPct?: { xPct: number
 function restorePersistedCards(): void {
   const persisted = loadPersistedState();
   for (const card of persisted.cards) {
+    lastKnownPositions.set(card.slotIndex, { xPct: card.xPct, yPct: card.yPct });
     openFloatingCardInternal(card.slotIndex, { xPct: card.xPct, yPct: card.yPct });
   }
 }
@@ -773,7 +835,15 @@ export function openFloatingCardForSlot(slotIndex: number): void {
   const normalized = clampSlotIndex(slotIndex);
   if (normalized == null) return;
   initFloatingCards();
-  openFloatingCardInternal(normalized);
+  // Restore last known position (in-memory first, then persisted storage)
+  const lastPos = lastKnownPositions.get(normalized);
+  if (lastPos) {
+    openFloatingCardInternal(normalized, lastPos);
+    return;
+  }
+  const persisted = loadPersistedState();
+  const saved = persisted.cards.find(c => c.slotIndex === normalized);
+  openFloatingCardInternal(normalized, saved ? { xPct: saved.xPct, yPct: saved.yPct } : undefined);
 }
 
 export function closeFloatingCardForSlot(slotIndex: number): void {

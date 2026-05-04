@@ -203,6 +203,7 @@ export function computeTeamAbilityPills(
 
 export function renderTeamSummaryBar(
   filledSlotData: Array<{ strength: number | null; targetScale: number | null; species: string; abilities: string[] }>,
+  teamScore?: number,
 ): HTMLElement {
   const summary = document.createElement('div');
   summary.className = 'qpm-team-summary';
@@ -248,7 +249,7 @@ export function renderTeamSummaryBar(
     summary.appendChild(sep2);
 
     const pillsWrap = document.createElement('div');
-    pillsWrap.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;align-items:center;';
+    pillsWrap.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;align-items:center;align-content:center;max-height:38px;overflow:hidden;flex:1;min-width:0;';
     for (const pill of pills) {
       const p = document.createElement('span');
       p.className = 'qpm-team-summary__pill qpm-team-summary__pill--ability';
@@ -292,6 +293,21 @@ export function renderTeamSummaryBar(
       pillsWrap.appendChild(p);
     }
     summary.appendChild(pillsWrap);
+  }
+
+  // Team score (right-aligned)
+  if (teamScore != null && teamScore > 0) {
+    const scoreWrap = document.createElement('div');
+    scoreWrap.className = 'qpm-team-summary__score';
+    const scoreLbl = document.createElement('span');
+    scoreLbl.className = 'qpm-team-summary__score-label';
+    scoreLbl.textContent = 'Team Score:';
+    const scoreVal = document.createElement('span');
+    scoreVal.className = 'qpm-team-summary__score-value';
+    scoreVal.textContent = String(Math.round(teamScore));
+    scoreWrap.appendChild(scoreLbl);
+    scoreWrap.appendChild(scoreVal);
+    summary.appendChild(scoreWrap);
   }
 
   return summary;

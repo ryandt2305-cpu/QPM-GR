@@ -6,6 +6,13 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.95",
+    date: "2026-05",
+    notes: [
+      "Fixed Shop Keybinds button styling not rendering when opened from Utility Hub",
+    ],
+  },
+  {
     version: "3.1.94",
     date: "2026-05",
     notes: [

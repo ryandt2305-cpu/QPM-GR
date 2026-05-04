@@ -12,6 +12,25 @@ import {
 
 const SHOP_IDS: readonly ShopId[] = ['seedShop', 'eggShop', 'toolShop', 'decorShop'];
 
+/** Inline styles matching .qpm-keybind-input so the button renders correctly
+ *  even when the pets window stylesheet hasn't been injected. */
+const KEYBIND_BTN_STYLE = [
+  'width:110px',
+  'text-align:center',
+  'background:rgba(255,255,255,0.06)',
+  'border:1px solid rgba(143,130,255,0.25)',
+  'border-radius:5px',
+  'color:#e0e0e0',
+  'font-family:inherit',
+  'font-size:11px',
+  'padding:5px 8px',
+  'outline:none',
+  'cursor:pointer',
+  'white-space:nowrap',
+  'overflow:hidden',
+  'text-overflow:ellipsis',
+].join(';');
+
 export function createShopKeybindsSection(): HTMLElement {
   const { root, body } = createCard('Shop Keybinds');
   root.dataset.qpmSection = 'shop-keybinds';
@@ -79,8 +98,8 @@ export function createShopKeybindsSection(): HTMLElement {
       onSet: (combo) => setShopKeybind(shopId, combo),
       onClear: () => clearShopKeybind(shopId),
       readCurrent: () => getShopKeybind(shopId),
-      width: '120px',
     });
+    kbBtn.style.cssText = KEYBIND_BTN_STYLE;
 
     row.append(label, kbBtn);
     bindsWrap.appendChild(row);

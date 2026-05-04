@@ -291,7 +291,14 @@ export function populateSlotEfficiencySnapshots(
       }
 
       const totalBonus = positiveBonusTotal + penaltyTotal;
-      const finalScore = anchor.adjustedStanding + supportValue + totalBonus;
+      let finalScore = anchor.adjustedStanding + supportValue + totalBonus;
+
+      // When dislike gold is on, penalize gold pets competing in non-gold pools.
+      // The gold granter anchor already has its own standing reduction; this ensures
+      // the pet's OTHER abilities don't sneak it into non-gold teams.
+      if (goldStandingFactor < 1 && anchor.family.broadRoleFamilyKey !== 'goldgranter') {
+        finalScore *= goldStandingFactor;
+      }
       compareSnapshot.slotEfficiencyFamilies.set(anchor.family.familyKey, {
         familyKey: anchor.family.familyKey,
         familyLabel: anchor.family.familyLabel,

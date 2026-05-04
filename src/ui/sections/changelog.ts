@@ -6,6 +6,14 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.91",
+    date: "2026-05",
+    notes: [
+      "Added gold-dislike penalty to non-gold-granter pools: gold pets no longer sneak into rainbow teams via secondary abilities when dislike gold is on",
+      "Fixed Create Team button missing on merged family groups (e.g. Amberlit Granter / Amberlit Plant Growth Boost)",
+    ],
+  },
+  {
     version: "3.1.90",
     date: "2026-05",
     notes: [

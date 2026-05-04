@@ -342,9 +342,12 @@ export function getTopTeamCandidatesForFamily(
   group: FamilyAbilityGroup,
   comparisons: PetComparison[],
 ): PetComparison[] {
+  const matchKeys = group.familyKey.includes('+')
+    ? new Set(group.familyKey.split('+'))
+    : null;
   const familyEntries = comparisons
     .flatMap((comparison) => getTeamFamilyEntries(comparison))
-    .filter((entry) => entry.familyKey === group.familyKey)
+    .filter((entry) => matchKeys ? matchKeys.has(entry.familyKey) : entry.familyKey === group.familyKey)
     .sort(compareDisplayFamilyEntries);
 
   const candidates: PetComparison[] = [];

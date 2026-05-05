@@ -237,13 +237,11 @@ export async function createOriginalUI(): Promise<HTMLElement> {
 
   const tabColors: Record<string, string> = {
     'dashboard':       'rgba(76, 175, 80, 0.28)',   // Green
-    'trackers':        'rgba(156, 39, 176, 0.28)',  // Purple
+    'hub':             'rgba(143, 130, 255, 0.28)', // Accent purple
     'shop-restock':    'rgba(0, 188, 212, 0.28)',   // Cyan
     'pet-teams':       'rgba(255, 152, 0, 0.28)',   // Orange
     'public-rooms':    'rgba(233, 30, 99, 0.28)',   // Pink
-    'utility':         'rgba(63, 81, 181, 0.28)',   // Indigo
     'journal-checker': 'rgba(121, 85, 72, 0.28)',   // Brown
-    'tools':           'rgba(96, 125, 139, 0.28)',  // Blue Grey
   };
 
   const buildSection = (header: string) => {
@@ -322,14 +320,14 @@ export async function createOriginalUI(): Promise<HTMLElement> {
 
   // ── GAME ──
   const { section: gameSection, addRow: gameRow } = buildSection('GAME');
-  const { tile: tTrackers, setStatus: setTrackersStatus } = buildTile('trackers', '📈', 'Trackers');
-  tTrackers.dataset.windowId = 'trackers-hub';
-  tTrackers.addEventListener('click', async () => {
+  const { tile: tHub, setStatus: setHubStatus } = buildTile('hub', '🔮', 'Hub');
+  tHub.dataset.windowId = 'qpm-hub';
+  tHub.addEventListener('click', async () => {
     try {
-      const { openTrackersHubWindow } = await import('./trackersHubWindow');
-      openTrackersHubWindow();
+      const { toggleHub } = await import('./hubWindow');
+      toggleHub();
     } catch (e) {
-      log('⚠️ Failed to open Trackers Hub', e);
+      log('⚠️ Failed to open QPM Hub', e);
     }
   });
   const { tile: tShop, setStatus: setShopStatus, setStatusDom: setShopStatusDom } = buildTile('shop-restock', '🏪', 'Shop Restock');
@@ -370,7 +368,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       log('⚠️ Failed to open Shop Restock window', e);
     }
   });
-  gameRow([tTrackers, tShop]);
+  gameRow([tHub, tShop]);
   const { tile: tRooms, setStatus: setRoomsStatus } = buildTile('public-rooms', '🌐', 'Public Rooms');
   tRooms.dataset.windowId = 'public-rooms';
   tRooms.addEventListener('click', () => {
@@ -383,31 +381,18 @@ export async function createOriginalUI(): Promise<HTMLElement> {
   });
   gameRow([tRooms]);
   navSections.appendChild(gameSection);
-  tabButtons.set('trackers', tTrackers);
+  tabButtons.set('hub', tHub);
   tabButtons.set('shop-restock', tShop);
   tabButtons.set('public-rooms', tRooms);
 
   // ── TOOLS ──
   const { section: toolsSection, addRow: toolsRow } = buildSection('TOOLS');
-  const { tile: tUtility, setStatus: setUtilityStatus } = buildTile('utility', '🔧', 'Utility');
-  tUtility.dataset.windowId = 'utility-hub';
-  tUtility.addEventListener('click', async () => {
-    try {
-      const { openUtilityHubWindow } = await import('./utilityHubWindow');
-      openUtilityHubWindow();
-    } catch (e) {
-      log('⚠️ Failed to open Utility Hub window', e);
-    }
-  });
   const { tile: tDash, setStatus: setDashStatus } = buildTile('dashboard', '📊', 'Dashboard');
   tDash.addEventListener('click', () => activateTab('dashboard'));
-  toolsRow([tDash, tUtility]);
   const { tile: tJournal, setStatus: setJournalStatus } = buildTile('journal-checker', '📔', 'Journal');
   tJournal.dataset.windowId = 'journal-checker-window';
   tJournal.addEventListener('click', () => {
     toggleWindow('journal-checker-window', '📔 Journal Checker', (windowRoot) => {
-      // The modal body already has flex:1;min-height:0;overflow:auto — don't wipe those.
-      // Just remove the default 16px padding so the journal section can use its own.
       windowRoot.style.padding = '0';
       import('./journalCheckerSection').then(({ createJournalCheckerSection }) => {
         windowRoot.appendChild(createJournalCheckerSection());
@@ -417,29 +402,16 @@ export async function createOriginalUI(): Promise<HTMLElement> {
       });
     }, '900px', '90vh');
   });
-  const { tile: tTools, setStatus: setToolsStatus } = buildTile('tools', '\u{1F9F0}', 'Tools');
-  tTools.dataset.windowId = 'tools-hub';
-  tTools.addEventListener('click', async () => {
-    try {
-      const { openToolsHubWindow } = await import('./toolsHubWindow');
-      openToolsHubWindow();
-    } catch (e) {
-      log('Failed to open Tools Hub window', e);
-    }
-  });
-  toolsRow([tJournal, tTools]);
+  toolsRow([tDash, tJournal]);
   navSections.appendChild(toolsSection);
-  tabButtons.set('utility', tUtility);
   tabButtons.set('dashboard', tDash);
   tabButtons.set('journal-checker', tJournal);
-  tabButtons.set('tools', tTools);
 
   // ── Tab panels (inline content for dashboard only; empty for window-openers) ──
   registerTabPanel('pet-teams', []);
-  registerTabPanel('trackers', []);
+  registerTabPanel('hub', []);
   registerTabPanel('shop-restock', []);
   registerTabPanel('public-rooms', []);
-  registerTabPanel('utility', []);
   registerTabPanel('dashboard', [statsHeader]);
 
   activateTab('dashboard');
@@ -499,12 +471,8 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   });
 
-  // Trackers tile — top strength summary
-  onActivePetInfos((pets: ActivePetInfo[]) => {
-    const strengths = pets.map(p => p.strength).filter((s): s is number => s !== null);
-    const maxStr = strengths.length ? Math.max(...strengths) : null;
-    setTrackersStatus(maxStr !== null ? `Top: ${maxStr} STR · XP · Ability` : 'XP · Ability · Turtle');
-  });
+  // Hub tile — static status
+  setHubStatus('All features');
 
   // Shop Restock tile — sprite row for all tracked items (future items bright, overdue dimmed)
   const shopSpriteCache = new Map<string, string | null>();
@@ -567,10 +535,8 @@ export async function createOriginalUI(): Promise<HTMLElement> {
 
   // Static tile statuses
   setRoomsStatus('View active rooms');
-  setUtilityStatus('Filters · Reminders · Favs');
   setDashStatus('Stats & overview');
   setJournalStatus('Loading tips...');
-  setToolsStatus('Guide | Layout Tools');
 
   // Journal tile — async smart tips: inline sprites only, mutation dot overlay
   (async () => {

@@ -168,7 +168,7 @@ export function getTrackersGroup(): HubGroupDef {
     onOpen: () => {
       toggleWindow('utility-feature-activity-log', '📜 Activity Log', (root) => {
         root.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;padding:12px;';
-        import('../sections/activityLogSection').then(({ createActivityLogSection }) => {
+        import('../../sections/activityLogSection').then(({ createActivityLogSection }) => {
           root.appendChild(createActivityLogSection());
         }).catch(e => log('⚠️ Failed to load Activity Log', e));
       }, '580px', '78vh');

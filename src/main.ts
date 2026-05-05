@@ -60,10 +60,13 @@ import { toggleWindow, registerWindowOpener, restoreOpenWindows } from './ui/mod
 import { openShopRestockWindow } from './ui/shopRestockWindow';
 import { openPetOptimizerWindow } from './ui/petOptimizerWindow';
 import { openCropBoostTrackerWindow } from './ui/cropBoostTrackerWindow';
-import { openTrackersHubWindow, openDetachedTracker, getTrackerWindowDefs } from './ui/trackersHubWindow';
 import { openStatsHubWindow } from './ui/statsHubWindow';
-import { openUtilityHubWindow, openDetachedFeature, getFeatureWindowDefs } from './ui/utilityHubWindow';
-import { openToolsHubWindow, openGuideWindow } from './ui/toolsHubWindow';
+import { registerHubGroups, toggleHub, HUB_WINDOW_ID } from './ui/hubWindow';
+import { getTrackersGroup } from './ui/hubWindow/groups/trackersGroup';
+import { getItemsGroup } from './ui/hubWindow/groups/itemsGroup';
+import { getGardenGroup } from './ui/hubWindow/groups/gardenGroup';
+import { getConfigGroup } from './ui/hubWindow/groups/configGroup';
+import { getToolsGroup } from './ui/hubWindow/groups/toolsGroup';
 import { registerPersistedItemRestockDetailOpeners } from './ui/itemRestockDetailWindow';
 import {
   getOptimizerDebugSnapshot,
@@ -1580,11 +1583,8 @@ async function initialize(): Promise<void> {
   registerWindowOpener('shop-restock', openShopRestockWindow);
   registerWindowOpener('pet-optimizer', openPetOptimizerWindow);
   registerWindowOpener('crop-boost-tracker', openCropBoostTrackerWindow);
-  registerWindowOpener('trackers-hub', openTrackersHubWindow);
+  registerWindowOpener(HUB_WINDOW_ID, toggleHub);
   registerWindowOpener('stats-hub', openStatsHubWindow);
-  registerWindowOpener('utility-hub', openUtilityHubWindow);
-  registerWindowOpener('tools-hub', openToolsHubWindow);
-  registerWindowOpener('tools-guide', openGuideWindow);
   registerWindowOpener('calculator', () => import('./ui/cropCalculatorWindow').then(({ openCalculatorWindow }) => openCalculatorWindow()));
   if (TEXTURE_MANIPULATOR_ENABLED) {
     registerWindowOpener('texture-swapper', openTextureSwapperWindow);
@@ -1594,15 +1594,14 @@ async function initialize(): Promise<void> {
     toggleWindow('pet-hub', '🐾 Pet Hub', render, '1600px', '92vh');
   });
 
-  // Register dynamic tracker hub child windows
-  for (const def of getTrackerWindowDefs()) {
-    registerWindowOpener(def.windowId, () => openDetachedTracker(def.key));
-  }
-
-  // Register dynamic utility hub child windows
-  for (const def of getFeatureWindowDefs()) {
-    registerWindowOpener(`utility-feature-${def.key}`, () => openDetachedFeature(def.key));
-  }
+  // Register unified hub groups
+  registerHubGroups([
+    getTrackersGroup(),
+    getItemsGroup(),
+    getGardenGroup(),
+    getConfigGroup(),
+    getToolsGroup(),
+  ]);
 
   registerPersistedItemRestockDetailOpeners();
   restoreOpenWindows();

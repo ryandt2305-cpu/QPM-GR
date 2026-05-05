@@ -3,13 +3,15 @@
 
 import { openWindow, destroyWindow, registerWindowOpener } from './modalWindow';
 import { fetchItemEvents, fetchAlgorithmHistory, type AlgorithmVersionEntry } from '../utils/itemEventService';
-import type { RestockItem } from '../utils/restockDataService';
+import type { RestockItem, RestockPredictionAccuracyAggregate } from '../utils/restockDataService';
 import {
   canonicalItemId,
+  fetchRestockPredictionAccuracyAggregate,
   getItemIdVariants,
   getItemProbability,
   getRestockDataSync,
   patchCachedItemLastSeen,
+  RESTOCK_MODEL_ACCURACY_MIN_SCORED,
 } from '../utils/restockDataService';
 import { getPetSpriteCanvas, getCropSpriteCanvas } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
@@ -87,6 +89,7 @@ function makeFallbackDetailItem(shopType: DetailShopType, itemId: string): Resto
     shop_type: shopType,
     current_probability: null,
     appearance_rate: null,
+    predicted_next_ms: null,
     estimated_next_timestamp: null,
     median_interval_ms: null,
     last_seen: null,
@@ -102,12 +105,19 @@ function makeFallbackDetailItem(shopType: DetailShopType, itemId: string): Resto
     baseline_interval_ms: null,
     ema_interval_ms: null,
     weather_intervals: null,
+    is_dormant: null,
+    current_weather: null,
+    weather_baseline_ms: null,
+    weather_samples: null,
+    weather_used: null,
+    weather_rejected_reason: null,
   };
 }
 
 function computeWeatherConditionalMedian(
   item: RestockItem,
 ): { median: number; weather: string } | null {
+  if (item.weather_used !== true) return null;
   const wi = item.weather_intervals;
   if (!wi || typeof wi !== 'object') return null;
   const currentWeather = getWeatherSnapshot().kind;
@@ -252,6 +262,27 @@ function fmtCountdown(ts: number | null): string {
   return `~${fmtDuration(diff)}`;
 }
 
+function clampPercentScore(value: number): number {
+  const pct = value >= 0 && value <= 1 ? value * 100 : value;
+  return Math.min(100, Math.max(0, pct));
+}
+
+function aggregateModelAccuracyMetric(
+  aggregate: RestockPredictionAccuracyAggregate | null,
+): { score: number; title: string } | null {
+  if (!aggregate || aggregate.scored_predictions < RESTOCK_MODEL_ACCURACY_MIN_SCORED) return null;
+  if (aggregate.within_one_cycle_pct == null || !Number.isFinite(aggregate.within_one_cycle_pct)) return null;
+  const details: string[] = [`${aggregate.scored_predictions} scored predictions`];
+  if (aggregate.mae_min != null) details.push(`MAE ${fmtDuration(aggregate.mae_min * 60_000)}`);
+  if (aggregate.median_abs_error_min != null) {
+    details.push(`median error ${fmtDuration(aggregate.median_abs_error_min * 60_000)}`);
+  }
+  return {
+    score: clampPercentScore(aggregate.within_one_cycle_pct),
+    title: details.join(' | '),
+  };
+}
+
 // ── Accuracy tier (adaptive, using restockAccuracy module) ───────────────────
 
 type Tier = 'good' | 'warn' | 'bad' | 'none';
@@ -269,6 +300,7 @@ const TIER_COLOR: Record<Tier, string> = {
 interface RowData {
   timestamp: number;
   quantity:  number | null;
+  predicted_next_ms: number | null;
   gapMs:     number | null;
   errorMs:   number | null;
 }
@@ -439,6 +471,20 @@ function computeRowEventAccuracy(
   return computeEventAccuracyNew(row, prevRow, medianMs, intervals);
 }
 
+function computeMedianRowRegularity(
+  row: RowData,
+  prevRow: RowData | null,
+  medianMs: number | null,
+  intervals?: number[] | null,
+): EventAccuracy {
+  return computeEventAccuracyNew(
+    { timestamp: row.timestamp },
+    prevRow ? { timestamp: prevRow.timestamp } : null,
+    medianMs,
+    intervals,
+  );
+}
+
 
 const STATUS_CONFIG: Record<EventStatus, { icon: string; label: string; color: string; bg: string }> = {
   accurate: { icon: '\u2713', label: 'Accurate',    color: '#4ade80', bg: 'rgba(74,222,128,0.10)' },
@@ -507,7 +553,8 @@ function makeCardHeader(
 interface OverviewHandle {
   container: HTMLElement;
   setEventCount: (count: number) => void;
-  setOverallAccuracy: (score: number) => void;
+  setMedianRegularity: (score: number) => void;
+  setModelAccuracy: (score: number, detailTitle?: string) => void;
   setLastSeen: (timestamp: number | null) => void;
   browseBtn: HTMLButtonElement;
 }
@@ -779,14 +826,14 @@ function buildOverviewCard(
     infoSection.appendChild(histRow);
   }
 
-  // Overall accuracy (filled in after events load)
+  // Median regularity (filled in after events load)
   const accuracyRow = document.createElement('div');
   accuracyRow.style.cssText = 'margin-top:4px;display:none;';
   const accuracyHeader = document.createElement('div');
   accuracyHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;';
   const accuracyLabel = document.createElement('span');
   accuracyLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
-  accuracyLabel.textContent = 'Overall Accuracy';
+  accuracyLabel.textContent = 'Gap Consistency';
   const accuracyValue = document.createElement('span');
   accuracyValue.style.cssText = 'font-size:16px;font-weight:700;color:#e8e0ff;';
   accuracyHeader.append(accuracyLabel, accuracyValue);
@@ -799,6 +846,26 @@ function buildOverviewCard(
   accBarTrack.appendChild(accBarFill);
   accuracyRow.appendChild(accBarTrack);
   infoSection.appendChild(accuracyRow);
+
+  const modelAccuracyRow = document.createElement('div');
+  modelAccuracyRow.style.cssText = 'margin-top:4px;display:none;';
+  const modelAccuracyHeader = document.createElement('div');
+  modelAccuracyHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;';
+  const modelAccuracyLabel = document.createElement('span');
+  modelAccuracyLabel.style.cssText = 'font-size:12px;color:rgba(232,224,255,0.5);';
+  modelAccuracyLabel.textContent = 'Prediction Accuracy';
+  const modelAccuracyValue = document.createElement('span');
+  modelAccuracyValue.style.cssText = 'font-size:16px;font-weight:700;color:#e8e0ff;';
+  modelAccuracyHeader.append(modelAccuracyLabel, modelAccuracyValue);
+  modelAccuracyRow.appendChild(modelAccuracyHeader);
+
+  const modelAccBarTrack = document.createElement('div');
+  modelAccBarTrack.style.cssText = 'width:100%;height:6px;border-radius:3px;background:rgba(143,130,255,0.12);overflow:hidden;';
+  const modelAccBarFill = document.createElement('div');
+  modelAccBarFill.style.cssText = 'height:100%;border-radius:3px;transition:width 0.3s ease;';
+  modelAccBarTrack.appendChild(modelAccBarFill);
+  modelAccuracyRow.appendChild(modelAccBarTrack);
+  infoSection.appendChild(modelAccuracyRow);
   card.appendChild(infoSection);
 
   // Browse events button
@@ -838,13 +905,22 @@ function buildOverviewCard(
       const chipValue = eventCountChip.firstElementChild as HTMLElement | null;
       if (chipValue) chipValue.textContent = String(count);
     },
-    setOverallAccuracy: (score: number) => {
+    setMedianRegularity: (score: number) => {
       accuracyRow.style.display = '';
       accuracyValue.textContent = `${Math.round(score)}%`;
       const color = score >= 70 ? '#4ade80' : score >= 40 ? '#fbbf24' : '#f87171';
       accBarFill.style.width = `${Math.round(score)}%`;
       accBarFill.style.background = color;
       accuracyValue.style.color = color;
+    },
+    setModelAccuracy: (score: number, detailTitle?: string) => {
+      modelAccuracyRow.style.display = '';
+      modelAccuracyRow.title = detailTitle ?? '';
+      modelAccuracyValue.textContent = `${Math.round(score)}%`;
+      const color = score >= 70 ? '#4ade80' : score >= 40 ? '#fbbf24' : '#f87171';
+      modelAccBarFill.style.width = `${Math.round(score)}%`;
+      modelAccBarFill.style.background = color;
+      modelAccuracyValue.style.color = color;
     },
     setLastSeen,
     browseBtn,
@@ -1008,9 +1084,11 @@ function buildEventCard(
     const prevRow = index + 1 < rows.length ? rows[index + 1]! : null;
     const acc = computeRowEventAccuracy(row, prevRow, medianMs, intervals);
     const cfg = STATUS_CONFIG[acc.status];
+    const hasLoggedPrediction = row.predicted_next_ms != null;
 
     statusIcon.textContent = cfg.icon;
     statusIcon.style.color = cfg.color;
+    scoreLabel.textContent = hasLoggedPrediction ? 'Prediction Accuracy' : 'Gap Consistency';
 
     if (acc.status === 'first') {
       scoreValue.textContent = '\u2014';
@@ -1027,7 +1105,7 @@ function buildEventCard(
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
       actual.valueEl.style.color = '#e8e0ff';
     } else {
-      estimated.labelEl.textContent = 'Median Estimate';
+      estimated.labelEl.textContent = hasLoggedPrediction ? 'Predicted Restock' : 'Median Estimate';
       estimated.valueEl.textContent = acc.estimatedTs != null ? fmtTimestamp(acc.estimatedTs) : '\u2014';
       estimated.valueEl.style.color = '#e8e0ff';
       actual.valueEl.textContent = fmtTimestamp(acc.actualTs);
@@ -1303,10 +1381,12 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
     void (async () => {
       let events: Awaited<ReturnType<typeof fetchItemEvents>> = [];
       let algoHistory: AlgorithmVersionEntry[] = [];
+      let modelAccuracyAggregate: Awaited<ReturnType<typeof fetchRestockPredictionAccuracyAggregate>> = null;
       try {
-        [events, algoHistory] = await Promise.all([
+        [events, algoHistory, modelAccuracyAggregate] = await Promise.all([
           fetchItemEvents(item.shop_type, item.item_id).catch(() => [] as Awaited<ReturnType<typeof fetchItemEvents>>),
           fetchAlgorithmHistory().catch(() => [] as AlgorithmVersionEntry[]),
+          fetchRestockPredictionAccuracyAggregate(item.shop_type, item.item_id).catch(() => null),
         ]);
       } catch {
         /* network error — both stay [] */
@@ -1314,6 +1394,10 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
 
       if (!eventListSection.contains(spinner)) return; // window closed
       eventListSection.removeChild(spinner);
+      const aggregateModelMetric = aggregateModelAccuracyMetric(modelAccuracyAggregate);
+      if (aggregateModelMetric) {
+        overview.setModelAccuracy(aggregateModelMetric.score, aggregateModelMetric.title);
+      }
 
       if (!events.length) {
         overview.setEventCount(0);
@@ -1329,9 +1413,13 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         .map((ev) => {
           const ts = normalizeEpochMs(ev.timestamp);
           if (ts == null) return null;
-          return { timestamp: ts, quantity: ev.quantity };
+          return {
+            timestamp: ts,
+            quantity: ev.quantity,
+            predicted_next_ms: normalizeEpochMs(ev.predicted_next_ms),
+          };
         })
-        .filter((ev): ev is { timestamp: number; quantity: number | null } => ev !== null);
+        .filter((ev): ev is { timestamp: number; quantity: number | null; predicted_next_ms: number | null } => ev !== null);
       const orderedEvents = sortEventsNewestFirst(normalizedEvents);
       overview.setEventCount(orderedEvents.length);
 
@@ -1342,6 +1430,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         return {
           timestamp: ev.timestamp,
           quantity: ev.quantity,
+          predicted_next_ms: ev.predicted_next_ms,
           gapMs,
           errorMs,
         };
@@ -1356,19 +1445,34 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         overview.setLastSeen(item.last_seen ?? latestEventTs);
       }
 
-      // Compute overall accuracy using new module
+      // Median-gap regularity is distinct from logged prediction accuracy.
       const withComparison = rows.filter((_, i) => i + 1 < rows.length);
       if (withComparison.length > 0) {
         const scores = withComparison
           .map((row, i) => {
             const prevRow = rows[i + 1]!;
-            return computeRowEventAccuracy(row, prevRow, medianMs, itemIntervals);
+            return computeMedianRowRegularity(row, prevRow, medianMs, itemIntervals);
           })
           .filter((acc) => acc.status !== 'first')
           .map((acc) => acc.score);
         if (scores.length > 0) {
           const avgScore = scores.reduce((s, v) => s + v, 0) / scores.length;
-          overview.setOverallAccuracy(avgScore);
+          overview.setMedianRegularity(avgScore);
+        }
+      }
+      if (!aggregateModelMetric) {
+        const modelScores = rows
+          .map((row, i) => {
+            if (row.predicted_next_ms == null) return null;
+            const prevRow = i + 1 < rows.length ? rows[i + 1]! : null;
+            const acc = computeRowEventAccuracy(row, prevRow, medianMs, itemIntervals);
+            return acc.status === 'first' ? null : acc.score;
+          })
+          .filter((score): score is number => score !== null);
+        if (modelScores.length > 0) {
+          const avgScore = modelScores.reduce((s, v) => s + v, 0) / modelScores.length;
+          const suffix = modelScores.length === 1 ? '' : 's';
+          overview.setModelAccuracy(avgScore, `${modelScores.length} logged prediction${suffix}`);
         }
       }
 
@@ -1412,8 +1516,15 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
       if (medianMs != null) {
         strip.appendChild(makeChip(fmtDuration(medianMs), 'Median gap', '#a78bfa'));
       }
+      const modelErrors = rows
+        .filter((r) => r.predicted_next_ms != null)
+        .map((r) => Math.abs(r.timestamp - r.predicted_next_ms!));
       const withError = rows.filter(r => r.errorMs !== null);
-      if (withError.length > 0) {
+      if (modelErrors.length > 0) {
+        const avgErr = modelErrors.reduce((s, v) => s + v, 0) / modelErrors.length;
+        const c = avgErr < 1_800_000 ? '#4ade80' : avgErr < 10_800_000 ? '#fbbf24' : '#f87171';
+        strip.appendChild(makeChip(fmtDuration(avgErr), 'Avg model error', c));
+      } else if (withError.length > 0) {
         const avgErr = withError.reduce((s, r) => s + Math.abs(r.errorMs!), 0) / withError.length;
         const c = avgErr < 1_800_000 ? '#4ade80' : avgErr < 10_800_000 ? '#fbbf24' : '#f87171';
         strip.appendChild(makeChip(fmtDuration(avgErr), 'Avg error', c));

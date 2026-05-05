@@ -250,14 +250,6 @@ export function buildPredRow(
   const etaLbl = document.createElement('div');
   etaLbl.style.cssText = 'font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:0.5px;';
   etaLbl.textContent = 'next';
-  // Weather-conditional indicator: show weather name when prediction uses weather-specific data.
-  if (item.weather_baseline_ms != null && item.current_weather) {
-    const wxTag = document.createElement('span');
-    wxTag.style.cssText = 'margin-left:3px;color:rgba(143,130,255,0.7);font-size:9px;';
-    wxTag.textContent = `(${item.current_weather})`;
-    wxTag.title = `ETA adjusted for ${item.current_weather} weather (${item.weather_samples ?? 0} samples)`;
-    etaLbl.appendChild(wxTag);
-  }
   etaWrap.append(etaEl, etaLbl);
   metrics.appendChild(etaWrap);
 

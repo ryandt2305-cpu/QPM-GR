@@ -7,11 +7,11 @@ import { type RestockItem, RESTOCK_ITEM_FIELDS } from './restockTypes';
 // Known item ID aliases for deduplication (legacy → canonical).
 // Scoped to "shop_type:oldId" to avoid cross-shop confusion.
 const ITEM_ID_ALIASES: Record<string, string> = {
-  'seed:Dawnbinder': 'DawnbinderPod',
-  'seed:DawnCelestial': 'DawnbinderPod',
-  'seed:Moonbinder': 'MoonbinderPod',
-  'seed:MoonCelestial': 'MoonbinderPod',
-  'seed:Starweaver': 'StarweaverPod',
+  'seed:Dawnbinder': 'DawnCelestial',
+  'seed:DawnbinderPod': 'DawnCelestial',
+  'seed:Moonbinder': 'MoonCelestial',
+  'seed:MoonbinderPod': 'MoonCelestial',
+  'seed:StarweaverPod': 'Starweaver',
 };
 
 /** Resolve canonical item_id for known aliases within a shop_type. */
@@ -67,6 +67,18 @@ export function toFloat(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function toBoolean(v: unknown): boolean | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v === 1 ? true : v === 0 ? false : null;
+  if (typeof v === 'string') {
+    const normalized = v.trim().toLowerCase();
+    if (normalized === 'true' || normalized === 't' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === 'f' || normalized === '0') return false;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Row deduplication
 // ---------------------------------------------------------------------------
@@ -101,6 +113,7 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     shop_type: preferred.shop_type,
     current_probability: preferred.current_probability ?? fallback.current_probability ?? null,
     appearance_rate: preferred.appearance_rate ?? fallback.appearance_rate ?? null,
+    predicted_next_ms: preferred.predicted_next_ms ?? fallback.predicted_next_ms ?? null,
     estimated_next_timestamp: preferred.estimated_next_timestamp ?? fallback.estimated_next_timestamp ?? null,
     median_interval_ms: preferred.median_interval_ms ?? fallback.median_interval_ms ?? null,
     last_seen: Number.isFinite(mergedLastSeen) ? mergedLastSeen : null,
@@ -120,6 +133,8 @@ function mergeDuplicateItemRows(existing: RestockItem, incoming: RestockItem): R
     current_weather: preferred.current_weather ?? fallback.current_weather ?? null,
     weather_baseline_ms: preferred.weather_baseline_ms ?? fallback.weather_baseline_ms ?? null,
     weather_samples: preferred.weather_samples ?? fallback.weather_samples ?? null,
+    weather_used: preferred.weather_used ?? fallback.weather_used ?? null,
+    weather_rejected_reason: preferred.weather_rejected_reason ?? fallback.weather_rejected_reason ?? null,
   };
 }
 
@@ -193,6 +208,7 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
       ?? raw.base_rate
       ?? raw.baseRate
     ),
+    predicted_next_ms: toMs(raw.predicted_next_ms ?? raw.predictedNextMs),
     estimated_next_timestamp: toMs(raw.estimated_next_timestamp ?? raw.estimatedNextTimestamp),
     median_interval_ms: toMsDuration(
       raw.median_interval_ms
@@ -222,6 +238,10 @@ export function normalizeRestockItem(raw: Record<string, unknown>): RestockItem 
       : null,
     weather_baseline_ms: toMsDuration(raw.weather_baseline_ms ?? raw.weatherBaselineMs),
     weather_samples: toFloat(raw.weather_samples ?? raw.weatherSamples),
+    weather_used: toBoolean(raw.weather_used ?? raw.weatherUsed),
+    weather_rejected_reason: typeof (raw.weather_rejected_reason ?? raw.weatherRejectedReason) === 'string'
+      ? String(raw.weather_rejected_reason ?? raw.weatherRejectedReason)
+      : null,
   };
 }
 

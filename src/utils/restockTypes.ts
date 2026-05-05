@@ -7,6 +7,7 @@ export interface RestockItem {
   shop_type: string;
   current_probability: number | null;
   appearance_rate: number | null;
+  predicted_next_ms: number | null;
   estimated_next_timestamp: number | null;
   median_interval_ms: number | null;
   last_seen: number | null;
@@ -30,6 +31,19 @@ export interface RestockItem {
   current_weather: string | null;
   weather_baseline_ms: number | null;
   weather_samples: number | null;
+  weather_used: boolean | null;
+  weather_rejected_reason: string | null;
+}
+
+export interface RestockPredictionAccuracyAggregate {
+  item_id: string;
+  shop_type: string;
+  algorithm_version: string | null;
+  scored_predictions: number;
+  mae_min: number | null;
+  median_abs_error_min: number | null;
+  within_one_cycle_pct: number | null;
+  last_scored_at: number | null;
 }
 
 export interface RestockRefreshBudgetState {
@@ -90,6 +104,8 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'currentProbability',
   'appearance_rate',
   'appearanceRate',
+  'predicted_next_ms',
+  'predictedNextMs',
   'base_rate',
   'baseRate',
   'median_interval_ms',
@@ -131,4 +147,8 @@ export const RESTOCK_ITEM_FIELDS = new Set([
   'weatherBaselineMs',
   'weather_samples',
   'weatherSamples',
+  'weather_used',
+  'weatherUsed',
+  'weather_rejected_reason',
+  'weatherRejectedReason',
 ]);

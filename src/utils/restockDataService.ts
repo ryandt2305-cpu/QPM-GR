@@ -9,9 +9,12 @@ import {
   deduplicateItems,
   normalizeRestockItem,
   extractItemsArray,
+  toFloat,
+  toMs,
 } from './restockParser';
 import type {
   RestockItem,
+  RestockPredictionAccuracyAggregate,
   RestockRefreshBudgetState,
   RestockDataUpdatedDetail,
   FetchStatus,
@@ -25,6 +28,7 @@ import type {
 export { canonicalItemId, getItemIdVariants } from './restockParser';
 export type {
   RestockItem,
+  RestockPredictionAccuracyAggregate,
   RestockRefreshBudgetState,
   RestockDataUpdatedDetail,
   FetchStatus,
@@ -32,6 +36,7 @@ export type {
 } from './restockTypes';
 
 const RESTOCK_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_predictions';
+const RESTOCK_ACCURACY_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_prediction_accuracy_by_item';
 export const RESTOCK_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqdXZyeWpncmpjaGJoaml4d3poIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxMDYyODMsImV4cCI6MjA4NTY4MjI4M30.MqQCBG-UMR4HYJU44Tz2orHUj9gMgJTMJtxpb_MHeps';
 // Base columns — known to exist in the live restock_predictions view.
@@ -49,6 +54,11 @@ const RESTOCK_COLUMNS = [
   'total_occurrences',
   'algorithm_version',
   'algorithm_updated_at_ms',
+  'current_weather',
+  'weather_baseline_ms',
+  'weather_samples',
+  'weather_used',
+  'weather_rejected_reason',
 ] as const;
 // Extended columns added by the 20260416000003 migration (prediction logging).
 // Requested as a secondary enrichment when the server supports them.
@@ -62,14 +72,21 @@ const RESTOCK_EXTENDED_COLUMNS = [
   'ema_interval_ms',
   'weather_intervals',
   'is_dormant',
-  'current_weather',
-  'weather_baseline_ms',
-  'weather_samples',
 ] as const;
 const RESTOCK_QUERY = `select=${RESTOCK_COLUMNS.join(',')}`;
 const RESTOCK_EXTENDED_QUERY = `select=${RESTOCK_EXTENDED_COLUMNS.join(',')}`;
 const RESTOCK_URL = `${RESTOCK_ENDPOINT}?${RESTOCK_QUERY}`;
 const RESTOCK_URL_EXTENDED = `${RESTOCK_ENDPOINT}?${RESTOCK_EXTENDED_QUERY}`;
+const RESTOCK_ACCURACY_COLUMNS = [
+  'shop_type',
+  'item_id',
+  'algorithm_version',
+  'scored_predictions',
+  'mae_min',
+  'median_abs_error_min',
+  'within_one_cycle_pct',
+  'last_scored_at',
+] as const;
 // Track whether the server supports extended columns (auto-detected on first success).
 let serverSupportsExtended: boolean | null = null;
 
@@ -81,6 +98,7 @@ const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool']);
 export const RESTOCK_REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const RESTOCK_REFRESH_MAX = 5;
 export const RESTOCK_DATA_UPDATED_EVENT = 'qpm:restock-data-updated';
+export const RESTOCK_MODEL_ACCURACY_MIN_SCORED = 5;
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -228,6 +246,12 @@ let fetchingPromise: Promise<RestockItem[]> | null = null;
 let fetchingIsForce = false;
 let weatherDisabledLogged = false;
 let invalidConfigLogged = false;
+let predictionAccuracyFailureLogged = false;
+const PREDICTION_ACCURACY_CACHE_TTL_MS = 10 * 60 * 1000;
+const predictionAccuracyCache = new Map<string, {
+  fetchedAt: number;
+  value: RestockPredictionAccuracyAggregate | null;
+}>();
 
 // ---------------------------------------------------------------------------
 // Event emission
@@ -332,6 +356,94 @@ export function onRestockDataUpdated(listener: (detail: RestockDataUpdatedDetail
 /** Return effective probability from either field. */
 export function getItemProbability(item: RestockItem): number | null {
   return item.current_probability ?? item.appearance_rate ?? null;
+}
+
+function normalizeShopTypeForAggregate(shopType: string): string {
+  const normalized = shopType.trim().toLowerCase();
+  if (normalized === 'seeds') return 'seed';
+  if (normalized === 'eggs') return 'egg';
+  if (normalized === 'decors') return 'decor';
+  if (normalized === 'tools') return 'tool';
+  return normalized;
+}
+
+function normalizePredictionAccuracyAggregate(raw: Record<string, unknown>): RestockPredictionAccuracyAggregate | null {
+  const shopType = typeof raw.shop_type === 'string' ? raw.shop_type : '';
+  const itemId = typeof raw.item_id === 'string' ? raw.item_id : '';
+  const scoredPredictions = toFloat(raw.scored_predictions);
+  if (!shopType || !itemId || scoredPredictions == null || !Number.isFinite(scoredPredictions)) return null;
+
+  return {
+    shop_type: normalizeShopTypeForAggregate(shopType),
+    item_id: itemId,
+    algorithm_version: typeof raw.algorithm_version === 'string' ? raw.algorithm_version : null,
+    scored_predictions: Math.max(0, Math.floor(scoredPredictions)),
+    mae_min: toFloat(raw.mae_min),
+    median_abs_error_min: toFloat(raw.median_abs_error_min),
+    within_one_cycle_pct: toFloat(raw.within_one_cycle_pct),
+    last_scored_at: toMs(raw.last_scored_at),
+  };
+}
+
+function getPredictionAccuracyCacheKey(shopType: string, itemId: string): string {
+  return `${shopType}:${canonicalItemId(shopType, itemId)}`;
+}
+
+export async function fetchRestockPredictionAccuracyAggregate(
+  shopType: string,
+  itemId: string,
+): Promise<RestockPredictionAccuracyAggregate | null> {
+  const canonical = canonicalItemId(shopType, itemId);
+  const cacheKey = getPredictionAccuracyCacheKey(shopType, canonical);
+  const cached = predictionAccuracyCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.fetchedAt < PREDICTION_ACCURACY_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const reqConfig = getRestockRequestConfig();
+  if (!reqConfig) return null;
+
+  const query = [
+    `select=${RESTOCK_ACCURACY_COLUMNS.join(',')}`,
+    `shop_type=eq.${encodeURIComponent(shopType)}`,
+    `item_id=eq.${encodeURIComponent(canonical)}`,
+    'limit=1',
+  ].join('&');
+  const url = `${RESTOCK_ACCURACY_ENDPOINT}?${query}`;
+  const gm = resolveGmXhr();
+
+  let result: FetchTextResult | null = null;
+  if (gm) {
+    result = await gmGet(gm, url, reqConfig.key, 5_000, { Prefer: 'count=none' });
+  }
+  if (!result?.ok || result.text == null) {
+    result = await webGet(url, reqConfig.key, 5_000, { Prefer: 'count=none' });
+  }
+  if (!result || !result.ok || result.text == null) {
+    if (!predictionAccuracyFailureLogged) {
+      const reason = result ? (result.error ?? `HTTP ${result.status}`) : 'no response';
+      log(`[RestockData] Prediction accuracy fetch failed: ${reason}`);
+      predictionAccuracyFailureLogged = true;
+    }
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(result.text);
+    const first = Array.isArray(parsed) ? parsed[0] : null;
+    const value = first && typeof first === 'object'
+      ? normalizePredictionAccuracyAggregate(first as Record<string, unknown>)
+      : null;
+    predictionAccuracyCache.set(cacheKey, { fetchedAt: now, value });
+    return value;
+  } catch (err) {
+    if (!predictionAccuracyFailureLogged) {
+      log('[RestockData] Prediction accuracy parse error', err);
+      predictionAccuracyFailureLogged = true;
+    }
+    return null;
+  }
 }
 
 /** Safe cache fallback — only returns the cached array, never a wrapped object. */

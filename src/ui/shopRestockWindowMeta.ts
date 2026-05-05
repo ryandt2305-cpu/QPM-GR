@@ -214,6 +214,7 @@ export function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
       shop_type: 'tool',
       current_probability: null,
       appearance_rate: null,
+      predicted_next_ms: null,
       estimated_next_timestamp: null,
       median_interval_ms: null,
       last_seen: null,
@@ -229,6 +230,12 @@ export function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
       baseline_interval_ms: null,
       ema_interval_ms: null,
       weather_intervals: null,
+      is_dormant: null,
+      current_weather: null,
+      weather_baseline_ms: null,
+      weather_samples: null,
+      weather_used: null,
+      weather_rejected_reason: null,
     });
   }
   return merged;

@@ -6,6 +6,18 @@
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.1.97",
+    date: "2026-05",
+    notes: [
+      "Added Prediction Accuracy metric to item restock detail: fetches per-item model accuracy from a new API endpoint and shows a score bar with MAE/median error in the tooltip",
+      "Renamed Overall Accuracy to Gap Consistency to distinguish median-gap regularity from logged model prediction accuracy",
+      "Event accuracy in the detail window now uses the server-logged predicted timestamp when available, falling back to median interval estimation",
+      "Fixed weather-conditional median interval only applying when the server explicitly confirms weather was used",
+      "Fixed seed item ID aliases for Dawnbinder, Moonbinder, and Starweaver to match the current canonical server IDs",
+      "Removed weather name tag from shop list ETA label",
+    ],
+  },
+  {
     version: "3.1.96",
     date: "2026-05",
     notes: [

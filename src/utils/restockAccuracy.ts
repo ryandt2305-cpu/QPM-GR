@@ -88,13 +88,14 @@ export function computeAccuracyScore(errorMs: number, windows: AccuracyWindows):
 
 interface RowLike {
   timestamp: number;
+  predicted_next_ms?: number | null;
 }
 
 /**
  * Compute accuracy for a single restock event.
  *
- * Uses interval-based accuracy: compares `prevRow.timestamp + medianMs`
- * (the expected gap) against the actual event timestamp.
+ * Uses logged model predictions when present. Falls back to interval-based
+ * regularity by comparing `prevRow.timestamp + medianMs` with the event.
  */
 export function computeEventAccuracy(
   row: RowLike,
@@ -103,9 +104,13 @@ export function computeEventAccuracy(
   intervals?: number[] | null,
 ): EventAccuracy {
   const windows = getAccuracyWindows(medianMs, intervals);
+  const loggedPredictionTs =
+    row.predicted_next_ms != null && Number.isFinite(row.predicted_next_ms) && row.predicted_next_ms > 0
+      ? row.predicted_next_ms
+      : null;
 
-  // No previous event to compare against → first event
-  if (!prevRow || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0) {
+  // No logged prediction and no previous event to compare against.
+  if (loggedPredictionTs == null && (!prevRow || medianMs == null || !Number.isFinite(medianMs) || medianMs <= 0)) {
     return {
       score: 0,
       status: 'first',
@@ -115,8 +120,7 @@ export function computeEventAccuracy(
     };
   }
 
-  // Interval-based accuracy: actual gap vs expected gap (median)
-  const estimatedTs = prevRow.timestamp + medianMs;
+  const estimatedTs = loggedPredictionTs ?? prevRow!.timestamp + medianMs!;
   const diffMs = row.timestamp - estimatedTs;
   const score = computeAccuracyScore(diffMs, windows);
   const absDiff = Math.abs(diffMs);

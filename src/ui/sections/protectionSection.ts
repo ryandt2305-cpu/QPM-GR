@@ -47,6 +47,18 @@ export function createProtectionSection(): { element: HTMLElement; cleanup: () =
     }
   })();
 
+  (async () => {
+    try {
+      const [{ buildInventoryReserveCard }, { getLockerConfig }] = await Promise.all([
+        import('./lockerTabPanels'),
+        import('../../features/locker/index'),
+      ]);
+      capacityContent.appendChild(buildInventoryReserveCard(getLockerConfig()));
+    } catch (err) {
+      log('⚠️ Failed to load Inventory Reserve', err);
+    }
+  })();
+
   return {
     element: container,
     cleanup: () => { cleanups.forEach(fn => fn()); cleanups.length = 0; },

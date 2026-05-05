@@ -101,7 +101,7 @@ let config: CropBoostConfig = { ...DEFAULT_CONFIG };
 let currentAnalysis: TrackerAnalysis | null = null;
 let gardenUnsubscribe: (() => void) | null = null;
 let refreshInterval: number | null = null;
-let changeCallback: ((analysis: TrackerAnalysis | null) => void) | null = null;
+const changeCallbacks = new Set<(analysis: TrackerAnalysis | null) => void>();
 let lastRecalcTime = 0;
 const RECALC_THROTTLE_MS = 5000; // Only recalculate every 5 seconds max
 
@@ -152,8 +152,9 @@ function loadConfig(): void {
 // Callbacks
 // ============================================================================
 
-export function onAnalysisChange(callback: (analysis: TrackerAnalysis | null) => void): void {
-  changeCallback = callback;
+export function onAnalysisChange(callback: (analysis: TrackerAnalysis | null) => void): () => void {
+  changeCallbacks.add(callback);
+  return () => { changeCallbacks.delete(callback); };
 }
 
 // ============================================================================
@@ -486,9 +487,7 @@ function recalculate(): void {
   lastRecalcTime = now;
   currentAnalysis = analyzeBoostTracker();
 
-  if (changeCallback) {
-    changeCallback(currentAnalysis);
-  }
+  for (const cb of changeCallbacks) cb(currentAnalysis);
 }
 
 /**

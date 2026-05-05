@@ -20,7 +20,8 @@ export function renderHub(groups: ReadonlyArray<HubGroupDef>): HubRenderResult {
     'flex-direction:row',
     'width:100%',
     'height:100%',
-    'min-height:0',
+    'min-height:500px',
+    'min-width:600px',
     'overflow:hidden',
   ].join(';');
 

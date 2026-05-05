@@ -3,6 +3,14 @@
 export type CardTier = 'inline-toggle' | 'expandable' | 'launcher';
 export type HubGroupId = 'trackers' | 'items' | 'garden' | 'config' | 'tools';
 
+export interface BunchedSpriteEntry {
+  readonly spriteKey: string;
+  readonly mutations?: readonly string[];
+  readonly offsetX?: number;
+  readonly offsetY?: number;
+  readonly scale?: number;
+}
+
 export interface CardIcon {
   readonly kind: 'emoji' | 'svg' | 'sprite';
   readonly value: string;
@@ -12,6 +20,8 @@ export interface CardIcon {
   readonly spriteMutations?: readonly string[];
   /** Fallback emoji if sprite isn't loaded yet. */
   readonly fallback?: string;
+  /** When present, renders overlapping sprite cluster instead of single sprite. */
+  readonly bunched?: ReadonlyArray<BunchedSpriteEntry>;
 }
 
 interface CardConfigBase {
@@ -19,6 +29,8 @@ interface CardConfigBase {
   readonly label: string;
   readonly description: string;
   readonly icon: CardIcon;
+  /** Optional color for the card label text (e.g. '#4ade80'). */
+  readonly labelColor?: string;
 }
 
 export interface InlineToggleConfig extends CardConfigBase {
@@ -34,6 +46,8 @@ export interface ExpandableCardConfig extends CardConfigBase {
   readonly renderExpanded: (container: HTMLElement) => (() => void) | void;
   readonly detachWindowId?: string;
   readonly onDetach?: () => void;
+  readonly onBeforeExpand?: () => void;
+  readonly onBeforeCollapse?: () => void;
 }
 
 export interface LauncherCardConfig extends CardConfigBase {

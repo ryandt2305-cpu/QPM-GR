@@ -58,29 +58,22 @@ export function renderHubGroup(group: HubGroupDef): HubGroupResult {
       container.appendChild(result.element);
       cleanups.push(result.cleanup);
     } else if (card.tier === 'expandable') {
-      const result = renderExpandableCard(card);
+      const cardWithCallbacks: typeof card = {
+        ...card,
+        onBeforeExpand: () => {
+          for (const [otherKey, otherResult] of expandableCards) {
+            if (otherKey !== card.key && otherResult.isExpanded()) otherResult.collapse();
+          }
+          setExpandedCard(group.id, card.key);
+        },
+        onBeforeCollapse: () => {
+          setExpandedCard(group.id, null);
+        },
+      };
+      const result = renderExpandableCard(cardWithCallbacks);
       expandableCards.set(card.key, result);
       container.appendChild(result.element);
       cleanups.push(result.cleanup);
-
-      // Wrap expand to enforce accordion
-      const originalExpand = result.expand;
-      const wrappedElement = result.element;
-      wrappedElement.addEventListener('click', (e) => {
-        // Only handle header clicks (the expandableCard already handles its own toggle)
-        // We intercept at this level to enforce accordion
-        if (!result.isExpanded()) {
-          // Collapse all others
-          for (const [otherKey, otherResult] of expandableCards) {
-            if (otherKey !== card.key && otherResult.isExpanded()) {
-              otherResult.collapse();
-            }
-          }
-          setExpandedCard(group.id, card.key);
-        } else {
-          setExpandedCard(group.id, null);
-        }
-      }, true); // capture phase so it fires before the card's own handler
     } else if (card.tier === 'launcher') {
       const result = renderLauncherCard(card);
       container.appendChild(result.element);

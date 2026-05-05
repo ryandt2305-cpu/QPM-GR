@@ -22,7 +22,7 @@ export function getToolsGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '📖', spriteKey: 'sprite/ui/JournalStamp', fallback: '📖' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'In-app money making guide';
     },
     onOpen: () => {
@@ -42,7 +42,7 @@ export function getToolsGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '🏰', spriteKey: 'sprite/decor/MiniWizardTower', fallback: '🏰' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'External tool — opens in new tab';
     },
     onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/MG-Decor-Layout-Customiser/'),
@@ -55,7 +55,7 @@ export function getToolsGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '🖼️', spriteKey: 'sprite/pet/Butterfly', spriteMutations: ['Rainbow'], fallback: '🖼️' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'External tool — opens in new tab';
     },
     onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/MG-Sprite-Customiser-V2/'),
@@ -68,7 +68,7 @@ export function getToolsGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '🌟', spriteKey: 'sprite/plant/DawnCelestialCrop', fallback: '🌟' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'External tool — opens in new tab';
     },
     onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/Celestial-Position-Layout-Calculator/'),
@@ -84,7 +84,7 @@ export function getToolsGroup(): HubGroupDef {
       icon: { kind: 'sprite', value: '🖌️', spriteKey: 'sprite/item/RainbowPotion', fallback: '🖌️' },
       tier: 'launcher',
       renderSummary: (el) => {
-        el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+        el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
         el.textContent = 'Tint, swap, or replace any sprite';
       },
       onOpen: () => {
@@ -99,7 +99,14 @@ export function getToolsGroup(): HubGroupDef {
   return {
     id: 'tools',
     label: 'Tools',
-    icon: { kind: 'sprite', value: '🔗', spriteKey: 'sprite/item/WateringCan', fallback: '🔗' },
+    icon: {
+      kind: 'sprite', value: '🔧', fallback: '🔧',
+      bunched: [
+        { spriteKey: 'sprite/item/Shovel', offsetX: -8, scale: 0.85 },
+        { spriteKey: 'sprite/item/WateringCan', offsetX: 2, offsetY: -2, scale: 0.85 },
+        { spriteKey: 'sprite/item/PlanterPot', offsetX: 8, offsetY: 2, scale: 0.75 },
+      ],
+    },
     cards,
   };
 }

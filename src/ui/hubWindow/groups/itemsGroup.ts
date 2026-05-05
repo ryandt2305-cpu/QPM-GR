@@ -3,6 +3,13 @@
 import type { HubGroupDef, ExpandableCardConfig } from '../cards/types';
 import { toggleWindow } from '../../modalWindow';
 import { log } from '../../../utils/logger';
+import { waitForCatalogs } from '../../../catalogs/gameCatalogs';
+
+/** Best-effort catalog wait — never rejects, just logs and continues */
+async function awaitCatalogs(): Promise<void> {
+  try { await waitForCatalogs(10000); }
+  catch { log('[Hub] Catalogs not ready yet, rendering with fallbacks'); }
+}
 
 export function getItemsGroup(): HubGroupDef {
   const favoritesCard: ExpandableCardConfig = {
@@ -10,13 +17,13 @@ export function getItemsGroup(): HubGroupDef {
     label: 'Favorites',
     description: 'Auto-favorite rules and bulk favorite actions',
     icon: { kind: 'sprite', value: '⭐', spriteKey: 'sprite/ui/HeartSticker', fallback: '⭐' },
+    labelColor: '#f472b6',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#f472b6">● Rules</span><span>Auto-fav + bulk actions</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Auto-fav + bulk actions';
     },
     renderExpanded: (container) => {
-      container.style.overflowY = 'auto';
       const spinner = document.createElement('div');
       spinner.style.cssText = 'color:rgba(224,224,224,0.45);font-size:12px;padding:8px;';
       spinner.textContent = '⏳ Loading...';
@@ -25,6 +32,7 @@ export function getItemsGroup(): HubGroupDef {
       let cleanup: (() => void) | undefined;
       (async () => {
         try {
+          await awaitCatalogs();
           const { createFavoritesSection } = await import('../../sections/favoritesSection');
           const result = createFavoritesSection();
           spinner.remove();
@@ -54,13 +62,13 @@ export function getItemsGroup(): HubGroupDef {
     label: 'Protection',
     description: 'Inventory locks, harvest guards, and capacity alerts',
     icon: { kind: 'sprite', value: '🛡️', spriteKey: 'sprite/ui/Locked', fallback: '🛡️' },
+    labelColor: '#fb923c',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#fb923c">● Guard</span><span>Locks + capacity warnings</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Locks + capacity warnings';
     },
     renderExpanded: (container) => {
-      container.style.overflowY = 'auto';
       const spinner = document.createElement('div');
       spinner.style.cssText = 'color:rgba(224,224,224,0.45);font-size:12px;padding:8px;';
       spinner.textContent = '⏳ Loading...';
@@ -69,6 +77,7 @@ export function getItemsGroup(): HubGroupDef {
       let cleanup: (() => void) | undefined;
       (async () => {
         try {
+          await awaitCatalogs();
           const { createProtectionSection } = await import('../../sections/protectionSection');
           const result = createProtectionSection();
           spinner.remove();
@@ -98,20 +107,32 @@ export function getItemsGroup(): HubGroupDef {
     label: 'Calculator',
     description: 'Calculate crop and pet sell values with mutations',
     icon: { kind: 'sprite', value: '🧮', spriteKey: 'sprite/ui/Coin', fallback: '🧮' },
+    labelColor: '#fbbf24',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#fbbf24">● Calc</span><span>Sell prices with bonuses</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Sell prices with bonuses';
     },
     renderExpanded: (container) => {
-      container.style.overflowY = 'auto';
-      // Wrapper div so renderCalculator's cssText doesn't overwrite container
-      const wrapper = document.createElement('div');
-      wrapper.style.cssText = 'display:flex;flex-direction:column;min-height:200px;';
-      container.appendChild(wrapper);
-      import('../../cropCalculatorWindow').then(({ renderCalculator }) => {
-        renderCalculator(wrapper);
-      }).catch(e => log('⚠️ Failed to load Calculator', e));
+      const spinner = document.createElement('div');
+      spinner.style.cssText = 'color:rgba(224,224,224,0.45);font-size:12px;padding:8px;';
+      spinner.textContent = '⏳ Loading...';
+      container.appendChild(spinner);
+
+      (async () => {
+        try {
+          await awaitCatalogs();
+          spinner.remove();
+          const wrapper = document.createElement('div');
+          wrapper.style.cssText = 'display:flex;flex-direction:column;min-height:200px;';
+          container.appendChild(wrapper);
+          const { renderCalculator } = await import('../../cropCalculatorWindow');
+          renderCalculator(wrapper);
+        } catch (err) {
+          log('⚠️ Failed to load Calculator', err);
+          spinner.textContent = '❌ Failed to load';
+        }
+      })();
     },
     detachWindowId: 'crop-calculator',
     onDetach: () => {
@@ -124,7 +145,13 @@ export function getItemsGroup(): HubGroupDef {
   return {
     id: 'items',
     label: 'Items',
-    icon: { kind: 'sprite', value: '🎒', spriteKey: 'sprite/ui/InventoryBag', fallback: '🎒' },
+    icon: {
+      kind: 'sprite', value: '🎒', fallback: '🎒',
+      bunched: [
+        { spriteKey: 'sprite/ui/InventoryBag', offsetX: -7, scale: 0.9 },
+        { spriteKey: 'sprite/ui/HeartSticker', offsetX: 7, offsetY: -3, scale: 0.65 },
+      ],
+    },
     cards: [favoritesCard, protectionCard, calculatorCard],
   };
 }

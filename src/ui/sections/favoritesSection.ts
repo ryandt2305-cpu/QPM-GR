@@ -83,7 +83,7 @@ export function createFavoritesSection(): { element: HTMLElement; cleanup: () =>
         } else {
           const { createBulkFavoriteSection } = await import('./bulkFavoriteSection');
           spinner.remove();
-          content.appendChild(createBulkFavoriteSection());
+          content.appendChild(createBulkFavoriteSection({ startExpanded: true }));
         }
       } catch (err) {
         log('⚠️ Failed to load favorites tab', err);

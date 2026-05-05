@@ -585,10 +585,10 @@ let showDetailedView = false; // Toggle for simple/detailed view
  * Embed crop boost content directly into a container (for hub tabs).
  * Registers the onAnalysisChange callback once.
  */
-export function renderCropBoostContent(container: HTMLElement): void {
+export function renderCropBoostContent(container: HTMLElement): () => void {
   let renderTimeout: number | null = null;
   renderCropBoostSection(container, { preserveScroll: false });
-  onAnalysisChange(() => {
+  const unsub = onAnalysisChange(() => {
     if (renderTimeout) clearTimeout(renderTimeout);
     renderTimeout = window.setTimeout(() => {
       const active = document.activeElement;
@@ -598,6 +598,10 @@ export function renderCropBoostContent(container: HTMLElement): void {
       }
     }, 100);
   });
+  return () => {
+    unsub();
+    if (renderTimeout) { clearTimeout(renderTimeout); renderTimeout = null; }
+  };
 }
 
 export function openCropBoostTrackerWindow(): void {

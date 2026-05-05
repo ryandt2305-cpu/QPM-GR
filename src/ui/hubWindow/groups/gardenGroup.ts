@@ -3,6 +3,13 @@
 import type { HubGroupDef, ExpandableCardConfig, LauncherCardConfig } from '../cards/types';
 import { toggleWindow } from '../../modalWindow';
 import { log } from '../../../utils/logger';
+import { waitForCatalogs } from '../../../catalogs/gameCatalogs';
+
+/** Best-effort catalog wait — never rejects, just logs and continues */
+async function awaitCatalogs(): Promise<void> {
+  try { await waitForCatalogs(10000); }
+  catch { log('[Hub] Catalogs not ready yet, rendering with fallbacks'); }
+}
 
 export function getGardenGroup(): HubGroupDef {
   const gardenFiltersCard: ExpandableCardConfig = {
@@ -10,13 +17,13 @@ export function getGardenGroup(): HubGroupDef {
     label: 'Garden Filters',
     description: 'Filter & highlight garden tiles by species, mutations',
     icon: { kind: 'sprite', value: '🔍', spriteKey: 'sprite/plant/RoseRed', spriteMutations: ['Thunderstruck'], fallback: '🔍' },
+    labelColor: '#c084fc',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#c084fc">● Filter</span><span>Species · Mutations · Rarity</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Species · Mutations · Rarity';
     },
     renderExpanded: (container) => {
-      container.style.overflowY = 'auto';
       const spinner = document.createElement('div');
       spinner.style.cssText = 'color:rgba(224,224,224,0.45);font-size:12px;padding:8px;';
       spinner.textContent = '⏳ Loading...';
@@ -24,6 +31,7 @@ export function getGardenGroup(): HubGroupDef {
 
       (async () => {
         try {
+          await awaitCatalogs();
           const { createGardenFiltersSection } = await import('../../sections/gardenFiltersSection');
           const el = await createGardenFiltersSection();
           spinner.remove();
@@ -50,15 +58,16 @@ export function getGardenGroup(): HubGroupDef {
     label: 'Reminders',
     description: 'Timers and alerts for garden events and harvests',
     icon: { kind: 'sprite', value: '🔔', spriteKey: 'sprite/plant/Mushroom', spriteMutations: ['Dawnlit'], fallback: '🔔' },
+    labelColor: '#34d399',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#34d399">● Timer</span><span>Custom alerts · Event timers</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Custom alerts · Event timers';
     },
     renderExpanded: (container) => {
-      container.style.overflowY = 'auto';
+      // overflow left to parent hub scroll container
       import('../../originalPanel').then(({ renderRemindersContent }) => {
-        renderRemindersContent(container);
+        renderRemindersContent(container, { startExpanded: true });
       }).catch(e => log('⚠️ Failed to load Reminders', e));
     },
     detachWindowId: 'utility-feature-reminders',
@@ -79,7 +88,7 @@ export function getGardenGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '🌿', spriteKey: 'sprite/pet/CommonEgg', fallback: '🌿' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'Mutation and hatching analytics';
     },
     onOpen: () => {
@@ -92,7 +101,14 @@ export function getGardenGroup(): HubGroupDef {
   return {
     id: 'garden',
     label: 'Garden',
-    icon: { kind: 'sprite', value: '🌱', spriteKey: 'sprite/ui/PlantIcon', fallback: '🌱' },
+    icon: {
+      kind: 'sprite', value: '🌱', fallback: '🌱',
+      bunched: [
+        { spriteKey: 'sprite/plant/RoseRed', offsetX: -8, scale: 0.85 },
+        { spriteKey: 'sprite/plant/Sunflower', offsetX: 2, offsetY: -2, scale: 0.85 },
+        { spriteKey: 'sprite/plant/Blueberry', offsetX: 8, offsetY: 2, scale: 0.75 },
+      ],
+    },
     cards: [gardenFiltersCard, remindersCard, statsCard],
   };
 }

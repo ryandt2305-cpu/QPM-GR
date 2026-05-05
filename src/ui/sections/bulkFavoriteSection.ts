@@ -1,14 +1,14 @@
 import { createCard } from '../panelHelpers';
 import { isBulkFavoriteEnabled, setBulkFavoriteEnabled } from '../../features/bulkFavorite';
 
-export function createBulkFavoriteSection(): HTMLElement {
+export function createBulkFavoriteSection(opts?: { startExpanded?: boolean }): HTMLElement {
   const statusChip = document.createElement('span');
   statusChip.className = 'qpm-chip';
   statusChip.textContent = isBulkFavoriteEnabled() ? 'Enabled' : 'Disabled';
 
   const { root, body } = createCard('❤️ Bulk Favorite', {
     collapsible: true,
-    startCollapsed: true,
+    startCollapsed: !opts?.startExpanded,
     subtitleElement: statusChip,
   });
   root.dataset.qpmSection = 'bulk-favorite';

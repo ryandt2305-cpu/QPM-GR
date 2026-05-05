@@ -207,14 +207,14 @@ export function createMutationValueSection(cfg: any, saveCfg: () => void): HTMLE
   return root;
 }
 
-export function createMutationSection(uiState: UIState, cfg: any, saveCfg: () => void): HTMLElement {
+export function createMutationSection(uiState: UIState, cfg: any, saveCfg: () => void, opts?: { startExpanded?: boolean }): HTMLElement {
   const statusChip = document.createElement('span');
   statusChip.className = 'qpm-chip';
   statusChip.textContent = cfg.mutationReminder?.enabled ? 'Enabled' : 'Disabled';
 
   const { root, body } = createCard('🧬 Mutation Reminder', {
     collapsible: true,
-    startCollapsed: true,
+    startCollapsed: !opts?.startExpanded,
     subtitleElement: statusChip,
   });
   root.dataset.qpmSection = 'mutation-reminder';

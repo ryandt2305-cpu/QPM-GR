@@ -3,6 +3,13 @@
 import type { HubGroupDef, ExpandableCardConfig, LauncherCardConfig } from '../cards/types';
 import { toggleWindow } from '../../modalWindow';
 import { log } from '../../../utils/logger';
+import { waitForCatalogs } from '../../../catalogs/gameCatalogs';
+
+/** Best-effort catalog wait — never rejects, just logs and continues */
+async function awaitCatalogs(): Promise<void> {
+  try { await waitForCatalogs(10000); }
+  catch { log('[Hub] Catalogs not ready yet, rendering with fallbacks'); }
+}
 
 function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => void) | void {
   return (container: HTMLElement) => {
@@ -12,8 +19,11 @@ function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => vo
     spinner.textContent = '⏳ Loading...';
     container.appendChild(spinner);
 
+    let contentCleanup: (() => void) | undefined;
+
     (async () => {
       try {
+        if (key === 'crops') await awaitCatalogs();
         if (key === 'ability') {
           const { createAbilityTrackerWindow, setGlobalAbilityTrackerState } = await import('../../trackerWindow');
           const state = createAbilityTrackerWindow();
@@ -30,8 +40,10 @@ function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => vo
           embedWindowRoot(state.root, container);
         } else if (key === 'crops') {
           const { renderCropBoostContent } = await import('../../cropBoostTrackerWindow');
-          container.style.overflowY = 'auto';
-          renderCropBoostContent(container);
+          const wrapper = document.createElement('div');
+          wrapper.style.cssText = 'flex:1;min-height:300px;max-height:600px;overflow-y:auto;overflow-x:hidden;';
+          container.appendChild(wrapper);
+          contentCleanup = renderCropBoostContent(wrapper) ?? undefined;
         }
         spinner.remove();
       } catch (err) {
@@ -39,6 +51,8 @@ function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => vo
         spinner.textContent = '❌ Failed to load';
       }
     })();
+
+    return () => { contentCleanup?.(); };
   };
 }
 
@@ -58,6 +72,7 @@ function embedWindowRoot(windowRoot: HTMLElement, container: HTMLElement): void 
     'width:100%',
     'height:auto',
     'min-height:340px',
+    'min-width:400px',
     'max-width:none',
     'max-height:none',
     'z-index:auto',
@@ -85,10 +100,11 @@ export function getTrackersGroup(): HubGroupDef {
     label: 'Ability Tracker',
     description: 'Monitor pet ability procs, mutation grants, and coin/hr',
     icon: { kind: 'sprite', value: '📊', spriteKey: 'sprite/pet/Peacock', spriteMutations: ['Rainbow'], fallback: '📊' },
+    labelColor: '#4ade80',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#4ade80">● Live</span><span>Procs · Coins · Mutations</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Procs · Coins · Mutations';
     },
     renderExpanded: makeTrackerExpanded('ability'),
     detachWindowId: 'trackers-v2-ability',
@@ -100,10 +116,11 @@ export function getTrackersGroup(): HubGroupDef {
     label: 'XP Tracker',
     description: 'Track pet XP progress and level-up estimates',
     icon: { kind: 'sprite', value: '✨', spriteKey: 'sprite/ui/StrengthStar', fallback: '✨' },
+    labelColor: '#fbbf24',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#fbbf24">● XP</span><span>Levels · Strength · ETA</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Levels · Strength · ETA';
     },
     renderExpanded: makeTrackerExpanded('xp'),
     detachWindowId: 'trackers-v2-xp',
@@ -114,11 +131,18 @@ export function getTrackersGroup(): HubGroupDef {
     key: 'turtle',
     label: 'Turtle Timer',
     description: 'Track turtle fishing timers and cooldowns',
-    icon: { kind: 'sprite', value: '🐢', spriteKey: 'sprite/pet/Turtle', spriteMutations: ['Wet'], fallback: '🐢' },
+    icon: {
+      kind: 'sprite', value: '🐢', fallback: '🐢',
+      bunched: [
+        { spriteKey: 'sprite/pet/Turtle', offsetX: -7, scale: 0.9 },
+        { spriteKey: 'sprite/pet/Chicken', offsetX: 7, offsetY: 1, scale: 0.75 },
+      ],
+    },
+    labelColor: '#38bdf8',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#38bdf8">● Timer</span><span>Cast cooldowns · Active turtles</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Cast cooldowns · Active turtles';
     },
     renderExpanded: makeTrackerExpanded('turtle'),
     detachWindowId: 'trackers-v2-turtle',
@@ -130,10 +154,11 @@ export function getTrackersGroup(): HubGroupDef {
     label: 'Crop Boosts',
     description: 'View active crop boost effects and durations',
     icon: { kind: 'sprite', value: '🌱', spriteKey: 'sprite/plant/Sunflower', spriteMutations: ['Gold'], fallback: '🌱' },
+    labelColor: '#a78bfa',
     tier: 'expandable',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;display:flex;gap:8px;align-items:center;';
-      el.innerHTML = '<span style="color:#a78bfa">● Boosts</span><span>Growth · Size · Mutations</span>';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
+      el.textContent = 'Growth · Size · Mutations';
     },
     renderExpanded: makeTrackerExpanded('crops'),
     detachWindowId: 'trackers-v2-crops',
@@ -144,10 +169,18 @@ export function getTrackersGroup(): HubGroupDef {
     key: 'shop-restock',
     label: 'Shop Restock',
     description: 'Track shop restock items and schedules',
-    icon: { kind: 'sprite', value: '🏪', spriteKey: 'sprite/ui/StorageButton', fallback: '🏪' },
+    icon: {
+      kind: 'sprite', value: '🏪', fallback: '🏪',
+      bunched: [
+        { spriteKey: 'sprite/ui/Coin', offsetX: -8, offsetY: 2, scale: 0.7 },
+        { spriteKey: 'sprite/plant/Starweaver', offsetX: -2, offsetY: -3, scale: 0.8 },
+        { spriteKey: 'sprite/plant/DawnCelestialCrop', offsetX: 4, offsetY: 1, scale: 0.75 },
+        { spriteKey: 'sprite/plant/MoonCelestialCrop', offsetX: 9, offsetY: -2, scale: 0.75 },
+      ],
+    },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'Restock items and timing';
     },
     onOpen: () => {
@@ -164,7 +197,7 @@ export function getTrackersGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '💰', spriteKey: 'sprite/ui/CoinBag', fallback: '💰' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'Overlay sell values on crops and storage';
     },
     onOpen: () => {
@@ -184,7 +217,7 @@ export function getTrackersGroup(): HubGroupDef {
     icon: { kind: 'sprite', value: '📜', spriteKey: 'sprite/ui/ActivityLog', fallback: '📜' },
     tier: 'launcher',
     renderSummary: (el) => {
-      el.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+      el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = 'Game event history with filtering';
     },
     onOpen: () => {
@@ -200,7 +233,14 @@ export function getTrackersGroup(): HubGroupDef {
   return {
     id: 'trackers',
     label: 'Trackers',
-    icon: { kind: 'sprite', value: '📊', spriteKey: 'sprite/ui/Stats', fallback: '📊' },
+    icon: {
+      kind: 'sprite', value: '📊', fallback: '📊',
+      bunched: [
+        { spriteKey: 'sprite/pet/Peacock', mutations: ['Rainbow'], offsetX: -8, scale: 0.9 },
+        { spriteKey: 'sprite/ui/StrengthStar', offsetX: 4, offsetY: -3, scale: 0.7 },
+        { spriteKey: 'sprite/ui/Coin', offsetX: 8, offsetY: 3, scale: 0.7 },
+      ],
+    },
     cards: [abilityCard, xpCard, turtleCard, cropsCard, shopRestockCard, valueDisplayCard, activityLogCard],
   };
 }

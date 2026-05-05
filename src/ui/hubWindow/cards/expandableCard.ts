@@ -18,10 +18,10 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
 
   const container = document.createElement('div');
   container.style.cssText = [
-    'background:rgba(143,130,255,0.06)',
-    'border:1px solid rgba(143,130,255,0.12)',
-    'border-radius:8px',
-    'transition:border-color 0.2s,box-shadow 0.2s',
+    'background:rgba(255,255,255,0.03)',
+    'border:1px solid rgba(143,130,255,0.18)',
+    'border-radius:10px',
+    'transition:border-color 0.2s,box-shadow 0.2s,background 0.15s',
   ].join(';');
 
   // Header row
@@ -30,17 +30,17 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
     'display:flex',
     'align-items:center',
     'gap:10px',
-    'padding:10px 14px',
+    'padding:14px 16px',
     'cursor:pointer',
     'user-select:none',
     'transition:background 0.15s',
-    'border-radius:8px',
+    'border-radius:10px',
   ].join(';');
   header.addEventListener('mouseenter', () => {
-    if (!expanded) header.style.background = 'rgba(143,130,255,0.04)';
+    if (!expanded) container.style.background = 'rgba(143,130,255,0.06)';
   });
   header.addEventListener('mouseleave', () => {
-    header.style.background = 'transparent';
+    if (!expanded) container.style.background = 'rgba(255,255,255,0.03)';
   });
 
   // Icon
@@ -51,20 +51,46 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
   info.style.cssText = 'flex:1;min-width:0;';
 
   const title = document.createElement('div');
-  title.style.cssText = 'font-size:13px;font-weight:500;color:#e8e0ff;';
+  title.style.cssText = `font-size:14px;font-weight:600;color:${config.labelColor ?? '#e0e0e0'};`;
   title.textContent = config.label;
 
   const summaryEl = document.createElement('div');
-  summaryEl.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+  summaryEl.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
   const summaryCleanup = config.renderSummary(summaryEl);
   if (summaryCleanup) cleanups.push(summaryCleanup);
 
   info.append(title, summaryEl);
 
-  // Chevron
-  const chevron = document.createElement('span');
-  chevron.style.cssText = 'font-size:11px;color:#776ea8;transition:color 0.15s,transform 0.2s;flex-shrink:0;';
-  chevron.textContent = '▸';
+  // Expand button (visible when collapsed, hidden when expanded)
+  const expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.textContent = 'Expand';
+  expandBtn.style.cssText = [
+    'background:rgba(143,130,255,0.12)',
+    'color:#c8c0ff',
+    'border:1px solid rgba(143,130,255,0.3)',
+    'border-radius:6px',
+    'padding:6px 12px',
+    'font-size:12px',
+    'font-weight:500',
+    'cursor:pointer',
+    'transition:background 0.15s,border-color 0.15s',
+    'flex-shrink:0',
+    'white-space:nowrap',
+  ].join(';');
+  expandBtn.addEventListener('mouseenter', () => {
+    expandBtn.style.background = 'rgba(143,130,255,0.25)';
+    expandBtn.style.borderColor = 'rgba(143,130,255,0.5)';
+  });
+  expandBtn.addEventListener('mouseleave', () => {
+    expandBtn.style.background = 'rgba(143,130,255,0.12)';
+    expandBtn.style.borderColor = 'rgba(143,130,255,0.3)';
+  });
+  expandBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    config.onBeforeExpand?.();
+    expand();
+  });
 
   // Detach button (hidden until expanded)
   const detachBtn = document.createElement('button');
@@ -98,15 +124,16 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
     });
   }
 
-  header.append(iconBox, info, detachBtn, chevron);
+  header.append(iconBox, info, expandBtn, detachBtn);
 
   // Expanded content area — no max-height so trackers/filters can fill naturally
+  // overflow-y left to 'visible' so scroll events propagate to the hub's scroll container
   const body = document.createElement('div');
+  body.setAttribute('data-card-body', '');
   body.style.cssText = [
     'display:none',
     'border-top:1px solid rgba(143,130,255,0.1)',
     'padding:12px 14px',
-    'overflow-y:auto',
   ].join(';');
 
   container.append(header, body);
@@ -115,10 +142,10 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
     if (expanded) return;
     expanded = true;
     body.style.display = 'block';
-    chevron.textContent = '▾';
-    chevron.style.color = '#8f82ff';
-    container.style.borderColor = 'rgba(143,130,255,0.3)';
+    container.style.background = 'rgba(143,130,255,0.06)';
+    container.style.borderColor = 'rgba(143,130,255,0.35)';
     container.style.boxShadow = '0 2px 12px rgba(143,130,255,0.08)';
+    expandBtn.style.display = 'none';
     if (config.detachWindowId) detachBtn.style.display = 'block';
 
     // Render expanded content
@@ -131,10 +158,10 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
     if (!expanded) return;
     expanded = false;
     body.style.display = 'none';
-    chevron.textContent = '▸';
-    chevron.style.color = '#776ea8';
-    container.style.borderColor = 'rgba(143,130,255,0.12)';
+    container.style.background = 'rgba(255,255,255,0.03)';
+    container.style.borderColor = 'rgba(143,130,255,0.18)';
     container.style.boxShadow = 'none';
+    expandBtn.style.display = 'block';
     detachBtn.style.display = 'none';
 
     // Clean up expanded content
@@ -146,8 +173,13 @@ export function renderExpandableCard(config: ExpandableCardConfig): ExpandableCa
   };
 
   header.addEventListener('click', () => {
-    if (expanded) collapse();
-    else expand();
+    if (expanded) {
+      config.onBeforeCollapse?.();
+      collapse();
+    } else {
+      config.onBeforeExpand?.();
+      expand();
+    }
   });
 
   return {

@@ -16,19 +16,19 @@ export function renderInlineToggle(config: InlineToggleConfig): InlineToggleResu
     'display:flex',
     'align-items:center',
     'gap:10px',
-    'padding:10px 14px',
-    'background:rgba(143,130,255,0.06)',
-    'border:1px solid rgba(143,130,255,0.12)',
-    'border-radius:8px',
+    'padding:14px 16px',
+    'background:rgba(255,255,255,0.03)',
+    'border:1px solid rgba(143,130,255,0.18)',
+    'border-radius:10px',
     'transition:border-color 0.15s,background 0.15s',
   ].join(';');
   card.addEventListener('mouseenter', () => {
-    card.style.borderColor = 'rgba(143,130,255,0.22)';
-    card.style.background = 'rgba(143,130,255,0.08)';
+    card.style.borderColor = 'rgba(143,130,255,0.35)';
+    card.style.background = 'rgba(143,130,255,0.06)';
   });
   card.addEventListener('mouseleave', () => {
-    card.style.borderColor = 'rgba(143,130,255,0.12)';
-    card.style.background = 'rgba(143,130,255,0.06)';
+    card.style.borderColor = 'rgba(143,130,255,0.18)';
+    card.style.background = 'rgba(255,255,255,0.03)';
   });
 
   // Icon
@@ -39,11 +39,11 @@ export function renderInlineToggle(config: InlineToggleConfig): InlineToggleResu
   info.style.cssText = 'flex:1;min-width:0;';
 
   const title = document.createElement('div');
-  title.style.cssText = 'font-size:13px;font-weight:500;color:#e8e0ff;';
+  title.style.cssText = `font-size:14px;font-weight:600;color:${config.labelColor ?? '#e0e0e0'};`;
   title.textContent = config.label;
 
   const desc = document.createElement('div');
-  desc.style.cssText = 'font-size:10px;color:#776ea8;margin-top:2px;';
+  desc.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
   desc.textContent = config.description;
 
   info.append(title, desc);

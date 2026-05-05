@@ -10,7 +10,6 @@ import {
 } from './lockerPrimitives';
 import {
   buildPlantsPanel, buildEggsPanel, buildDecorPanel, buildSellPanel,
-  buildInventoryReserveCard,
 } from './lockerTabPanels';
 
 // ── Tab definitions ─────────────────────────────────────────────────────────
@@ -119,9 +118,6 @@ export function createLockerSection(): HTMLElement {
 
     container.appendChild(tabBar.bar);
     container.appendChild(panelSlot);
-
-    // ── Inventory Reserve (always visible below tabs) ──
-    container.appendChild(buildInventoryReserveCard(cfg));
   }
 
   render();

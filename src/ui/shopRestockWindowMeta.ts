@@ -7,6 +7,7 @@ import { getItemIdVariants } from '../utils/restockDataService';
 import { getAnySpriteDataUrl, getCropSpriteCanvas, getPetSpriteCanvas } from '../sprite-v2/compat';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 import { storage } from '../utils/storage';
+import { getWeatherDef } from '../catalogs/gameCatalogs';
 import type { RestockItem } from '../utils/restockDataService';
 import {
   TRACKED_KEY,
@@ -129,13 +130,20 @@ export function buildItemMetaCache(gameData: Record<string, unknown>): void {
 
   let toolOrder = 0;
   for (const [itemId, itemData] of Object.entries((gameData.items ?? {}) as Record<string, Record<string, unknown>>)) {
-    const key = `tool:${itemId}`;
+    const coinPrice = Number(itemData?.coinPrice);
     const dustPrice = Number(itemData?.magicDustPrice);
+    const hasValidCoinPrice = Number.isFinite(coinPrice) && coinPrice > 0 && coinPrice < 1_000_000_000;
+    const hasValidDustPrice = Number.isFinite(dustPrice) && dustPrice > 0;
+
+    // Skip non-shop items: sentinel prices (mutation potions) and zero-cost items (DawnCapsule).
+    if (!hasValidCoinPrice && !hasValidDustPrice) continue;
+
+    const key = `tool:${itemId}`;
     itemMetaCache.set(key, {
       name: (typeof itemData?.name === 'string' && itemData.name.trim()) ? itemData.name : itemId,
       rarity: String(itemData?.rarity ?? 'common').toLowerCase(),
-      price: Number.isFinite(itemData?.coinPrice as number) ? itemData.coinPrice as number : 0,
-      ...(Number.isFinite(dustPrice) && dustPrice > 0 ? { priceMagicDust: dustPrice } : {}),
+      price: hasValidCoinPrice ? coinPrice : 0,
+      ...(hasValidDustPrice ? { priceMagicDust: dustPrice } : {}),
       spriteUrl: typeof itemData?.sprite === 'string' ? itemData.sprite : null,
     });
     itemCatalogOrder.set(key, toolOrder++);
@@ -168,6 +176,15 @@ export function getItemMeta(itemId: string, shopType: string): ItemMeta | null {
 }
 
 export function getItemName(itemId: string, shopType: string): string {
+  if (shopType === 'weather') {
+    // Try weather catalog name first, then camelCase split
+    const def = getWeatherDef(itemId);
+    if (def && typeof def.name === 'string' && def.name) return def.name;
+    return (itemId ?? '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  }
   const meta = getItemMeta(itemId, shopType);
   if (meta?.name) return meta.name;
   // Fallback: convert camelCase ID to title case
@@ -177,11 +194,22 @@ export function getItemName(itemId: string, shopType: string): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
+const WEATHER_RARITY: Record<string, string> = {
+  'Dawn':         'legendary',
+  'AmberMoon':    'epic',
+  'Thunderstorm': 'rare',
+  'Snow':         'rare',
+  'Rain':         'uncommon',
+  'Sunny':        'common',
+};
+
 export function getItemRarity(itemId: string, shopType: string): string {
+  if (shopType === 'weather') return WEATHER_RARITY[itemId] ?? 'common';
   return getItemMeta(itemId, shopType)?.rarity ?? 'common';
 }
 
 export function getItemPrice(itemId: string, shopType: string): number {
+  if (shopType === 'weather') return 0;
   return getItemMeta(itemId, shopType)?.price ?? 0;
 }
 
@@ -304,6 +332,21 @@ export function getCoinSpriteUrl(): string | null {
 export function getSpriteUrl(item: RestockItem): string | null {
   const id = item.item_id;
   if (!id) return null;
+
+  if (item.shop_type === 'weather') {
+    const cacheKey = `weather:${id}`;
+    if (spriteUrlCache.has(cacheKey)) return spriteUrlCache.get(cacheKey)!;
+    const def = getWeatherDef(id);
+    const spriteId = def && typeof def.spriteId === 'string' ? def.spriteId : null;
+    if (spriteId) {
+      const url = getAnySpriteDataUrl(spriteId) || null;
+      spriteUrlCache.set(cacheKey, url);
+      return url;
+    }
+    spriteUrlCache.set(cacheKey, null);
+    return null;
+  }
+
   const cacheKey = `${item.shop_type}:${id}`;
   if (spriteUrlCache.has(cacheKey)) return spriteUrlCache.get(cacheKey)!;
 

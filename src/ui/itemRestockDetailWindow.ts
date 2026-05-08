@@ -35,7 +35,7 @@ const DETAIL_WINDOW_SCALE_MAX = 2.2;
 const DETAIL_WINDOW_SCALE_DEFAULT = 1;
 let detailScaleLegacyCleared = false;
 
-type DetailShopType = 'seed' | 'egg' | 'decor' | 'tool';
+type DetailShopType = 'seed' | 'egg' | 'decor' | 'tool' | 'weather';
 
 interface DetailWindowRegistryEntry {
   shopType: DetailShopType;
@@ -45,7 +45,7 @@ interface DetailWindowRegistryEntry {
 }
 
 function isDetailShopType(value: unknown): value is DetailShopType {
-  return value === 'seed' || value === 'egg' || value === 'decor' || value === 'tool';
+  return value === 'seed' || value === 'egg' || value === 'decor' || value === 'tool' || value === 'weather';
 }
 
 function clampDetailScale(value: number): number {
@@ -458,7 +458,7 @@ function getItemSpriteUrl(shopType: string, itemId: string): string | null {
 // ── Category & status helpers ────────────────────────────────────────────────
 
 const SHOP_LABELS: Record<string, string> = {
-  seed: 'Seeds', egg: 'Eggs', decor: 'Decor', tool: 'Tools',
+  seed: 'Seeds', egg: 'Eggs', decor: 'Decor', tool: 'Tools', weather: 'Weather',
 };
 
 /** Thin wrapper: compute accuracy for a RowData using the new module. */

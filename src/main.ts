@@ -85,7 +85,8 @@ import { initializeStorage, storage } from './utils/storage';
 import { DEBUG_GLOBALS_OPT_IN_KEY, isDebugGlobalsEnabled } from './utils/debugGlobals';
 import { registerDebugBootstrap } from './debug/debugBootstrap';
 import { registerUniversalProbe } from './debug/universalProbe';
-import { timerManager } from './utils/timerManager';
+import { createWsMonitor } from './debug/wsMonitor';
+import { timerManager, visibleInterval } from './utils/timerManager';
 import { startController, stopController } from './features/controller/index';
 import { startStorageValue, stopStorageValue } from './features/storageValue';
 import { startStorageValueOverlay, stopStorageValueOverlay } from './ui/storageValueOverlay';
@@ -94,6 +95,7 @@ import { startInventoryCapacityOverlay, stopInventoryCapacityOverlay } from './u
 import { initTextureSwapper, TEXTURE_MANIPULATOR_ENABLED } from './features/textureSwapper';
 import { openTextureSwapperWindow } from './ui/textureSwapperWindow';
 import { startShopRestockAlerts } from './ui/shopRestockAlerts';
+import { fetchWeatherPredictions } from './utils/restockDataService';
 import { startDawnShopTracker, stopDawnShopTracker } from './features/dawnShop';
 import { startCapsuleTracker, stopCapsuleTracker } from './features/dawnCapsule';
 import { startDawnCaptureTracker, stopDawnCaptureTracker } from './features/dawnCapture';
@@ -1572,6 +1574,7 @@ async function initialize(): Promise<void> {
   // Expose validation commands for testing
   if (DEBUG_GLOBALS_ENABLED) {
     registerUniversalProbe(QPM_DEBUG_API as Record<string, unknown>);
+    (QPM_DEBUG_API as Record<string, unknown>).ws = createWsMonitor();
     shareGlobal('QPM_DEBUG_API', QPM_DEBUG_API);
     shareGlobal('QPM', QPM_DEBUG_API);
     exposeValidationCommands();
@@ -1609,6 +1612,15 @@ async function initialize(): Promise<void> {
   } catch (error) {
     console.error('[QPM][Dawn] Dawn features failed to start (non-fatal):', error);
   }
+
+  // Phase 11b — Weather predictions (lightweight, non-blocking)
+  await yieldToBrowser();
+  fetchWeatherPredictions().catch((error) => {
+    log('[Main] Weather predictions fetch failed (non-fatal)', error);
+  });
+  visibleInterval('weather-predictions-poll', () => {
+    fetchWeatherPredictions().catch(() => { /* silent retry */ });
+  }, 5 * 60 * 1000);
 
   initPetsWindow();
 

@@ -269,7 +269,7 @@ export function createAlert(model: AlertModel): ActiveAlert {
   titleWrap.className = 'qpm-restock-alert__title-wrap';
   const titleEl = document.createElement('div');
   titleEl.className = 'qpm-restock-alert__title';
-  titleEl.textContent = 'Pinned item restocked';
+  titleEl.textContent = model.isWeatherAlert ? 'Weather event active' : 'Pinned item restocked';
   const itemEl = document.createElement('div');
   itemEl.className = 'qpm-restock-alert__item';
   itemEl.textContent = model.label;
@@ -285,11 +285,16 @@ export function createAlert(model: AlertModel): ActiveAlert {
 
   const qtyEl = document.createElement('span');
   qtyEl.className = 'qpm-restock-alert__qty';
-  qtyEl.textContent = `${model.quantity} available`;
+  if (model.isWeatherAlert && model.weatherDurationMs) {
+    const dMin = Math.round(model.weatherDurationMs / 60_000);
+    qtyEl.textContent = `${dMin} min event`;
+  } else {
+    qtyEl.textContent = `${model.quantity} available`;
+  }
 
   const statusEl = document.createElement('span');
   statusEl.className = 'qpm-restock-alert__status';
-  statusEl.textContent = 'Ready to buy';
+  statusEl.textContent = model.isWeatherAlert ? 'Active now' : 'Ready to buy';
 
   const qtyRow = document.createElement('div');
   qtyRow.className = 'qpm-restock-alert__qty-row';
@@ -313,6 +318,7 @@ export function createAlert(model: AlertModel): ActiveAlert {
   muteBtn.title = 'Mute sound';
   muteBtn.style.display = soundCfg ? '' : 'none';
 
+  if (model.isWeatherAlert) buyBtn.style.display = 'none';
   actions.append(buyBtn, muteBtn, dismissBtn);
 
   card.append(top, qtyRow, actions);

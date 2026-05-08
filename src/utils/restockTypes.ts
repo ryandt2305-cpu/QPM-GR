@@ -92,6 +92,21 @@ export interface FetchTextResult {
   error: string | null;
 }
 
+export interface WeatherPrediction {
+  weather_id: string;
+  total_occurrences: number;
+  last_seen: number | null;
+  average_interval_ms: number | null;
+  estimated_next_timestamp: number | null;
+  appearance_rate: number | null;
+  duration_ms: number;
+}
+
+export interface WeatherPredictionCacheEntry {
+  data: WeatherPrediction[];
+  fetchedAt: number;
+}
+
 // Fields present on any legitimate RestockItem row (snake_case and camelCase variants).
 export const RESTOCK_ITEM_FIELDS = new Set([
   'item_id',

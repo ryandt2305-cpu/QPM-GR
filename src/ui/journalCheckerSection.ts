@@ -13,6 +13,7 @@ import {
 } from '../sprite-v2/compat';
 import { storage } from '../utils/storage';
 import { getCropSizeIndicatorConfig, setCropSizeIndicatorConfig } from '../features/cropSizeIndicator';
+import { getPlantCatalog, getMutationCatalog, getPetCatalog } from '../catalogs/gameCatalogs';
 import { getVariantChipColors } from '../data/variantBadges';
 import { canvasToDataUrl } from '../utils/canvasHelpers';
 
@@ -32,6 +33,29 @@ const SPECIES_NAME_MAP: Record<string, string> = {
 function normalizeSpeciesName(species: string): string {
   const key = species.toLowerCase().replace(/[^a-z0-9]/g, '');
   return SPECIES_NAME_MAP[key] || species;
+}
+
+// Human-readable display names for PascalCase catalog keys
+const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  DawnCelestial: 'Dawnbinder',
+  MoonCelestial: 'Moonbinder',
+  OrangeTulip: 'Orange Tulip',
+  BurrosTail: "Burro's Tail",
+  FavaBean: 'Fava Bean',
+  FourLeafClover: 'Four-Leaf Clover',
+  PurpleDaisy: 'Purple Daisy',
+  PassionFruit: 'Passion Fruit',
+  DragonFruit: 'Dragon Fruit',
+  PineTree: 'Pine Tree',
+  VioletCort: 'Violet Cort',
+  FireHorse: 'Fire Horse',
+  SnowFox: 'Snow Fox',
+  WhiteCaribou: 'White Caribou',
+};
+
+function formatSpeciesDisplayName(key: string): string {
+  if (DISPLAY_NAME_OVERRIDES[key]) return DISPLAY_NAME_OVERRIDES[key];
+  return key.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
 // Known mutation prefixes — when a species name starts with one of these,
@@ -120,46 +144,41 @@ function getNormalizedPetSprite(species: string): string | null {
   return null;
 }
 
-// Shop layout order (produce section follows this sequence)
-// Shop layout order (top -> bottom) as requested
+// Produce layout order by rarity tier (all 54 species)
+// Names chosen so normalization matches catalog keys:
+//   'Dawn Celestial' → 'dawncelestial' matches DawnCelestial → 'dawncelestial'
 const SHOP_LAYOUT_ORDER = [
-  'Carrot',
-  'Strawberry',
-  'Aloe',
-  'Fava Bean',
-  'Delphinium',
-  'Blueberry',
-  'Apple',
-  'Orange Tulip', // Tulip in shop; catalog uses OrangeTulip
-  'Tomato',
-  'Daffodil',
-  'Corn',
-  'Watermelon',
-  'Pumpkin',
-  'Echeveria',
-  'Coconut',
-  'Banana',
-  'Lily',
-  'Camellia',
-  "Burro's Tail",
-  'Mushroom',
-  'Cactus',
-  'Bamboo',
-  'Chrysanthemum',
-  'Grape',
-  'Pepper',
-  'Lemon',
-  'Passion Fruit',
-  'Dragon Fruit',
-  'Squash',
-  'Cacao Bean',
-  'Lychee',
-  'Sunflower',
-  'Starweaver',
-  'Dawnbinder',
-  'Moonbinder',
+  // Common
+  'Carrot', 'Cabbage', 'Strawberry', 'Aloe',
+  // Uncommon
+  'Clover', 'Beet', 'Rose', 'Fava Bean', 'Delphinium', 'Blueberry', 'Apple', 'Orange Tulip', 'Tomato', 'Daisy',
+  // Rare
+  'Daffodil', 'Corn', 'Watermelon', 'Pumpkin', 'Echeveria', 'Pear', 'Gentian', 'Lavender',
+  // Legendary
+  'Coconut', 'Pine Tree', 'Banana', 'Lily', 'Camellia', 'Squash', 'Peach', "Burro's Tail", 'Saffron', 'Four Leaf Clover', 'Purple Daisy',
+  // Mythic
+  'Mushroom', 'Cactus', 'Bamboo', 'Poinsettia', 'Violet Cort', 'Chrysanthemum', 'Date', 'Grape', 'Eggplant',
+  // Divine
+  'Pepper', 'Lemon', 'Passion Fruit', 'Dragon Fruit', 'Cacao', 'Lychee', 'Ube', 'Sunflower',
+  // Celestial
+  'Dawnbreaker', 'Starweaver', 'Dawn Celestial', 'Moon Celestial',
 ];
 const SHOP_LAYOUT_INDEX = new Map(SHOP_LAYOUT_ORDER.map((name, idx) => [name.toLowerCase().replace(/[^a-z0-9]/g, ''), idx]));
+
+// Pet layout order by egg tier
+const PET_LAYOUT_ORDER = [
+  // Common
+  'Worm', 'Snail', 'Bee',
+  // Uncommon
+  'Chicken', 'Bunny', 'Dragonfly',
+  // Rare
+  'Pig', 'Cow', 'Turkey',
+  // Legendary
+  'Squirrel', 'Turtle', 'Goat', 'Snow Fox', 'Stoat', 'White Caribou', 'Pony', 'Sheep', 'Horse',
+  // Mythic
+  'Hedgehog', 'Fire Horse', 'Butterfly', 'Peacock', 'Capybara',
+];
+const PET_LAYOUT_INDEX = new Map(PET_LAYOUT_ORDER.map((name, idx) => [name.toLowerCase().replace(/[^a-z0-9]/g, ''), idx]));
 
 const TALL_SPECIES = new Set(['cactus', 'bamboo']);
 
@@ -304,8 +323,22 @@ export function createJournalCheckerSection(): HTMLElement {
 
   let selectedCategory = 'produce';
   let showMissingOnly = false;
+  let catalogRetries = 0;
 
   const updateDisplay = async () => {
+    // Guard: wait for plant/mutation/pet catalogs before rendering
+    if (!getPlantCatalog() || !getMutationCatalog() || !getPetCatalog()) {
+      if (catalogRetries < 10) {
+        catalogRetries++;
+        resultsContainer.innerHTML = '<div style="color: #999; text-align: center; padding: 40px; font-size: 14px;">⏳ Loading game data...<br><span style="font-size: 12px; color: #666;">Waiting for catalogs to initialize</span></div>';
+        setTimeout(updateDisplay, 1500);
+        return;
+      }
+      resultsContainer.innerHTML = '<div style="color: #999; text-align: center; padding: 40px; font-size: 14px;">⚠️ Game catalogs did not load<br><span style="font-size: 12px; color: #666;">Try refreshing the page</span></div>';
+      return;
+    }
+    catalogRetries = 0;
+
     const summary = await import('../features/journalChecker').then(m => m.getJournalSummary());
     const stats = await import('../features/journalChecker').then(m => m.getJournalStats());
 
@@ -433,7 +466,7 @@ export function createJournalCheckerSection(): HTMLElement {
             <div style="flex: 1;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
+                  <strong style="color: #fff; font-size: 14px;">${formatSpeciesDisplayName(species.species)}</strong>
                   ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
@@ -520,7 +553,16 @@ export function createJournalCheckerSection(): HTMLElement {
         resultsContainer.appendChild(speciesCard);
       }
     } else if (selectedCategory === 'pets') {
-      for (const species of summary.pets) {
+      const orderedPets = summary.pets.slice().sort((a, b) => {
+        const aKey = a.species.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const bKey = b.species.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const aIdx = PET_LAYOUT_INDEX.has(aKey) ? PET_LAYOUT_INDEX.get(aKey)! : Number.MAX_SAFE_INTEGER;
+        const bIdx = PET_LAYOUT_INDEX.has(bKey) ? PET_LAYOUT_INDEX.get(bKey)! : Number.MAX_SAFE_INTEGER;
+        if (aIdx !== bIdx) return aIdx - bIdx;
+        return a.species.localeCompare(b.species);
+      });
+
+      for (const species of orderedPets) {
         const variants = showMissingOnly
           ? species.variants.filter(v => !v.collected)
           : species.variants;
@@ -620,7 +662,7 @@ export function createJournalCheckerSection(): HTMLElement {
             <div style="flex: 1;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <strong style="color: #fff; font-size: 14px;">${species.species}</strong>
+                  <strong style="color: #fff; font-size: 14px;">${formatSpeciesDisplayName(species.species)}</strong>
                   ${isComplete ? '<span style="font-size: 16px;">✨</span>' : ''}
                 </div>
                 <span style="

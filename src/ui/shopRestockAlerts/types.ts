@@ -34,7 +34,7 @@ export const ALERT_DEBUG_ENABLED = false;
 // Types
 // ---------------------------------------------------------------------------
 
-export type RestockShopType = 'seed' | 'egg' | 'decor' | 'tool' | 'dawn';
+export type RestockShopType = 'seed' | 'egg' | 'decor' | 'tool' | 'dawn' | 'weather';
 
 export interface AlertModel {
   key: string;
@@ -47,6 +47,10 @@ export interface AlertModel {
   weatherBound?: boolean;
   /** V16 ItemType hint for PurchaseShopItem ('Seed'|'Egg'|'Tool'|'Decor'). */
   itemType?: string;
+  /** When true, this is a weather event alert (no Buy All button). */
+  isWeatherAlert?: boolean;
+  /** Remaining duration for weather alerts (ms). */
+  weatherDurationMs?: number;
 }
 
 export interface ActiveAlert {

@@ -26,7 +26,7 @@ export function startPetDerivedStatuses(getStatusEl: GetStatusEl, addLiveCleanup
     import('../../store/pets'),
     import('../../store/petTeams'),
     import('../trackerWindow'),
-    import('../xpTrackerWindow'),
+    import('../xpTracker'),
     import('../../store/abilityLogs'),
     import('../../store/xpTracker'),
   ]).then(([petsStore, teamsStore, abilityTrackerWindow, xpTrackerWindow, abilityLogs, xpTracker]) => {

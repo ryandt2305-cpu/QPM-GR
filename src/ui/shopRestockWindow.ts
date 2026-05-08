@@ -12,6 +12,8 @@ import {
   getRestockRefreshBudget,
   getItemProbability,
   onRestockDataUpdated,
+  onWeatherPredictionsUpdated,
+  weatherPredictionsAsRestockItems,
   type RestockItem,
 } from '../utils/restockDataService';
 import { visibleInterval } from '../utils/timerManager';
@@ -334,7 +336,11 @@ function renderShopRestockWindow(root: HTMLElement): void {
   body.appendChild(histSection);
 
   // -- Shared state --
+  let shopData: RestockItem[] = [];
   let allData: RestockItem[] = [];
+  const rebuildAllData = (): void => {
+    allData = [...shopData, ...weatherPredictionsAsRestockItems()];
+  };
   let trackedItems = loadTracked();
   let isLoading = false;
   updateRefreshBudgetUi();
@@ -397,9 +403,15 @@ function renderShopRestockWindow(root: HTMLElement): void {
       ? detail.items
       : getRestockDataSync();
     if (!updated) return;
-    allData = mergeToolFallbackRows(updated);
+    shopData = mergeToolFallbackRows(updated);
+    rebuildAllData();
     scheduleRender(true, true);
     updateLastUpdated();
+  });
+
+  const stopWeatherDataUpdates = onWeatherPredictionsUpdated(() => {
+    rebuildAllData();
+    scheduleRender(true, true);
   });
 
   // ETA DOM refs for live countdown
@@ -683,6 +695,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
       hideSoundPopover();
       flushPredCleanups();
       flushHistCleanups();
+      stopWeatherDataUpdates();
       stopTicker();
       stopSpritesReady();
       stopRestockDataUpdates();
@@ -708,13 +721,15 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
     const cached = getRestockDataSync();
     if (!force && cached?.length) {
-      allData = mergeToolFallbackRows(cached);
+      shopData = mergeToolFallbackRows(cached);
+      rebuildAllData();
       scheduleRender(true, true);
       updateLastUpdated();
     }
 
     try {
-      allData = mergeToolFallbackRows(await fetchRestockData(force));
+      shopData = mergeToolFallbackRows(await fetchRestockData(force));
+      rebuildAllData();
       scheduleRender(true, true);
       updateLastUpdated();
     } catch (err) {
@@ -737,7 +752,8 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
   // Kick off both in parallel -- game data load doesn't block restock data
   void initGameData().then(() => {
-    allData = mergeToolFallbackRows(allData);
+    shopData = mergeToolFallbackRows(shopData);
+    rebuildAllData();
     scheduleRender(true, true);
   });
   void load(false);

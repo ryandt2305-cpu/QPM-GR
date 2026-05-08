@@ -26,19 +26,17 @@ function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => vo
       try {
         if (key === 'crops') await awaitCatalogs();
         if (key === 'ability') {
-          const { createAbilityTrackerWindow, setGlobalAbilityTrackerState } = await import('../../trackerWindow');
-          const state = createAbilityTrackerWindow();
-          setGlobalAbilityTrackerState(state);
-          embedWindowRoot(state.root, container);
+          const { renderAbilityTrackerContent } = await import('../../trackerWindow');
+          spinner.remove();
+          contentCleanup = renderAbilityTrackerContent(container);
         } else if (key === 'turtle') {
-          const { createTurtleTimerWindow } = await import('../../turtleTimerWindow');
-          const state = createTurtleTimerWindow();
-          embedWindowRoot(state.root, container);
+          const { renderTurtleTimerContent } = await import('../../turtleTimerWindow');
+          spinner.remove();
+          contentCleanup = renderTurtleTimerContent(container);
         } else if (key === 'xp') {
-          const { createXpTrackerWindow, setGlobalXpTrackerState } = await import('../../xpTrackerWindow');
-          const state = createXpTrackerWindow();
-          setGlobalXpTrackerState(state);
-          embedWindowRoot(state.root, container);
+          const { renderXpTrackerContent } = await import('../../xpTracker');
+          spinner.remove();
+          contentCleanup = renderXpTrackerContent(container);
         } else if (key === 'crops') {
           const { renderCropBoostContent } = await import('../../cropBoostTrackerWindow');
           // renderCropBoostSection overwrites root.style.cssText with overflow-y:auto
@@ -69,37 +67,6 @@ function makeTrackerExpanded(key: string): (container: HTMLElement) => (() => vo
 
     return () => { contentCleanup?.(); };
   };
-}
-
-function embedWindowRoot(windowRoot: HTMLElement, container: HTMLElement): void {
-  const chromeCursors = new Set(['move', 'grab', 'grabbing', 'se-resize']);
-  for (const child of Array.from(windowRoot.children) as HTMLElement[]) {
-    const cursor = child.style.cursor?.trim().toLowerCase() ||
-      window.getComputedStyle(child).cursor?.trim().toLowerCase();
-    if (cursor && chromeCursors.has(cursor)) {
-      child.style.display = 'none';
-    }
-  }
-  windowRoot.style.cssText = [
-    'position:relative',
-    'top:auto',
-    'left:auto',
-    'width:100%',
-    'height:auto',
-    'min-height:340px',
-    'min-width:400px',
-    'max-width:none',
-    'max-height:none',
-    'z-index:auto',
-    'box-shadow:none',
-    'border-radius:0',
-    'border:none',
-    'display:flex',
-    'flex-direction:column',
-    'overflow:hidden',
-  ].join(';');
-  container.innerHTML = '';
-  container.appendChild(windowRoot);
 }
 
 export function openDetachedTracker(windowId: string, title: string, key: string, width: string): void {

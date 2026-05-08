@@ -22,6 +22,8 @@ import type {
   RefreshBudgetEntry,
   GmXhr,
   FetchTextResult,
+  WeatherPrediction,
+  WeatherPredictionCacheEntry,
 } from './restockTypes';
 
 // Re-export parser utilities and types so existing callers work unchanged.
@@ -33,6 +35,7 @@ export type {
   RestockDataUpdatedDetail,
   FetchStatus,
   GmXhr,
+  WeatherPrediction,
 } from './restockTypes';
 
 const RESTOCK_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_predictions';
@@ -90,10 +93,10 @@ const RESTOCK_ACCURACY_COLUMNS = [
 // Track whether the server supports extended columns (auto-detected on first success).
 let serverSupportsExtended: boolean | null = null;
 
-// v4 key forces a fresh fetch after the WateringCans/WateringCan DB dedup migration.
-const CACHE_KEY = 'qpm.restockCache.v4';
+// v5 key forces a fresh fetch after adding dawn shop type.
+const CACHE_KEY = 'qpm.restockCache.v5';
 const REFRESH_BUDGET_KEY = 'qpm.restock.refreshBudget.v1';
-const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool']);
+const ALLOWED_SHOP_TYPES = new Set(['seed', 'egg', 'decor', 'tool', 'dawn']);
 
 export const RESTOCK_REFRESH_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const RESTOCK_REFRESH_MAX = 5;
@@ -670,4 +673,196 @@ export function patchCachedItemLastSeen(shopType: string, itemId: string, lastSe
     items: merged,
   });
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Weather Predictions
+// ---------------------------------------------------------------------------
+
+const WEATHER_PREDICTIONS_ENDPOINT =
+  'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/weather_predictions';
+const WEATHER_PREDICTIONS_COLUMNS = [
+  'weather_id',
+  'total_occurrences',
+  'last_seen',
+  'average_interval_ms',
+  'estimated_next_timestamp',
+  'appearance_rate',
+  'duration_ms',
+] as const;
+const WEATHER_PREDICTIONS_URL = `${WEATHER_PREDICTIONS_ENDPOINT}?select=${WEATHER_PREDICTIONS_COLUMNS.join(',')}`;
+const WEATHER_CACHE_KEY = 'qpm.weatherPredictions.v1';
+export const WEATHER_PREDICTIONS_UPDATED_EVENT = 'qpm:weather-predictions-updated';
+
+let weatherFetchPromise: Promise<WeatherPrediction[]> | null = null;
+
+function readWeatherCache(): WeatherPredictionCacheEntry | null {
+  const cached = storage.get<WeatherPredictionCacheEntry | null>(WEATHER_CACHE_KEY, null);
+  if (!cached || !Array.isArray(cached.data)) return null;
+  return cached;
+}
+
+function emitWeatherPredictionsUpdated(data: WeatherPrediction[]): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(
+    new CustomEvent(WEATHER_PREDICTIONS_UPDATED_EVENT, {
+      detail: { data, fetchedAt: Date.now() },
+    }),
+  );
+}
+
+function normalizeWeatherPrediction(raw: Record<string, unknown>): WeatherPrediction | null {
+  const weatherId = typeof raw.weather_id === 'string' ? raw.weather_id.trim() : '';
+  if (!weatherId) return null;
+  return {
+    weather_id: weatherId,
+    total_occurrences: toFloat(raw.total_occurrences) ?? 0,
+    last_seen: toMs(raw.last_seen),
+    average_interval_ms: toFloat(raw.average_interval_ms) ?? null,
+    estimated_next_timestamp: toMs(raw.estimated_next_timestamp),
+    appearance_rate: toFloat(raw.appearance_rate) ?? null,
+    duration_ms: toFloat(raw.duration_ms) ?? 0,
+  };
+}
+
+/**
+ * Fetch weather predictions from Supabase. Returns cached data on non-force calls.
+ */
+export async function fetchWeatherPredictions(force = false): Promise<WeatherPrediction[]> {
+  const cache = readWeatherCache();
+  if (!force && cache && cache.data.length > 0) {
+    return cache.data;
+  }
+
+  if (weatherFetchPromise) return weatherFetchPromise;
+
+  weatherFetchPromise = (async (): Promise<WeatherPrediction[]> => {
+    const key = (RESTOCK_ANON_KEY || '').trim();
+    if (key.length < 16) return cache?.data ?? [];
+
+    const gm = resolveGmXhr();
+    let result: FetchTextResult | null = null;
+
+    if (gm) {
+      result = await gmGet(gm, WEATHER_PREDICTIONS_URL, key, 10_000);
+    }
+    if (!result?.ok || result.text == null) {
+      result = await webGet(WEATHER_PREDICTIONS_URL, key, 10_000);
+    }
+    if (!result?.ok || result.text == null) {
+      log('[RestockData] Weather predictions fetch failed', result?.error);
+      return cache?.data ?? [];
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(result.text);
+      if (!Array.isArray(parsed)) return cache?.data ?? [];
+      const predictions = parsed
+        .map((row) => normalizeWeatherPrediction(row as Record<string, unknown>))
+        .filter((p): p is WeatherPrediction => p !== null);
+
+      const entry: WeatherPredictionCacheEntry = { data: predictions, fetchedAt: Date.now() };
+      storage.set(WEATHER_CACHE_KEY, entry);
+      emitWeatherPredictionsUpdated(predictions);
+      log(`[RestockData] Fetched ${predictions.length} weather predictions`);
+      return predictions;
+    } catch (err) {
+      log('[RestockData] Weather predictions parse error', err);
+      return cache?.data ?? [];
+    }
+  })();
+
+  try {
+    return await weatherFetchPromise;
+  } finally {
+    weatherFetchPromise = null;
+  }
+}
+
+/** Synchronous cache read for weather predictions. */
+export function getWeatherPredictionsSync(): WeatherPrediction[] | null {
+  const data = readWeatherCache()?.data;
+  return Array.isArray(data) && data.length > 0 ? data : null;
+}
+
+/** Convert weather predictions into RestockItem format for unified display. */
+export function weatherPredictionsAsRestockItems(
+  predictions?: WeatherPrediction[] | null,
+): RestockItem[] {
+  const data = predictions ?? getWeatherPredictionsSync();
+  if (!data || data.length === 0) return [];
+
+  const LUNAR_IDS = new Set(['Dawn', 'AmberMoon']);
+  const SUNNY_ID = 'Sunny';
+  const LUNAR_SLOTS_PER_DAY = 6; // every 4h UTC
+
+  // Sum regular weather rates (excluding lunar + Sunny) for per-cycle probability.
+  const regularTotalRate = data
+    .filter((wp) => !LUNAR_IDS.has(wp.weather_id) && wp.weather_id !== SUNNY_ID && wp.appearance_rate != null)
+    .reduce((sum, wp) => sum + (wp.appearance_rate ?? 0), 0);
+
+  return data.map((wp): RestockItem => {
+    // Convert rate_per_day to per-cycle probability so ratePercent() shows
+    // values matching wiki probabilities (e.g. Dawn 67%, Rain ~50%).
+    let rate: number | null = null;
+    if (wp.appearance_rate != null) {
+      if (LUNAR_IDS.has(wp.weather_id)) {
+        // Lunar probability: rate_per_day / slots_per_day (Dawn 4.02/6 = 67%)
+        rate = wp.appearance_rate / LUNAR_SLOTS_PER_DAY;
+      } else if (wp.weather_id === SUNNY_ID) {
+        // Sunny = default state; show fraction-of-day-active instead.
+        rate = wp.duration_ms > 0
+          ? (wp.appearance_rate * wp.duration_ms) / (24 * 60 * 60 * 1000)
+          : null;
+      } else if (regularTotalRate > 0) {
+        // Regular weather per-cycle probability: this type / total regular.
+        rate = wp.appearance_rate / regularTotalRate;
+      }
+    }
+
+    return {
+      item_id: wp.weather_id,
+      shop_type: 'weather',
+      current_probability: null,
+      appearance_rate: rate,
+      predicted_next_ms: null,
+      estimated_next_timestamp: wp.estimated_next_timestamp,
+      median_interval_ms: wp.average_interval_ms,
+      last_seen: wp.last_seen,
+      average_quantity: null,
+      total_quantity: wp.total_occurrences,
+      total_occurrences: wp.total_occurrences,
+      algorithm_version: null,
+      algorithm_updated_at: null,
+      recent_intervals_ms: null,
+      empirical_weight: null,
+      empirical_probability: null,
+      fallback_rate: null,
+      baseline_interval_ms: null,
+      ema_interval_ms: null,
+      weather_intervals: null,
+      is_dormant: null,
+      current_weather: null,
+      weather_baseline_ms: null,
+      weather_samples: null,
+      weather_used: null,
+      weather_rejected_reason: null,
+    };
+  });
+}
+
+/** Subscribe to weather predictions updates. Returns unsubscribe function. */
+export function onWeatherPredictionsUpdated(
+  listener: (data: WeatherPrediction[]) => void,
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const handler = (event: Event): void => {
+    const detail = (event as CustomEvent<{ data: WeatherPrediction[] }>).detail;
+    if (!detail || !Array.isArray(detail.data)) return;
+    listener(detail.data);
+  };
+  window.addEventListener(WEATHER_PREDICTIONS_UPDATED_EVENT, handler as EventListener);
+  return () => {
+    window.removeEventListener(WEATHER_PREDICTIONS_UPDATED_EVENT, handler as EventListener);
+  };
 }

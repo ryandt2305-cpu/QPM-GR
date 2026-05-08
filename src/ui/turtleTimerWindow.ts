@@ -1,6 +1,5 @@
-// src/ui/turtleTimerWindow.ts - Turtle Timer floating window
+// src/ui/turtleTimerWindow.ts - Turtle Timer (renders inside modalWindow or hub card)
 
-import { log } from '../utils/logger';
 import {
   onTurtleTimerState,
   getTurtleTimerState,
@@ -14,184 +13,8 @@ import {
 import { getPetSpriteDataUrlWithMutations } from '../sprite-v2/compat';
 import { throttle } from '../utils/scheduling';
 import { storage } from '../utils/storage';
-import { clampPct, scaledDimension } from '../utils/windowPosition';
 import { t } from '../i18n';
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const LAYOUT_KEY = 'qpm.turtleTimerWindow.layout.v3';
-/** Design-baseline dimensions (tuned for 1920px viewport). Used by updateContentScale. */
-const DESIGN_WIDTH = 500;
-const DESIGN_HEIGHT = 560;
-/** Viewport-scaled defaults — always the same fraction of the screen. */
-function defaultWidth(): number { return scaledDimension(DESIGN_WIDTH, 'w'); }
-function defaultHeight(): number { return scaledDimension(DESIGN_HEIGHT, 'h'); }
-const MIN_WIDTH = 380;
-const MIN_HEIGHT = 280;
-
-// ============================================================================
-// TYPES
-// ============================================================================
-
-export interface TurtleTimerWindowState {
-  root: HTMLElement;
-  summaryStrip: HTMLElement;
-  plantTabBtn: HTMLButtonElement;
-  eggTabBtn: HTMLButtonElement;
-  tabContent: HTMLElement;
-  focusZone: HTMLElement;   // focus controls — only rebuilt when mode/targets change
-  dynamicZone: HTMLElement; // ETA + turtle list — rebuilt on every state update
-  activeTab: 'plant' | 'egg';
-  lastFocusSignature: string; // tracks when focus controls need rebuilding
-  latestState: TurtleTimerState | null;
-  unsubscribeTimer: (() => void) | null;
-  resizeListener: (() => void) | null;
-  scaleWrapper: HTMLElement;
-  scaleOuter: HTMLElement;
-  updateScale: (() => void) | null;
-  resizeObserver: ResizeObserver | null;
-}
-
-interface WindowLayout {
-  xPct: number;
-  yPct: number;
-  width: number;
-  height: number;
-}
-
-const MARGIN = 8;
-let currentPct = { xPct: 0.5, yPct: 0.5 };
-
-function layoutPctToPixels(xPct: number, yPct: number, w: number, h: number): { x: number; y: number } {
-  const availW = Math.max(0, window.innerWidth - w - MARGIN * 2);
-  const availH = Math.max(0, window.innerHeight - h - MARGIN * 2);
-  return {
-    x: Math.round(MARGIN + clampPct(xPct) * availW),
-    y: Math.round(MARGIN + clampPct(yPct) * availH),
-  };
-}
-
-function layoutPixelsToPct(x: number, y: number, w: number, h: number): { xPct: number; yPct: number } {
-  const availW = Math.max(1, window.innerWidth - w - MARGIN * 2);
-  const availH = Math.max(1, window.innerHeight - h - MARGIN * 2);
-  return {
-    xPct: clampPct((x - MARGIN) / availW),
-    yPct: clampPct((y - MARGIN) / availH),
-  };
-}
-
-// ============================================================================
-// LAYOUT PERSISTENCE
-// ============================================================================
-
-function loadLayout(): WindowLayout | null {
-  try {
-    const saved = storage.get<Record<string, unknown> | null>(LAYOUT_KEY, null);
-    if (!saved || typeof saved !== 'object') return null;
-
-    const width = (typeof saved.width === 'number' && saved.width >= defaultWidth()) ? saved.width : defaultWidth();
-    const height = (typeof saved.height === 'number' && saved.height >= defaultHeight()) ? saved.height : defaultHeight();
-
-    if (typeof saved.xPct === 'number' && typeof saved.yPct === 'number') {
-      return { xPct: clampPct(saved.xPct), yPct: clampPct(saved.yPct), width, height };
-    }
-
-    if (typeof saved.top === 'number' && typeof saved.left === 'number') {
-      const pct = layoutPixelsToPct(saved.left, saved.top, width, height);
-      return { xPct: pct.xPct, yPct: pct.yPct, width, height };
-    }
-
-    return null;
-  } catch { return null; }
-}
-
-function saveLayout(root: HTMLElement): void {
-  try {
-    storage.set(LAYOUT_KEY, {
-      xPct: currentPct.xPct,
-      yPct: currentPct.yPct,
-      width: root.offsetWidth || defaultWidth(),
-      height: root.offsetHeight || defaultHeight(),
-    } satisfies WindowLayout);
-  } catch { /* ignore */ }
-}
-
-function capturePositionAndSave(root: HTMLElement): void {
-  const rect = root.getBoundingClientRect();
-  const pct = layoutPixelsToPct(rect.left, rect.top, rect.width, rect.height);
-  currentPct.xPct = pct.xPct;
-  currentPct.yPct = pct.yPct;
-  saveLayout(root);
-}
-
-function applyCurrentPosition(root: HTMLElement): void {
-  const { x, y } = layoutPctToPixels(currentPct.xPct, currentPct.yPct, root.offsetWidth, root.offsetHeight);
-  root.style.left = `${x}px`;
-  root.style.top = `${y}px`;
-}
-
-// ============================================================================
-// WINDOW CHROME
-// ============================================================================
-
-function makeDraggable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
-  let sx = 0, sy = 0, startLeft = 0, startTop = 0;
-  const onMove = (e: MouseEvent) => {
-    const dx = e.clientX - sx;
-    const dy = e.clientY - sy;
-    const rawLeft = startLeft + dx;
-    const rawTop = startTop + dy;
-    const w = root.offsetWidth;
-    const h = root.offsetHeight;
-    const maxLeft = Math.max(MARGIN, window.innerWidth - w - MARGIN);
-    const maxTop = Math.max(MARGIN, window.innerHeight - h - MARGIN);
-    root.style.left = `${Math.max(MARGIN, Math.min(maxLeft, rawLeft))}px`;
-    root.style.top = `${Math.max(MARGIN, Math.min(maxTop, rawTop))}px`;
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    capturePositionAndSave(root);
-    onEnd();
-  };
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    sx = e.clientX;
-    sy = e.clientY;
-    const rect = root.getBoundingClientRect();
-    startLeft = rect.left;
-    startTop = rect.top;
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-}
-
-function makeResizable(root: HTMLElement, handle: HTMLElement, onEnd: () => void): void {
-  let sx = 0, sy = 0, sw = 0, sh = 0;
-  const onMove = (e: MouseEvent) => {
-    const maxW = window.innerWidth - parseFloat(root.style.left || '0') - MARGIN;
-    const maxH = window.innerHeight - parseFloat(root.style.top || '0') - MARGIN;
-    root.style.width = `${Math.max(MIN_WIDTH, Math.min(sw + e.clientX - sx, maxW))}px`;
-    root.style.height = `${Math.max(MIN_HEIGHT, Math.min(sh + e.clientY - sy, maxH))}px`;
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    capturePositionAndSave(root);
-    onEnd();
-  };
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    sx = e.clientX;
-    sy = e.clientY;
-    sw = root.offsetWidth;
-    sh = root.offsetHeight;
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-}
+import { log } from '../utils/logger';
 
 // ============================================================================
 // UTILITY HELPERS
@@ -231,23 +54,6 @@ function makeSelect(style: string): HTMLSelectElement {
     style,
   ].join(';');
   return sel;
-}
-
-/**
- * Scale the scroll content proportionally to the window width using
- * CSS transform: scale() so card backgrounds scale correctly alongside text.
- * scaleOuter acts as a height-tracking wrapper (transform doesn't affect layout).
- */
-function updateContentScale(scaleWrapper: HTMLElement, scaleOuter: HTMLElement, defaultWidth: number): void {
-  const parent = scaleOuter.parentElement;
-  if (!parent) return;
-  const w = parent.offsetWidth;
-  if (w <= 0) return;
-  const scale = Math.max(0.65, Math.min(4, w / defaultWidth));
-  scaleWrapper.style.transformOrigin = 'top left';
-  scaleWrapper.style.transform = `scale(${scale.toFixed(4)})`;
-  scaleWrapper.style.width = `${(100 / scale).toFixed(3)}%`;
-  scaleOuter.style.height = `${Math.ceil(scaleWrapper.scrollHeight * scale)}px`;
 }
 
 // ============================================================================
@@ -293,7 +99,7 @@ function buildTurtleRow(contribution: TurtleContribution): HTMLElement {
     pendingEl.style.cssText = 'font-size:10px;color:#ffa500;font-style:italic;flex-shrink:0;margin-left:auto;';
     row.appendChild(pendingEl);
   } else {
-    // Rate column (52px) — shows "−X.X" (unit in column header)
+    // Rate column (52px)
     const rateEl = document.createElement('span');
     if (contribution.perHourReduction > 0) {
       rateEl.textContent = `−${contribution.perHourReduction.toFixed(1)}`;
@@ -556,7 +362,7 @@ function updateDynamicZone(
       contribCard.appendChild(rateTotal);
     }
 
-    // Column header row — aligned with turtle row columns
+    // Column header row
     const colHeader = document.createElement('div');
     colHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:2px;';
     const chSpacer = document.createElement('div');
@@ -591,140 +397,31 @@ function updateDynamicZone(
 }
 
 // ============================================================================
-// FULL STATE RENDER
+// RENDER CONTENT (embeddable — no window chrome)
 // ============================================================================
-
-function renderTurtleTimerState(state: TurtleTimerWindowState, timerState: TurtleTimerState): void {
-  state.latestState = timerState;
-
-  // Summary strip
-  const summaryParts: string[] = [];
-  summaryParts.push(timerState.availableTurtles === 1
-    ? t('feature.turtleTimer.summaryTurtle', { count: '1' })
-    : t('feature.turtleTimer.summaryTurtles', { count: String(timerState.availableTurtles) }));
-  if (timerState.hungerFilteredCount > 0) summaryParts.push(t('feature.turtleTimer.summaryHungry', { count: String(timerState.hungerFilteredCount) }));
-  if (timerState.turtlesMissingStats > 0) summaryParts.push(t('feature.turtleTimer.summaryDataPending', { count: String(timerState.turtlesMissingStats) }));
-  state.summaryStrip.textContent = summaryParts.join(' · ');
-
-  renderActiveTab(state, timerState);
-}
-
-function renderActiveTab(state: TurtleTimerWindowState, timerState: TurtleTimerState): void {
-  const isPlant = state.activeTab === 'plant';
-  const channel = isPlant ? timerState.plant : timerState.egg;
-  const targets = isPlant ? timerState.plantTargets : timerState.eggTargets;
-  const focusMode = isPlant ? timerState.focus : timerState.eggFocus;
-  const focusTargetKey = isPlant ? timerState.focusTargetKey : timerState.eggFocusTargetKey;
-
-  // Only rebuild focus controls when mode/targets actually change.
-  // This prevents destroying the dropdown while the user has it open.
-  const sig = getFocusSignature(state.activeTab, focusMode, focusTargetKey, targets);
-  if (sig !== state.lastFocusSignature) {
-    state.lastFocusSignature = sig;
-    state.focusZone.innerHTML = '';
-    state.focusZone.appendChild(buildFocusControls(isPlant, focusMode, focusTargetKey, targets));
-  }
-
-  // Dynamic zone (ETA + turtle list) always updates freely.
-  updateDynamicZone(state.dynamicZone, channel);
-
-  // Sync scaleOuter height after content changes so scrolling reflects visual size.
-  state.updateScale?.();
-}
 
 const TURTLE_TAB_KEY = 'qpm.turtleTimer.activeTab';
 
-function setActiveTab(state: TurtleTimerWindowState, tab: 'plant' | 'egg'): void {
-  state.activeTab = tab;
-  storage.set(TURTLE_TAB_KEY, tab);
-  // Force focus zone rebuild on tab switch by invalidating the signature.
-  state.lastFocusSignature = '';
+/**
+ * Builds turtle timer content inside the given container.
+ * Sets up subscriptions for live updates and returns an idempotent cleanup function.
+ */
+export function renderTurtleTimerContent(container: HTMLElement): () => void {
+  let cleaned = false;
+  const cleanups: Array<() => void> = [];
 
-  const activeStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:var(--qpm-surface-2,#1a1a1a);color:var(--qpm-text,#fff);border-bottom:2px solid var(--qpm-accent,#4CAF50);';
-  const inactiveStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:transparent;color:var(--qpm-text-muted,#888);border-bottom:2px solid transparent;';
+  // -- Internal state (closure variables) --
+  let activeTab: 'plant' | 'egg' = storage.get<string>(TURTLE_TAB_KEY, 'plant') === 'egg' ? 'egg' : 'plant';
+  let lastFocusSignature = '';
+  let latestTimerState: TurtleTimerState | null = null;
 
-  state.plantTabBtn.style.cssText = tab === 'plant' ? activeStyle : inactiveStyle;
-  state.eggTabBtn.style.cssText = tab === 'egg' ? activeStyle : inactiveStyle;
-
-  if (state.latestState) {
-    renderActiveTab(state, state.latestState);
-  }
-}
-
-// ============================================================================
-// WINDOW CREATION
-// ============================================================================
-
-export function createTurtleTimerWindow(): TurtleTimerWindowState {
-  const layout = loadLayout();
-  const initWidth = layout?.width ?? defaultWidth();
-  const initHeight = layout?.height ?? defaultHeight();
-  currentPct = layout
-    ? { xPct: layout.xPct, yPct: layout.yPct }
-    : { xPct: 0.5, yPct: 0.5 };
-  const initPos = layoutPctToPixels(currentPct.xPct, currentPct.yPct, initWidth, initHeight);
-
-  // Root
-  const root = document.createElement('div');
-  root.id = 'qpm-turtle-timer-window';
-  root.style.cssText = [
-    'position:fixed',
-    `top:${initPos.y}px`,
-    `left:${initPos.x}px`,
-    `width:${initWidth}px`,
-    `height:${initHeight}px`,
-    'display:none',
-    'flex-direction:column',
-    'overflow:hidden',
-    'background:var(--qpm-surface-1,#141414)',
-    'border:1px solid var(--qpm-border,#2a2a2a)',
-    'border-radius:8px',
-    'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
-    'z-index:10003',
-    "font-family:'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif",
-    'color:var(--qpm-text,#fff)',
-  ].join(';');
-
-  // Title bar
-  const titleBar = document.createElement('div');
-  titleBar.style.cssText = [
-    'display:flex',
-    'align-items:center',
-    'gap:8px',
-    'padding:8px 12px',
-    'background:var(--qpm-surface-1,#141414)',
-    'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
-    'cursor:grab',
-    'user-select:none',
-    'flex-shrink:0',
-  ].join(';');
-
-  const titleText = document.createElement('span');
-  titleText.textContent = `🐢 ${t('feature.turtleTimer.title')}`;
-  titleText.style.cssText = 'font-size:13px;font-weight:600;color:var(--qpm-text,#fff);pointer-events:none;flex:1;';
-  titleBar.appendChild(titleText);
-
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕';
-  closeBtn.style.cssText = [
-    'background:none',
-    'border:none',
-    'color:var(--qpm-text-muted,#888)',
-    'cursor:pointer',
-    'font-size:14px',
-    'padding:0 4px',
-    'line-height:1',
-  ].join(';');
-  titleBar.appendChild(closeBtn);
-  root.appendChild(titleBar);
-
+  // -- DOM structure --
   // Summary strip
   const summaryStrip = document.createElement('div');
   summaryStrip.style.cssText = [
     'padding:5px 14px',
     'font-size:11px',
     'color:var(--qpm-text-muted,#888)',
-    'background:var(--qpm-surface-1,#141414)',
     'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
     'flex-shrink:0',
     'white-space:nowrap',
@@ -732,13 +429,12 @@ export function createTurtleTimerWindow(): TurtleTimerWindowState {
     'text-overflow:ellipsis',
   ].join(';');
   summaryStrip.textContent = t('common.loading');
-  root.appendChild(summaryStrip);
+  container.appendChild(summaryStrip);
 
   // Tab bar
   const tabBar = document.createElement('div');
   tabBar.style.cssText = [
     'display:flex',
-    'background:var(--qpm-surface-1,#141414)',
     'border-bottom:1px solid var(--qpm-border,#2a2a2a)',
     'flex-shrink:0',
   ].join(';');
@@ -746,144 +442,108 @@ export function createTurtleTimerWindow(): TurtleTimerWindowState {
   const activeTabStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:var(--qpm-surface-2,#1a1a1a);color:var(--qpm-text,#fff);border-bottom:2px solid var(--qpm-accent,#4CAF50);';
   const inactiveTabStyle = 'padding:6px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:transparent;color:var(--qpm-text-muted,#888);border-bottom:2px solid transparent;';
 
-  const savedTurtleTab = storage.get<string>(TURTLE_TAB_KEY, 'plant');
-
   const plantTabBtn = document.createElement('button');
   plantTabBtn.textContent = `🌱 ${t('feature.turtleTimer.tabPlants')}`;
-  plantTabBtn.style.cssText = savedTurtleTab === 'egg' ? inactiveTabStyle : activeTabStyle;
+  plantTabBtn.style.cssText = activeTab === 'egg' ? inactiveTabStyle : activeTabStyle;
   tabBar.appendChild(plantTabBtn);
 
   const eggTabBtn = document.createElement('button');
   eggTabBtn.textContent = `🥚 ${t('feature.turtleTimer.tabEggs')}`;
-  eggTabBtn.style.cssText = savedTurtleTab === 'egg' ? activeTabStyle : inactiveTabStyle;
+  eggTabBtn.style.cssText = activeTab === 'egg' ? activeTabStyle : inactiveTabStyle;
   tabBar.appendChild(eggTabBtn);
 
-  root.appendChild(tabBar);
+  container.appendChild(tabBar);
 
-  // Tab content (scrollable) — split into two zones so focus controls
-  // are never destroyed mid-interaction.
+  // Scroll wrapper with focus + dynamic zones
   const scrollWrapper = document.createElement('div');
   scrollWrapper.style.cssText = 'flex:1;overflow-y:auto;overflow-x:hidden;';
 
-  // scaleOuter: height-tracking wrapper (transform on scaleWrapper doesn't affect layout)
-  const scaleOuter = document.createElement('div');
+  const contentWrap = document.createElement('div');
+  contentWrap.style.cssText = 'padding:10px;display:flex;flex-direction:column;gap:8px;';
 
-  // scaleWrapper: scaled via transform so card backgrounds grow/shrink with the window
-  const scaleWrapper = document.createElement('div');
-  scaleWrapper.style.cssText = 'padding:10px;display:flex;flex-direction:column;gap:8px;';
-
-  const tabContent = document.createElement('div');
-  tabContent.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
-
-  // focusZone: dropdowns — only rebuilt when mode/targets change
   const focusZone = document.createElement('div');
   focusZone.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
-  tabContent.appendChild(focusZone);
+  contentWrap.appendChild(focusZone);
 
-  // dynamicZone: ETA + turtle list — rebuilt freely on every state update
   const dynamicZone = document.createElement('div');
   dynamicZone.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
-  tabContent.appendChild(dynamicZone);
+  contentWrap.appendChild(dynamicZone);
 
-  scaleWrapper.appendChild(tabContent);
-  scaleOuter.appendChild(scaleWrapper);
-  scrollWrapper.appendChild(scaleOuter);
-  root.appendChild(scrollWrapper);
+  scrollWrapper.appendChild(contentWrap);
+  container.appendChild(scrollWrapper);
 
-  // Resize handle
-  const resizeHandle = document.createElement('div');
-  resizeHandle.title = t('window.chrome.resizeHint');
-  resizeHandle.style.cssText = [
-    'position:absolute',
-    'bottom:0',
-    'right:0',
-    'width:14px',
-    'height:14px',
-    'cursor:se-resize',
-    'z-index:1',
-    'background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,0.12) 50%)',
-    'border-radius:0 0 7px 0',
-  ].join(';');
-  root.appendChild(resizeHandle);
+  // -- Render functions --
+  const renderActiveTab = (timerState: TurtleTimerState): void => {
+    const isPlant = activeTab === 'plant';
+    const channel = isPlant ? timerState.plant : timerState.egg;
+    const targets = isPlant ? timerState.plantTargets : timerState.eggTargets;
+    const focusMode = isPlant ? timerState.focus : timerState.eggFocus;
+    const focusTargetKey = isPlant ? timerState.focusTargetKey : timerState.eggFocusTargetKey;
 
-  document.body.appendChild(root);
+    const sig = getFocusSignature(activeTab, focusMode, focusTargetKey, targets);
+    if (sig !== lastFocusSignature) {
+      lastFocusSignature = sig;
+      focusZone.innerHTML = '';
+      focusZone.appendChild(buildFocusControls(isPlant, focusMode, focusTargetKey, targets));
+    }
 
-  const state: TurtleTimerWindowState = {
-    root,
-    summaryStrip,
-    plantTabBtn,
-    eggTabBtn,
-    tabContent,
-    focusZone,
-    dynamicZone,
-    activeTab: storage.get<string>(TURTLE_TAB_KEY, 'plant') === 'egg' ? 'egg' as const : 'plant' as const,
-    lastFocusSignature: '',
-    latestState: null,
-    unsubscribeTimer: null,
-    resizeListener: null,
-    scaleWrapper,
-    scaleOuter,
-    updateScale: null,
-    resizeObserver: null,
+    updateDynamicZone(dynamicZone, channel);
   };
 
-  // Tab click handlers
-  plantTabBtn.addEventListener('click', () => setActiveTab(state, 'plant'));
-  eggTabBtn.addEventListener('click', () => setActiveTab(state, 'egg'));
+  const renderTimerState = (timerState: TurtleTimerState): void => {
+    latestTimerState = timerState;
 
-  // Window behaviours
-  const onLayoutChange = () => { /* position saved in capturePositionAndSave */ };
-  makeDraggable(root, titleBar, onLayoutChange);
-  makeResizable(root, resizeHandle, onLayoutChange);
+    // Summary strip
+    const summaryParts: string[] = [];
+    summaryParts.push(timerState.availableTurtles === 1
+      ? t('feature.turtleTimer.summaryTurtle', { count: '1' })
+      : t('feature.turtleTimer.summaryTurtles', { count: String(timerState.availableTurtles) }));
+    if (timerState.hungerFilteredCount > 0) summaryParts.push(t('feature.turtleTimer.summaryHungry', { count: String(timerState.hungerFilteredCount) }));
+    if (timerState.turtlesMissingStats > 0) summaryParts.push(t('feature.turtleTimer.summaryDataPending', { count: String(timerState.turtlesMissingStats) }));
+    summaryStrip.textContent = summaryParts.join(' · ');
 
-  closeBtn.addEventListener('click', () => { hideTurtleTimerWindow(state); });
-
-  const resizeListener = () => {
-    if (root.style.display !== 'none') applyCurrentPosition(root);
+    renderActiveTab(timerState);
   };
-  window.addEventListener('resize', resizeListener);
-  state.resizeListener = resizeListener;
 
-  // Content scaling — live update as the user drags the resize handle
-  const doUpdateScale = () => updateContentScale(scaleWrapper, scaleOuter, DESIGN_WIDTH);
-  state.updateScale = doUpdateScale;
-  const scaleObserver = new ResizeObserver(doUpdateScale);
-  scaleObserver.observe(root);
-  state.resizeObserver = scaleObserver;
+  const setTab = (tab: 'plant' | 'egg'): void => {
+    activeTab = tab;
+    storage.set(TURTLE_TAB_KEY, tab);
+    lastFocusSignature = '';
 
-  // Subscribe to turtle timer state
+    plantTabBtn.style.cssText = tab === 'plant' ? activeTabStyle : inactiveTabStyle;
+    eggTabBtn.style.cssText = tab === 'egg' ? activeTabStyle : inactiveTabStyle;
+
+    if (latestTimerState) {
+      renderActiveTab(latestTimerState);
+    }
+  };
+
+  // -- Tab click handlers --
+  plantTabBtn.addEventListener('click', () => setTab('plant'));
+  eggTabBtn.addEventListener('click', () => setTab('egg'));
+
+  // -- Subscription --
   const throttledRender = throttle((timerState: TurtleTimerState) => {
-    renderTurtleTimerState(state, timerState);
+    renderTimerState(timerState);
   }, 500);
 
-  state.unsubscribeTimer = onTurtleTimerState((timerState) => {
+  const unsubTimer = onTurtleTimerState((timerState) => {
     throttledRender(timerState);
   }, false);
+  cleanups.push(unsubTimer);
 
-  return state;
-}
-
-// ============================================================================
-// PUBLIC API
-// ============================================================================
-
-export function showTurtleTimerWindow(state: TurtleTimerWindowState): void {
-  state.root.style.display = 'flex';
-  applyCurrentPosition(state.root);
+  // Initial render with current state
   try {
-    renderTurtleTimerState(state, getTurtleTimerState()); // calls state.updateScale?.() internally
+    renderTimerState(getTurtleTimerState());
   } catch (error) {
     log('⚠️ Failed to render turtle timer state', error);
   }
-}
 
-export function hideTurtleTimerWindow(state: TurtleTimerWindowState): void {
-  state.root.style.display = 'none';
-}
-
-export function destroyTurtleTimerWindow(state: TurtleTimerWindowState): void {
-  state.resizeObserver?.disconnect();
-  if (state.resizeListener) window.removeEventListener('resize', state.resizeListener);
-  state.unsubscribeTimer?.();
-  state.root.remove();
+  // -- Idempotent cleanup --
+  return () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const fn of cleanups) fn();
+    cleanups.length = 0;
+  };
 }

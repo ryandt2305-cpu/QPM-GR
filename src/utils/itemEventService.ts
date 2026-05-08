@@ -11,6 +11,7 @@ import {
 } from './restockDataService';
 
 const EVENTS_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/restock_events';
+const WEATHER_EVENTS_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/weather_events';
 const EVENTS_RPC_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/rpc/get_item_restock_events';
 const ALGO_HISTORY_RPC_ENDPOINT = 'https://xjuvryjgrjchbhjixwzh.supabase.co/rest/v1/rpc/get_algorithm_version_history';
 
@@ -272,6 +273,34 @@ async function fetchEventsForId(
   }).filter((e) => Number.isFinite(e.timestamp));
 }
 
+/** Fetch weather occurrence events from the weather_events table. */
+async function fetchWeatherEventsFromTable(
+  gm: GmXhr,
+  weatherId: string,
+  limit: number,
+): Promise<ItemEvent[]> {
+  const url = `${WEATHER_EVENTS_ENDPOINT}?weather_id=eq.${encodeURIComponent(weatherId)}&select=timestamp&order=timestamp.desc&limit=${limit}`;
+  const result = await gmGet(gm, url, RESTOCK_ANON_KEY, EVENTS_TIMEOUT_MS);
+  if (!result.ok || !result.text) return [];
+
+  let rows: unknown[];
+  try {
+    rows = JSON.parse(result.text);
+    if (!Array.isArray(rows)) return [];
+  } catch {
+    return [];
+  }
+
+  return rows
+    .map((row): ItemEvent | null => {
+      const r = row as Record<string, unknown>;
+      const ts = typeof r.timestamp === 'number' ? r.timestamp : Number(r.timestamp);
+      if (!Number.isFinite(ts)) return null;
+      return { timestamp: ts, quantity: null, predicted_next_ms: null };
+    })
+    .filter((e): e is ItemEvent => e !== null);
+}
+
 /**
  * Fetch up to `limit` restock events for a specific item, newest first.
  * Merges known item-ID aliases and deduplicates near-identical captures.
@@ -292,6 +321,13 @@ export async function fetchItemEvents(
   const fetchPromise = (async (): Promise<ItemEvent[]> => {
     const gm = resolveGmXhr();
     if (!gm) return [];
+
+    // Weather events come from a separate table.
+    if (shopType === 'weather') {
+      const weatherEvents = await fetchWeatherEventsFromTable(gm, itemId, normalizedLimit);
+      writeItemEventCache(cacheKey, weatherEvents);
+      return weatherEvents;
+    }
 
     // Primary path: server-side canonicalized RPC.
     const rpcEvents = await fetchEventsViaRpc(gm, shopType, itemId, normalizedLimit);

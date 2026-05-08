@@ -138,8 +138,16 @@ function buildChangelogPanel(): HTMLElement {
 
     const version = document.createElement('strong');
     version.textContent = `v${entry.version}`;
+    item.appendChild(version);
 
-    item.append(version, document.createTextNode(` - ${entry.notes[0] ?? ''}`));
+    const list = document.createElement('ul');
+    list.style.cssText = 'margin:2px 0 0;padding:0 0 0 16px;';
+    for (const note of entry.notes) {
+      const li = document.createElement('li');
+      li.textContent = note;
+      list.appendChild(li);
+    }
+    item.appendChild(list);
     panel.appendChild(item);
   }
 

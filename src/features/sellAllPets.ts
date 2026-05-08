@@ -6,6 +6,7 @@ import { storage } from '../utils/storage';
 import { log } from '../utils/logger';
 import { delay } from '../utils/scheduling';
 import { sendRoomAction } from '../websocket/api';
+import { ensureJournalLogged } from './journalGuard';
 
 export type SellAllPetsRunStatus = 'success' | 'partial' | 'noop' | 'cancelled' | 'busy' | 'failed';
 
@@ -37,6 +38,7 @@ interface SellablePet {
   species: string | null;
   name: string | null;
   mutations: string[];
+  targetScale: number | null;
   rarity: string | null;
   maxStrength: number | null;
 }
@@ -236,6 +238,7 @@ function toSellablePet(item: InventoryItem): SellablePet | null {
     species,
     name,
     mutations,
+    targetScale,
     rarity,
     maxStrength: maxStrength == null ? null : Math.round(maxStrength),
   };
@@ -457,6 +460,9 @@ export async function runSellAllPets(): Promise<SellAllPetsRunResult> {
         };
       }
     }
+
+    // Auto-log unlogged journal variants for the entire batch before selling
+    await ensureJournalLogged(candidates);
 
     let soldCount = 0;
     let failedCount = 0;

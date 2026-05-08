@@ -39,6 +39,7 @@ import {
 import { processShopStock, loadDismissedCycles } from './stockProcessor';
 import { applyAlertSprite, removeAlert } from './alertDom';
 import { stopAllLoops } from './soundEngine';
+import { startWeatherAlertProcessor, stopWeatherAlertProcessor } from './weatherAlertProcessor';
 
 // ---------------------------------------------------------------------------
 // Socket close detection
@@ -185,6 +186,8 @@ export function startShopRestockAlerts(): void {
 
     bindAlertSocketIfNeeded();
     alertState.socketPollTimer = window.setInterval(bindAlertSocketIfNeeded, SOCKET_BIND_POLL_MS);
+
+    startWeatherAlertProcessor();
   } catch (error) {
     alertState.started = false;
     log('[ShopRestockAlerts] start failed', error);
@@ -216,6 +219,7 @@ export function stopShopRestockAlerts(): void {
   }
   detachAlertSocketListener();
   stopAllLoops();
+  stopWeatherAlertProcessor();
 
   dismissedInStockKeys.clear();
   dismissedCyclesByKey.clear();

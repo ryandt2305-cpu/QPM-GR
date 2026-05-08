@@ -8,6 +8,19 @@ import { t } from '../../i18n';
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.2.2",
+    date: "2026-05-08",
+    notes: [
+      "Removed non-shop items from restock tracker: mutation potions (Gold, Rainbow, Wet, etc.) and Dawn Capsule no longer appear as tool fallback rows",
+      "Added journal variant guard: auto-logs unlogged pet variants (Gold, Rainbow, Normal, Max Weight) before QPM-initiated sells",
+      "Added XP Potion button to XP Tracker pet cards, usable from anywhere without walking to the pet",
+      "Added XP Potion hover preview showing projected XP gain, strength change, and progress bar overlay",
+      "Added weather tracking: weather types appear in the restock window with ETA countdowns and can trigger pop-up alerts when tracked weather arrives",
+      "Refactored XP Tracker from a 1534-line monolith into 3 focused modules (no behavior changes)",
+      "Reduced Ability Tracker and Turtle Timer windows by ~1000 lines combined (no behavior changes)",
+    ],
+  },
+  {
     version: "3.2.1",
     date: "2026-05-08",
     notes: [

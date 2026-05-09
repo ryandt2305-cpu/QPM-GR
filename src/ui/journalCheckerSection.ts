@@ -37,6 +37,7 @@ function normalizeSpeciesName(species: string): string {
 
 // Human-readable display names for PascalCase catalog keys
 const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  Cacao: 'Cacao Bean',
   DawnCelestial: 'Dawnbinder',
   MoonCelestial: 'Moonbinder',
   OrangeTulip: 'Orange Tulip',

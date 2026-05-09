@@ -8,6 +8,14 @@ import { t } from '../../i18n';
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.2.5",
+    date: "2026-05-09",
+    notes: [
+      "Fixed journal checker displaying 'Cacao' instead of 'Cacao Bean' after display name refactor",
+      "Fixed crop tooltip journal badges not appearing for mature Cacao crops (game tooltip shows 'Cacao Fruit')",
+    ],
+  },
+  {
     version: "3.2.4",
     date: "2026-05-09",
     notes: [

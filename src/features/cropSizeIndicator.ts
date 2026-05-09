@@ -717,6 +717,8 @@ async function injectCropSizeInfo(element: Element): Promise<void> {
     'passion fruit': 'passionfruit',
     'cacao bean': 'cacaobean',
     'cacao': 'cacaobean',
+    'cacao fruit': 'cacaobean',
+    'cacao plant': 'cacaobean',
     'cocoa bean': 'cacaobean',
     // Tooltip name differs from species name
     'bamboo shoot': 'bamboo',

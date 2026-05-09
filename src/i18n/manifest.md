@@ -9,14 +9,14 @@ Updated by the `/language` skill after each surface is completed.
 - `done` — translated and verified (check:i18n + typecheck + build pass)
 - `shell` — completed during shell migration (Slices 1–11)
 
-## Visual Review Pending
+## Visual Review
 
-Surfaces translated but not yet screenshot-verified by the user:
-- #11 Garden Filters Section (es)
-- #12 Storage Value Window (es) — also verify "Silo" term in live game
-- #13 Turtle Timer Window (es)
-- #14 Mutation Value Section (es)
-- #15 Controller Section (es)
+Visual review runs as a single pass after all feature surfaces are `done` for a language.
+Trigger: `/language [lang] review`
+
+| Language | Status |
+|----------|--------|
+| es | pending — complete all surfaces first |
 
 ## Shell UI (completed)
 
@@ -58,8 +58,8 @@ Ordered by string count (smallest → largest). Each invocation of `/language` p
 | 13 | Turtle Timer Window | `turtleTimerWindow.ts` | ~16 | done |
 | 14 | Mutation Value Section | `sections/mutationValueSection.ts` | ~10 | done |
 | 15 | Controller Section | `sections/controllerSection.ts` | ~20 | done |
-| 16 | Guide Section | `sections/guideSection.ts` | ~20 | pending |
-| 17 | Stats Header Section | `sections/statsHeaderSection.ts` | ~20 | pending |
+| 16 | Guide Section | `sections/guideSection.ts` | ~20 | done |
+| 17 | Stats Header Section | `sections/statsHeaderSection.ts` | ~20 | done |
 | 18 | Stats Overview Section | `sections/statsOverviewSection.ts` | ~15 | pending |
 | 19 | Stats Section | `sections/statsSection.ts` | ~10 | pending |
 | 20 | Dashboard Modules | `sections/dashboardModules.ts` | ~15 | pending |

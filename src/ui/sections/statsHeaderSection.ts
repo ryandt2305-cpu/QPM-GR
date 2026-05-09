@@ -2,6 +2,7 @@
 import { type UIState } from "../panelState";
 import { btn, showToast } from "../panelHelpers";
 import { log } from "../../utils/logger";
+import { t } from "../../i18n";
 import { getCropSpriteDataUrl } from "../../sprite-v2/compat";
 import {
   fetchRestockData,
@@ -105,22 +106,22 @@ export function createStatsHeader(
 
   const headerTitle = document.createElement("div");
   headerTitle.className = "qpm-card__title";
-  headerTitle.textContent = "Dashboard";
+  headerTitle.textContent = t('feature.statsHeader.title');
   headerTitle.style.cssText =
     "font-size:14px;font-weight:700;letter-spacing:0.3px;";
 
-  const resetWinBtn = btn("Reset Windows", () => {
+  const resetWinBtn = btn(t('panel.footer.resetWindows'), () => {
     import("../modalWindow").then(({ resetAllWindowLayouts }) => {
       resetAllWindowLayouts();
-      resetWinBtn.textContent = "Done!";
+      resetWinBtn.textContent = t('feature.statsHeader.resetDone');
       setTimeout(() => {
-        resetWinBtn.textContent = "Reset Windows";
+        resetWinBtn.textContent = t('panel.footer.resetWindows');
       }, 1500);
     });
   });
   resetWinBtn.classList.add("qpm-button--accent");
   resetWinBtn.style.fontSize = "11px";
-  resetWinBtn.title = "Reset all window sizes and positions to defaults";
+  resetWinBtn.title = t('feature.statsHeader.resetTooltip');
 
   headerRow.append(headerTitle, resetWinBtn);
   container.appendChild(headerRow);
@@ -151,7 +152,7 @@ function buildShopRestockSection(): HTMLElement {
   const sectionTitle = document.createElement("div");
   sectionTitle.style.cssText =
     "font-size:11px;font-weight:600;color:#64b5f6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;";
-  sectionTitle.textContent = "✨ Celestial Restocks";
+  sectionTitle.textContent = `✨ ${t('feature.statsHeader.celestialRestocks')}`;
   section.appendChild(sectionTitle);
 
   const grid = document.createElement("div");
@@ -203,7 +204,7 @@ function buildShopRestockSection(): HTMLElement {
     const subEl = document.createElement("span");
     subEl.style.cssText =
       "font-size:10px;color:rgba(224,224,224,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-    subEl.textContent = "Loading...";
+    subEl.textContent = t('common.loading');
     subRow.append(subEl);
 
     card.append(nameEl, nextEl, subRow);
@@ -264,7 +265,7 @@ function buildShopRestockSection(): HTMLElement {
       if (!found) {
         nextEl.textContent = "—";
         nextEl.style.color = "rgba(224,224,224,0.4)";
-        subEl.textContent = "No data yet";
+        subEl.textContent = t('feature.statsHeader.noDataYet');
         card.ts = 0;
         return;
       }
@@ -276,7 +277,7 @@ function buildShopRestockSection(): HTMLElement {
 
       const now = Date.now();
       subEl.textContent = found.last_seen
-        ? `Last ${Math.round((now - found.last_seen) / 86_400_000)}d ago`
+        ? t('feature.statsHeader.lastSeenDaysAgo', { days: String(Math.round((now - found.last_seen) / 86_400_000)) })
         : "";
     });
   };
@@ -350,7 +351,8 @@ function buildSettingsRow(): HTMLElement {
   const toggle = document.createElement("span");
   toggle.style.cssText =
     "font-size:10px;color:rgba(224,224,224,0.35);cursor:pointer;user-select:none;";
-  toggle.textContent = "Settings \u25BC";
+  const settingsLabel = t('feature.statsHeader.settings');
+  toggle.textContent = `${settingsLabel} \u25BC`;
   wrapper.appendChild(toggle);
 
   const buttons = document.createElement("div");
@@ -361,21 +363,21 @@ function buildSettingsRow(): HTMLElement {
   toggle.addEventListener("click", () => {
     const open = buttons.style.display !== "none";
     buttons.style.display = open ? "none" : "flex";
-    toggle.textContent = open ? "Settings \u25BC" : "Settings \u25B2";
+    toggle.textContent = open ? `${settingsLabel} \u25BC` : `${settingsLabel} \u25B2`;
   });
 
-  const exportBtn = settingsBtn("Export", async () => {
+  const exportBtn = settingsBtn(t('panel.footer.export'), async () => {
     try {
       const { downloadBackup } = await import("../../services/backupService");
       downloadBackup();
-      showToast("Settings exported");
+      showToast(t('panel.footer.exportToast'));
     } catch (err) {
       log("Export failed", err);
-      showToast("Export failed");
+      showToast(t('panel.footer.exportFailed'));
     }
   });
 
-  const importBtn = settingsBtn("Import", () => {
+  const importBtn = settingsBtn(t('panel.footer.import'), () => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
@@ -386,7 +388,7 @@ function buildSettingsRow(): HTMLElement {
       if (!file) return;
       if (
         !confirm(
-          "This will replace all QPM settings with the imported file. An auto-backup will be created first.\n\nContinue?",
+          t('feature.statsHeader.importConfirm'),
         )
       )
         return;
@@ -394,14 +396,14 @@ function buildSettingsRow(): HTMLElement {
         const { importFromFile } = await import("../../services/backupService");
         const result = await importFromFile(file);
         if (result.ok) {
-          showToast(`Imported ${result.keysWritten} keys. Reload recommended.`);
+          showToast(t('feature.statsHeader.importSuccess', { count: String(result.keysWritten) }));
           if (result.warnings.length) log("Import warnings:", result.warnings);
         } else {
-          showToast(`Import failed: ${result.warnings[0] ?? "unknown error"}`);
+          showToast(t('panel.footer.importError', { reason: result.warnings[0] ?? t('window.lazy.unknownError') }));
         }
       } catch (err) {
         log("Import failed", err);
-        showToast("Import failed");
+        showToast(t('panel.footer.importFailed'));
       }
     });
     document.body.appendChild(input);

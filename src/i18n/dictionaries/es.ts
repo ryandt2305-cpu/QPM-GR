@@ -440,6 +440,23 @@ const es: Dictionary = {
   'feature.storageValue.cropPrice': 'Precio de cultivo',
   'feature.storageValue.cropPriceDesc': 'Mostrar precio de venta en los tooltips al pararte en una parcela',
 
+  // ── Feature: Stats Header ─────────────────────────────────────────────────
+  'feature.statsHeader.title': 'Tablero',
+  'feature.statsHeader.resetDone': '¡Listo!',
+  'feature.statsHeader.resetTooltip': 'Restablecer tamaños y posiciones de todas las ventanas',
+  'feature.statsHeader.celestialRestocks': 'Restocks celestes',
+  'feature.statsHeader.noDataYet': 'Sin datos aún',
+  'feature.statsHeader.lastSeenDaysAgo': 'Hace {days}d',
+  'feature.statsHeader.settings': 'Ajustes',
+  'feature.statsHeader.importConfirm': 'Esto reemplazará toda la configuración de QPM con el archivo importado. Se creará un respaldo automático primero.\n\n¿Continuar?',
+  'feature.statsHeader.importSuccess': 'Se importaron {count} claves. Se recomienda recargar.',
+
+  // ── Feature: Guide ────────────────────────────────────────────────────────
+  'feature.guide.title': 'Guía de Magic Garden',
+  'feature.guide.subtitle': 'Guía de referencia de mecánicas del juego',
+  'feature.guide.clickHint': '(¡Clic para ver en tamaño completo!)',
+  'feature.guide.imageError': 'Imagen de la guía no encontrada. Asegúrate de que MGGuide.jpeg esté subido a la rama master del repositorio.',
+
   // ── Tile grid ─────────────────────────────────────────────────────────────
   'tile.addTile': 'Agregar acceso',
   'tile.pickerTitle': 'Agregar acceso rápido',

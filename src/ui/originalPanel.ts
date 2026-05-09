@@ -86,7 +86,7 @@ export async function createOriginalUI(): Promise<HTMLElement> {
     }
   };
 
-  const VERSION_SCRIPT_URL = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js';
+  const VERSION_SCRIPT_URL = 'https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/dist/QPM.user.js';
   versionBubble.href = VERSION_SCRIPT_URL;
 
   const openVersionLink = (): void => {

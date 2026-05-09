@@ -114,8 +114,8 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @connect      ariesmod-api.ariedam.fr
 // @connect      mg-api.ariedam.fr
 // @connect      xjuvryjgrjchbhjixwzh.supabase.co
-// @updateURL    https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
-// @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
+// @updateURL    https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/dist/QPM.user.js
+// @downloadURL  https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/dist/QPM.user.js
 // @run-at       document-start
 // @inject-into  page
 // @grant        GM_xmlhttpRequest

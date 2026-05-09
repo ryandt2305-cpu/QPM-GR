@@ -353,7 +353,7 @@ export function registerBuiltinTiles(): void {
     color: 'rgba(196, 181, 253, 0.28)',
     action: () => {
       import('../hubWindow/groups/toolsGroup').then(({ openExternalUrl }) => {
-        openExternalUrl('https://ryandt2305-cpu.github.io/MG-Decor-Layout-Customiser/');
+        openExternalUrl('https://mg-tokyo.github.io/MG-Decor-Layout-Customiser/');
       });
     },
   });
@@ -365,7 +365,7 @@ export function registerBuiltinTiles(): void {
     color: 'rgba(249, 168, 212, 0.28)',
     action: () => {
       import('../hubWindow/groups/toolsGroup').then(({ openExternalUrl }) => {
-        openExternalUrl('https://ryandt2305-cpu.github.io/MG-Sprite-Customiser-V2/');
+        openExternalUrl('https://mg-tokyo.github.io/MG-Sprite-Customiser-V2/');
       });
     },
   });
@@ -377,7 +377,7 @@ export function registerBuiltinTiles(): void {
     color: 'rgba(253, 230, 138, 0.28)',
     action: () => {
       import('../hubWindow/groups/toolsGroup').then(({ openExternalUrl }) => {
-        openExternalUrl('https://ryandt2305-cpu.github.io/Celestial-Position-Layout-Calculator/');
+        openExternalUrl('https://mg-tokyo.github.io/Celestial-Position-Layout-Calculator/');
       });
     },
   });

@@ -25,7 +25,7 @@ Compatible with:
 ### Option B — Build from source
 
 ```bash
-git clone https://github.com/ryandt2305-cpu/QPM-GR.git
+git clone https://github.com/mg-tokyo/QPM-GR.git
 cd QPM-GR
 npm install
 npm run build:dist          # outputs dist/QPM.user.js

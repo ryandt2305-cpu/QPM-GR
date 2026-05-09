@@ -1,9 +1,10 @@
 import { createCard } from '../panelHelpers';
 import { fetchImageUrl } from '../../utils/imageFetcher';
+import { t } from '../../i18n';
 
 export function createGuideSection(): HTMLElement {
-  const { root, body } = createCard('📖 Magic Garden Guide', {
-    subtitle: 'Reference guide for game mechanics',
+  const { root, body } = createCard(`📖 ${t('feature.guide.title')}`, {
+    subtitle: t('feature.guide.subtitle'),
   });
   root.dataset.qpmSection = 'guide';
 
@@ -18,7 +19,7 @@ export function createGuideSection(): HTMLElement {
   `;
 
   const clickHint = document.createElement('div');
-  clickHint.textContent = '(Click to open full size!)';
+  clickHint.textContent = t('feature.guide.clickHint');
   clickHint.style.cssText = `
     position: absolute;
     top: 20px;
@@ -34,9 +35,9 @@ export function createGuideSection(): HTMLElement {
   `;
 
   const img = document.createElement('img');
-  img.alt = 'Magic Garden Guide';
+  img.alt = t('feature.guide.title');
   // Use GM_xmlhttpRequest to bypass CSP img-src restrictions (e.g. Discord)
-  const guideUrl = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/MGGuide.jpeg';
+  const guideUrl = 'https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/docs/product/MGGuide.jpeg';
   fetchImageUrl(guideUrl).then((src) => { img.src = src; });
   img.style.cssText = `
     width: 100%;
@@ -63,11 +64,11 @@ export function createGuideSection(): HTMLElement {
   });
 
   img.onerror = () => {
-    imageContainer.innerHTML = `
-      <div style="padding: 40px; color: var(--qpm-text-muted, #999); font-style: italic;">
-        📖 Guide image not found. Please ensure MGGuide.jpeg is uploaded to the master branch of the repository.
-      </div>
-    `;
+    imageContainer.textContent = '';
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'padding: 40px; color: var(--qpm-text-muted, #999); font-style: italic;';
+    errorDiv.textContent = `📖 ${t('feature.guide.imageError')}`;
+    imageContainer.appendChild(errorDiv);
   };
 
   imageContainer.appendChild(clickHint);

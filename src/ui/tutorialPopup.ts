@@ -6,7 +6,7 @@ import { log } from '../utils/logger';
 import { fetchImageUrl } from '../utils/imageFetcher';
 
 const TUTORIAL_SHOWN_KEY = 'qpm_tutorial_shown_v3.1.0';
-const TUTORIAL_IMAGE_PATH = 'https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/docs/product/QPM_user_guide.jpg';
+const TUTORIAL_IMAGE_PATH = 'https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/docs/product/QPM_user_guide.jpg';
 
 export function shouldShowTutorial(): boolean {
   return !storage.get<boolean>(TUTORIAL_SHOWN_KEY, false);

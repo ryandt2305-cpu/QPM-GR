@@ -440,6 +440,23 @@ const en: Dictionary = {
   'feature.storageValue.cropPrice': 'Crop Price',
   'feature.storageValue.cropPriceDesc': 'Show sell price on crop tooltips when standing on a tile',
 
+  // ── Feature: Stats Header ─────────────────────────────────────────────────
+  'feature.statsHeader.title': 'Dashboard',
+  'feature.statsHeader.resetDone': 'Done!',
+  'feature.statsHeader.resetTooltip': 'Reset all window sizes and positions to defaults',
+  'feature.statsHeader.celestialRestocks': 'Celestial Restocks',
+  'feature.statsHeader.noDataYet': 'No data yet',
+  'feature.statsHeader.lastSeenDaysAgo': 'Last {days}d ago',
+  'feature.statsHeader.settings': 'Settings',
+  'feature.statsHeader.importConfirm': 'This will replace all QPM settings with the imported file. An auto-backup will be created first.\n\nContinue?',
+  'feature.statsHeader.importSuccess': 'Imported {count} keys. Reload recommended.',
+
+  // ── Feature: Guide ────────────────────────────────────────────────────────
+  'feature.guide.title': 'Magic Garden Guide',
+  'feature.guide.subtitle': 'Reference guide for game mechanics',
+  'feature.guide.clickHint': '(Click to open full size!)',
+  'feature.guide.imageError': 'Guide image not found. Please ensure MGGuide.jpeg is uploaded to the master branch of the repository.',
+
   // ── Tile grid ─────────────────────────────────────────────────────────────
   'tile.addTile': 'Add tile',
   'tile.pickerTitle': 'Add a tile',

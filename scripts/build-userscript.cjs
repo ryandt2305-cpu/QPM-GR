@@ -85,8 +85,8 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @connect      starweaver.org
 // @connect      1227719606223765687.discordsays.com
 // @connect      ariesmod-api.ariedam.fr
-// @updateURL    https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
-// @downloadURL  https://raw.githubusercontent.com/ryandt2305-cpu/QPM-GR/master/dist/QPM.user.js
+// @updateURL    https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/dist/QPM.user.js
+// @downloadURL  https://raw.githubusercontent.com/mg-tokyo/QPM-GR/master/dist/QPM.user.js
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest

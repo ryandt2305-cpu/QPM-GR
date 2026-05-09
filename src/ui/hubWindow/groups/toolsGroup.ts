@@ -48,7 +48,7 @@ export function getToolsGroup(): HubGroupDef {
       el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = t('hub.tools.decorLayout.summary');
     },
-    onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/MG-Decor-Layout-Customiser/'),
+    onOpen: () => openExternalUrl('https://mg-tokyo.github.io/MG-Decor-Layout-Customiser/'),
   };
 
   const spriteCustomiserCard: LauncherCardConfig = {
@@ -62,7 +62,7 @@ export function getToolsGroup(): HubGroupDef {
       el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = t('hub.tools.spriteCustomiser.summary');
     },
-    onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/MG-Sprite-Customiser-V2/'),
+    onOpen: () => openExternalUrl('https://mg-tokyo.github.io/MG-Sprite-Customiser-V2/'),
   };
 
   const celestialCard: LauncherCardConfig = {
@@ -76,7 +76,7 @@ export function getToolsGroup(): HubGroupDef {
       el.style.cssText = 'font-size:11px;color:rgba(224,224,224,0.45);margin-top:2px;';
       el.textContent = t('hub.tools.celestial.summary');
     },
-    onOpen: () => openExternalUrl('https://ryandt2305-cpu.github.io/Celestial-Position-Layout-Calculator/'),
+    onOpen: () => openExternalUrl('https://mg-tokyo.github.io/Celestial-Position-Layout-Calculator/'),
   };
 
   const cards: LauncherCardConfig[] = [guideCard, decorLayoutCard, spriteCustomiserCard, celestialCard];

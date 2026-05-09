@@ -16,7 +16,7 @@ Thanks for your interest in contributing. QPM-GR is a TypeScript userscript for 
 ## Setup
 
 ```bash
-git clone https://github.com/ryandt2305-cpu/QPM-GR.git
+git clone https://github.com/mg-tokyo/QPM-GR.git
 cd QPM-GR
 npm install
 ```

@@ -728,9 +728,12 @@ function normalizeWeatherPrediction(raw: Record<string, unknown>): WeatherPredic
 /**
  * Fetch weather predictions from Supabase. Returns cached data on non-force calls.
  */
+const WEATHER_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export async function fetchWeatherPredictions(force = false): Promise<WeatherPrediction[]> {
   const cache = readWeatherCache();
-  if (!force && cache && cache.data.length > 0) {
+  const cacheAge = cache?.fetchedAt ? Date.now() - cache.fetchedAt : Infinity;
+  if (!force && cache && cache.data.length > 0 && cacheAge < WEATHER_CACHE_TTL_MS) {
     return cache.data;
   }
 

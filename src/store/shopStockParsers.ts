@@ -117,7 +117,12 @@ export function deriveItemId(category: ShopCategory, entry: ShopInventoryEntry):
     case 'decor':
       return entry.decorId != null ? String(entry.decorId) : entry.id != null ? String(entry.id) : null;
     default:
-      return entry.id != null ? String(entry.id) : null;
+      return entry.species != null ? String(entry.species)
+        : entry.eggId != null ? String(entry.eggId)
+        : entry.toolId != null ? String(entry.toolId)
+        : entry.decorId != null ? String(entry.decorId)
+        : entry.id != null ? String(entry.id)
+        : null;
   }
 }
 

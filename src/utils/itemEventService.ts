@@ -43,6 +43,7 @@ const SHOP_RESTOCK_CYCLE_MS: Record<string, number> = {
   egg: 15 * 60 * 1000,
   decor: 60 * 60 * 1000,
   tool: 10 * 60 * 1000,
+  dawn: 0,
 };
 const EVENT_DEDUP_FACTOR = 0.9;
 

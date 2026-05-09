@@ -34,6 +34,7 @@ import {
   loadTracked,
   saveTracked,
   mergeToolFallbackRows,
+  mergeDawnFallbackRows,
   getItemName,
   getCatalogOrder,
   initGameData,
@@ -403,7 +404,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
       ? detail.items
       : getRestockDataSync();
     if (!updated) return;
-    shopData = mergeToolFallbackRows(updated);
+    shopData = mergeDawnFallbackRows(mergeToolFallbackRows(updated));
     rebuildAllData();
     scheduleRender(true, true);
     updateLastUpdated();
@@ -721,14 +722,14 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
     const cached = getRestockDataSync();
     if (!force && cached?.length) {
-      shopData = mergeToolFallbackRows(cached);
+      shopData = mergeDawnFallbackRows(mergeToolFallbackRows(cached));
       rebuildAllData();
       scheduleRender(true, true);
       updateLastUpdated();
     }
 
     try {
-      shopData = mergeToolFallbackRows(await fetchRestockData(force));
+      shopData = mergeDawnFallbackRows(mergeToolFallbackRows(await fetchRestockData(force)));
       rebuildAllData();
       scheduleRender(true, true);
       updateLastUpdated();
@@ -752,7 +753,7 @@ function renderShopRestockWindow(root: HTMLElement): void {
 
   // Kick off both in parallel -- game data load doesn't block restock data
   void initGameData().then(() => {
-    shopData = mergeToolFallbackRows(shopData);
+    shopData = mergeDawnFallbackRows(mergeToolFallbackRows(shopData));
     rebuildAllData();
     scheduleRender(true, true);
   });

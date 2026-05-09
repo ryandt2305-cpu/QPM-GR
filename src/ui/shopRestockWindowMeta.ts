@@ -172,7 +172,12 @@ export async function initGameData(): Promise<void> {
 }
 
 export function getItemMeta(itemId: string, shopType: string): ItemMeta | null {
-  return itemMetaCache.get(`${shopType}:${itemId}`) ?? null;
+  const direct = itemMetaCache.get(`${shopType}:${itemId}`);
+  if (direct) return direct;
+  if (shopType === 'dawn') {
+    return itemMetaCache.get(`seed:${itemId}`) ?? itemMetaCache.get(`egg:${itemId}`) ?? null;
+  }
+  return null;
 }
 
 export function getItemName(itemId: string, shopType: string): string {
@@ -214,7 +219,10 @@ export function getItemPrice(itemId: string, shopType: string): number {
 }
 
 export function getCatalogOrder(itemId: string, shopType: string): number | null {
-  const order = itemCatalogOrder.get(`${shopType}:${itemId}`);
+  let order = itemCatalogOrder.get(`${shopType}:${itemId}`);
+  if (!Number.isFinite(order) && shopType === 'dawn') {
+    order = itemCatalogOrder.get(`seed:${itemId}`) ?? itemCatalogOrder.get(`egg:${itemId}`);
+  }
   return Number.isFinite(order) ? (order as number) : null;
 }
 
@@ -240,6 +248,60 @@ export function mergeToolFallbackRows(items: RestockItem[]): RestockItem[] {
     merged.push({
       item_id: toolId,
       shop_type: 'tool',
+      current_probability: null,
+      appearance_rate: null,
+      predicted_next_ms: null,
+      estimated_next_timestamp: null,
+      median_interval_ms: null,
+      last_seen: null,
+      average_quantity: null,
+      total_quantity: 0,
+      total_occurrences: 0,
+      algorithm_version: null,
+      algorithm_updated_at: null,
+      recent_intervals_ms: null,
+      empirical_weight: null,
+      empirical_probability: null,
+      fallback_rate: null,
+      baseline_interval_ms: null,
+      ema_interval_ms: null,
+      weather_intervals: null,
+      is_dormant: null,
+      current_weather: null,
+      weather_baseline_ms: null,
+      weather_samples: null,
+      weather_used: null,
+      weather_rejected_reason: null,
+    });
+  }
+  return merged;
+}
+
+/** All items that can appear in the Dawn shop. */
+const DAWN_SHOP_ITEM_IDS = [
+  'Daisy', 'Lavender', 'Saffron', 'Eggplant', 'Ube',
+  'Dawnbreaker', 'DawnEgg',
+] as const;
+
+export function mergeDawnFallbackRows(items: RestockItem[]): RestockItem[] {
+  const existingDawnIds = new Set<string>();
+  for (const row of items) {
+    if (row.shop_type === 'dawn') existingDawnIds.add(row.item_id);
+  }
+
+  const missing: string[] = [];
+  for (const id of DAWN_SHOP_ITEM_IDS) {
+    if (existingDawnIds.has(id)) continue;
+    missing.push(id);
+  }
+
+  if (missing.length === 0) return items;
+
+  const merged = items.slice();
+  for (const id of missing) {
+    merged.push({
+      item_id: id,
+      shop_type: 'dawn',
       current_probability: null,
       appearance_rate: null,
       predicted_next_ms: null,

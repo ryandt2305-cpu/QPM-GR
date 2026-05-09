@@ -8,6 +8,15 @@ import { t } from '../../i18n';
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.2.3",
+    date: "2026-05-09",
+    notes: [
+      "Added Dawn shop items to restock tracker with fallback rows and catalog meta lookups",
+      "Added Dawn item detail window support: clicking detail on a Dawn item now opens event history",
+      "Fixed weather prediction ETAs staying 'Overdue' indefinitely due to cache never expiring",
+    ],
+  },
+  {
     version: "3.2.2",
     date: "2026-05-08",
     notes: [

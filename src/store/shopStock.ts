@@ -22,6 +22,7 @@ import {
   type ShopStockCategoryState,
   type ShopStockState,
 } from './shopStockParsers';
+import { getPlantSpecies, getEggType, getItem, getDecor } from '../catalogs/gameCatalogs';
 
 // Re-export types so existing importers of shopStock.ts continue to work.
 export type { ShopStockItem, ShopStockCategoryState, ShopStockState } from './shopStockParsers';
@@ -110,6 +111,34 @@ function getEffectivePurchasesSnapshot(): ShopPurchasesAtomSnapshot | null {
   return hasAny ? merged : null;
 }
 
+/**
+ * Dawn shop items lack price fields in their raw atom data.
+ * Resolve prices by detecting the underlying item type and looking up
+ * the catalog price for that type (seeds, eggs, tools, decor).
+ */
+function resolveDawnCatalogPrices(items: ShopStockItem[]): void {
+  for (const item of items) {
+    if (item.priceCoins != null) continue;
+    const raw = item.raw as Record<string, unknown> | null;
+    if (!raw) continue;
+
+    let price: number | null = null;
+    if (raw.species != null) {
+      price = getPlantSpecies(String(raw.species))?.seed?.coinPrice ?? null;
+    } else if (raw.eggId != null) {
+      price = getEggType(String(raw.eggId))?.coinPrice ?? null;
+    } else if (raw.toolId != null) {
+      price = getItem(String(raw.toolId))?.coinPrice ?? null;
+    } else if (raw.decorId != null) {
+      price = getDecor(String(raw.decorId))?.coinPrice ?? null;
+    }
+
+    if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
+      item.priceCoins = price;
+    }
+  }
+}
+
 function rebuildState(): void {
   const now = Date.now();
   const categories = Object.create(null) as Record<ShopCategory, ShopStockCategoryState>;
@@ -121,6 +150,8 @@ function rebuildState(): void {
     const customInventory = customInventories?.[atomKey] ?? null;
     categories[category] = buildCategoryState(category, snapshot, effectivePurchases, customInventory);
   }
+  // Dawn items have no price fields in raw atom data — resolve from game catalogs.
+  resolveDawnCatalogPrices(categories.dawn.items);
   cachedState = { updatedAt: now, categories };
   notifyState();
 }

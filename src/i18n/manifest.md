@@ -60,10 +60,10 @@ Ordered by string count (smallest → largest). Each invocation of `/language` p
 | 15 | Controller Section | `sections/controllerSection.ts` | ~20 | done |
 | 16 | Guide Section | `sections/guideSection.ts` | ~20 | done |
 | 17 | Stats Header Section | `sections/statsHeaderSection.ts` | ~20 | done |
-| 18 | Stats Overview Section | `sections/statsOverviewSection.ts` | ~15 | pending |
-| 19 | Stats Section | `sections/statsSection.ts` | ~10 | pending |
-| 20 | Dashboard Modules | `sections/dashboardModules.ts` | ~15 | pending |
-| 21 | Trackers Section | `sections/trackersSection.ts` | ~10 | pending |
+| 18 | Stats Overview Section | `sections/statsOverviewSection.ts` | ~15 | done |
+| 19 | Stats Section | `sections/statsSection.ts` | ~10 | done |
+| 20 | Dashboard Modules | `sections/dashboardModules.ts` | ~15 | done |
+| 21 | Trackers Section | `sections/trackersSection.ts` | ~10 | done |
 | 22 | Turtle Timer Section | `sections/turtleTimerSection.ts` | ~25 | pending |
 | 23 | Locker Section | `sections/lockerSection.ts`, `lockerCustomRules.ts`, `lockerPlantPicker.ts`, `lockerPrimitives.ts`, `lockerTabPanels.ts` | ~25 | done |
 | 24 | Crop Boost Tracker | `cropBoostTrackerWindow.ts` | ~20 | pending |

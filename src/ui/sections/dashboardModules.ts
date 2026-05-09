@@ -3,6 +3,7 @@
 import { type UIState } from "../panelState";
 import { log } from "../../utils/logger";
 import { storage } from "../../utils/storage";
+import { t } from "../../i18n";
 import { calculateMaxStrength } from "../../store/xpTracker";
 import { onActivePetInfos, type ActivePetInfo } from "../../store/pets";
 import {
@@ -33,10 +34,10 @@ interface DashboardModule {
 }
 
 const ALL_MODULES: DashboardModule[] = [
-  { id: "xp-near-max", label: "XP Near Max", icon: "✨" },
-  { id: "turtle-timer", label: "Turtle Timer", icon: "🐢" },
-  { id: "active-pets", label: "Active Pets", icon: "🐾" },
-  { id: "next-restock", label: "Next Restock", icon: "🏪" },
+  { id: "xp-near-max", label: "feature.dashboard.moduleXpNearMax", icon: "✨" },
+  { id: "turtle-timer", label: "feature.dashboard.moduleTurtleTimer", icon: "🐢" },
+  { id: "active-pets", label: "feature.dashboard.moduleActivePets", icon: "🐾" },
+  { id: "next-restock", label: "feature.dashboard.moduleNextRestock", icon: "🏪" },
 ];
 
 function loadEnabledModules(): Set<ModuleId> {
@@ -53,7 +54,7 @@ function saveEnabledModules(ids: Set<ModuleId>): void {
 // ---------------------------------------------------------------------------
 
 export function formatCountdown(ms: number): string {
-  if (ms <= 0) return "Soon™";
+  if (ms <= 0) return t("feature.dashboard.soon");
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   if (h > 0) return `${h}h ${m}m`;
@@ -127,7 +128,7 @@ function buildModuleCard(
   const titleEl = document.createElement("div");
   titleEl.style.cssText =
     "font-size:10px;font-weight:600;color:rgba(224,224,224,0.5);text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;";
-  titleEl.textContent = `${mod.icon} ${mod.label}`;
+  titleEl.textContent = `${mod.icon} ${t(mod.label)}`;
   titleRow.appendChild(titleEl);
   card.appendChild(titleRow);
 
@@ -155,11 +156,11 @@ export function buildModulesSection(uiState: UIState): HTMLElement {
   const sectionTitle = document.createElement("div");
   sectionTitle.style.cssText =
     "font-size:11px;font-weight:600;color:rgba(224,224,224,0.6);text-transform:uppercase;letter-spacing:0.5px;";
-  sectionTitle.textContent = "⚡ Feature Modules";
+  sectionTitle.textContent = `⚡ ${t("feature.dashboard.sectionTitle")}`;
 
   const customizeBtn = document.createElement("button");
   customizeBtn.type = "button";
-  customizeBtn.textContent = "⚙ Customize";
+  customizeBtn.textContent = `⚙ ${t("feature.dashboard.customize")}`;
   customizeBtn.style.cssText = [
     "font-size:10px",
     "padding:2px 8px",
@@ -209,7 +210,7 @@ export function buildModulesSection(uiState: UIState): HTMLElement {
         saveEnabledModules(enabledModules);
         renderModuleCards();
       });
-      chip.append(cb, document.createTextNode(`${mod.icon} ${mod.label}`));
+      chip.append(cb, document.createTextNode(`${mod.icon} ${t(mod.label)}`));
       togglePanel.appendChild(chip);
     }
   };
@@ -224,7 +225,7 @@ export function buildModulesSection(uiState: UIState): HTMLElement {
       const hint = document.createElement("div");
       hint.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
-      hint.textContent = "No modules enabled. Click ⚙ Customize to add some.";
+      hint.textContent = t("feature.dashboard.noModulesHint");
       moduleCards.appendChild(hint);
       return;
     }
@@ -279,8 +280,8 @@ function buildTurtleTimerModule(
   ].join(";");
   titleRow.appendChild(toggleBtn);
 
-  const plantRow = makeChannelRow("🌱", "Plant");
-  const eggRow = makeChannelRow("🥚", "Egg");
+  const plantRow = makeChannelRow("🌱", t("feature.dashboard.channelPlant"));
+  const eggRow = makeChannelRow("🥚", t("feature.dashboard.channelEgg"));
   const footerEl = document.createElement("div");
   footerEl.style.cssText = "font-size:10px;color:rgba(224,224,224,0.3);";
   card.append(plantRow.el, eggRow.el, footerEl);
@@ -299,13 +300,13 @@ function buildTurtleTimerModule(
     const now = Date.now();
     if (plantEndTime != null) {
       const adj = Math.max(0, plantEndTime - now) / Math.max(0.01, plantRate);
-      plantRow.val.textContent = adj > 0 ? formatCountdown(adj) : "Ready";
+      plantRow.val.textContent = adj > 0 ? formatCountdown(adj) : t("feature.dashboard.ready");
     } else {
       plantRow.val.textContent = "—";
     }
     if (eggEndTime != null) {
       const adj = Math.max(0, eggEndTime - now) / Math.max(0.01, eggRate);
-      eggRow.val.textContent = adj > 0 ? formatCountdown(adj) : "Ready";
+      eggRow.val.textContent = adj > 0 ? formatCountdown(adj) : t("feature.dashboard.ready");
     } else {
       eggRow.val.textContent = "—";
     }
@@ -314,7 +315,7 @@ function buildTurtleTimerModule(
   reg(
     onTurtleTimerState((snap) => {
       currentEnabled = snap.enabled;
-      toggleBtn.textContent = snap.enabled ? "ON" : "OFF";
+      toggleBtn.textContent = snap.enabled ? t("feature.dashboard.toggleOn") : t("feature.dashboard.toggleOff");
       toggleBtn.style.color = snap.enabled
         ? "#4caf50"
         : "rgba(224,224,224,0.4)";
@@ -323,8 +324,8 @@ function buildTurtleTimerModule(
         : "rgba(143,130,255,0.3)";
       if (!snap.enabled) {
         plantEndTime = eggEndTime = null;
-        plantRow.val.textContent = eggRow.val.textContent = "Off";
-        footerEl.textContent = "Disabled";
+        plantRow.val.textContent = eggRow.val.textContent = t("feature.dashboard.channelOff");
+        footerEl.textContent = t("common.disabled");
         return;
       }
       const getEnd = (ch: TurtleTimerChannel): number | null =>
@@ -342,8 +343,8 @@ function buildTurtleTimerModule(
       eggRate = snap.egg.effectiveRate ?? 1;
       footerEl.textContent =
         snap.availableTurtles > 0
-          ? `${snap.availableTurtles} turtle${snap.availableTurtles !== 1 ? "s" : ""} active`
-          : "No turtles available";
+          ? t(snap.availableTurtles === 1 ? "feature.dashboard.turtleActive" : "feature.dashboard.turtlesActive", { count: snap.availableTurtles })
+          : t("feature.dashboard.noTurtlesAvailable");
       tick();
     }),
   );
@@ -359,7 +360,7 @@ function buildActivePetsModule(
 ): void {
   const feedAllBtn = document.createElement("button");
   feedAllBtn.type = "button";
-  feedAllBtn.textContent = "🍖 All";
+  feedAllBtn.textContent = `🍖 ${t("feature.dashboard.feedAll")}`;
   feedAllBtn.style.cssText = [
     "font-size:10px",
     "padding:1px 6px",
@@ -383,7 +384,7 @@ function buildActivePetsModule(
       log("⚠️ Feed all failed", err);
     } finally {
       feedAllBtn.disabled = false;
-      feedAllBtn.textContent = "🍖 All";
+      feedAllBtn.textContent = `🍖 ${t("feature.dashboard.feedAll")}`;
     }
   });
 
@@ -397,7 +398,7 @@ function buildActivePetsModule(
       const e = document.createElement("div");
       e.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
-      e.textContent = "No active pets";
+      e.textContent = t("feature.dashboard.noActivePets");
       listEl.appendChild(e);
       return;
     }
@@ -408,7 +409,7 @@ function buildActivePetsModule(
       nameEl.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
       nameEl.textContent =
-        pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+        pet.name || pet.species || t("feature.dashboard.petFallback", { index: pet.slotIndex + 1 });
       const pct = pet.hungerPct ?? 0;
       const bar = makeBar(pct, hungerColor(pct));
       const pctEl = document.createElement("span");
@@ -417,7 +418,7 @@ function buildActivePetsModule(
       const feedBtn = document.createElement("button");
       feedBtn.type = "button";
       feedBtn.textContent = "🍖";
-      feedBtn.title = "Feed";
+      feedBtn.title = t("feature.dashboard.feedTooltip");
       feedBtn.style.cssText =
         "font-size:11px;padding:0 4px;border-radius:3px;cursor:pointer;border:1px solid rgba(143,130,255,0.2);background:rgba(143,130,255,0.06);flex-shrink:0;line-height:1.5;";
       const idx = pet.slotIndex;
@@ -477,7 +478,7 @@ function buildXpNearMaxModule(
       const e = document.createElement("div");
       e.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
-      e.textContent = "No XP data";
+      e.textContent = t("feature.dashboard.noXpData");
       listEl.appendChild(e);
       return;
     }
@@ -488,7 +489,7 @@ function buildXpNearMaxModule(
       nameEl.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.75);min-width:52px;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
       nameEl.textContent =
-        pet.name || pet.species || `Pet ${pet.slotIndex + 1}`;
+        pet.name || pet.species || t("feature.dashboard.petFallback", { index: pet.slotIndex + 1 });
       const clr =
         pct >= 95 ? "#8f82ff" : pct >= 80 ? "#ff9800" : "rgba(255,255,255,0.5)";
       const bar = makeBar(pct, clr);
@@ -516,10 +517,10 @@ function buildNextRestockModule(
     weather: "🌤",
   };
   const SHOP_LABELS: Record<string, string> = {
-    seed: "Seeds",
-    egg: "Eggs",
-    decor: "Decor",
-    weather: "Weather",
+    seed: t("feature.dashboard.shopSeeds"),
+    egg: t("feature.dashboard.shopEggs"),
+    decor: t("feature.dashboard.shopDecor"),
+    weather: t("feature.dashboard.shopWeather"),
   };
   const SHOP_ORDER = ["seed", "egg", "decor", "weather"];
 
@@ -548,7 +549,7 @@ function buildNextRestockModule(
       const e = document.createElement("div");
       e.style.cssText =
         "font-size:11px;color:rgba(224,224,224,0.3);font-style:italic;";
-      e.textContent = "No data";
+      e.textContent = t("feature.dashboard.noData");
       listEl.appendChild(e);
       return;
     }
@@ -578,7 +579,7 @@ function buildNextRestockModule(
       const tsEl = document.createElement("span");
       tsEl.style.cssText =
         "font-size:10px;color:#8f82ff;min-width:44px;text-align:right;flex-shrink:0;";
-      tsEl.textContent = ts > now ? formatCountdown(ts - now) : "Soon™";
+      tsEl.textContent = ts > now ? formatCountdown(ts - now) : t("feature.dashboard.soon");
       shopSlots.set(shopKey, { tsEl, ts });
       row.append(iconEl, nameEl, probEl, tsEl);
       listEl.appendChild(row);
@@ -600,7 +601,7 @@ function buildNextRestockModule(
       () => {
         const now = Date.now();
         for (const { tsEl, ts } of shopSlots.values()) {
-          tsEl.textContent = ts > now ? formatCountdown(ts - now) : "Soon™";
+          tsEl.textContent = ts > now ? formatCountdown(ts - now) : t("feature.dashboard.soon");
         }
       },
       1000,

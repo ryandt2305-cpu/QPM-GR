@@ -8,6 +8,13 @@ import { t } from '../../i18n';
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.2.7",
+    date: "2026-05-09",
+    notes: [
+      "Fixed alerts not triggering for Dawn shop items",
+    ],
+  },
+  {
     version: "3.2.6",
     date: "2026-05-09",
     notes: [

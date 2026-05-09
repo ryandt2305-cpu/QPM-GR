@@ -1,4 +1,5 @@
 // src/ui/sections/turtleTimerSection.ts — Turtle Timer section (plant/egg/support breakdown)
+import { t } from '../../i18n';
 import { type UIState } from '../panelState';
 import { type TurtleTimerUIConfig, ensureTurtleTimerConfig, updateTurtleTimerViews } from '../turtleTimerLogic';
 import { createCard, parseFocusTargetKey, formatDurationPretty, formatCompletionTime } from '../panelHelpers';
@@ -11,8 +12,8 @@ import {
 import type { TurtleTimerState } from '../../features/turtleTimer.ts';
 
 export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: () => void): HTMLElement {
-  const { root, body } = createCard('🐢 Bella\'s Turtle Temple', {
-    subtitle: 'Growth, eggs, and support breakdown',
+  const { root, body } = createCard(`🐢 ${t('feature.turtleSection.title')}`, {
+    subtitle: t('feature.turtleSection.subtitle'),
   });
   root.dataset.qpmSection = 'turtle-timer';
 
@@ -49,13 +50,13 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
 
   const latestOption = document.createElement('option');
   latestOption.value = 'latest';
-  latestOption.textContent = 'Latest finish';
+  latestOption.textContent = t('feature.turtleSection.latestFinish');
   const earliestOption = document.createElement('option');
   earliestOption.value = 'earliest';
-  earliestOption.textContent = 'Earliest finish';
+  earliestOption.textContent = t('feature.turtleSection.earliestFinish');
   const specificOption = document.createElement('option');
   specificOption.value = 'specific';
-  specificOption.textContent = 'Specific plant';
+  specificOption.textContent = t('feature.turtleSection.specificPlant');
   focusSelect.append(latestOption, earliestOption, specificOption);
   focusSelect.value = turtleCfg.focus;
 
@@ -88,12 +89,12 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   });
 
   const focusText = document.createElement('span');
-  focusText.textContent = 'Focus';
+  focusText.textContent = t('feature.turtleSection.focus');
   focusLabel.append(focusText, focusSelect);
   controls.appendChild(focusLabel);
   uiState.turtleFocusSelects.push(focusSelect);
   const targetText = document.createElement('span');
-  targetText.textContent = 'Target plant';
+  targetText.textContent = t('feature.turtleSection.targetPlant');
   targetLabel.append(targetText, targetSelect);
   controls.appendChild(targetLabel);
   uiState.turtleFocusTargetContainers.push(targetLabel);
@@ -127,13 +128,13 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
 
   const eggLatestOption = document.createElement('option');
   eggLatestOption.value = 'latest';
-  eggLatestOption.textContent = 'Latest hatch';
+  eggLatestOption.textContent = t('feature.turtleSection.latestHatch');
   const eggEarliestOption = document.createElement('option');
   eggEarliestOption.value = 'earliest';
-  eggEarliestOption.textContent = 'Earliest hatch';
+  eggEarliestOption.textContent = t('feature.turtleSection.earliestHatch');
   const eggSpecificOption = document.createElement('option');
   eggSpecificOption.value = 'specific';
-  eggSpecificOption.textContent = 'Specific egg';
+  eggSpecificOption.textContent = t('feature.turtleSection.specificEgg');
   eggFocusSelect.append(eggLatestOption, eggEarliestOption, eggSpecificOption);
   eggFocusSelect.value = turtleCfg.eggFocus;
 
@@ -166,13 +167,13 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   });
 
   const eggFocusText = document.createElement('span');
-  eggFocusText.textContent = 'Egg focus';
+  eggFocusText.textContent = t('feature.turtleSection.eggFocus');
   eggFocusLabel.append(eggFocusText, eggFocusSelect);
   controls.appendChild(eggFocusLabel);
   uiState.turtleEggFocusSelects.push(eggFocusSelect);
 
   const eggTargetText = document.createElement('span');
-  eggTargetText.textContent = 'Target egg';
+  eggTargetText.textContent = t('feature.turtleSection.targetEgg');
   eggTargetLabel.append(eggTargetText, eggTargetSelect);
   controls.appendChild(eggTargetLabel);
   uiState.turtleEggFocusTargetContainers.push(eggTargetLabel);
@@ -200,7 +201,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
 
   const hint = document.createElement('div');
   hint.style.cssText = 'font-size:10px;color:#9acccc;line-height:1.4;';
-  hint.textContent = "Change your target plant's with Focus to display the estimated time to mature. The Egg Hatching section displays info on egg maturing. The Food Turtles section displays food drain and restore info.";
+  hint.textContent = t('feature.turtleSection.hint');
   body.appendChild(hint);
 
   const createSectionCard = (title: string, accentColor: string, icon: string) => {
@@ -256,7 +257,11 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     // Pets table (cleaner header)
     const tableHeader = document.createElement('div');
     tableHeader.style.cssText = 'display:grid;grid-template-columns:1.4fr 0.7fr 0.6fr 0.8fr;gap:8px;font-size:11px;color:#4CAF50;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;padding:6px 8px;background:rgba(76,175,80,0.1);border-radius:6px;';
-    tableHeader.innerHTML = '<span>🐾 Pet</span><span>🍖 Hunger</span><span>⚡ Boost</span><span>✨ XP</span>';
+    for (const text of [`🐾 ${t('feature.turtleSection.colPet')}`, `🍖 ${t('feature.turtleSection.colHunger')}`, `⚡ ${t('feature.turtleSection.colBoost')}`, `✨ ${t('feature.turtleSection.colXp')}`]) {
+      const span = document.createElement('span');
+      span.textContent = text;
+      tableHeader.appendChild(span);
+    }
     card.appendChild(tableHeader);
 
     const tableBody = document.createElement('div');
@@ -266,7 +271,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     return { card, etaEl, summaryEl, totalsEl, simpleEl, luckEl, tableBody } as const;
   };
 
-  const plantCard = createSectionCard('Plant Growth', 'rgba(76,175,80,0.6)', '🌱');
+  const plantCard = createSectionCard(t('feature.turtleSection.plantGrowth'), 'rgba(76,175,80,0.6)', '🌱');
   body.appendChild(plantCard.card);
   uiState.turtlePlantEta = plantCard.etaEl;
   uiState.turtlePlantSummary = plantCard.summaryEl;
@@ -275,7 +280,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   uiState.turtlePlantLuck = plantCard.luckEl;
   uiState.turtlePlantTable = plantCard.tableBody;
 
-  const eggCard = createSectionCard('Egg Hatching', 'rgba(156,39,176,0.6)', '🥚');
+  const eggCard = createSectionCard(t('feature.turtleSection.eggHatching'), 'rgba(156,39,176,0.6)', '🥚');
   body.appendChild(eggCard.card);
   uiState.turtleEggEta = eggCard.etaEl;
   uiState.turtleEggSummary = eggCard.summaryEl;
@@ -296,7 +301,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
 
   const supportHeader = document.createElement('div');
   supportHeader.style.cssText = 'font-weight:700;font-size:14px;color:#FFB74D;letter-spacing:0.3px;';
-  supportHeader.textContent = 'Food Turtles';
+  supportHeader.textContent = t('feature.turtleSection.foodTurtles');
 
   supportHeaderRow.append(supportIcon, supportHeader);
   supportCard.appendChild(supportHeaderRow);
@@ -334,18 +339,18 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
 
   const etaHelperHeader = document.createElement('div');
   etaHelperHeader.style.cssText = 'font-weight:700;font-size:13px;color:#64b5f6;letter-spacing:0.3px;';
-  etaHelperHeader.textContent = '⏰ Specified ETA Helper';
+  etaHelperHeader.textContent = `⏰ ${t('feature.turtleSection.etaHelper')}`;
   etaHelperCard.appendChild(etaHelperHeader);
 
   const etaHelperHint = document.createElement('div');
   etaHelperHint.style.cssText = 'font-size:10px;color:#90caf9;line-height:1.5;';
-  etaHelperHint.textContent = 'Calculate how many watering cans you need to finish a plant by a specific time.';
+  etaHelperHint.textContent = t('feature.turtleSection.etaHint');
   etaHelperCard.appendChild(etaHelperHint);
 
   const turtleWarning = document.createElement('div');
   turtleWarning.style.cssText = 'font-size:10px;color:#ffb74d;line-height:1.5;padding:6px;background:rgba(255,152,0,0.1);border-radius:4px;border-left:3px solid #ffb74d;margin-top:6px;';
-  turtleWarning.textContent = '⚠️ Switch to your Plant Growth Turtles before you calculate!';
-  turtleWarning.title = 'Calculation uses your CURRENT turtle setup. Make sure you have Plant Growth boost turtles active if you want accurate watering can counts.';
+  turtleWarning.textContent = `⚠️ ${t('feature.turtleSection.etaWarning')}`;
+  turtleWarning.title = t('feature.turtleSection.etaWarningTooltip');
   etaHelperCard.appendChild(turtleWarning);
 
   const etaHelperInputs = document.createElement('div');
@@ -356,7 +361,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   dateInputWrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
   const dateLabel = document.createElement('label');
   dateLabel.style.cssText = 'font-size:10px;color:#b3e5fc;font-weight:600;';
-  dateLabel.textContent = 'Target Date (DD/MM)';
+  dateLabel.textContent = t('feature.turtleSection.targetDate');
   const dateInput = document.createElement('input');
   dateInput.type = 'text';
   dateInput.className = 'qpm-input';
@@ -378,7 +383,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   timeInputWrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
   const timeLabel = document.createElement('label');
   timeLabel.style.cssText = 'font-size:10px;color:#b3e5fc;font-weight:600;';
-  timeLabel.textContent = 'Target Time';
+  timeLabel.textContent = t('feature.turtleSection.targetTime');
   const timeInput = document.createElement('input');
   timeInput.type = 'time';
   timeInput.className = 'qpm-input';
@@ -391,14 +396,14 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   plantSelectWrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px;';
   const plantLabel = document.createElement('label');
   plantLabel.style.cssText = 'font-size:10px;color:#b3e5fc;font-weight:600;';
-  plantLabel.textContent = 'Select Plant';
+  plantLabel.textContent = t('feature.turtleSection.selectPlant');
   const plantSelect = document.createElement('select');
   plantSelect.className = 'qpm-select';
   plantSelect.style.cssText = 'padding:6px 10px;font-size:11px;';
   plantSelect.addEventListener('click', e => e.stopPropagation());
   const placeholderOption = document.createElement('option');
   placeholderOption.value = '';
-  placeholderOption.textContent = 'Choose a growing plant...';
+  placeholderOption.textContent = t('feature.turtleSection.choosePlant');
   placeholderOption.disabled = true;
   placeholderOption.selected = true;
   plantSelect.appendChild(placeholderOption);
@@ -408,7 +413,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
   const calculateButton = document.createElement('button');
   calculateButton.type = 'button';
   calculateButton.className = 'qpm-button qpm-button--accent';
-  calculateButton.textContent = 'Calculate';
+  calculateButton.textContent = t('feature.turtleSection.calculate');
   calculateButton.style.cssText = 'padding:6px 16px;font-size:11px;font-weight:600;align-self:flex-end;';
   etaHelperInputs.appendChild(calculateButton);
 
@@ -434,9 +439,10 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
       if (target.endTime && target.endTime > now) {
         const option = document.createElement('option');
         option.value = target.key;
-        option.textContent = `${target.species || 'Unknown'} - ${formatDurationPretty(target.remainingMs || 0)}`;
+        const speciesName = target.species || t('feature.turtleTimer.unknownSpecies');
+        option.textContent = `${speciesName} - ${formatDurationPretty(target.remainingMs || 0)}`;
         option.dataset.endTime = String(target.endTime);
-        option.dataset.species = target.species || 'Unknown';
+        option.dataset.species = speciesName;
         plantSelect.appendChild(option);
         addedCount++;
       }
@@ -446,7 +452,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     if (addedCount === 0) {
       const noPlants = document.createElement('option');
       noPlants.value = '';
-      noPlants.textContent = 'No growing plants found';
+      noPlants.textContent = t('feature.turtleSection.noGrowingPlants');
       noPlants.disabled = true;
       plantSelect.appendChild(noPlants);
     }
@@ -468,7 +474,7 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     }
 
     const endTime = Number(selectedOption.dataset.endTime);
-    const species = selectedOption.dataset.species || 'Unknown';
+    const species = selectedOption.dataset.species || t('feature.turtleTimer.unknownSpecies');
     const now = Date.now();
 
     // Parse target date (DD/MM format)
@@ -477,7 +483,11 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     const month = dateParts[1];
 
     if (!day || !month || day < 1 || day > 31 || month < 1 || month > 12) {
-      etaHelperResults.innerHTML = '<div style="color:#ef5350;font-size:11px;">Invalid date! Use DD/MM format (e.g., 15/11)</div>';
+      etaHelperResults.textContent = '';
+      const errDiv = document.createElement('div');
+      errDiv.style.cssText = 'color:#ef5350;font-size:11px;';
+      errDiv.textContent = t('feature.turtleSection.invalidDate');
+      etaHelperResults.appendChild(errDiv);
       etaHelperResults.style.display = 'flex';
       return;
     }
@@ -508,7 +518,11 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     const targetMsRemaining = targetMs - now;
 
     if (targetMsRemaining <= 0) {
-      etaHelperResults.innerHTML = '<div style="color:#ef5350;font-size:11px;">Target time is in the past!</div>';
+      etaHelperResults.textContent = '';
+      const pastDiv = document.createElement('div');
+      pastDiv.style.cssText = 'color:#ef5350;font-size:11px;';
+      pastDiv.textContent = t('feature.turtleSection.targetInPast');
+      etaHelperResults.appendChild(pastDiv);
       etaHelperResults.style.display = 'flex';
       return;
     }
@@ -527,38 +541,63 @@ export function createTurtleTimerSection(uiState: UIState, cfg: any, saveCfg: ()
     const msToSave = Math.max(0, currentTimeRemaining - targetMsRemaining);
     const wateringCansNeeded = Math.ceil(msToSave / wateringCanReduction);
 
-    etaHelperResults.innerHTML = '';
+    etaHelperResults.textContent = '';
 
     const resultTitle = document.createElement('div');
     resultTitle.style.cssText = 'font-weight:700;font-size:11px;color:#64b5f6;margin-bottom:4px;';
-    resultTitle.textContent = `Results for ${species}`;
+    resultTitle.textContent = t('feature.turtleSection.resultsFor', { species });
     etaHelperResults.appendChild(resultTitle);
 
     // Show current state info
     const currentStateRow = document.createElement('div');
     currentStateRow.style.cssText = 'font-size:10px;color:#e0e0e0;line-height:1.6;padding:6px;background:rgba(255,255,255,0.05);border-radius:4px;margin-bottom:4px;';
+    const stateStrong = document.createElement('strong');
     if (hasTurtles) {
-      currentStateRow.innerHTML = `<strong style="color:#81c784;">🐢 Current State (With Turtles):</strong> ${formatDurationPretty(currentTimeRemaining)} • ${formatCompletionTime(currentTimeRemaining)}`;
+      stateStrong.style.color = '#81c784';
+      stateStrong.textContent = `🐢 ${t('feature.turtleSection.stateWithTurtles')}`;
     } else {
-      currentStateRow.innerHTML = `<strong style="color:#90caf9;">Current State (No Turtles):</strong> ${formatDurationPretty(currentTimeRemaining)} • ${formatCompletionTime(currentTimeRemaining)}`;
+      stateStrong.style.color = '#90caf9';
+      stateStrong.textContent = t('feature.turtleSection.stateNoTurtles');
     }
+    currentStateRow.appendChild(stateStrong);
+    currentStateRow.append(` ${formatDurationPretty(currentTimeRemaining)} • ${formatCompletionTime(currentTimeRemaining)}`);
     etaHelperResults.appendChild(currentStateRow);
 
     const targetRow = document.createElement('div');
     targetRow.style.cssText = 'font-size:10px;color:#e0e0e0;line-height:1.6;';
-    const dateLabelStr = daysAhead === 0 ? 'today' : daysAhead === 1 ? 'tomorrow' : `in ${daysAhead} days`;
+    const dateLabelStr = daysAhead === 0 ? t('feature.turtleSection.today') : daysAhead === 1 ? t('feature.turtleSection.tomorrow') : t('feature.turtleSection.inDays', { days: String(daysAhead) });
     const targetDateStr = `${dateInput.value} ${timeInput.value}`;
-    targetRow.innerHTML = `<strong style="color:#ffb74d;">Target:</strong> ${targetDateStr} (${dateLabelStr}) • ${formatDurationPretty(targetMsRemaining)} from now`;
+    const targetStrong = document.createElement('strong');
+    targetStrong.style.color = '#ffb74d';
+    targetStrong.textContent = t('feature.turtleSection.targetLabel');
+    targetRow.appendChild(targetStrong);
+    targetRow.append(` ${targetDateStr} (${dateLabelStr}) • ${t('feature.turtleSection.fromNow', { time: formatDurationPretty(targetMsRemaining) })}`);
     etaHelperResults.appendChild(targetRow);
 
     const wateringRow = document.createElement('div');
     wateringRow.style.cssText = 'font-size:11px;color:#fff;font-weight:700;padding:8px;background:rgba(100,181,246,0.15);border-radius:6px;margin-top:4px;';
 
     if (wateringCansNeeded === 0) {
-      wateringRow.innerHTML = `✅ <span style="color:#81c784;">No watering cans needed!</span><br><span style="font-size:10px;font-weight:400;color:#b0b0b0;">Plant will finish ${formatDurationPretty(Math.abs(msToSave))} before target time.</span>`;
+      const checkSpan = document.createElement('span');
+      checkSpan.style.color = '#81c784';
+      checkSpan.textContent = t('feature.turtleSection.noWateringNeeded');
+      wateringRow.append('✅ ');
+      wateringRow.appendChild(checkSpan);
+      const detailSpan = document.createElement('div');
+      detailSpan.style.cssText = 'font-size:10px;font-weight:400;color:#b0b0b0;';
+      detailSpan.textContent = t('feature.turtleSection.finishBefore', { time: formatDurationPretty(Math.abs(msToSave)) });
+      wateringRow.appendChild(detailSpan);
     } else {
-      const stateNote = hasTurtles ? '(based on current turtle boost)' : '(no turtle boost applied)';
-      wateringRow.innerHTML = `💧 <span style="color:#64b5f6;">Watering Cans Needed: ${wateringCansNeeded}</span><br><span style="font-size:10px;font-weight:400;color:#b0b0b0;">Each can saves 5 minutes ${stateNote}</span>`;
+      const stateNote = hasTurtles ? t('feature.turtleSection.withTurtleBoost') : t('feature.turtleSection.noTurtleBoost');
+      const countSpan = document.createElement('span');
+      countSpan.style.color = '#64b5f6';
+      countSpan.textContent = t('feature.turtleSection.wateringNeeded', { count: String(wateringCansNeeded) });
+      wateringRow.append('💧 ');
+      wateringRow.appendChild(countSpan);
+      const noteSpan = document.createElement('div');
+      noteSpan.style.cssText = 'font-size:10px;font-weight:400;color:#b0b0b0;';
+      noteSpan.textContent = `${t('feature.turtleSection.wateringNote')} ${stateNote}`;
+      wateringRow.appendChild(noteSpan);
     }
     etaHelperResults.appendChild(wateringRow);
 

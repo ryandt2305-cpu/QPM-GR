@@ -2,6 +2,7 @@
 // Status helpers, defaults, new tile status updaters, and the orchestrator.
 
 import { getAllTileDefinitions } from './tileRegistry';
+import { t } from '../../i18n';
 import {
   startPetDerivedStatuses,
   startPublicRoomsStatus,
@@ -225,11 +226,11 @@ function startGardenFiltersStatus(getStatusEl: GetStatusEl, addLiveCleanup: AddL
     const render = (): void => {
       const cfg = getGardenFiltersConfig();
       if (!cfg.enabled) {
-        setStatusText(el, 'Off', 'muted');
+        setStatusText(el, t('common.off'), 'muted');
         return;
       }
       const count = cfg.mutations.length + cfg.cropSpecies.length + cfg.eggTypes.length + cfg.growthStates.length;
-      setStatusText(el, `Enabled / ${plural(count, 'filter')}`, 'positive');
+      setStatusText(el, t('tile.status.enabledFilterCount', { count }), 'positive');
     };
     render();
     const unsub = subscribeToGardenFiltersConfig(render);
@@ -304,11 +305,11 @@ function startFavoritesStatus(getStatusEl: GetStatusEl, addLiveCleanup: AddLiveC
     const render = (): void => {
       const cfg = getAutoFavoriteConfig();
       if (!cfg.enabled) {
-        setStatusText(el, 'Off / 0 rules', 'muted');
+        setStatusText(el, t('tile.status.offRuleCount', { count: 0 }), 'muted');
         return;
       }
       const count = cfg.species.length + cfg.mutations.length + cfg.petAbilities.length;
-      setStatusText(el, `Enabled / ${plural(count, 'rule')}`, 'positive');
+      setStatusText(el, t('tile.status.enabledRuleCount', { count }), 'positive');
     };
     render();
     const unsub = subscribeToAutoFavoriteConfig(render);
@@ -325,11 +326,11 @@ function startAutoReconnectStatus(getStatusEl: GetStatusEl, addLiveCleanup: AddL
     const render = (): void => {
       const cfg = getAutoReconnectConfig();
       if (!cfg.enabled) {
-        setStatusText(el, 'Off', 'muted');
+        setStatusText(el, t('common.off'), 'muted');
         return;
       }
-      const delay = cfg.delayMs <= 0 ? 'Instant' : `${Math.round(cfg.delayMs / 1000)}s delay`;
-      setStatusText(el, `Enabled / ${delay}`, 'positive');
+      const delay = cfg.delayMs <= 0 ? t('tile.status.instantDelay') : t('tile.status.secondsDelay', { seconds: Math.round(cfg.delayMs / 1000) });
+      setStatusText(el, t('tile.status.enabledDelay', { delay }), 'positive');
     };
     render();
     const unsub = subscribeToAutoReconnectConfig(render);
@@ -345,11 +346,11 @@ function startShopKeybindsStatus(getStatusEl: GetStatusEl, addLiveCleanup: AddLi
     if (version !== currentVersion) return;
     const render = (): void => {
       if (!isShopKeybindsEnabled()) {
-        setStatusText(el, 'Off', 'muted');
+        setStatusText(el, t('common.off'), 'muted');
         return;
       }
       const count = Object.keys(getAllShopKeybinds()).length;
-      setStatusText(el, `Enabled / ${plural(count, 'bind')}`, 'positive');
+      setStatusText(el, t('tile.status.enabledBindCount', { count }), 'positive');
     };
     render();
     const timer = window.setInterval(render, 5_000);
@@ -387,11 +388,11 @@ function startTextureManipulatorStatus(getStatusEl: GetStatusEl, addLiveCleanup:
       const total = state.rules.length;
       const active = state.rules.filter(r => r.enabled).length;
       if (active > 0) {
-        setStatusText(el, `${plural(total, 'rule')} / ${active} active`, 'positive');
+        setStatusText(el, t('tile.status.ruleCountActive', { total, active }), 'positive');
       } else if (total > 0) {
-        setStatusText(el, `${plural(total, 'rule')} / 0 active`, 'normal');
+        setStatusText(el, t('tile.status.ruleCountActive', { total, active: 0 }), 'normal');
       } else {
-        setStatusText(el, '0 rules / 0 active', 'muted');
+        setStatusText(el, t('tile.status.ruleCountActive', { total: 0, active: 0 }), 'muted');
       }
     };
     render();

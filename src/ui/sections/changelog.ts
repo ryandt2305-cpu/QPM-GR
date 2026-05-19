@@ -8,6 +8,17 @@ import { t } from '../../i18n';
 
 export const CHANGELOG: Array<{ version: string; date: string; notes: string[] }> = [
   {
+    version: "3.2.13",
+    date: "2026-05-19",
+    notes: [
+      "Fixed Prediction Accuracy scores showing wrong values in restock item detail windows",
+      "Fixed restock data not loading extended interval data, which caused inaccurate scoring for all items",
+      "Fixed overlapping text in restock detail stats chips when labels are long",
+      "Added German and French language support",
+      "Improved i18n coverage across journal recommendations, pet optimizer, tile statuses, and stats hub",
+    ],
+  },
+  {
     version: "3.2.12",
     date: "2026-05-17",
     notes: [

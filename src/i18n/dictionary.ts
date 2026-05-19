@@ -4,6 +4,8 @@ import type { Dictionary, I18nKey, I18nVars, LocalizedString, QpmLocale } from '
 import { getCurrentLocale } from './gameLocale';
 import en from './dictionaries/en';
 import es from './dictionaries/es';
+import de from './dictionaries/de';
+import fr from './dictionaries/fr';
 
 /** Registry of loaded dictionaries keyed by locale code. */
 const dictionaries = new Map<string, Dictionary>();
@@ -11,6 +13,8 @@ const dictionaries = new Map<string, Dictionary>();
 // English is always loaded eagerly.
 dictionaries.set('en', en);
 dictionaries.set('es', es);
+dictionaries.set('de', de);
+dictionaries.set('fr', fr);
 
 /**
  * Register a dictionary for a locale.

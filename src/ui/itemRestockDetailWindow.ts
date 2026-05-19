@@ -19,6 +19,7 @@ import { storage } from '../utils/storage';
 import { getWeatherDef } from '../catalogs/gameCatalogs';
 import {
   getAccuracyWindows,
+  computeAccuracyScore,
   computeEventAccuracy as computeEventAccuracyNew,
   getConfidenceInterval,
   type EventAccuracy,
@@ -264,23 +265,21 @@ function fmtCountdown(ts: number | null): string {
   return `~${fmtDuration(diff)}`;
 }
 
-function clampPercentScore(value: number): number {
-  const pct = value >= 0 && value <= 1 ? value * 100 : value;
-  return Math.min(100, Math.max(0, pct));
-}
-
 function aggregateModelAccuracyMetric(
   aggregate: RestockPredictionAccuracyAggregate | null,
+  medianMs: number | null,
+  intervals: number[] | null,
 ): { score: number; title: string } | null {
   if (!aggregate || aggregate.scored_predictions < RESTOCK_MODEL_ACCURACY_MIN_SCORED) return null;
-  if (aggregate.within_one_cycle_pct == null || !Number.isFinite(aggregate.within_one_cycle_pct)) return null;
+  if (aggregate.median_abs_error_min == null || !Number.isFinite(aggregate.median_abs_error_min)) return null;
+  const medianErrorMs = aggregate.median_abs_error_min * 60_000;
+  const windows = getAccuracyWindows(medianMs, intervals);
+  const score = computeAccuracyScore(medianErrorMs, windows);
   const details: string[] = [t('feature.itemDetail.scoredPredictions', { count: aggregate.scored_predictions })];
   if (aggregate.mae_min != null) details.push(t('feature.itemDetail.mae', { duration: fmtDuration(aggregate.mae_min * 60_000) }));
-  if (aggregate.median_abs_error_min != null) {
-    details.push(t('feature.itemDetail.medianError', { duration: fmtDuration(aggregate.median_abs_error_min * 60_000) }));
-  }
+  details.push(t('feature.itemDetail.medianError', { duration: fmtDuration(medianErrorMs) }));
   return {
-    score: clampPercentScore(aggregate.within_one_cycle_pct),
+    score: Math.min(100, Math.max(0, score)),
     title: details.join(' | '),
   };
 }
@@ -610,14 +609,14 @@ function buildOverviewCard(
     const chip = document.createElement('div');
     chip.style.cssText = [
       'flex:1', 'display:flex', 'flex-direction:column', 'align-items:center',
-      'padding:10px 6px', 'gap:2px',
+      'padding:10px 6px', 'gap:2px', 'min-width:0', 'overflow:hidden',
       'border-right:1px solid rgba(143,130,255,0.08)',
     ].join(';');
     const v = document.createElement('div');
     v.style.cssText = `font-size:15px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;white-space:nowrap;`;
     v.textContent = value;
     const l = document.createElement('div');
-    l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;';
+    l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;';
     l.textContent = label;
     chip.append(v, l);
     return chip;
@@ -1421,7 +1420,7 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
 
       if (!eventListSection.contains(spinner)) return; // window closed
       eventListSection.removeChild(spinner);
-      const aggregateModelMetric = aggregateModelAccuracyMetric(modelAccuracyAggregate);
+      const aggregateModelMetric = aggregateModelAccuracyMetric(modelAccuracyAggregate, medianMs, itemIntervals);
       if (aggregateModelMetric) {
         overview.setModelAccuracy(aggregateModelMetric.score, aggregateModelMetric.title);
       }
@@ -1525,14 +1524,14 @@ export function openItemRestockDetail(item: RestockItem, itemName: string): void
         const chip = document.createElement('div');
         chip.style.cssText = [
           'flex:1', 'display:flex', 'flex-direction:column', 'align-items:center',
-          'padding:10px 8px', 'gap:2px',
+          'padding:10px 8px', 'gap:2px', 'min-width:0', 'overflow:hidden',
           'border-right:1px solid rgba(143,130,255,0.08)',
         ].join(';');
         const v = document.createElement('div');
         v.style.cssText = `font-size:15px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;white-space:nowrap;`;
         v.textContent = value;
         const l = document.createElement('div');
-        l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;';
+        l.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.55px;color:rgba(224,224,224,0.32);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;';
         l.textContent = label;
         chip.append(v, l);
         return chip;

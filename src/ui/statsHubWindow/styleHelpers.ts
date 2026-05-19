@@ -5,6 +5,7 @@ import { RAINBOW_GRADIENT } from './constants';
 import { findVariantBadge, getVariantChipColors } from '../../data/variantBadges';
 import { formatCoinsAbbreviated } from '../../features/valueCalculator';
 import { getCoinSpriteUrl } from './spriteHelpers';
+import { t } from '../../i18n';
 
 // ---------------------------------------------------------------------------
 // Rarity styling
@@ -110,10 +111,10 @@ export function mutBadge(mutId: string, grayed = false): HTMLElement {
 // Toggle switch
 // ---------------------------------------------------------------------------
 
-export function buildToggleSwitch(active: boolean, onChange: (active: boolean) => void, toggleLabel = 'Filter garden'): HTMLElement {
+export function buildToggleSwitch(active: boolean, onChange: (active: boolean) => void, toggleLabel?: string): HTMLElement {
   const label = document.createElement('label');
   label.style.cssText = 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:10px;color:rgba(224,224,224,0.45);';
-  label.title = 'Show/hide these crops in the game garden';
+  label.title = t('feature.statsHub.filterGardenTooltip');
 
   const track = document.createElement('div');
   const applyTrack = (on: boolean) => {
@@ -141,7 +142,7 @@ export function buildToggleSwitch(active: boolean, onChange: (active: boolean) =
   label.appendChild(track);
 
   const txt = document.createElement('span');
-  txt.textContent = toggleLabel;
+  txt.textContent = toggleLabel ?? t('feature.statsHub.filterGarden');
   label.appendChild(txt);
 
   label.addEventListener('click', (e) => {
@@ -214,7 +215,7 @@ export function makeCoinValueEl(coins: number, prefix: string, cssExtra: string)
 export function makeWhenCompleteHint(gain: number, extraCss = ''): HTMLElement {
   const el = document.createElement('span');
   el.style.cssText = `display:inline-flex;align-items:center;gap:2px;font-size:10px;font-weight:700;color:#FFD700;${extraCss}`;
-  el.title = `+${gain.toLocaleString()} when complete`;
+  el.title = t('feature.statsHub.whenComplete', { value: gain.toLocaleString() });
   const url = getCoinSpriteUrl();
   if (url) {
     const img = document.createElement('img');
@@ -224,7 +225,7 @@ export function makeWhenCompleteHint(gain: number, extraCss = ''): HTMLElement {
     el.appendChild(img);
   }
   const txt = document.createElement('span');
-  txt.textContent = `+${formatCoinsAbbreviated(gain)} when complete`;
+  txt.textContent = t('feature.statsHub.whenComplete', { value: formatCoinsAbbreviated(gain) });
   el.appendChild(txt);
   return el;
 }

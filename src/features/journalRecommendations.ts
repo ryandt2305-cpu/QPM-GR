@@ -8,6 +8,7 @@ import { getVariantTimeEstimate } from '../data/gameData';
 import { readInventoryDirect } from '../store/inventory';
 import { getAtomByLabel, readAtomValue } from '../core/jotaiBridge';
 import { getActivePetInfos } from '../store/pets';
+import { t } from '../i18n';
 
 // ============================================================================
 // Types
@@ -382,16 +383,16 @@ function generateStrategy(
         if (needsGold && resources.hasGoldGranter) granterTypes.push('Gold');
 
         if (granterTypes.length > 0) {
-          strategies.push(`Use ${granterTypes.join(' and/or ')} Pets`);
+          strategies.push(t('feature.journal.strategy.useGranterPets', { types: granterTypes.join(t('feature.journal.strategy.andOr')) }));
         } else {
-          strategies.push('⚠️ Rare without Granters');
+          strategies.push(`⚠️ ${t('feature.journal.strategy.rareNoGranters')}`);
         }
       } else {
-        strategies.push('⚠️ Rare without Granters');
+        strategies.push(`⚠️ ${t('feature.journal.strategy.rareNoGranters')}`);
       }
     } else {
       // Pet color variants from hatching
-      strategies.push('Hatch eggs (0.1-1%)');
+      strategies.push(t('feature.journal.strategy.hatchEggs'));
     }
   }
 
@@ -400,10 +401,10 @@ function generateStrategy(
   const needsChilled = missingVariants.includes('Chilled');
   const needsFrozen = missingVariants.includes('Frozen');
 
-  if (needsWet) strategies.push('Rain (~20-35min)');
-  if (needsChilled) strategies.push('Snow (~20-35min)');
+  if (needsWet) strategies.push(t('feature.journal.strategy.rain'));
+  if (needsChilled) strategies.push(t('feature.journal.strategy.snow'));
   if (needsFrozen) {
-    strategies.push('Wet+Chilled (~30-45min)');
+    strategies.push(t('feature.journal.strategy.wetChilled'));
   }
 
   // Check for lunar mutations
@@ -413,23 +414,23 @@ function generateStrategy(
   const needsAmbercharged = missingVariants.includes('Ambercharged');
 
   if (needsDawnlit) {
-    strategies.push(`⚠️ Log before charging! Dawn event`);
+    strategies.push(`⚠️ ${t('feature.journal.strategy.logDawn')}`);
   }
   if (needsAmberlit) {
-    strategies.push(`⚠️ Log before charging! Amber event`);
+    strategies.push(`⚠️ ${t('feature.journal.strategy.logAmber')}`);
   }
   if (needsDawncharged) {
     if (resources.hasDawnbinder) {
-      strategies.push('Dawnlit + Dawnbinder (25%/min)');
+      strategies.push(t('feature.journal.strategy.dawnbinderCombo'));
     } else {
-      strategies.push('⚠️ Need Dawnbinder');
+      strategies.push(`⚠️ ${t('feature.journal.strategy.needDawnbinder')}`);
     }
   }
   if (needsAmbercharged) {
     if (resources.hasMoonbinder) {
-      strategies.push('Amberlit + Moonbinder (25%/min)');
+      strategies.push(t('feature.journal.strategy.moonbinderCombo'));
     } else {
-      strategies.push('⚠️ Need Moonbinder');
+      strategies.push(`⚠️ ${t('feature.journal.strategy.needMoonbinder')}`);
     }
   }
 
@@ -437,9 +438,9 @@ function generateStrategy(
   const needsMaxWeight = missingVariants.includes('Max Weight') || missingVariants.includes('Max');
   if (needsMaxWeight) {
     if (type === 'pet') {
-      strategies.push('⚠️ Hatch at lvl 70+ (rare)');
+      strategies.push(`⚠️ ${t('feature.journal.strategy.hatchHighLevel')}`);
     } else {
-      strategies.push('Needs Size Boost ability');
+      strategies.push(t('feature.journal.strategy.needSizeBoost'));
     }
   }
 
@@ -448,11 +449,11 @@ function generateStrategy(
   if (type === 'produce' && celestialSeeds.includes(species)) {
     const needsNormal = missingVariants.includes('Normal');
     if (needsNormal) {
-      strategies.unshift('🌟 Log NORMAL first!');
+      strategies.unshift(`🌟 ${t('feature.journal.strategy.logNormalFirst')}`);
     }
   }
 
-  return strategies.join(' | ') || 'Grow normally';
+  return strategies.join(' | ') || t('feature.journal.strategy.growNormally');
 }
 
 /**
@@ -551,8 +552,8 @@ function estimateCompletionTime(
   missingVariants: string[],
   difficulty: VariantDifficulty,
 ): string {
-  if (missingVariants.length === 0) return 'Complete';
-  if (difficulty === 'impossible') return 'Impossible without required resources';
+  if (missingVariants.length === 0) return t('feature.journal.time.complete');
+  if (difficulty === 'impossible') return t('feature.journal.time.impossibleNoResources');
 
   // Base time from difficulty
   const baseTime = getVariantTimeEstimate(difficulty as 'easy' | 'medium' | 'hard' | 'very-hard');
@@ -561,20 +562,20 @@ function estimateCompletionTime(
   if (missingVariants.length === 1) {
     return baseTime;
   } else if (missingVariants.length === 2) {
-    return difficulty === 'easy' ? '30-60 minutes' :
-           difficulty === 'medium' ? '1-2 hours' :
-           difficulty === 'hard' ? '1-2 days' :
-           '1-2 weeks';
+    return difficulty === 'easy' ? t('feature.journal.time.30to60min') :
+           difficulty === 'medium' ? t('feature.journal.time.1to2hours') :
+           difficulty === 'hard' ? t('feature.journal.time.1to2days') :
+           t('feature.journal.time.1to2weeks');
   } else if (missingVariants.length <= 4) {
-    return difficulty === 'easy' ? '1-2 hours' :
-           difficulty === 'medium' ? '2-4 hours' :
-           difficulty === 'hard' ? '2-4 days' :
-           '2-4 weeks';
+    return difficulty === 'easy' ? t('feature.journal.time.1to2hours') :
+           difficulty === 'medium' ? t('feature.journal.time.2to4hours') :
+           difficulty === 'hard' ? t('feature.journal.time.2to4days') :
+           t('feature.journal.time.2to4weeks');
   } else {
-    return difficulty === 'easy' ? '2-4 hours' :
-           difficulty === 'medium' ? '4-8 hours' :
-           difficulty === 'hard' ? '1 week' :
-           '1+ month';
+    return difficulty === 'easy' ? t('feature.journal.time.2to4hours') :
+           difficulty === 'medium' ? t('feature.journal.time.4to8hours') :
+           difficulty === 'hard' ? t('feature.journal.time.1week') :
+           t('feature.journal.time.1plusMonth');
   }
 }
 
@@ -699,15 +700,15 @@ function calculateFastestPath(recommendations: SpeciesRecommendation[]): {
   const hasAnyVeryHard = steps.some(s => s.difficulty === 'very-hard');
   const hasAnyHard = steps.some(s => s.difficulty === 'hard');
 
-  let estimatedTime = '1-2 weeks';
+  let estimatedTime = t('feature.journal.time.1to2weeks');
   if (hasAnyVeryHard) {
-    estimatedTime = '2-4 weeks';
+    estimatedTime = t('feature.journal.time.2to4weeks');
   } else if (hasAnyHard) {
-    estimatedTime = '1-2 weeks';
+    estimatedTime = t('feature.journal.time.1to2weeks');
   } else if (steps.every(s => s.difficulty === 'easy')) {
-    estimatedTime = '2-3 days';
+    estimatedTime = t('feature.journal.time.2to3days');
   } else {
-    estimatedTime = '4-7 days';
+    estimatedTime = t('feature.journal.time.4to7days');
   }
 
   return {
@@ -807,11 +808,11 @@ export function getDifficultyEmoji(difficulty: VariantDifficulty): string {
  */
 export function getDifficultyDescription(difficulty: VariantDifficulty): string {
   switch (difficulty) {
-    case 'easy': return 'Easy';
-    case 'medium': return 'Medium';
-    case 'hard': return 'Hard';
-    case 'very-hard': return 'Very Hard';
-    case 'impossible': return 'Impossible';
+    case 'easy': return t('feature.journal.difficulty.easy');
+    case 'medium': return t('feature.journal.difficulty.medium');
+    case 'hard': return t('feature.journal.difficulty.hard');
+    case 'very-hard': return t('feature.journal.difficulty.veryHard');
+    case 'impossible': return t('feature.journal.difficulty.impossible');
   }
 }
 

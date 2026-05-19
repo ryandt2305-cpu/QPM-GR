@@ -1,4 +1,5 @@
 import { getAbilityDefinition } from '../../data/petAbilities';
+import { t } from '../../i18n';
 import {
   HIGH_VALUE_ABILITIES,
   LOW_VALUE_ABILITIES,
@@ -164,7 +165,7 @@ export function analyzePet(
   if (familyResults.length === 0) {
     return buildComparison({
       status: 'keep',
-      reason: 'Best available',
+      reason: t('feature.petOptimizer.reason.bestAvailable'),
       betterAlternatives: [],
       decisionMode: 'rule',
     });
@@ -177,11 +178,11 @@ export function analyzePet(
   if (topFamilies.length > 0) {
     const reason = activeMode === 'slot_efficiency'
       ? (topFamilies.length === 1
-          ? `Top 3 slot-efficient for ${topFamilies[0]}`
-          : `Top 3 slot-efficient in ${topFamilies.length} ability families`)
+          ? t('feature.petOptimizer.reason.top3SlotFor', { family: topFamilies[0]! })
+          : t('feature.petOptimizer.reason.top3SlotMulti', { count: topFamilies.length }))
       : (topFamilies.length === 1
-          ? `Top 3 for ${topFamilies[0]}`
-          : `Top 3 in ${topFamilies.length} ability families`);
+          ? t('feature.petOptimizer.reason.top3For', { family: topFamilies[0]! })
+          : t('feature.petOptimizer.reason.top3Multi', { count: topFamilies.length }));
 
     return buildComparison({
       status: 'keep',
@@ -202,8 +203,8 @@ export function analyzePet(
 
     if (specialistTopFamilies.length > 0) {
       const reason = specialistTopFamilies.length === 1
-        ? `Top 3 specialist for ${specialistTopFamilies[0]}`
-        : `Top 3 specialist in ${specialistTopFamilies.length} ability families`;
+        ? t('feature.petOptimizer.reason.top3SpecFor', { family: specialistTopFamilies[0]! })
+        : t('feature.petOptimizer.reason.top3SpecMulti', { count: specialistTopFamilies.length });
 
       return buildComparison({
         status: 'keep',
@@ -226,7 +227,7 @@ export function analyzePet(
   if (!decision || decision.betterEntries.length === 0) {
     return buildComparison({
       status: 'keep',
-      reason: 'Best available',
+      reason: t('feature.petOptimizer.reason.bestAvailable'),
       betterAlternatives: [],
       decisionMode: 'rule',
     });
@@ -243,7 +244,7 @@ export function analyzePet(
   }
 
   const betterPets = decision.betterEntries.map((entry) => entry.pet);
-  const rankingLabel = activeMode === 'slot_efficiency' ? 'slot-efficiency' : 'specialist';
+  const rankingLabel = activeMode === 'slot_efficiency' ? t('feature.petOptimizer.reason.rankSlotEfficiency') : t('feature.petOptimizer.reason.rankSpecialist');
   const maxStrengthValue = getMaxStrengthValue(pet);
   const rainbowProtectionEnabled = pet.hasRainbow && cfg.mutationProtection !== 'none';
   const goldProtectionEnabled = pet.hasGold && cfg.mutationProtection === 'both' && !cfg.dislikeGold;
@@ -251,23 +252,23 @@ export function analyzePet(
   const rainbowKeepSignals: string[] = [];
 
   if (score.total >= RAINBOW_AUTO_KEEP_MIN_SCORE) {
-    rainbowKeepSignals.push(`score ${Math.round(score.total)}`);
+    rainbowKeepSignals.push(t('feature.petOptimizer.signal.score', { value: Math.round(score.total) }));
   }
   if (maxStrengthValue >= RAINBOW_AUTO_KEEP_MIN_MAX_STRENGTH) {
-    rainbowKeepSignals.push(`max STR ${maxStrengthValue}`);
+    rainbowKeepSignals.push(t('feature.petOptimizer.signal.maxStr', { value: maxStrengthValue }));
   }
   if (competitiveRainbowFamilies.length > 0) {
     rainbowKeepSignals.push(
       competitiveRainbowFamilies.length === 1
-        ? `top ${RAINBOW_AUTO_KEEP_MAX_RANK} for ${competitiveRainbowFamilies[0]?.familyLabel ?? 'its family'}`
-        : `top ${RAINBOW_AUTO_KEEP_MAX_RANK} in ${competitiveRainbowFamilies.length} families`,
+        ? t('feature.petOptimizer.signal.topFor', { rank: RAINBOW_AUTO_KEEP_MAX_RANK, family: competitiveRainbowFamilies[0]?.familyLabel ?? 'its family' })
+        : t('feature.petOptimizer.signal.topMulti', { rank: RAINBOW_AUTO_KEEP_MAX_RANK, count: competitiveRainbowFamilies.length }),
     );
   }
 
   if (rainbowProtectionEnabled && rainbowKeepSignals.length > 0) {
     return buildComparison({
       status: 'keep',
-      reason: `Rainbow protection: keep (${rainbowKeepSignals.join(', ')})`,
+      reason: t('feature.petOptimizer.reason.rainbowKeep', { signals: rainbowKeepSignals.join(', ') }),
       betterAlternatives: [],
       decisionMode: activeMode,
       decisionFamilyKey: decision.familyKey,
@@ -278,7 +279,7 @@ export function analyzePet(
   if (rainbowProtectionEnabled) {
     return buildComparison({
       status: 'review',
-      reason: `Rainbow protection: lower ${decision.familyLabel} ${rankingLabel} ranking - review before selling`,
+      reason: t('feature.petOptimizer.reason.rainbowReview', { family: decision.familyLabel, ranking: rankingLabel }),
       betterAlternatives: betterPets.slice(0, MAX_BETTER_ALTERNATIVES),
       decisionMode: activeMode,
       decisionFamilyKey: decision.familyKey,
@@ -289,7 +290,7 @@ export function analyzePet(
   if (goldProtectionEnabled) {
     return buildComparison({
       status: 'review',
-      reason: `Gold protection: lower ${decision.familyLabel} ${rankingLabel} ranking - review before selling`,
+      reason: t('feature.petOptimizer.reason.goldReview', { family: decision.familyLabel, ranking: rankingLabel }),
       betterAlternatives: betterPets.slice(0, MAX_BETTER_ALTERNATIVES),
       decisionMode: activeMode,
       decisionFamilyKey: decision.familyKey,
@@ -298,8 +299,10 @@ export function analyzePet(
   }
 
   const reason = shouldProtect
-    ? `Lower ${decision.familyLabel} ${rankingLabel} ranking but has ${mutationType} mutation - consider keeping`
-    : `${decision.betterEntries.length} better ${decision.familyLabel} ${rankingLabel} pet${decision.betterEntries.length > 1 ? 's' : ''} available`;
+    ? t('feature.petOptimizer.reason.keepMutation', { family: decision.familyLabel, ranking: rankingLabel, mutation: mutationType })
+    : decision.betterEntries.length === 1
+      ? t('feature.petOptimizer.reason.sellBetter1', { family: decision.familyLabel, ranking: rankingLabel })
+      : t('feature.petOptimizer.reason.sellBetter', { count: decision.betterEntries.length, family: decision.familyLabel, ranking: rankingLabel });
 
   return buildComparison({
     status: 'sell',

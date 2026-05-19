@@ -429,6 +429,7 @@ export async function fetchRestockPredictionAccuracyAggregate(
     `select=${RESTOCK_ACCURACY_COLUMNS.join(',')}`,
     `shop_type=eq.${encodeURIComponent(shopType)}`,
     `item_id=eq.${encodeURIComponent(canonical)}`,
+    'order=scored_predictions.desc',
     'limit=1',
   ].join('&');
   const url = `${RESTOCK_ACCURACY_ENDPOINT}?${query}`;
@@ -556,18 +557,19 @@ export async function fetchRestockData(force = false): Promise<RestockItem[]> {
       return { text: null, errors };
     };
 
-    // Try extended columns first if we know the server supports them.
-    // Otherwise use the base URL — never probe speculatively (avoids 400s).
+    // Try extended columns first if we know the server supports them,
+    // or if we haven't probed yet (null). Mark false on failure so we
+    // don't probe every request.
     let mainText: string | null = null;
     const fetchErrors: string[] = [];
 
-    if (serverSupportsExtended === true) {
+    if (serverSupportsExtended !== false) {
       const extUrl = withCacheBust(RESTOCK_URL_EXTENDED, force);
       const ext = await requestText(extUrl);
       mainText = ext.text;
       if (!mainText) {
-        // Server may have reverted — fall back to base and reset flag.
-        serverSupportsExtended = null;
+        // Server doesn't support extended columns — stop probing.
+        serverSupportsExtended = false;
         fetchErrors.push(...ext.errors);
       }
     }

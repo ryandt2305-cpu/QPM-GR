@@ -2,6 +2,8 @@
 // Source: https://magicgarden.wiki/
 // Last Updated: 2025-11-25
 
+import { t } from '../i18n';
+
 /**
  * Pet Ability Count Probabilities
  * Determines how many abilities a pet will have based on max ability slots
@@ -233,13 +235,13 @@ export type CropTier = 'common' | 'uncommon' | 'rare' | 'mythic' | 'divine' | 'c
 export function getVariantTimeEstimate(difficulty: 'easy' | 'medium' | 'hard' | 'very-hard'): string {
   switch (difficulty) {
     case 'easy':
-      return '20-30 minutes';
+      return t('feature.journal.time.20to30min');
     case 'medium':
-      return '30-45 minutes';
+      return t('feature.journal.time.30to45min');
     case 'hard':
-      return 'Several hours to 1 day';
+      return t('feature.journal.time.severalHoursToDay');
     case 'very-hard':
-      return 'Days to weeks';
+      return t('feature.journal.time.daysToWeeks');
   }
 }
 
